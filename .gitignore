@@ -20,7 +20,10 @@ out/
 # VS Code
 .vscode/
 
-# Data
+# Maven shade plugin artifact
+dependency-reduced-pom.xml
+
+# Data / local runtime
 *.log
 data/
 *.mv.db
