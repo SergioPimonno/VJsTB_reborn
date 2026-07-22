@@ -7,7 +7,9 @@ import com.vjstb.ledscheme.domain.Scene;
 import com.vjstb.ledscheme.domain.Screen;
 import com.vjstb.ledscheme.domain.SignalChain;
 import com.vjstb.ledscheme.dto.ScreenDtos.CabinetInstanceDto;
+import com.vjstb.ledscheme.dto.ScreenDtos.CabinetStateDto;
 import com.vjstb.ledscheme.dto.ScreenDtos.CreateScreenRequest;
+import com.vjstb.ledscheme.dto.ScreenDtos.RestoreScreenRequest;
 import com.vjstb.ledscheme.dto.ScreenDtos.PowerChainDto;
 import com.vjstb.ledscheme.dto.ScreenDtos.PowerChainRequest;
 import com.vjstb.ledscheme.dto.ScreenDtos.ReplacePowerChainsRequest;
@@ -122,9 +124,58 @@ public class ScreenService {
 
     public ScreenDetailDto replacePowerChains(Long screenId, ReplacePowerChainsRequest request) {
         Screen screen = getEntity(screenId);
-        Set<Long> validIds = screen.getCabinets().stream().map(CabinetInstance::getId).collect(Collectors.toSet());
+        Set<Long> validIds = cabinetIds(screen);
+        applyPowerChains(screen, request.chains(), validIds);
+        return toDetail(screenRepository.save(screen));
+    }
+
+    public ScreenDetailDto replaceSignalChains(Long screenId, ReplaceSignalChainsRequest request) {
+        Screen screen = getEntity(screenId);
+        Set<Long> validIds = cabinetIds(screen);
+        applySignalChains(screen, request.chains(), validIds);
+        return toDetail(screenRepository.save(screen));
+    }
+
+    /**
+     * Атомарно восстанавливает снимок редактируемого состояния экрана (undo):
+     * имя, позиция, состояние кабинетов и цепочки — за одну транзакцию.
+     */
+    public ScreenDetailDto restore(Long screenId, RestoreScreenRequest request) {
+        Screen screen = getEntity(screenId);
+        Set<Long> validIds = cabinetIds(screen);
+
+        screen.setName(request.name());
+        screen.setPosXMm(request.posXMm());
+        screen.setPosYMm(request.posYMm());
+
+        Map<Long, CabinetInstance> byId = new HashMap<>();
+        for (CabinetInstance c : screen.getCabinets()) {
+            byId.put(c.getId(), c);
+        }
+        for (CabinetStateDto cs : request.cabinets()) {
+            CabinetInstance cab = byId.get(cs.id());
+            if (cab == null) {
+                throw new IllegalArgumentException("Кабинет с id=" + cs.id() + " не принадлежит этому экрану");
+            }
+            if (cs.phase() < 0 || cs.phase() > 3) {
+                throw new IllegalArgumentException("phase должен быть от 0 до 3");
+            }
+            cab.setPhase(cs.phase());
+            cab.setHidden(cs.hidden());
+        }
+
+        applyPowerChains(screen, request.powerChains(), validIds);
+        applySignalChains(screen, request.signalChains(), validIds);
+        return toDetail(screenRepository.save(screen));
+    }
+
+    private Set<Long> cabinetIds(Screen screen) {
+        return screen.getCabinets().stream().map(CabinetInstance::getId).collect(Collectors.toSet());
+    }
+
+    private void applyPowerChains(Screen screen, List<PowerChainRequest> chains, Set<Long> validIds) {
         screen.getPowerChains().clear();
-        for (PowerChainRequest cr : request.chains()) {
+        for (PowerChainRequest cr : chains) {
             if (cr.phase() < 1 || cr.phase() > 3) {
                 throw new IllegalArgumentException("phase цепочки питания должен быть 1, 2 или 3");
             }
@@ -135,14 +186,11 @@ public class ScreenService {
             chain.setCabinetInstanceIds(cr.cabinetInstanceIds());
             screen.getPowerChains().add(chain);
         }
-        return toDetail(screenRepository.save(screen));
     }
 
-    public ScreenDetailDto replaceSignalChains(Long screenId, ReplaceSignalChainsRequest request) {
-        Screen screen = getEntity(screenId);
-        Set<Long> validIds = screen.getCabinets().stream().map(CabinetInstance::getId).collect(Collectors.toSet());
+    private void applySignalChains(Screen screen, List<SignalChainRequest> chains, Set<Long> validIds) {
         screen.getSignalChains().clear();
-        for (SignalChainRequest cr : request.chains()) {
+        for (SignalChainRequest cr : chains) {
             validateCabinetIds(cr.cabinetInstanceIds(), validIds);
             SignalChain chain = new SignalChain();
             chain.setScreen(screen);
@@ -151,7 +199,6 @@ public class ScreenService {
             chain.setCabinetInstanceIds(cr.cabinetInstanceIds());
             screen.getSignalChains().add(chain);
         }
-        return toDetail(screenRepository.save(screen));
     }
 
     private void validateCabinetIds(List<Long> ids, Set<Long> validIds) {

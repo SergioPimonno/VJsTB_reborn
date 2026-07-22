@@ -199,7 +199,22 @@
 <div id="main">
   <div id="toolbar">
     <span id="toolbar-status">Выберите или создайте проект слева.</span>
-    <span id="toolbar-mode-badge"></span>
+    <span class="toolbar-right">
+      <button id="btn-undo" class="toolbar-btn" title="Отменить последнее действие (Ctrl+Z)" disabled>↶ Отменить</button>
+      <button id="btn-shortcuts" class="toolbar-btn" title="Горячие клавиши">⌨</button>
+      <span id="toolbar-mode-badge"></span>
+    </span>
+  </div>
+  <div id="shortcuts-popover" style="display:none;">
+    <div class="sc-title">Горячие клавиши</div>
+    <div class="sc-row"><kbd>Ctrl</kbd>+<kbd>Z</kbd><span>Отменить действие</span></div>
+    <div class="sc-row"><kbd>P</kbd><span>Режим «Питание»</span></div>
+    <div class="sc-row"><kbd>S</kbd><span>Режим «Сигнал»</span></div>
+    <div class="sc-row"><kbd>N</kbd><span>Новая цепочка</span></div>
+    <div class="sc-row"><kbd>Enter</kbd><span>Завершить цепочку</span></div>
+    <div class="sc-row"><kbd>Esc</kbd><span>Отмена построения цепочки</span></div>
+    <div class="sc-row"><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><span>Фаза L1 / L2 / L3 (питание)</span></div>
+    <div class="sc-row"><kbd>Del</kbd><span>Скрыть кабинет под курсором</span></div>
   </div>
   <div id="canvas-wrap">
     <div id="scene">

@@ -18,7 +18,65 @@ const state = {
   editingCabinetTypeId: null,
   chainBuilding: false,
   activeChainCabIds: [],
+  undoStack: [],       // снимки состояния активного экрана для «отменить»
+  hoveredCabId: null,  // кабинет под курсором (для шортката Del)
 };
+
+const UNDO_LIMIT = 50;
+
+// ── UNDO: снимки редактируемого состояния активного экрана ────────────
+function snapshotScreen(scr) {
+  return {
+    name: scr.name,
+    posXMm: scr.posXMm,
+    posYMm: scr.posYMm,
+    cabinets: scr.cabinets.map(c => ({ id: c.id, phase: c.phase, hidden: c.hidden })),
+    powerChains: scr.powerChains.map(c => ({ phase: c.phase, cabinetInstanceIds: c.cabinetInstanceIds.slice() })),
+    signalChains: scr.signalChains.map(c => ({ portNumber: c.portNumber, backup: c.backup, cabinetInstanceIds: c.cabinetInstanceIds.slice() })),
+  };
+}
+
+/** Запомнить текущее состояние экрана перед изменением. */
+function pushUndo() {
+  if (!state.currentScreen) return;
+  state.undoStack.push(snapshotScreen(state.currentScreen));
+  if (state.undoStack.length > UNDO_LIMIT) state.undoStack.shift();
+  updateUndoBtn();
+}
+
+function clearUndo() {
+  state.undoStack = [];
+  updateUndoBtn();
+}
+
+function updateUndoBtn() {
+  const btn = document.getElementById('btn-undo');
+  if (!btn) return;
+  const n = state.undoStack.length;
+  btn.disabled = n === 0 || !state.currentScreen;
+  btn.textContent = n > 0 ? `↶ Отменить (${n})` : '↶ Отменить';
+}
+
+async function undo() {
+  if (!state.currentScreen || state.undoStack.length === 0) return;
+  const snap = state.undoStack.pop();
+  try {
+    state.currentScreen = await api('PUT', `/screens/${state.currentScreen.id}/restore`, snap);
+    resetChainBuilding();
+    populateScreenParams();
+    renderCanvas();
+    renderStats();
+    renderChainList();
+    state.currentProjectDetail = await api('GET', `/projects/${state.currentProjectId}`);
+    renderScreenList();
+    setStatus('Действие отменено');
+  } catch (e) {
+    // восстановление не удалось — вернём снимок в стек, чтобы не потерять
+    state.undoStack.push(snap);
+    alert('Не удалось отменить: ' + e.message);
+  }
+  updateUndoBtn();
+}
 
 // ── low-level API helper ──────────────────────────────────────────────
 async function api(method, url, body) {
@@ -350,6 +408,8 @@ async function addScreen() {
 
 async function selectScreen(id) {
   resetChainBuilding();
+  clearUndo(); // стек «отменить» относится к конкретному экрану
+  state.hoveredCabId = null;
   state.currentScreenId = id;
   if (id == null) {
     state.currentScreen = null;
@@ -357,6 +417,7 @@ async function selectScreen(id) {
     document.getElementById('mode-section').style.display = 'none';
     document.getElementById('stats-section').style.display = 'none';
     renderCanvas();
+    updateUndoBtn();
     return;
   }
   state.currentScreen = await api('GET', `/screens/${id}`);
@@ -368,6 +429,7 @@ async function selectScreen(id) {
   renderCanvas();
   renderStats();
   renderChainList();
+  updateUndoBtn();
   setStatus(`Экран «${state.currentScreen.name}»`);
 }
 
@@ -396,6 +458,8 @@ async function applyGrid() {
     renderCanvas();
     renderStats();
     renderChainList();
+    // сетка перестроена — id кабинетов изменились, прежние снимки недействительны
+    clearUndo();
   } catch (e) {
     alert('Ошибка обновления экрана: ' + e.message);
   }
@@ -406,9 +470,17 @@ async function applyPos() {
     posXMm: Number(document.getElementById('scr-x').value),
     posYMm: Number(document.getElementById('scr-y').value),
   };
-  state.currentScreen = await api('PUT', `/screens/${state.currentScreen.id}/position`, payload);
-  state.currentProjectDetail = await api('GET', `/projects/${state.currentProjectId}`);
-  renderScreenList();
+  pushUndo();
+  try {
+    state.currentScreen = await api('PUT', `/screens/${state.currentScreen.id}/position`, payload);
+    state.currentProjectDetail = await api('GET', `/projects/${state.currentProjectId}`);
+    renderScreenList();
+    updateUndoBtn();
+  } catch (e) {
+    state.undoStack.pop();
+    updateUndoBtn();
+    alert('Ошибка обновления позиции: ' + e.message);
+  }
 }
 
 async function deleteScreenCurrent() {
@@ -464,6 +536,7 @@ function cancelChain() {
 
 async function finishChain() {
   if (state.activeChainCabIds.length === 0) { alert('Добавьте хотя бы один кабинет в цепочку'); return; }
+  pushUndo();
   try {
     if (state.mode === 'power') {
       for (const cabId of state.activeChainCabIds) {
@@ -484,7 +557,10 @@ async function finishChain() {
     renderCanvas();
     renderStats();
     renderChainList();
+    updateUndoBtn();
   } catch (e) {
+    state.undoStack.pop(); // изменение не применилось — снимок не нужен
+    updateUndoBtn();
     alert('Ошибка сохранения цепочки: ' + e.message);
   }
 }
@@ -492,6 +568,7 @@ async function finishChain() {
 async function deleteChain(chainId, isPower) {
   if (!confirm('Удалить цепочку?')) return;
   const scr = state.currentScreen;
+  pushUndo();
   try {
     if (isPower) {
       const chains = scr.powerChains.filter(c => c.id !== chainId).map(c => ({ phase: c.phase, cabinetInstanceIds: c.cabinetInstanceIds }));
@@ -503,7 +580,10 @@ async function deleteChain(chainId, isPower) {
     renderCanvas();
     renderStats();
     renderChainList();
+    updateUndoBtn();
   } catch (e) {
+    state.undoStack.pop();
+    updateUndoBtn();
     alert('Ошибка удаления цепочки: ' + e.message);
   }
 }
@@ -511,14 +591,22 @@ async function deleteChain(chainId, isPower) {
 async function clearChains() {
   if (!confirm('Очистить все цепочки текущего режима на этом экране?')) return;
   const scr = state.currentScreen;
-  if (state.mode === 'power') {
-    state.currentScreen = await api('PUT', `/screens/${scr.id}/power-chains`, { chains: [] });
-  } else {
-    state.currentScreen = await api('PUT', `/screens/${scr.id}/signal-chains`, { chains: [] });
+  pushUndo();
+  try {
+    if (state.mode === 'power') {
+      state.currentScreen = await api('PUT', `/screens/${scr.id}/power-chains`, { chains: [] });
+    } else {
+      state.currentScreen = await api('PUT', `/screens/${scr.id}/signal-chains`, { chains: [] });
+    }
+    renderCanvas();
+    renderStats();
+    renderChainList();
+    updateUndoBtn();
+  } catch (e) {
+    state.undoStack.pop();
+    updateUndoBtn();
+    alert('Ошибка очистки цепочек: ' + e.message);
   }
-  renderCanvas();
-  renderStats();
-  renderChainList();
 }
 
 function renderChainList() {
@@ -566,6 +654,24 @@ function onCabinetClick(cab) {
   renderCanvas();
 }
 
+async function toggleHideCabinet(cabId) {
+  if (!state.currentScreen) return;
+  const cab = state.currentScreen.cabinets.find(c => c.id === cabId);
+  if (!cab) return;
+  pushUndo();
+  try {
+    state.currentScreen = await api('PATCH', `/screens/${state.currentScreen.id}/cabinets/${cabId}`,
+      { phase: null, hidden: !cab.hidden });
+    renderCanvas();
+    renderStats();
+    updateUndoBtn();
+  } catch (e) {
+    state.undoStack.pop();
+    updateUndoBtn();
+    alert('Ошибка изменения кабинета: ' + e.message);
+  }
+}
+
 function renderCanvas() {
   const grid = document.getElementById('grid');
   const svg = document.getElementById('connections-svg');
@@ -603,6 +709,8 @@ function renderCanvas() {
     }
     el.textContent = `${cab.rowIndex},${cab.colIndex}`;
     el.onclick = () => onCabinetClick(cab);
+    el.onmouseenter = () => { state.hoveredCabId = cab.id; };
+    el.onmouseleave = () => { if (state.hoveredCabId === cab.id) state.hoveredCabId = null; };
     grid.appendChild(el);
   }
 
@@ -693,7 +801,61 @@ function wireEvents() {
     e.target.value = '';
   });
 
+  document.getElementById('btn-undo').onclick = undo;
+  wireShortcutsPopover();
+  document.addEventListener('keydown', onGlobalKeydown);
+
   selectPhase(1);
+  updateUndoBtn();
+}
+
+function wireShortcutsPopover() {
+  const btn = document.getElementById('btn-shortcuts');
+  const pop = document.getElementById('shortcuts-popover');
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    pop.style.display = pop.style.display === 'none' ? 'block' : 'none';
+  };
+  document.addEventListener('click', (e) => {
+    if (pop.style.display !== 'none' && !pop.contains(e.target) && e.target !== btn) {
+      pop.style.display = 'none';
+    }
+  });
+}
+
+function isTypingTarget(el) {
+  const tag = (el.tagName || '').toLowerCase();
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable;
+}
+
+function onGlobalKeydown(e) {
+  // Ctrl/Cmd+Z — отменить (работает даже из полей ввода)
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    undo();
+    return;
+  }
+  if (isTypingTarget(e.target)) return;
+  if (!state.currentScreen) return;
+
+  switch (e.key.toLowerCase()) {
+    case 'p': setMode('power'); break;
+    case 's': setMode('signal'); break;
+    case 'n': if (!state.chainBuilding) startChain(); break;
+    case 'enter': if (state.chainBuilding) finishChain(); break;
+    case 'escape': if (state.chainBuilding) cancelChain(); break;
+    case '1': if (state.mode === 'power') selectPhase(1); break;
+    case '2': if (state.mode === 'power') selectPhase(2); break;
+    case '3': if (state.mode === 'power') selectPhase(3); break;
+    case 'delete':
+    case 'backspace':
+      if (state.hoveredCabId != null && !state.chainBuilding) {
+        e.preventDefault();
+        toggleHideCabinet(state.hoveredCabId);
+      }
+      break;
+    default: return;
+  }
 }
 
 async function init() {

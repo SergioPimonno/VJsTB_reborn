@@ -3,6 +3,7 @@ package com.vjstb.ledscheme.web;
 import com.vjstb.ledscheme.dto.ScreenDtos.CreateScreenRequest;
 import com.vjstb.ledscheme.dto.ScreenDtos.ReplacePowerChainsRequest;
 import com.vjstb.ledscheme.dto.ScreenDtos.ReplaceSignalChainsRequest;
+import com.vjstb.ledscheme.dto.ScreenDtos.RestoreScreenRequest;
 import com.vjstb.ledscheme.dto.ScreenDtos.ScreenDetailDto;
 import com.vjstb.ledscheme.dto.ScreenDtos.UpdateCabinetRequest;
 import com.vjstb.ledscheme.dto.ScreenDtos.UpdateScreenPositionRequest;
@@ -70,5 +71,11 @@ public class ScreenController {
     @PutMapping("/api/screens/{id}/signal-chains")
     public ScreenDetailDto replaceSignalChains(@PathVariable Long id, @Valid @RequestBody ReplaceSignalChainsRequest request) {
         return screenService.replaceSignalChains(id, request);
+    }
+
+    /** Атомарно восстанавливает снимок состояния экрана (используется для «отменить»). */
+    @PutMapping("/api/screens/{id}/restore")
+    public ScreenDetailDto restore(@PathVariable Long id, @Valid @RequestBody RestoreScreenRequest request) {
+        return screenService.restore(id, request);
     }
 }

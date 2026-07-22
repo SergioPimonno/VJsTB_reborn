@@ -110,4 +110,28 @@ public final class ScreenDtos {
             @NotNull @Valid List<SignalChainRequest> chains
     ) {
     }
+
+    /** Состояние одного кабинета для восстановления снимка (undo). */
+    public record CabinetStateDto(
+            @NotNull Long id,
+            int phase,
+            boolean hidden
+    ) {
+    }
+
+    /**
+     * Полный снимок редактируемого состояния экрана для операции «отменить».
+     * Применяется атомарно: имя, позиция, состояние кабинетов (фаза/скрытие),
+     * цепочки питания и сигнала. Сетка (rows/cols/тип кабинета) не меняется —
+     * снимок валиден только пока набор кабинетов тот же.
+     */
+    public record RestoreScreenRequest(
+            @NotBlank String name,
+            double posXMm,
+            double posYMm,
+            @NotNull @Valid List<CabinetStateDto> cabinets,
+            @NotNull @Valid List<PowerChainRequest> powerChains,
+            @NotNull @Valid List<SignalChainRequest> signalChains
+    ) {
+    }
 }

@@ -10,8 +10,10 @@ import com.vjstb.ledscheme.dto.SceneDtos.CreateSceneRequest;
 import com.vjstb.ledscheme.dto.SceneDtos.SceneSummaryDto;
 import com.vjstb.ledscheme.dto.ScreenDtos.CreateScreenRequest;
 import com.vjstb.ledscheme.dto.ScreenDtos.PowerChainRequest;
+import com.vjstb.ledscheme.dto.ScreenDtos.CabinetStateDto;
 import com.vjstb.ledscheme.dto.ScreenDtos.ReplacePowerChainsRequest;
 import com.vjstb.ledscheme.dto.ScreenDtos.ReplaceSignalChainsRequest;
+import com.vjstb.ledscheme.dto.ScreenDtos.RestoreScreenRequest;
 import com.vjstb.ledscheme.dto.ScreenDtos.ScreenDetailDto;
 import com.vjstb.ledscheme.dto.ScreenDtos.SignalChainRequest;
 import java.util.List;
@@ -76,5 +78,41 @@ class ScreenApiFlowTests {
         assertThat(refetched.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(refetched.getBody().powerChains()).hasSize(1);
         assertThat(refetched.getBody().signalChains()).hasSize(1);
+    }
+
+    @Test
+    void restoreRevertsScreenSnapshotAtomically() {
+        CabinetTypeDto cabinet = rest.postForObject("/api/cabinet-types",
+                new UpsertCabinetTypeRequest("HTTP restore 500x500", 500, 500, null, 128, 128, 150, 12),
+                CabinetTypeDto.class);
+        ProjectDetailDto project = rest.postForObject("/api/projects",
+                new CreateProjectRequest("restore проект", null), ProjectDetailDto.class);
+        SceneSummaryDto scene = rest.postForObject("/api/projects/" + project.id() + "/scenes",
+                new CreateSceneRequest("restore сцена"), SceneSummaryDto.class);
+        ScreenDetailDto screen = rest.postForObject("/api/scenes/" + scene.id() + "/screens",
+                new CreateScreenRequest("restore экран", cabinet.id(), 2, 2, 0, 0), ScreenDetailDto.class);
+
+        // Снимок «пустого» состояния сразу после создания экрана.
+        RestoreScreenRequest emptySnapshot = new RestoreScreenRequest(
+                screen.name(), screen.posXMm(), screen.posYMm(),
+                screen.cabinets().stream().map(c -> new CabinetStateDto(c.id(), c.phase(), c.hidden())).toList(),
+                List.of(), List.of());
+
+        // Мутируем: добавляем цепочку питания на фазе 2.
+        List<Long> ids = screen.cabinets().stream().map(c -> c.id()).limit(2).toList();
+        ScreenDetailDto mutated = rest.exchange(
+                "/api/screens/" + screen.id() + "/power-chains", org.springframework.http.HttpMethod.PUT,
+                new org.springframework.http.HttpEntity<>(new ReplacePowerChainsRequest(
+                        List.of(new PowerChainRequest(2, ids)))),
+                ScreenDetailDto.class).getBody();
+        assertThat(mutated.powerChains()).hasSize(1);
+
+        // Отменяем через restore — состояние должно вернуться к пустому.
+        ResponseEntity<ScreenDetailDto> restored = rest.exchange(
+                "/api/screens/" + screen.id() + "/restore", org.springframework.http.HttpMethod.PUT,
+                new org.springframework.http.HttpEntity<>(emptySnapshot), ScreenDetailDto.class);
+        assertThat(restored.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(restored.getBody().powerChains()).isEmpty();
+        assertThat(restored.getBody().signalChains()).isEmpty();
     }
 }
