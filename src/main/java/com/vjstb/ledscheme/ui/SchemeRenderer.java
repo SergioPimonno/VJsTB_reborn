@@ -1,10 +1,12 @@
 package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.model.CabinetInstance;
+import com.vjstb.ledscheme.model.CabinetShape;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SignalChain;
+import com.vjstb.ledscheme.model.Workspace;
 import com.vjstb.ledscheme.service.ScreenLogic;
 import com.vjstb.ledscheme.service.ScreenStats;
 import java.awt.BasicStroke;
@@ -44,6 +46,13 @@ public final class SchemeRenderer {
     /** Рисует кабинеты и сохранённые цепочки указанного режима. */
     public static void paintScheme(Graphics2D g2, Screen scr, CabinetType type, boolean power,
                                    int cellW, int cellH, int offX, int offY) {
+        paintScheme(g2, scr, type, power, cellW, cellH, offX, offY, null);
+    }
+
+    /** То же, но с указанием workspace — тогда для ячеек с переопределённым типом
+     *  метка формы (форма кабинета) рисуется по фактическому типу ячейки. */
+    public static void paintScheme(Graphics2D g2, Screen scr, CabinetType type, boolean power,
+                                   int cellW, int cellH, int offX, int offY, Workspace workspace) {
         Font labelFont = g2.getFont().deriveFont(Font.PLAIN, Math.max(9f, cellH * 0.14f));
         for (CabinetInstance cab : scr.getCabinets()) {
             int x = offX + cab.getColIndex() * cellW;
@@ -54,6 +63,19 @@ public final class SchemeRenderer {
            // g2.fillRect(x, y, cellW, cellH);
             g2.setColor(Palette.BORDER);
             g2.drawRect(x, y, cellW, cellH);
+
+            if (!cab.isHidden()) {
+                CabinetType effective = type;
+                if (workspace != null && cab.getCabinetTypeId() != null) {
+                    CabinetType override = workspace.cabinetTypeById(cab.getCabinetTypeId());
+                    if (override != null) {
+                        effective = override;
+                    }
+                }
+                if (effective != null && effective.getShape() != CabinetShape.RECTANGLE) {
+                    drawShapeMarker(g2, x, y, cellW, cellH, effective.getShape());
+                }
+            }
 
             g2.setColor(cab.isHidden() ? Palette.MUTED : new Color(0xc0, 0xc8, 0xd0));
             g2.setFont(labelFont);
@@ -74,13 +96,14 @@ public final class SchemeRenderer {
         }
     }
 
-    /** Рисует одну цепочку линиями между центрами кабинетов. */
+    /** Рисует одну цепочку линиями между центрами кабинетов со стрелками направления. */
     public static void drawChain(Graphics2D g2, Screen scr, List<String> ids, Color color, boolean dashed,
                                  int cellW, int cellH, int offX, int offY) {
         g2.setStroke(dashed
                 ? new BasicStroke(2.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 0, new float[]{6, 5}, 0)
                 : new BasicStroke(2.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         g2.setColor(color);
+        double arrowSize = Math.max(7.0, Math.min(cellW, cellH) * 0.14);
         for (int i = 0; i < ids.size() - 1; i++) {
             CabinetInstance a = scr.cabinetById(ids.get(i));
             CabinetInstance b = scr.cabinetById(ids.get(i + 1));
@@ -92,12 +115,73 @@ public final class SchemeRenderer {
             int bx = offX + b.getColIndex() * cellW + cellW / 2;
             int by = offY + b.getRowIndex() * cellH + cellH / 2;
             g2.drawLine(ax, ay, bx, by);
+            drawArrowHead(g2, ax, ay, bx, by, color, arrowSize);
         }
         g2.setStroke(new BasicStroke(1f));
     }
 
+    /** Метка формы кабинета (треугольная/угловая/круглая) в углу ячейки — сама сетка
+     *  остаётся прямоугольной, метка лишь сигнализирует физическую форму кабинета. */
+    private static void drawShapeMarker(Graphics2D g2, int x, int y, int w, int h, CabinetShape shape) {
+        Color prev = g2.getColor();
+        g2.setColor(Palette.ACCENT);
+        int s = Math.max(8, Math.min(w, h) / 3);
+        int mx = x + w - s - 3;
+        int my = y + h - s - 3;
+        switch (shape) {
+            case TRIANGLE:
+                g2.fillPolygon(new int[]{mx, mx + s, mx}, new int[]{my, my + s, my + s}, 3);
+                break;
+            case CORNER:
+                g2.fillPolygon(new int[]{mx, mx + s, mx + s, mx + s / 2, mx + s / 2, mx},
+                        new int[]{my, my, my + s, my + s, my + s / 2, my + s / 2}, 6);
+                break;
+            case ROUND:
+                g2.fillOval(mx, my, s, s);
+                break;
+            default:
+                break;
+        }
+        g2.setColor(prev);
+    }
+
+    /** Треугольная стрелка на середине отрезка a->b, указывающая направление цепочки. */
+    private static void drawArrowHead(Graphics2D g2, int ax, int ay, int bx, int by, Color color, double size) {
+        double dx = bx - ax;
+        double dy = by - ay;
+        double len = Math.hypot(dx, dy);
+        if (len < 1) {
+            return;
+        }
+        double ux = dx / len;
+        double uy = dy / len;
+        double midX = (ax + bx) / 2.0;
+        double midY = (ay + by) / 2.0;
+        double tipX = midX + ux * size * 0.6;
+        double tipY = midY + uy * size * 0.6;
+        double backX = midX - ux * size * 0.6;
+        double backY = midY - uy * size * 0.6;
+        double leftX = backX - uy * size * 0.55;
+        double leftY = backY + ux * size * 0.55;
+        double rightX = backX + uy * size * 0.55;
+        double rightY = backY - ux * size * 0.55;
+
+        int[] xs = {(int) Math.round(tipX), (int) Math.round(leftX), (int) Math.round(rightX)};
+        int[] ys = {(int) Math.round(tipY), (int) Math.round(leftY), (int) Math.round(rightY)};
+        Color prev = g2.getColor();
+        g2.setColor(color);
+        g2.fillPolygon(xs, ys, 3);
+        g2.setColor(prev);
+    }
+
     /** Рендерит схему экрана в изображение (с заголовком и характеристиками). */
     public static BufferedImage renderImage(Screen scr, CabinetType type, boolean power, int base) {
+        return renderImage(scr, type, power, base, null);
+    }
+
+    /** То же, но вес/мощность в заголовке учитывают переопределение типа кабинета по ячейкам. */
+    public static BufferedImage renderImage(Screen scr, CabinetType type, boolean power, int base,
+                                             com.vjstb.ledscheme.model.Workspace workspace) {
         Dimension c = cellSize(type, base);
         int pad = 24;
         int headerH = 52;
@@ -115,7 +199,7 @@ public final class SchemeRenderer {
         g2.fillRect(0, 0, w, h);
 
         // заголовок
-        ScreenStats stats = ScreenLogic.stats(scr, type);
+        ScreenStats stats = ScreenLogic.stats(scr, type, workspace);
         g2.setColor(Palette.TEXT);
         g2.setFont(g2.getFont().deriveFont(Font.BOLD, 16f));
         String title = "Экран «" + scr.getName() + "» — " + (power ? "Питание" : "Сигнал");
@@ -128,7 +212,7 @@ public final class SchemeRenderer {
                 + trim(stats.totalPowerW()) + " Вт · " + trim(stats.totalWeightKg()) + " кг";
         g2.drawString(sub, pad, 42);
 
-        paintScheme(g2, scr, type, power, c.width, c.height, pad, pad + headerH);
+        paintScheme(g2, scr, type, power, c.width, c.height, pad, pad + headerH, workspace);
         g2.dispose();
         return img;
     }

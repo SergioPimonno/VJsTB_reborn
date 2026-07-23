@@ -10,6 +10,9 @@ public class Scene {
     private String name = "";
     private int orderIndex;
     private List<Screen> screens = new ArrayList<>();
+    /** Узлы/связи общей схемы площадки (питание и сигнал вместе, различаются полем mode). */
+    private List<SchemaNode> schemaNodes = new ArrayList<>();
+    private List<SchemaEdge> schemaEdges = new ArrayList<>();
 
     public Scene() {
     }
@@ -48,5 +51,21 @@ public class Scene {
 
     public void setScreens(List<Screen> screens) {
         this.screens = screens;
+    }
+
+    public List<SchemaNode> getSchemaNodes() {
+        return schemaNodes;
+    }
+
+    public void setSchemaNodes(List<SchemaNode> schemaNodes) {
+        this.schemaNodes = schemaNodes;
+    }
+
+    public List<SchemaEdge> getSchemaEdges() {
+        return schemaEdges;
+    }
+
+    public void setSchemaEdges(List<SchemaEdge> schemaEdges) {
+        this.schemaEdges = schemaEdges;
     }
 }

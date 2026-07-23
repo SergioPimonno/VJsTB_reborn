@@ -13,6 +13,10 @@ public class SignalChain {
     private String id = UUID.randomUUID().toString();
     private Integer portNumber;
     private boolean backup;
+    /** Номер ДРУГОГО порта, который подхватывает сигнал, если этот порт откажет
+     *  (например, резервный маршрут на другом контроллере/фидере). Задаётся на
+     *  основной (не бэкап) цепочке порта; null — резервный порт не назначен. */
+    private Integer backupPortNumber;
     private List<String> cabinetInstanceIds = new ArrayList<>();
 
     public SignalChain() {
@@ -48,6 +52,14 @@ public class SignalChain {
         this.backup = backup;
     }
 
+    public Integer getBackupPortNumber() {
+        return backupPortNumber;
+    }
+
+    public void setBackupPortNumber(Integer backupPortNumber) {
+        this.backupPortNumber = backupPortNumber;
+    }
+
     public List<String> getCabinetInstanceIds() {
         return cabinetInstanceIds;
     }
@@ -61,6 +73,7 @@ public class SignalChain {
         c.id = id;
         c.portNumber = portNumber;
         c.backup = backup;
+        c.backupPortNumber = backupPortNumber;
         c.cabinetInstanceIds = new ArrayList<>(cabinetInstanceIds);
         return c;
     }

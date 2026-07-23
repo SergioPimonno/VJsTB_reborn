@@ -24,6 +24,12 @@ public class CabinetType {
     private double powerConsumptionW = 150;
     /** Вес, кг. */
     private double weightKg = 12;
+    /** Физическая форма кабинета. */
+    private CabinetShape shape = CabinetShape.RECTANGLE;
+    /** Сколько отдельных линий питания нужно развести на кабинет (0 = коммутация встроена/сквозная). */
+    private int powerConnectorsNeeded = 0;
+    /** Сколько отдельных линий сигнала нужно развести на кабинет (0 = коммутация встроена/сквозная). */
+    private int signalConnectorsNeeded = 0;
 
     public CabinetType() {
     }
@@ -100,6 +106,30 @@ public class CabinetType {
         this.weightKg = weightKg;
     }
 
+    public CabinetShape getShape() {
+        return shape;
+    }
+
+    public void setShape(CabinetShape shape) {
+        this.shape = shape;
+    }
+
+    public int getPowerConnectorsNeeded() {
+        return powerConnectorsNeeded;
+    }
+
+    public void setPowerConnectorsNeeded(int powerConnectorsNeeded) {
+        this.powerConnectorsNeeded = powerConnectorsNeeded;
+    }
+
+    public int getSignalConnectorsNeeded() {
+        return signalConnectorsNeeded;
+    }
+
+    public void setSignalConnectorsNeeded(int signalConnectorsNeeded) {
+        this.signalConnectorsNeeded = signalConnectorsNeeded;
+    }
+
     public CabinetType copy() {
         CabinetType c = new CabinetType();
         c.id = id;
@@ -111,6 +141,9 @@ public class CabinetType {
         c.resolutionHeight = resolutionHeight;
         c.powerConsumptionW = powerConsumptionW;
         c.weightKg = weightKg;
+        c.shape = shape;
+        c.powerConnectorsNeeded = powerConnectorsNeeded;
+        c.signalConnectorsNeeded = signalConnectorsNeeded;
         return c;
     }
 }

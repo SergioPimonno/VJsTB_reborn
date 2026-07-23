@@ -3,8 +3,10 @@ package com.vjstb.ledscheme.service;
 import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.PowerChain;
+import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SignalChain;
+import com.vjstb.ledscheme.model.Workspace;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -79,28 +81,48 @@ public final class ScreenLogic {
         return null;
     }
 
-    public static ScreenStats stats(Screen screen, CabinetType type) {
-        double w = type != null ? type.getWidthMm() : 0;
-        double h = type != null ? type.getHeightMm() : 0;
-        int rw = type != null ? type.getResolutionWidth() : 0;
-        int rh = type != null ? type.getResolutionHeight() : 0;
-        double power = type != null ? type.getPowerConsumptionW() : 0;
-        double weight = type != null ? type.getWeightKg() : 0;
+    /** Характеристики экрана без учёта переопределения типа кабинета по ячейкам. */
+    public static ScreenStats stats(Screen screen, CabinetType defaultType) {
+        return stats(screen, defaultType, null);
+    }
+
+    /**
+     * Характеристики экрана. Разрешение/габариты считаются по типу экрана
+     * (геометрия сетки — единая), а вес/мощность/нагрузка по фазам — по
+     * ФАКТИЧЕСКОМУ типу каждого кабинета (с учётом переопределения по ячейкам,
+     * если передан workspace для его разрешения).
+     */
+    public static ScreenStats stats(Screen screen, CabinetType defaultType, Workspace workspace) {
+        double w = defaultType != null ? defaultType.getWidthMm() : 0;
+        double h = defaultType != null ? defaultType.getHeightMm() : 0;
+        int rw = defaultType != null ? defaultType.getResolutionWidth() : 0;
+        int rh = defaultType != null ? defaultType.getResolutionHeight() : 0;
 
         int active = 0;
         int[] phaseCounts = new int[4];
+        double[] phasePower = new double[4];
+        double totalPower = 0;
+        double totalWeight = 0;
         for (CabinetInstance c : screen.getCabinets()) {
             if (c.isHidden()) {
                 continue;
             }
             active++;
+            CabinetType effective = defaultType;
+            if (workspace != null && c.getCabinetTypeId() != null) {
+                CabinetType override = workspace.cabinetTypeById(c.getCabinetTypeId());
+                if (override != null) {
+                    effective = override;
+                }
+            }
+            double p = effective != null ? effective.getPowerConsumptionW() : 0;
+            double wt = effective != null ? effective.getWeightKg() : 0;
+            totalPower += p;
+            totalWeight += wt;
             if (c.getPhase() >= 1 && c.getPhase() <= 3) {
                 phaseCounts[c.getPhase()]++;
+                phasePower[c.getPhase()] += p;
             }
-        }
-        double[] phasePower = new double[4];
-        for (int p = 1; p <= 3; p++) {
-            phasePower[p] = phaseCounts[p] * power;
         }
 
         return new ScreenStats(
@@ -109,11 +131,25 @@ public final class ScreenLogic {
                 screen.getCols() * rw,
                 screen.getRows() * rh,
                 active,
-                active * power,
-                active * weight,
+                totalPower,
+                totalWeight,
                 phaseCounts,
                 phasePower
         );
+    }
+
+    /** Базовая сводка по сцене (прериг): суммарный вес и мощность всех экранов. */
+    public static SceneStats sceneStats(Scene scene, Workspace workspace) {
+        int cabinets = 0;
+        double power = 0;
+        double weight = 0;
+        for (Screen s : scene.getScreens()) {
+            ScreenStats st = stats(s, workspace.cabinetTypeById(s.getCabinetTypeId()), workspace);
+            cabinets += st.activeCabinetCount();
+            power += st.totalPowerW();
+            weight += st.totalWeightKg();
+        }
+        return new SceneStats(scene.getScreens().size(), cabinets, power, weight);
     }
 
     // ---- undo: снимок и восстановление состояния экрана ----
@@ -130,12 +166,22 @@ public final class ScreenLogic {
         live.setCols(snapshot.getCols());
         live.setPosXMm(snapshot.getPosXMm());
         live.setPosYMm(snapshot.getPosYMm());
+        live.setSignalPortCount(snapshot.getSignalPortCount());
+        live.setMountType(snapshot.getMountType());
+        live.setRiggingPointsCount(snapshot.getRiggingPointsCount());
+        live.setRiggingNotes(snapshot.getRiggingNotes());
 
         List<CabinetInstance> cabs = new ArrayList<>();
         for (CabinetInstance c : snapshot.getCabinets()) {
             cabs.add(c.copy());
         }
         live.setCabinets(cabs);
+
+        List<com.vjstb.ledscheme.model.ControllerInstance> ctrls = new ArrayList<>();
+        for (com.vjstb.ledscheme.model.ControllerInstance c : snapshot.getControllers()) {
+            ctrls.add(c.copy());
+        }
+        live.setControllers(ctrls);
 
         List<PowerChain> pc = new ArrayList<>();
         for (PowerChain c : snapshot.getPowerChains()) {

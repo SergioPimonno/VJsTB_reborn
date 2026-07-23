@@ -16,13 +16,21 @@ import java.awt.event.MouseEvent;
 import java.awt.event.MouseWheelEvent;
 import java.util.List;
 import javax.swing.JPanel;
+import javax.swing.SwingUtilities;
 
-/** Холст схемы: рисует сетку кабинетов активного экрана и цепочки, обрабатывает клики. */
+/**
+ * Холст схемы: рисует сетку кабинетов активного экрана и цепочки, обрабатывает
+ * клики и протяжку мышью (зажатая ЛКМ) для построения цепочки.
+ */
 public class CanvasPanel extends JPanel {
 
     public interface Controller {
         boolean isChainBuilding();
         List<String> activeChainCabIds();
+        /** -1, если клавиатурный курсор не установлен. */
+        int cursorRow();
+        int cursorCol();
+        /** Вызывается и на клик, и на вход указателя в новую ячейку при зажатой ЛКМ. */
         void cabinetClicked(String cabId);
         void cabinetHovered(String cabId);
     }
@@ -33,17 +41,38 @@ public class CanvasPanel extends JPanel {
     private final AppModel model;
     private final Controller controller;
     private double zoom = 1.0;
+    private String lastDragCabId;
 
     public CanvasPanel(AppModel model, Controller controller) {
         this.model = model;
         this.controller = controller;
         setBackground(Palette.BG);
+        setFocusable(true);
 
         MouseAdapter mouse = new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent e) {
+                requestFocusInWindow();
                 CabinetInstance cab = cabinetAt(e.getPoint());
+                lastDragCabId = cab != null ? cab.getId() : null;
                 if (cab != null) {
+                    controller.cabinetClicked(cab.getId());
+                }
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                lastDragCabId = null;
+            }
+
+            @Override
+            public void mouseDragged(MouseEvent e) {
+                if (!SwingUtilities.isLeftMouseButton(e)) {
+                    return;
+                }
+                CabinetInstance cab = cabinetAt(e.getPoint());
+                if (cab != null && !cab.getId().equals(lastDragCabId)) {
+                    lastDragCabId = cab.getId();
                     controller.cabinetClicked(cab.getId());
                 }
             }
@@ -138,7 +167,7 @@ public class CanvasPanel extends JPanel {
         boolean power = model.getMode() == AppModel.Mode.POWER;
 
         // кабинеты и сохранённые цепочки (общая отрисовка с экспортом)
-        SchemeRenderer.paintScheme(g2, scr, model.typeOf(scr), power, cw, ch, PADDING, PADDING);
+        SchemeRenderer.paintScheme(g2, scr, model.typeOf(scr), power, cw, ch, PADDING, PADDING, model.getWorkspace());
 
         // строящаяся цепочка + подсветка выбранных
         if (controller.isChainBuilding()) {
@@ -155,6 +184,16 @@ public class CanvasPanel extends JPanel {
                 }
             }
             SchemeRenderer.drawChain(g2, scr, active, c, true, cw, ch, PADDING, PADDING);
+
+            int cr = controller.cursorRow();
+            int cc = controller.cursorCol();
+            if (cr >= 0 && cc >= 0) {
+                int x = PADDING + cc * cw;
+                int y = PADDING + cr * ch;
+                g2.setColor(Color.YELLOW);
+                g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 0, new float[]{4, 3}, 0));
+                g2.drawRect(x + 3, y + 3, cw - 6, ch - 6);
+            }
         }
 
         g2.dispose();

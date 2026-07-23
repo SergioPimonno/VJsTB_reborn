@@ -1,5 +1,6 @@
 package com.vjstb.ledscheme.ui;
 
+import com.vjstb.ledscheme.model.CabinetShape;
 import com.vjstb.ledscheme.model.CabinetType;
 import java.awt.BorderLayout;
 import java.awt.Component;
@@ -10,6 +11,7 @@ import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
+import javax.swing.JComboBox;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
@@ -27,6 +29,9 @@ public class CabinetTypeDialog extends JDialog {
     private final JTextField resHField = new JTextField();
     private final JTextField powerField = new JTextField();
     private final JTextField weightField = new JTextField();
+    private final JComboBox<CabinetShape> shapeField = new JComboBox<>(CabinetShape.values());
+    private final JTextField powerConnectorsField = new JTextField();
+    private final JTextField signalConnectorsField = new JTextField();
 
     private CabinetType result;
 
@@ -51,6 +56,12 @@ public class CabinetTypeDialog extends JDialog {
         form.add(powerField);
         form.add(new JLabel("Вес (кг)"));
         form.add(weightField);
+        form.add(new JLabel("Форма"));
+        form.add(shapeField);
+        form.add(new JLabel("Линий питания на кабинет (0 = встроено)"));
+        form.add(powerConnectorsField);
+        form.add(new JLabel("Линий сигнала на кабинет (0 = встроено)"));
+        form.add(signalConnectorsField);
 
         CabinetType src = existing != null ? existing : new CabinetType();
         nameField.setText(src.getName());
@@ -61,6 +72,9 @@ public class CabinetTypeDialog extends JDialog {
         resHField.setText(String.valueOf(src.getResolutionHeight()));
         powerField.setText(num(src.getPowerConsumptionW()));
         weightField.setText(num(src.getWeightKg()));
+        shapeField.setSelectedItem(src.getShape());
+        powerConnectorsField.setText(String.valueOf(src.getPowerConnectorsNeeded()));
+        signalConnectorsField.setText(String.valueOf(src.getSignalConnectorsNeeded()));
 
         JButton ok = new JButton("Сохранить");
         ok.addActionListener(e -> onOk(existing));
@@ -98,6 +112,9 @@ public class CabinetTypeDialog extends JDialog {
             ct.setResolutionHeight((int) parsePositive(resHField.getText(), "Разрешение H"));
             ct.setPowerConsumptionW(parseNonNeg(powerField.getText(), "Мощность"));
             ct.setWeightKg(parseNonNeg(weightField.getText(), "Вес"));
+            ct.setShape((CabinetShape) shapeField.getSelectedItem());
+            ct.setPowerConnectorsNeeded((int) parseNonNeg(powerConnectorsField.getText(), "Линий питания"));
+            ct.setSignalConnectorsNeeded((int) parseNonNeg(signalConnectorsField.getText(), "Линий сигнала"));
             result = ct;
             dispose();
         } catch (IllegalArgumentException ex) {

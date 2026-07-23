@@ -1,70 +1,85 @@
 package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.ui.stage.OutputStagePanel;
+import com.vjstb.ledscheme.ui.stage.PowerStagePanel;
+import com.vjstb.ledscheme.ui.stage.SetupStagePanel;
+import com.vjstb.ledscheme.ui.stage.SignalStagePanel;
+import com.vjstb.ledscheme.ui.stage.VisualizationStagePanel;
 import java.awt.BorderLayout;
+import java.awt.CardLayout;
 import java.awt.Component;
-import java.awt.Dimension;
 import java.awt.KeyEventDispatcher;
 import java.awt.KeyboardFocusManager;
 import java.awt.event.KeyEvent;
-import java.util.ArrayList;
-import java.util.List;
 import javax.swing.BorderFactory;
-import javax.swing.JButton;
-import javax.swing.JComponent;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
-import javax.swing.JScrollPane;
-import javax.swing.JSplitPane;
-import javax.swing.JToolBar;
 import javax.swing.SwingUtilities;
 import javax.swing.text.JTextComponent;
 
-/** Главное окно приложения: координирует модель, боковую панель, холст, горячие клавиши. */
-public class MainFrame extends JFrame implements CanvasPanel.Controller {
+/**
+ * Главное окно: верхнее меню, переключатель этапов работы (Сетап/Питание/Сигнал/
+ * Визуализация/Вывод) и область содержимого текущего этапа. Координирует общие
+ * горячие клавиши (отмена, построение цепочек на активном этапе).
+ */
+public class MainFrame extends JFrame {
 
     private final AppModel model;
-    private final CanvasPanel canvas;
-    private final SidebarPanel sidebar;
 
-    private final JButton undoButton = new JButton("↶ Отменить");
-    private final JLabel modeBadge = new JLabel();
+    private final SetupStagePanel setupStage;
+    private final PowerStagePanel powerStage;
+    private final SignalStagePanel signalStage;
+    private final VisualizationStagePanel visualizationStage;
+    private final OutputStagePanel outputStage;
+
+    private final CardLayout cards = new CardLayout();
+    private final JPanel content = new JPanel(cards);
     private final JLabel statusBar = new JLabel(" ");
+    private final javax.swing.JButton undoButton = new javax.swing.JButton("↶ Отменить");
 
-    // transient chain-building state (не сохраняется)
-    private boolean chainBuilding = false;
-    private final List<String> activeChainCabIds = new ArrayList<>();
-    private String hoveredCabId;
+    private String currentStage = StageSwitcher.SETUP;
 
     public MainFrame(AppModel model) {
         super("LED Scheme Designer");
         this.model = model;
-        this.canvas = new CanvasPanel(model, this);
-        this.sidebar = new SidebarPanel(model, this);
+
+        setupStage = new SetupStagePanel(model);
+        powerStage = new PowerStagePanel(model);
+        signalStage = new SignalStagePanel(model);
+        visualizationStage = new VisualizationStagePanel(model);
+        outputStage = new OutputStagePanel(model);
 
         setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setSize(1280, 820);
+        setSize(1360, 860);
         setLocationRelativeTo(null);
-
         setLayout(new BorderLayout());
-        add(buildToolbar(), BorderLayout.NORTH);
 
-        JScrollPane sideScroll = new JScrollPane(sidebar);
-        sideScroll.setBorder(null);
-        sideScroll.getVerticalScrollBar().setUnitIncrement(16);
-        sideScroll.setMinimumSize(new Dimension(300, 100));
-        sideScroll.setPreferredSize(new Dimension(330, 100));
+        setJMenuBar(new MainMenuBar(this, model, this::showShortcuts));
 
-        JScrollPane canvasScroll = new JScrollPane(canvas);
-        canvasScroll.getVerticalScrollBar().setUnitIncrement(24);
-        canvasScroll.getHorizontalScrollBar().setUnitIncrement(24);
+        JPanel top = new JPanel(new BorderLayout());
+        StageSwitcher switcher = new StageSwitcher(this::switchStage);
+        top.add(switcher, BorderLayout.CENTER);
+        JPanel toolRow = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 8, 4));
+        undoButton.setToolTipText("Отменить последнее действие (Ctrl+Z)");
+        undoButton.addActionListener(e -> model.undo());
+        javax.swing.JButton shortcutsBtn = new javax.swing.JButton("⌨");
+        shortcutsBtn.setToolTipText("Горячие клавиши");
+        shortcutsBtn.addActionListener(e -> showShortcuts());
+        toolRow.add(undoButton);
+        toolRow.add(shortcutsBtn);
+        top.add(toolRow, BorderLayout.EAST);
+        top.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
+        add(top, BorderLayout.NORTH);
 
-        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sideScroll, canvasScroll);
-        split.setDividerLocation(330);
-        split.setContinuousLayout(true);
-        add(split, BorderLayout.CENTER);
+        content.add(setupStage, StageSwitcher.SETUP);
+        content.add(powerStage, StageSwitcher.POWER);
+        content.add(signalStage, StageSwitcher.SIGNAL);
+        content.add(visualizationStage, StageSwitcher.VISUALIZATION);
+        content.add(outputStage, StageSwitcher.OUTPUT);
+        add(content, BorderLayout.CENTER);
 
         statusBar.setBorder(BorderFactory.createEmptyBorder(4, 10, 4, 10));
         statusBar.setForeground(Palette.MUTED);
@@ -75,103 +90,23 @@ public class MainFrame extends JFrame implements CanvasPanel.Controller {
         refresh();
     }
 
-    private JToolBar buildToolbar() {
-        JToolBar bar = new JToolBar();
-        bar.setFloatable(false);
-        bar.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
-
-        undoButton.setToolTipText("Отменить последнее действие (Ctrl+Z)");
-        undoButton.addActionListener(e -> model.undo());
-        bar.add(undoButton);
-
-        JButton shortcutsButton = new JButton("⌨ Горячие клавиши");
-        shortcutsButton.addActionListener(e -> showShortcuts());
-        bar.add(shortcutsButton);
-
-        JButton fitButton = new JButton("Масштаб 100%");
-        fitButton.addActionListener(e -> canvas.resetZoom());
-        bar.add(fitButton);
-
-        bar.add(javax.swing.Box.createHorizontalGlue());
-        modeBadge.setForeground(Palette.ACCENT);
-        bar.add(modeBadge);
-        return bar;
-    }
-
-    // ---- CanvasPanel.Controller ----
-
-    @Override
-    public boolean isChainBuilding() {
-        return chainBuilding;
-    }
-
-    @Override
-    public List<String> activeChainCabIds() {
-        return activeChainCabIds;
-    }
-
-    @Override
-    public void cabinetClicked(String cabId) {
-        if (!chainBuilding) {
-            return;
+    private void switchStage(String stage) {
+        // переключение на цепочко-строящий этап завершает построение, начатое на другом
+        if (!stage.equals(StageSwitcher.POWER)) {
+            powerStage.chainController().finish();
         }
-        if (!activeChainCabIds.contains(cabId)) {
-            activeChainCabIds.add(cabId);
-            canvas.repaint();
-            updateStatus();
+        if (!stage.equals(StageSwitcher.SIGNAL)) {
+            signalStage.chainController().finish();
         }
-    }
-
-    @Override
-    public void cabinetHovered(String cabId) {
-        hoveredCabId = cabId;
-    }
-
-    // ---- chain building coordination (вызывается из боковой панели и шорткатов) ----
-
-    public void startChain() {
-        if (model.getCurrentScreen() == null) {
-            return;
+        currentStage = stage;
+        if (stage.equals(StageSwitcher.POWER)) {
+            model.setMode(AppModel.Mode.POWER);
+        } else if (stage.equals(StageSwitcher.SIGNAL)) {
+            model.setMode(AppModel.Mode.SIGNAL);
         }
-        chainBuilding = true;
-        activeChainCabIds.clear();
-        refresh();
-        setStatus("Кликайте по кабинетам на схеме в порядке цепочки. Enter — завершить, Esc — отмена.");
-    }
-
-    public void cancelChain() {
-        chainBuilding = false;
-        activeChainCabIds.clear();
+        cards.show(content, stage);
         refresh();
     }
-
-    public void finishChain() {
-        if (!chainBuilding) {
-            return;
-        }
-        if (activeChainCabIds.isEmpty()) {
-            cancelChain();
-            return;
-        }
-        try {
-            if (model.getMode() == AppModel.Mode.POWER) {
-                model.addPowerChain(model.getActivePhase(), new ArrayList<>(activeChainCabIds));
-            } else {
-                model.addSignalChain(sidebar.getSignalPort(), sidebar.isSignalBackup(), new ArrayList<>(activeChainCabIds));
-            }
-            chainBuilding = false;
-            activeChainCabIds.clear();
-            refresh();
-        } catch (RuntimeException ex) {
-            JOptionPane.showMessageDialog(this, ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
-        }
-    }
-
-    public boolean isChainBuildingActive() {
-        return chainBuilding;
-    }
-
-    // ---- shortcuts ----
 
     private void installShortcuts() {
         KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(new KeyEventDispatcher() {
@@ -180,7 +115,6 @@ public class MainFrame extends JFrame implements CanvasPanel.Controller {
                 if (e.getID() != KeyEvent.KEY_PRESSED || !isActive()) {
                     return false;
                 }
-                // Ctrl+Z — всегда
                 if (e.isControlDown() && e.getKeyCode() == KeyEvent.VK_Z) {
                     model.undo();
                     return true;
@@ -189,22 +123,23 @@ public class MainFrame extends JFrame implements CanvasPanel.Controller {
                 if (focus instanceof JTextComponent) {
                     return false; // не мешаем вводу текста
                 }
-                if (model.getCurrentScreen() == null) {
+                ChainInteractionController ctrl = activeChainController();
+                if (ctrl == null) {
                     return false;
                 }
                 switch (e.getKeyCode()) {
-                    case KeyEvent.VK_P -> { model.setMode(AppModel.Mode.POWER); return true; }
-                    case KeyEvent.VK_S -> { model.setMode(AppModel.Mode.SIGNAL); return true; }
-                    case KeyEvent.VK_N -> { if (!chainBuilding) startChain(); return true; }
-                    case KeyEvent.VK_ENTER -> { if (chainBuilding) finishChain(); return true; }
-                    case KeyEvent.VK_ESCAPE -> { if (chainBuilding) cancelChain(); return true; }
-                    case KeyEvent.VK_1 -> { if (model.getMode() == AppModel.Mode.POWER) model.setActivePhase(1); return true; }
-                    case KeyEvent.VK_2 -> { if (model.getMode() == AppModel.Mode.POWER) model.setActivePhase(2); return true; }
-                    case KeyEvent.VK_3 -> { if (model.getMode() == AppModel.Mode.POWER) model.setActivePhase(3); return true; }
-                    case KeyEvent.VK_DELETE -> {
-                        if (!chainBuilding && hoveredCabId != null) {
-                            model.toggleCabinetHidden(hoveredCabId);
-                            return true;
+                    case KeyEvent.VK_ESCAPE -> { ctrl.finish(); return true; }
+                    case KeyEvent.VK_UP -> { ctrl.moveCursor(-1, 0); return true; }
+                    case KeyEvent.VK_DOWN -> { ctrl.moveCursor(1, 0); return true; }
+                    case KeyEvent.VK_LEFT -> { ctrl.moveCursor(0, -1); return true; }
+                    case KeyEvent.VK_RIGHT -> { ctrl.moveCursor(0, 1); return true; }
+                    case KeyEvent.VK_DELETE, KeyEvent.VK_BACK_SPACE -> {
+                        if (!ctrl.isChainBuilding()) {
+                            String hovered = hoveredCabinetOnActiveStage();
+                            if (hovered != null) {
+                                model.toggleCabinetHidden(hovered);
+                                return true;
+                            }
                         }
                         return false;
                     }
@@ -214,52 +149,57 @@ public class MainFrame extends JFrame implements CanvasPanel.Controller {
         });
     }
 
+    private ChainInteractionController activeChainController() {
+        if (currentStage.equals(StageSwitcher.POWER)) {
+            return powerStage.chainController();
+        }
+        if (currentStage.equals(StageSwitcher.SIGNAL)) {
+            return signalStage.chainController();
+        }
+        return null;
+    }
+
+    private String hoveredCabinetOnActiveStage() {
+        if (currentStage.equals(StageSwitcher.POWER)) {
+            return powerStage.chainController().hoveredCabinetId();
+        }
+        if (currentStage.equals(StageSwitcher.SIGNAL)) {
+            return signalStage.chainController().hoveredCabinetId();
+        }
+        return null;
+    }
+
     private void showShortcuts() {
         String msg = """
-                Ctrl+Z — отменить действие
-                P / S — режим Питание / Сигнал
-                N — новая цепочка
-                Enter — завершить цепочку
-                Esc — отмена построения цепочки
-                1 / 2 / 3 — фаза L1 / L2 / L3 (питание)
-                Del — скрыть кабинет под курсором
+                Ctrl+Z — отменить действие (везде)
+
+                На этапах «Питание» / «Сигнал»:
+                Клик по фазе/порту — начать новую цепочку
+                Клик, зажатая ЛКМ или стрелки — добавить кабинеты
+                Esc — завершить цепочку
+                ПКМ по порту (Сигнал) — переключить бэкап
+                Del — скрыть/показать кабинет под курсором (вне построения)
                 Ctrl+колесо — масштаб холста""";
         JOptionPane.showMessageDialog(this, msg, "Горячие клавиши", JOptionPane.INFORMATION_MESSAGE);
     }
 
-    // ---- refresh ----
-
-    public void refresh() {
+    private void refresh() {
         SwingUtilities.invokeLater(() -> {
             undoButton.setEnabled(model.canUndo());
             undoButton.setText(model.undoDepth() > 0 ? "↶ Отменить (" + model.undoDepth() + ")" : "↶ Отменить");
-            modeBadge.setText(model.getMode() == AppModel.Mode.POWER ? "⚡ Питание" : "📡 Сигнал");
-            sidebar.rebuild();
-            canvas.revalidate();
-            canvas.repaint();
             updateStatus();
         });
     }
 
     private void updateStatus() {
-        if (chainBuilding) {
-            return; // сообщение о построении уже показано
-        }
         if (model.getCurrentScreen() != null) {
-            setStatus("Экран «" + model.getCurrentScreen().getName() + "»");
+            statusBar.setText("Экран «" + model.getCurrentScreen().getName() + "»  ·  этап: " + currentStage);
+        } else if (model.getCurrentScene() != null) {
+            statusBar.setText("Сцена «" + model.getCurrentScene().getName() + "»  ·  этап: " + currentStage);
         } else if (model.getCurrentProject() != null) {
-            setStatus("Проект «" + model.getCurrentProject().getName() + "»");
+            statusBar.setText("Проект «" + model.getCurrentProject().getName() + "»  ·  этап: " + currentStage);
         } else {
-            setStatus("Создайте или выберите проект слева.");
+            statusBar.setText("Создайте или выберите проект в разделе «Сетап»  ·  этап: " + currentStage);
         }
-    }
-
-    public void setStatus(String text) {
-        statusBar.setText(text);
-    }
-
-    static void styleSectionBorder(JComponent c, String title) {
-        c.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createMatteBorder(0, 0, 1, 0, Palette.BORDER), title));
     }
 }

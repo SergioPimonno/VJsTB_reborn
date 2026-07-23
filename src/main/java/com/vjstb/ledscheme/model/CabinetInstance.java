@@ -11,8 +11,12 @@ public class CabinetInstance {
     private String id = UUID.randomUUID().toString();
     private int rowIndex;
     private int colIndex;
+    /** Ячейка исключена из экрана: не считается, не рисуется, не участвует в цепочках.
+     *  Так задаётся неправильная (не прямоугольная) форма экрана — маской ячеек. */
     private boolean hidden;
     private int phase;
+    /** Тип кабинета для ЭТОЙ ячейки, если отличается от типа экрана по умолчанию (null = тип экрана). */
+    private String cabinetTypeId;
 
     public CabinetInstance() {
     }
@@ -74,6 +78,14 @@ public class CabinetInstance {
         this.phase = phase;
     }
 
+    public String getCabinetTypeId() {
+        return cabinetTypeId;
+    }
+
+    public void setCabinetTypeId(String cabinetTypeId) {
+        this.cabinetTypeId = cabinetTypeId;
+    }
+
     public CabinetInstance copy() {
         CabinetInstance c = new CabinetInstance();
         c.id = id;
@@ -81,6 +93,7 @@ public class CabinetInstance {
         c.colIndex = colIndex;
         c.hidden = hidden;
         c.phase = phase;
+        c.cabinetTypeId = cabinetTypeId;
         return c;
     }
 }

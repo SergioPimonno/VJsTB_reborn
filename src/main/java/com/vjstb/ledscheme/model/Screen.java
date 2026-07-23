@@ -20,6 +20,19 @@ public class Screen {
     /** Позиция левого верхнего угла экрана в сцене, мм. */
     private double posXMm;
     private double posYMm;
+    /** Количество портов контроллера, доступных для расключения сигнала на этом экране. */
+    private int signalPortCount = 8;
+
+    /** Способ монтажа — влияет на применимость расчёта точек подвеса. */
+    private ScreenMountType mountType = ScreenMountType.FLOOR;
+    /** Заготовка под расчёт точек подвеса (формула будет добавлена отдельно):
+     *  пока просто вручную вводимое количество точек и заметки. */
+    private int riggingPointsCount = 0;
+    private String riggingNotes;
+
+    /** Контроллеры, обслуживающие экран (может быть несколько). Если список не пуст,
+     *  суммарное число их портов определяет доступные порты сигнала вместо signalPortCount. */
+    private List<ControllerInstance> controllers = new ArrayList<>();
 
     private List<CabinetInstance> cabinets = new ArrayList<>();
     private List<PowerChain> powerChains = new ArrayList<>();
@@ -84,6 +97,46 @@ public class Screen {
         this.posYMm = posYMm;
     }
 
+    public int getSignalPortCount() {
+        return signalPortCount;
+    }
+
+    public void setSignalPortCount(int signalPortCount) {
+        this.signalPortCount = signalPortCount;
+    }
+
+    public ScreenMountType getMountType() {
+        return mountType;
+    }
+
+    public void setMountType(ScreenMountType mountType) {
+        this.mountType = mountType;
+    }
+
+    public int getRiggingPointsCount() {
+        return riggingPointsCount;
+    }
+
+    public void setRiggingPointsCount(int riggingPointsCount) {
+        this.riggingPointsCount = riggingPointsCount;
+    }
+
+    public String getRiggingNotes() {
+        return riggingNotes;
+    }
+
+    public void setRiggingNotes(String riggingNotes) {
+        this.riggingNotes = riggingNotes;
+    }
+
+    public List<ControllerInstance> getControllers() {
+        return controllers;
+    }
+
+    public void setControllers(List<ControllerInstance> controllers) {
+        this.controllers = controllers;
+    }
+
     public List<CabinetInstance> getCabinets() {
         return cabinets;
     }
@@ -130,6 +183,16 @@ public class Screen {
         return null;
     }
 
+    @JsonIgnore
+    public SignalChain signalChainByPort(int port, boolean backup) {
+        for (SignalChain c : signalChains) {
+            if (c.getPortNumber() != null && c.getPortNumber() == port && c.isBackup() == backup) {
+                return c;
+            }
+        }
+        return null;
+    }
+
     public Screen copy() {
         Screen s = new Screen();
         s.id = id;
@@ -139,6 +202,14 @@ public class Screen {
         s.cols = cols;
         s.posXMm = posXMm;
         s.posYMm = posYMm;
+        s.signalPortCount = signalPortCount;
+        s.mountType = mountType;
+        s.riggingPointsCount = riggingPointsCount;
+        s.riggingNotes = riggingNotes;
+        s.controllers = new ArrayList<>();
+        for (ControllerInstance c : controllers) {
+            s.controllers.add(c.copy());
+        }
         s.cabinets = new ArrayList<>();
         for (CabinetInstance c : cabinets) {
             s.cabinets.add(c.copy());
