@@ -53,7 +53,15 @@ public class AppModel {
     private Mode mode = Mode.POWER;
     private int activePhase = 1;
 
-    private final Deque<Screen> undoStack = new ArrayDeque<>();
+    /** Снимок для «отменить»: состояние текущего экрана + цепочки его сцены на тот
+     *  момент. Цепочки хранятся на уровне сцены, а не экрана (см. Task #78), поэтому
+     *  снимок ОДНОГО экрана (как было раньше) больше не покрывает отмену
+     *  добавления/удаления/разрыва цепочки — нужен отдельный снимок списков сцены. */
+    private record UndoEntry(Screen screenSnapshot, List<PowerChain> powerChainsSnapshot,
+                              List<SignalChain> signalChainsSnapshot) {
+    }
+
+    private final Deque<UndoEntry> undoStack = new ArrayDeque<>();
     private final List<Listener> listeners = new ArrayList<>();
 
     public AppModel(WorkspaceStore store) {
@@ -449,7 +457,11 @@ public class AppModel {
             int offset = portOffsetOf(scene, backup);
             ControllerType backupType = workspace.controllerTypeById(backup.getControllerTypeId());
             int count = backupType != null ? backupType.effectivePortCount() : 0;
-            for (SignalChain c : screen.getSignalChains()) {
+            // По всей сцене, а не только screen.getSignalChains() — цепочка на порту
+            // резервируемого контроллера могла быть построена (и физически храниться,
+            // до Task #78 — привязанной к экрану, где она была ЗАВЕРШЕНА) при
+            // просмотре ЛЮБОГО экрана сцены, не только этого.
+            for (SignalChain c : scene.getSignalChains()) {
                 if (c.getPortNumber() != null && c.getPortNumber() > offset && c.getPortNumber() <= offset + count
                         && !c.getCabinetInstanceIds().isEmpty()) {
                     throw new IllegalArgumentException("У резервного контроллера уже есть собственная цепочка"
@@ -625,7 +637,7 @@ public class AppModel {
         }
         screen.setName(name);
         screen.setCabinetTypeId(cabinetTypeId);
-        ScreenLogic.resizeGrid(screen, rows, cols);
+        ScreenLogic.resizeGrid(screen, rows, cols, sceneContaining(screen));
         undoStack.clear(); // id кабинетов могли измениться — снимки недействительны
         changed();
     }
@@ -1011,10 +1023,10 @@ public class AppModel {
     public SchemaNode addSchemaNodeFromPreset(SchemaMode mode, EquipmentPreset preset, double x, double y) {
         SchemaNode node = addSchemaNode(mode, preset.getCategory(), preset.getName(), x, y, null);
         for (SchemaCard c : preset.getCards()) {
-            node.getCards().add(c.copy());
+            node.getCards().add(duplicateCardWithFreshIds(c));
         }
         for (CardPort p : preset.getPowerConnectors()) {
-            node.getPowerConnectors().add(p.copy());
+            node.getPowerConnectors().add(duplicatePortWithFreshId(p));
         }
         autoFitNodeToPorts(node);
         changed();
@@ -1041,7 +1053,7 @@ public class AppModel {
             }
         }
         for (CardPort p : preset.getPowerConnectors()) {
-            node.getPowerConnectors().add(p.copy());
+            node.getPowerConnectors().add(duplicatePortWithFreshId(p));
         }
         autoFitNodeToPorts(node);
         changed();
@@ -1049,10 +1061,16 @@ public class AppModel {
     }
 
     /** Копия карты с НОВЫМИ id (у самой карты и у каждого её разъёма) — в отличие
-     *  от {@link SchemaCard#copy()} (сохраняет id для случаев, где важна идентичность,
-     *  например снапшоты undo), нужна, когда в узел добавляется НЕСКОЛЬКО экземпляров
-     *  одного и того же шаблона карты: с одинаковыми id гнёзда стали бы неразличимы
-     *  для коммутации через гнёзда (Task #52) и удаления конкретной карты. */
+     *  от {@link SchemaCard#copy()} (сохраняет id как есть — годится для "редактировать
+     *  как новый" в библиотеке, где копия ЗАМЕНЯЕТ оригинал, а не сосуществует с ним),
+     *  эта версия обязательна всякий раз, когда из ОДНОГО пресета/шаблона создаётся
+     *  НЕСКОЛЬКО независимых узлов схемы (или несколько карт одного шаблона в одном
+     *  узле): с одинаковыми id гнёзда разных физических блоков были бы неразличимы
+     *  для коммутации через гнёзда (Task #52) и для подсчёта занятых/свободных линий
+     *  гнезда (SchemaCanvasPanel.usedCount сравнивает по portId) — без этого лимит
+     *  на гнездо одного блока (например "Проходная") ошибочно делился бы на ВСЕ
+     *  узлы, созданные из того же пресета, вместо того чтобы считаться отдельно для
+     *  каждого физического экземпляра. */
     private static SchemaCard duplicateCardWithFreshIds(SchemaCard template) {
         SchemaCard c = template.copy();
         c.setId(java.util.UUID.randomUUID().toString());
@@ -1060,6 +1078,14 @@ public class AppModel {
             p.setId(java.util.UUID.randomUUID().toString());
         }
         return c;
+    }
+
+    /** Копия одиночного гнезда (разъём питания вне карты) с НОВЫМ id — см.
+     *  {@link #duplicateCardWithFreshIds}, та же причина. */
+    private static CardPort duplicatePortWithFreshId(CardPort template) {
+        CardPort p = template.copy();
+        p.setId(java.util.UUID.randomUUID().toString());
+        return p;
     }
 
     // ---- канвасы компоновки контента (выходные кадры сигнала, сцена-scoped) ----
@@ -1193,7 +1219,7 @@ public class AppModel {
     // ---- chains ----
 
     public void addPowerChain(int phase, List<String> cabinetIds) {
-        if (currentScreen == null || cabinetIds.isEmpty()) {
+        if (currentScreen == null || currentScene == null || cabinetIds.isEmpty()) {
             return;
         }
         // Как и сигнальная цепочка, силовая цепочка физически может продолжаться с
@@ -1211,12 +1237,19 @@ public class AppModel {
                 cab.setPhase(phase);
             }
         }
-        currentScreen.getPowerChains().add(new PowerChain(phase, cabinetIds));
+        // Цепочка хранится на уровне СЦЕНЫ, а не конкретного экрана (см. Task #78,
+        // независимый менеджер цепочек) — раньше привязка к "текущему на момент
+        // завершения" экрану была источником повторяющихся багов: экран, где
+        // цепочка физически НАЧИНАЛАСЬ, но не был активен при завершении, не видел
+        // её вовсе (список цепочек, поиск по порту, отрисовка) — а теперь она
+        // принадлежит сцене целиком, и каждый экран сам решает, какую её часть
+        // рисовать, по факту наличия своих кабинетов в списке.
+        currentScene.getPowerChains().add(new PowerChain(phase, cabinetIds));
         changed();
     }
 
     public void addSignalChain(Integer port, boolean backup, List<String> cabinetIds) {
-        if (currentScreen == null || cabinetIds.isEmpty()) {
+        if (currentScreen == null || currentScene == null || cabinetIds.isEmpty()) {
             return;
         }
         // Проверка здесь, а не только в UI-колбэке (SignalStagePanel.onPortSelected) —
@@ -1236,11 +1269,11 @@ public class AppModel {
         // только чтобы было куда сохранить резервный порт, кабинетов ещё нет) —
         // заполняем именно её, а не добавляем вторую запись того же порта: резерв
         // и реальная прокладка — один и тот же порт, а не два разных.
-        SignalChain existing = port != null ? currentScreen.signalChainByPort(port, backup) : null;
+        SignalChain existing = port != null ? signalChainByPortInScene(currentScene, port, backup) : null;
         if (existing != null && existing.getCabinetInstanceIds().isEmpty()) {
             existing.setCabinetInstanceIds(new ArrayList<>(cabinetIds));
         } else {
-            currentScreen.getSignalChains().add(new SignalChain(port, backup, cabinetIds));
+            currentScene.getSignalChains().add(new SignalChain(port, backup, cabinetIds));
         }
         changed();
     }
@@ -1250,13 +1283,7 @@ public class AppModel {
             return;
         }
         pushUndo();
-        // По всей сцене, а не только currentScreen — цепочка физически хранится на
-        // ОДНОМ экране (том, что был активен при завершении построения), который
-        // может быть ДРУГИМ, чем экран, откуда пользователь сейчас удаляет её из
-        // списка «Существующие цепочки» (см. Task #68).
-        for (Screen s : currentScene.getScreens()) {
-            s.getPowerChains().removeIf(c -> c.getId().equals(chainId));
-        }
+        currentScene.getPowerChains().removeIf(c -> c.getId().equals(chainId));
         changed();
     }
 
@@ -1265,10 +1292,7 @@ public class AppModel {
             return;
         }
         pushUndo();
-        // По всей сцене — см. deletePowerChain выше (та же причина, Task #68).
-        for (Screen s : currentScene.getScreens()) {
-            s.getSignalChains().removeIf(c -> c.getId().equals(chainId));
-        }
+        currentScene.getSignalChains().removeIf(c -> c.getId().equals(chainId));
         changed();
     }
 
@@ -1276,10 +1300,10 @@ public class AppModel {
      *  linkIndex+1), не удаляя всю цепочку — вместо неё остаются одна или две
      *  цепочки по обе стороны разрыва (та же фаза). */
     public void splitPowerChainLink(String chainId, int linkIndex) {
-        if (currentScreen == null) {
+        if (currentScene == null) {
             return;
         }
-        PowerChain chain = currentScreen.getPowerChains().stream()
+        PowerChain chain = currentScene.getPowerChains().stream()
                 .filter(c -> c.getId().equals(chainId)).findFirst().orElse(null);
         if (chain == null) {
             return;
@@ -1291,12 +1315,12 @@ public class AppModel {
         List<String> first = new ArrayList<>(ids.subList(0, linkIndex + 1));
         List<String> second = new ArrayList<>(ids.subList(linkIndex + 1, ids.size()));
         pushUndo();
-        currentScreen.getPowerChains().removeIf(c -> c.getId().equals(chainId));
+        currentScene.getPowerChains().removeIf(c -> c.getId().equals(chainId));
         if (!first.isEmpty()) {
-            currentScreen.getPowerChains().add(new PowerChain(chain.getPhase(), first));
+            currentScene.getPowerChains().add(new PowerChain(chain.getPhase(), first));
         }
         if (!second.isEmpty()) {
-            currentScreen.getPowerChains().add(new PowerChain(chain.getPhase(), second));
+            currentScene.getPowerChains().add(new PowerChain(chain.getPhase(), second));
         }
         changed();
     }
@@ -1304,10 +1328,10 @@ public class AppModel {
     /** То же для цепочки сигнала (см. {@link #splitPowerChainLink}) — порт/бэкап
      *  сохраняются на обеих половинах. */
     public void splitSignalChainLink(String chainId, int linkIndex) {
-        if (currentScreen == null) {
+        if (currentScene == null) {
             return;
         }
-        SignalChain chain = currentScreen.getSignalChains().stream()
+        SignalChain chain = currentScene.getSignalChains().stream()
                 .filter(c -> c.getId().equals(chainId)).findFirst().orElse(null);
         if (chain == null) {
             return;
@@ -1319,12 +1343,12 @@ public class AppModel {
         List<String> first = new ArrayList<>(ids.subList(0, linkIndex + 1));
         List<String> second = new ArrayList<>(ids.subList(linkIndex + 1, ids.size()));
         pushUndo();
-        currentScreen.getSignalChains().removeIf(c -> c.getId().equals(chainId));
+        currentScene.getSignalChains().removeIf(c -> c.getId().equals(chainId));
         if (!first.isEmpty()) {
-            currentScreen.getSignalChains().add(new SignalChain(chain.getPortNumber(), chain.isBackup(), first));
+            currentScene.getSignalChains().add(new SignalChain(chain.getPortNumber(), chain.isBackup(), first));
         }
         if (!second.isEmpty()) {
-            currentScreen.getSignalChains().add(new SignalChain(chain.getPortNumber(), chain.isBackup(), second));
+            currentScene.getSignalChains().add(new SignalChain(chain.getPortNumber(), chain.isBackup(), second));
         }
         changed();
     }
@@ -1336,36 +1360,59 @@ public class AppModel {
      * чтобы было куда сохранить ссылку.
      */
     public void setSignalBackupPortLink(int port, Integer backupPort) {
-        if (currentScreen == null) {
+        if (currentScreen == null || currentScene == null) {
             return;
         }
         if (backupPort != null && backupPort == port) {
             throw new IllegalArgumentException("Резервный порт должен отличаться от основного");
         }
         if (backupPort != null) {
-            SignalChain backupMain = currentScreen.signalChainByPort(backupPort, false);
+            SignalChain backupMain = signalChainByPortInScene(currentScene, backupPort, false);
             if (backupMain != null && !backupMain.getCabinetInstanceIds().isEmpty()) {
                 throw new IllegalArgumentException("Порт " + backupPort + " уже используется для собственной"
                         + " цепочки — сначала очистите её, чтобы отдать порт под резерв");
             }
         }
         pushUndo();
-        SignalChain main = currentScreen.signalChainByPort(port, false);
+        SignalChain main = signalChainByPortInScene(currentScene, port, false);
         if (main == null) {
             main = new SignalChain(port, false, List.of());
-            currentScreen.getSignalChains().add(main);
+            currentScene.getSignalChains().add(main);
         }
         main.setBackupPortNumber(backupPort);
         changed();
+    }
+
+    /** Как {@link Screen#signalChainByPort} раньше — но по ВСЕЙ сцене экрана, а не
+     *  только по его собственному списку (цепочки теперь хранятся на сцене, см.
+     *  Task #78). Публичная версия — для UI (порт-пикер, диалог резерва), которому
+     *  нужен поиск по конкретному экрану, а не по currentScene напрямую. */
+    public SignalChain signalChainByPort(Screen screen, int port, boolean backup) {
+        return signalChainByPortInScene(sceneContaining(screen), port, backup);
+    }
+
+    private SignalChain signalChainByPortInScene(Scene scene, int port, boolean backup) {
+        if (scene == null) {
+            return null;
+        }
+        for (SignalChain c : scene.getSignalChains()) {
+            if (c.getPortNumber() != null && c.getPortNumber() == port && c.isBackup() == backup) {
+                return c;
+            }
+        }
+        return null;
     }
 
     /** true, если этот порт уже назначен чьим-то резервным (backupPortNumber другого
      *  порта) — такой порт не должен получать собственную ручную цепочку: он целиком
      *  отдан под подхват сигнала основного порта, а не под независимый контент. */
     public boolean isPortReservedAsBackup(Screen screen, int port) {
-        for (SignalChain c : screen.getSignalChains()) {
-            if (c.getBackupPortNumber() != null && c.getBackupPortNumber() == port) {
-                return true;
+        Scene scene = sceneContaining(screen);
+        if (scene != null) {
+            for (SignalChain c : scene.getSignalChains()) {
+                if (c.getBackupPortNumber() != null && c.getBackupPortNumber() == port) {
+                    return true;
+                }
             }
         }
         // Порт также зарезервирован, если ЦЕЛИКОМ принадлежит контроллеру, который
@@ -1374,11 +1421,16 @@ public class AppModel {
         return owner != null && isControllerReservedAsBackup(screen, owner.getId());
     }
 
-    /** Число активных резервных связок портов на экране (для учёта в общей схеме
-     *  сигнала — на каждую нужна отдельная витая пара между основным и резервным портом). */
+    /** Число активных резервных связок портов сцены этого экрана (для учёта в общей
+     *  схеме сигнала — на каждую нужна отдельная витая пара между основным и
+     *  резервным портом). */
     public int backupPortLinkCount(Screen screen) {
+        Scene scene = sceneContaining(screen);
+        if (scene == null) {
+            return 0;
+        }
         int n = 0;
-        for (SignalChain c : screen.getSignalChains()) {
+        for (SignalChain c : scene.getSignalChains()) {
             if (c.getBackupPortNumber() != null) {
                 n++;
             }
@@ -1395,15 +1447,24 @@ public class AppModel {
         changed();
     }
 
+    /** Очищает цепочки ТЕКУЩЕГО режима, которые физически затрагивают текущий
+     *  экран (кнопка «Очистить цепочки…» — сформулирована как «на этом экране»).
+     *  Цепочки теперь общие для сцены (см. Task #78), поэтому "весь список
+     *  очистить" больше не то же самое, что "на этом экране" — фильтруем по
+     *  касанию кабинетов текущего экрана, а не берём список целиком. Кросс-
+     *  экранная цепочка, затрагивающая и другой экран, тоже удалится целиком —
+     *  как и раньше, когда она физически "жила" на одном экране. */
     public void clearChainsOfMode() {
-        if (currentScreen == null) {
+        if (currentScreen == null || currentScene == null) {
             return;
         }
         pushUndo();
         if (mode == Mode.POWER) {
-            currentScreen.getPowerChains().clear();
+            currentScene.getPowerChains().removeIf(c ->
+                    c.getCabinetInstanceIds().stream().anyMatch(id -> currentScreen.cabinetById(id) != null));
         } else {
-            currentScreen.getSignalChains().clear();
+            currentScene.getSignalChains().removeIf(c ->
+                    c.getCabinetInstanceIds().stream().anyMatch(id -> currentScreen.cabinetById(id) != null));
         }
         changed();
     }
@@ -1433,71 +1494,62 @@ public class AppModel {
 
     /** true, если этот кабинет (на любом экране текущей сцены) уже используется
      *  какой-либо сигнальной цепочкой — в т.ч. цепочкой, которая физически
-     *  продолжается сюда с ДРУГОГО экрана (см. {@link #validateCabinetIdsAcrossScene}). */
+     *  продолжается сюда с ДРУГОГО экрана. Цепочки хранятся на уровне сцены (см.
+     *  Task #78), поэтому это просто прямая проверка одного списка, а не обход
+     *  всех экранов сцены, как было раньше. */
     public boolean isCabinetWiredForSignal(String cabinetId) {
         if (currentScene == null) {
             return false;
         }
-        for (Screen s : currentScene.getScreens()) {
-            for (SignalChain c : s.getSignalChains()) {
-                if (c.getCabinetInstanceIds().contains(cabinetId)) {
-                    return true;
-                }
+        for (SignalChain c : currentScene.getSignalChains()) {
+            if (c.getCabinetInstanceIds().contains(cabinetId)) {
+                return true;
             }
         }
         return false;
     }
 
-    /** Как {@link #isCabinetWiredForSignal}, но для силовой цепочки — тоже проверяется
-     *  по ВСЕЙ сцене, т.к. силовая цепочка тоже может физически продолжаться на другой
-     *  экран (см. {@link #addPowerChain}, Task #64). */
+    /** Как {@link #isCabinetWiredForSignal}, но для силовой цепочки. */
     public boolean isCabinetWiredForPower(String cabinetId) {
         if (currentScene == null) {
             return false;
         }
-        for (Screen s : currentScene.getScreens()) {
-            for (PowerChain c : s.getPowerChains()) {
-                if (c.getCabinetInstanceIds().contains(cabinetId)) {
-                    return true;
-                }
+        for (PowerChain c : currentScene.getPowerChains()) {
+            if (c.getCabinetInstanceIds().contains(cabinetId)) {
+                return true;
             }
         }
         return false;
     }
 
-    /** Все цепочки питания сцены, которые физически затрагивают этот экран — и
-     *  "родные" (хранящиеся на нём же), и пришедшие с другого экрана (цепочка
-     *  хранится целиком на ОДНОМ экране — том, что был активен при завершении
-     *  построения — а не обязательно на том, где она реально начиналась, см.
-     *  Task #64). Без этого метода экран, где цепочка НАЧИНАЛАСЬ, но не был активен
-     *  на момент завершения, вообще не видел бы её в своём списке «Существующие
-     *  цепочки», хотя часть его собственных кабинетов ею занята (см. Task #68). */
+    /** Все цепочки питания сцены, которые физически затрагивают этот экран (т.е.
+     *  среди их кабинетов есть хотя бы один кабинет этого экрана) — не только
+     *  экраны, на которых цепочка "хранится", раз хранение больше не привязано к
+     *  конкретному экрану (см. Task #78: цепочки — общий список сцены). */
     public List<PowerChain> powerChainsTouchingScreen(Screen screen) {
         List<PowerChain> result = new ArrayList<>();
-        if (currentScene == null) {
+        Scene scene = sceneContaining(screen);
+        if (scene == null) {
             return result;
         }
-        for (Screen s : currentScene.getScreens()) {
-            for (PowerChain c : s.getPowerChains()) {
-                if (c.getCabinetInstanceIds().stream().anyMatch(id -> screen.cabinetById(id) != null)) {
-                    result.add(c);
-                }
+        for (PowerChain c : scene.getPowerChains()) {
+            if (c.getCabinetInstanceIds().stream().anyMatch(id -> screen.cabinetById(id) != null)) {
+                result.add(c);
             }
         }
         return result;
     }
 
-    /** Как {@link #powerChainsTouchingScreen}, но для сигнала (Task #68). */
+    /** Как {@link #powerChainsTouchingScreen}, но для сигнала. */
     public List<SignalChain> signalChainsTouchingScreen(Screen screen) {
         List<SignalChain> result = new ArrayList<>();
-        if (currentScene == null) {
+        Scene scene = sceneContaining(screen);
+        if (scene == null) {
             return result;
         }
-        for (Screen s : currentScene.getScreens()) {
-            for (SignalChain c : s.getSignalChains()) {
-                if (c.getCabinetInstanceIds().stream().anyMatch(id -> screen.cabinetById(id) != null)) {
-                    result.add(c);
-                }
+        for (SignalChain c : scene.getSignalChains()) {
+            if (c.getCabinetInstanceIds().stream().anyMatch(id -> screen.cabinetById(id) != null)) {
+                result.add(c);
             }
         }
         return result;
@@ -1509,7 +1561,18 @@ public class AppModel {
         if (currentScreen == null) {
             return;
         }
-        undoStack.push(ScreenLogic.snapshot(currentScreen));
+        Scene scene = sceneContaining(currentScreen);
+        List<PowerChain> pc = new ArrayList<>();
+        List<SignalChain> sc = new ArrayList<>();
+        if (scene != null) {
+            for (PowerChain c : scene.getPowerChains()) {
+                pc.add(c.copy());
+            }
+            for (SignalChain c : scene.getSignalChains()) {
+                sc.add(c.copy());
+            }
+        }
+        undoStack.push(new UndoEntry(ScreenLogic.snapshot(currentScreen), pc, sc));
         while (undoStack.size() > UNDO_LIMIT) {
             undoStack.removeLast();
         }
@@ -1519,8 +1582,13 @@ public class AppModel {
         if (currentScreen == null || undoStack.isEmpty()) {
             return;
         }
-        Screen snap = undoStack.pop();
-        ScreenLogic.restore(currentScreen, snap);
+        UndoEntry snap = undoStack.pop();
+        ScreenLogic.restore(currentScreen, snap.screenSnapshot());
+        Scene scene = sceneContaining(currentScreen);
+        if (scene != null) {
+            scene.setPowerChains(snap.powerChainsSnapshot());
+            scene.setSignalChains(snap.signalChainsSnapshot());
+        }
         changed();
     }
 }

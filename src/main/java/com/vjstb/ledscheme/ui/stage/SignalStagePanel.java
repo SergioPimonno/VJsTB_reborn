@@ -147,7 +147,7 @@ public class SignalStagePanel extends JPanel {
                     maxLocal = t != null ? t.effectivePortCount() : 0;
                 }
                 int localPort = port - offset;
-                SignalChain main = scr.signalChainByPort(port, false);
+                SignalChain main = model.signalChainByPort(scr, port, false);
                 Integer currentGlobal = main != null ? main.getBackupPortNumber() : null;
                 Integer currentLocal = null;
                 String crossControllerNote = "";

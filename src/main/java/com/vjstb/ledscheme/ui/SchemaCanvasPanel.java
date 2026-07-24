@@ -1,7 +1,10 @@
 package com.vjstb.ledscheme.ui;
 
+import com.vjstb.ledscheme.model.CabinetInstance;
+import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.CardPort;
 import com.vjstb.ledscheme.model.PortDirection;
+import com.vjstb.ledscheme.model.PowerConnectorType;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.SchemaCard;
 import com.vjstb.ledscheme.model.SchemaEdge;
@@ -10,6 +13,7 @@ import com.vjstb.ledscheme.model.SchemaNode;
 import com.vjstb.ledscheme.model.SchemaNodeType;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.service.ScreenLogic;
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Cursor;
@@ -23,7 +27,9 @@ import java.awt.RenderingHints;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Consumer;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -494,8 +500,28 @@ public class SchemaCanvasPanel extends JPanel {
                 maxCountReason = limitReason(edge.getToNodeId(), toPort, remaining);
             }
         }
+        // Узел-ссылка на реальный экран не имеет гнёзд (CardPort) вовсе — раньше
+        // связи, ведущие к экрану, вообще не проверялись на лимит числа линий.
+        // "N вводных" экрана — это фактическое число независимых силовых цепочек,
+        // уже расключённых на кабинетах экрана (Питание → расключение), а значит и
+        // максимум того, сколько отдельных линий схема вправе подвести к этому
+        // экрану суммарно от всех источников (см. также screenUsedCount ниже).
+        for (String nodeId : new String[]{edge.getFromNodeId(), edge.getToNodeId()}) {
+            SchemaNode node = nodeById(nodeId);
+            Integer capacity = node != null ? screenPowerCapacity(node) : null;
+            if (capacity == null) {
+                continue;
+            }
+            int used = screenUsedCount(nodeId, edge);
+            int rem = Math.max(1, capacity - used);
+            if (maxCount == null || rem < maxCount) {
+                maxCount = rem;
+                maxCountReason = node.getLabel() + ": свободно " + Math.max(0, capacity - used)
+                        + " из " + capacity + " вводных";
+            }
+        }
         WireLabelDialog dlg = new WireLabelDialog(SwingUtilities.getWindowAncestor(this), mode, edge,
-                connectorHintFor(edge), lockedType, maxCount, maxCountReason);
+                connectorHintsFor(edge), lockedType, maxCount, maxCountReason);
         dlg.setVisible(true);
         if (!dlg.isConfirmed()) {
             return;
@@ -514,13 +540,20 @@ public class SchemaCanvasPanel extends JPanel {
         repaint();
     }
 
-    /** Если связь ведёт к узлу-ссылке на реальный экран — тип разъёма питания
-     *  кабинета этого экрана (сужает список доступных кабелей в WireLabelDialog).
-     *  Для питания единственная связь узла-экрана трактуется как ввод в кабинет,
-     *  поэтому оба конца проверяются одинаково — какой из них экран, не важно. */
-    private com.vjstb.ledscheme.model.PowerConnectorType connectorHintFor(SchemaEdge edge) {
+    /** Если связь ведёт к узлу-ссылке на реальный экран — типы разъёма питания
+     *  кабинетов ЭТОГО экрана (сужает/подбирает список доступных кабелей в
+     *  WireLabelDialog: ввод в кабинет — это адаптер вида CEE16A→TrueCON или
+     *  CEE16A→PowerCon, а не сам разъём кабинета напрямую). Возвращает МНОЖЕСТВО,
+     *  а не одно значение — экран может смешивать несколько типов кабинетов
+     *  (переопределение типа по ячейке, см. Task #28), тогда список кабелей должен
+     *  предложить варианты под ВСЕ реально присутствующие типы, а не молча выбрать
+     *  только первый попавшийся (что могло бы подсунуть неверный тип адаптера для
+     *  части кабинетов экрана). Для питания единственная связь узла-экрана
+     *  трактуется как ввод в кабинет, поэтому оба конца проверяются одинаково —
+     *  какой из них экран, не важно. */
+    private Set<PowerConnectorType> connectorHintsFor(SchemaEdge edge) {
         if (mode != SchemaMode.POWER) {
-            return null;
+            return Set.of();
         }
         for (String nodeId : new String[]{edge.getFromNodeId(), edge.getToNodeId()}) {
             SchemaNode n = nodeById(nodeId);
@@ -531,12 +564,52 @@ public class SchemaCanvasPanel extends JPanel {
             if (scr == null) {
                 continue;
             }
-            com.vjstb.ledscheme.model.CabinetType t = model.typeOf(scr);
-            if (t != null) {
-                return t.getPowerConnectorType();
+            CabinetType defaultType = model.typeOf(scr);
+            Set<PowerConnectorType> types = new LinkedHashSet<>();
+            for (CabinetInstance c : scr.getCabinets()) {
+                if (c.isHidden()) {
+                    continue;
+                }
+                CabinetType effective = ScreenLogic.effectiveType(c, defaultType, model.getWorkspace());
+                if (effective != null) {
+                    types.add(effective.getPowerConnectorType());
+                }
+            }
+            if (!types.isEmpty()) {
+                return types;
             }
         }
-        return null;
+        return Set.of();
+    }
+
+    /** Для узла-ссылки на экран (SchemaNodeType.SCREEN) в схеме ПИТАНИЯ — сколько
+     *  всего независимых силовых линий может физически прийти в этот узел: то же
+     *  число, что показано в подписи узла как "N вводных" (фактическое число
+     *  силовых цепочек, уже расключённых на кабинетах экрана в «Расключение
+     *  экрана» → Питание) — пользователь явно указал, что это одно и то же число.
+     *  null — понятие неприменимо (не экран, не питание, экран не найден). */
+    private Integer screenPowerCapacity(SchemaNode node) {
+        if (mode != SchemaMode.POWER || node.getType() != SchemaNodeType.SCREEN || node.getScreenRefId() == null) {
+            return null;
+        }
+        Screen scr = screenById(node.getScreenRefId());
+        return scr == null ? null : model.powerChainsTouchingScreen(scr).size();
+    }
+
+    /** Сколько линий уже подведено к узлу-экрану ДРУГИМИ связями схемы (кроме
+     *  exclude) — суммарно от всех источников, а не по одному конкретному гнезду,
+     *  т.к. у узла-экрана нет отдельных гнёзд (см. screenPowerCapacity). */
+    private int screenUsedCount(String nodeId, SchemaEdge exclude) {
+        int used = 0;
+        for (SchemaEdge e2 : edges()) {
+            if (e2 == exclude) {
+                continue;
+            }
+            if (nodeId.equals(e2.getFromNodeId()) || nodeId.equals(e2.getToNodeId())) {
+                used += e2.getWireCount() != null ? e2.getWireCount() : 1;
+            }
+        }
+        return used;
     }
 
     /** Находит гнездо (карта или разъём питания) узла по id порта — используется
@@ -628,10 +701,6 @@ public class SchemaCanvasPanel extends JPanel {
         }
     }
 
-    private static boolean supportsCards(SchemaNodeType type) {
-        return type == SchemaNodeType.SERVER || type == SchemaNodeType.CONTROLLER;
-    }
-
     private void showNodeMenu(SchemaNode node, int x, int y) {
         JPopupMenu menu = new JPopupMenu();
         if (node.getType() != SchemaNodeType.SCREEN) {
@@ -653,7 +722,13 @@ public class SchemaCanvasPanel extends JPanel {
             }
             menu.add(typeMenu);
         }
-        if (supportsCards(node.getType())) {
+        // Карты (сигнальные гнёзда) доступны любому не-экранному узлу СИГНАЛЬНОЙ
+        // схемы — симметрично тому, как "Разъёмы питания…" ниже доступны любому
+        // не-экранному узлу схемы ПИТАНИЯ. Раньше это было ограничено только типами
+        // "Медиасервер"/"Контроллер", из-за чего для остальных типов (конвертер,
+        // прочее оборудование) не было способа добавить/отредактировать карты
+        // вручную — хотя они могли УЖЕ иметь карты (например, из пресета).
+        if (node.getMode() == SchemaMode.SIGNAL && node.getType() != SchemaNodeType.SCREEN) {
             javax.swing.JMenuItem cards = new javax.swing.JMenuItem("Комплектация карт…");
             cards.addActionListener(ev -> {
                 CardsConfigDialog dlg = new CardsConfigDialog(SwingUtilities.getWindowAncestor(this), model, node);
@@ -859,7 +934,8 @@ public class SchemaCanvasPanel extends JPanel {
             return "ссылка недействительна";
         }
         if (mode == SchemaMode.POWER) {
-            return scr.getCols() + "×" + scr.getRows() + " каб. · " + scr.getPowerChains().size() + " вводных";
+            return scr.getCols() + "×" + scr.getRows() + " каб. · " + model.powerChainsTouchingScreen(scr).size()
+                    + " вводных";
         }
         // Резерв порта (витая пара) подразумевается по умолчанию на используемом
         // контроллере — в блок-схеме площадки это лишняя детализация, не нужно
@@ -872,8 +948,8 @@ public class SchemaCanvasPanel extends JPanel {
                 controllerBackups++;
             }
         }
-        return "портов: " + model.effectiveSignalPortCount(scr) + " · " + scr.getSignalChains().size() + " вводных"
-                + (controllerBackups > 0 ? " · резерв контроллера: " + controllerBackups : "");
+        return "портов: " + model.effectiveSignalPortCount(scr) + " · " + model.signalChainsTouchingScreen(scr).size()
+                + " вводных" + (controllerBackups > 0 ? " · резерв контроллера: " + controllerBackups : "");
     }
 
     private static List<PortEntry> flattenCardPorts(List<SchemaCard> cards) {
@@ -975,9 +1051,13 @@ public class SchemaCanvasPanel extends JPanel {
     }
 
     /** Список гнёзд узла (карты для сигнала, разъёмы для питания) — пусто, если
-     *  комплектация не задана. */
+     *  комплектация не задана. Раньше отрисовка карт была ошибочно ограничена
+     *  типами "Медиасервер"/"Контроллер" — но карты может нести ЛЮБОЙ тип узла
+     *  (например, узел из пресета с картами, впоследствии переклассифицированный
+     *  в "Прочее оборудование"/"Конвертер" через "Изменить тип"), и раз карты уже
+     *  назначены — их гнёзда должны отрисовываться независимо от типа узла. */
     private static List<PortEntry> portsOf(SchemaNode n) {
-        if (supportsCards(n.getType()) && !n.getCards().isEmpty()) {
+        if (!n.getCards().isEmpty()) {
             return flattenCardPorts(n.getCards());
         }
         if (n.getMode() == SchemaMode.POWER && !n.getPowerConnectors().isEmpty()) {

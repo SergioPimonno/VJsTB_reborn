@@ -203,16 +203,6 @@ public class Screen {
         return null;
     }
 
-    @JsonIgnore
-    public SignalChain signalChainByPort(int port, boolean backup) {
-        for (SignalChain c : signalChains) {
-            if (c.getPortNumber() != null && c.getPortNumber() == port && c.isBackup() == backup) {
-                return c;
-            }
-        }
-        return null;
-    }
-
     public Screen copy() {
         Screen s = new Screen();
         s.id = id;
@@ -236,14 +226,11 @@ public class Screen {
         for (CabinetInstance c : cabinets) {
             s.cabinets.add(c.copy());
         }
-        s.powerChains = new ArrayList<>();
-        for (PowerChain c : powerChains) {
-            s.powerChains.add(c.copy());
-        }
-        s.signalChains = new ArrayList<>();
-        for (SignalChain c : signalChains) {
-            s.signalChains.add(c.copy());
-        }
+        // powerChains/signalChains НЕ копируются здесь — цепочки хранятся на уровне
+        // сцены, а не экрана (см. Task #78); эти поля на Screen остаются только для
+        // чтения СТАРЫХ файлов проектов (миграция в WorkspaceStore переносит их на
+        // сцену при загрузке), копия экрана (используется для undo-снимка) их больше
+        // не касается — AppModel.undo() снимает/восстанавливает цепочки сцены отдельно.
         return s;
     }
 }

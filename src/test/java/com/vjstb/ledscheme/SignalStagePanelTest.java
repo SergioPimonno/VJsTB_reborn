@@ -61,8 +61,8 @@ class SignalStagePanelTest {
             panel.chainController().cabinetClicked(cab2);
             panel.chainController().finish();
 
-            assertEquals(1, scr.getSignalChains().size());
-            SignalChain chain = scr.getSignalChains().get(0);
+            assertEquals(1, model.getCurrentScene().getSignalChains().size());
+            SignalChain chain = model.getCurrentScene().getSignalChains().get(0);
             assertEquals(1, chain.getPortNumber());
             assertEquals(2, chain.getCabinetInstanceIds().size());
         });

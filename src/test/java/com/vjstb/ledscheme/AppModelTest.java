@@ -2,6 +2,7 @@ package com.vjstb.ledscheme;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -87,12 +88,12 @@ class AppModelTest {
         List<String> ids = screen.getCabinets().stream().map(c -> c.getId()).limit(3).toList();
         model.addPowerChain(1, ids);
 
-        assertEquals(1, screen.getPowerChains().size());
-        assertEquals(3, screen.getPowerChains().get(0).getCabinetInstanceIds().size());
+        assertEquals(1, model.getCurrentScene().getPowerChains().size());
+        assertEquals(3, model.getCurrentScene().getPowerChains().get(0).getCabinetInstanceIds().size());
         assertTrue(model.canUndo());
 
         model.undo();
-        assertEquals(0, screen.getPowerChains().size());
+        assertEquals(0, model.getCurrentScene().getPowerChains().size());
         assertFalse(model.canUndo());
     }
 
@@ -107,18 +108,18 @@ class AppModelTest {
 
         List<String> ids = screen.getCabinets().stream().map(c -> c.getId()).toList();
         model.addPowerChain(1, ids);
-        String chainId = screen.getPowerChains().get(0).getId();
+        String chainId = model.getCurrentScene().getPowerChains().get(0).getId();
 
         model.splitPowerChainLink(chainId, 1); // разрыв между 2-м и 3-м кабинетом
-        assertEquals(2, screen.getPowerChains().size(), "Должно остаться две цепочки по обе стороны разрыва");
-        List<Integer> sizes = screen.getPowerChains().stream()
+        assertEquals(2, model.getCurrentScene().getPowerChains().size(), "Должно остаться две цепочки по обе стороны разрыва");
+        List<Integer> sizes = model.getCurrentScene().getPowerChains().stream()
                 .map(c -> c.getCabinetInstanceIds().size()).sorted().toList();
         assertEquals(List.of(2, 2), sizes);
-        assertTrue(screen.getPowerChains().stream().allMatch(c -> c.getPhase() == 1));
+        assertTrue(model.getCurrentScene().getPowerChains().stream().allMatch(c -> c.getPhase() == 1));
 
         model.undo();
-        assertEquals(1, screen.getPowerChains().size(), "Отмена должна вернуть исходную единую цепочку");
-        assertEquals(4, screen.getPowerChains().get(0).getCabinetInstanceIds().size());
+        assertEquals(1, model.getCurrentScene().getPowerChains().size(), "Отмена должна вернуть исходную единую цепочку");
+        assertEquals(4, model.getCurrentScene().getPowerChains().get(0).getCabinetInstanceIds().size());
     }
 
     @Test
@@ -132,15 +133,15 @@ class AppModelTest {
 
         List<String> ids = screen.getCabinets().stream().map(c -> c.getId()).toList();
         model.addSignalChain(2, false, ids);
-        String chainId = screen.getSignalChains().get(0).getId();
+        String chainId = model.getCurrentScene().getSignalChains().get(0).getId();
 
         model.splitSignalChainLink(chainId, 0); // разрыв после 1-го кабинета
-        assertEquals(2, screen.getSignalChains().size());
-        for (SignalChain c : screen.getSignalChains()) {
+        assertEquals(2, model.getCurrentScene().getSignalChains().size());
+        for (SignalChain c : model.getCurrentScene().getSignalChains()) {
             assertEquals(2, c.getPortNumber());
             assertFalse(c.isBackup());
         }
-        List<Integer> sizes = screen.getSignalChains().stream()
+        List<Integer> sizes = model.getCurrentScene().getSignalChains().stream()
                 .map(c -> c.getCabinetInstanceIds().size()).sorted().toList();
         assertEquals(List.of(1, 2), sizes);
     }
@@ -158,11 +159,11 @@ class AppModelTest {
         List<String> bottomRow = screen.getCabinets().stream()
                 .filter(c -> c.getRowIndex() == 2).map(c -> c.getId()).toList();
         model.addPowerChain(2, bottomRow);
-        assertEquals(1, screen.getPowerChains().size());
+        assertEquals(1, model.getCurrentScene().getPowerChains().size());
 
         model.updateScreenGrid(screen, screen.getName(), type.getId(), 2, 3);
         assertEquals(6, screen.getCabinets().size());
-        assertTrue(screen.getPowerChains().isEmpty(), "Цепочка из удалённых кабинетов должна исчезнуть");
+        assertTrue(model.getCurrentScene().getPowerChains().isEmpty(), "Цепочка из удалённых кабинетов должна исчезнуть");
     }
 
     @Test
@@ -305,7 +306,7 @@ class AppModelTest {
         model.updateSignalPortCount(screen, 8);
 
         model.setSignalBackupPortLink(3, 7);
-        SignalChain main = screen.signalChainByPort(3, false);
+        SignalChain main = model.signalChainByPort(screen, 3, false);
         assertNotNull(main);
         assertEquals(7, main.getBackupPortNumber());
         // Порт 7 теперь целиком отдан под резерв порта 3 — свою ручную цепочку получать не должен.
@@ -314,7 +315,7 @@ class AppModelTest {
         assertEquals(1, model.backupPortLinkCount(screen));
 
         model.setSignalBackupPortLink(3, null);
-        assertNull(screen.signalChainByPort(3, false).getBackupPortNumber());
+        assertNull(model.signalChainByPort(screen, 3, false).getBackupPortNumber());
         assertFalse(model.isPortReservedAsBackup(screen, 7));
         assertEquals(0, model.backupPortLinkCount(screen));
 
@@ -347,7 +348,7 @@ class AppModelTest {
         assertTrue(assertThrowsRuntime(() -> model.addSignalChain(4, false, ids)));
         // Порт, который НЕ зарезервирован, по-прежнему можно расключить как обычно.
         model.addSignalChain(5, false, ids);
-        assertNotNull(screen.signalChainByPort(5, false));
+        assertNotNull(model.signalChainByPort(screen, 5, false));
     }
 
     @Test
@@ -370,7 +371,7 @@ class AppModelTest {
         String firstOfB = b.getCabinets().get(0).getId();
 
         model.addSignalChain(1, false, List.of(lastOfA, firstOfB));
-        assertEquals(1, a.getSignalChains().size());
+        assertEquals(1, model.getCurrentScene().getSignalChains().size());
         assertTrue(model.isCabinetWiredForSignal(firstOfB), "Кабинет экрана B занят цепочкой, живущей на экране A");
         assertTrue(model.isCabinetWiredForSignal(lastOfA));
         assertFalse(model.isCabinetWiredForSignal(b.getCabinets().get(1).getId()));
@@ -378,7 +379,7 @@ class AppModelTest {
         String lastOfA2 = a.getCabinets().get(a.getCabinets().size() - 2).getId();
         String secondOfB = b.getCabinets().get(1).getId();
         model.addPowerChain(2, List.of(lastOfA2, secondOfB));
-        assertEquals(1, a.getPowerChains().size());
+        assertEquals(1, model.getCurrentScene().getPowerChains().size());
         assertTrue(model.isCabinetWiredForPower(lastOfA2));
         assertTrue(model.isCabinetWiredForPower(secondOfB), "Кабинет экрана B занят силовой цепочкой, живущей на экране A");
         assertFalse(model.isCabinetWiredForPower(firstOfB));
@@ -405,13 +406,13 @@ class AppModelTest {
         model.updateSignalPortCount(screen, 8);
 
         model.setSignalBackupPortLink(2, 5);
-        assertEquals(1, screen.getSignalChains().size());
+        assertEquals(1, model.getCurrentScene().getSignalChains().size());
 
         List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).limit(2).toList();
         model.addSignalChain(2, false, ids);
 
-        assertEquals(1, screen.getSignalChains().size());
-        SignalChain chain = screen.signalChainByPort(2, false);
+        assertEquals(1, model.getCurrentScene().getSignalChains().size());
+        SignalChain chain = model.signalChainByPort(screen, 2, false);
         assertNotNull(chain);
         assertEquals(2, chain.getCabinetInstanceIds().size());
         assertEquals(5, chain.getBackupPortNumber());
@@ -769,6 +770,65 @@ class AppModelTest {
 
         model.deleteEquipmentPreset(preset);
         assertTrue(model.getEquipmentPresets().isEmpty());
+    }
+
+    @Test
+    void multipleNodesFromSamePresetGetIndependentPortIds(@TempDir Path dir) {
+        // Регрессия: несколько узлов схемы, созданных из ОДНОГО пресета (например,
+        // три отдельные физические "Проходные" коробки), раньше получали гнёзда с
+        // ОДИНАКОВЫМИ id (SchemaCard.copy()/CardPort.copy() сохраняют id как есть).
+        // SchemaCanvasPanel.usedCount считает занятые линии гнезда по совпадению
+        // portId — с совпадающими id лимит "Максимум линий на этом гнезде" одного
+        // физического блока ошибочно делился на ВСЕ узлы того же пресета сразу,
+        // вместо того чтобы считаться отдельно для каждого. Каждое применение
+        // пресета теперь обязано генерировать НОВЫЕ id для карт/гнёзд/разъёмов.
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+
+        var preset = model.addEquipmentPreset(SchemaMode.POWER, SchemaNodeType.DISTRO, "Проходная", "Power passthrough", null);
+        model.addPowerConnectorToPreset(preset, "CEE 32A", PortDirection.IN, 1);
+        model.addPowerConnectorToPreset(preset, "CEE 16A", PortDirection.OUT, 6);
+        model.addCardToPreset(preset, "Карта", List.of(new CardPort("HDMI", PortDirection.OUT, 2)));
+
+        SchemaNode nodeA = model.addSchemaNodeFromPreset(SchemaMode.POWER, preset, 0, 0);
+        SchemaNode nodeB = model.addSchemaNodeFromPreset(SchemaMode.POWER, preset, 200, 0);
+
+        // Структура (число карт/разъёмов) не меняется — регенерация id не создаёт и
+        // не теряет ни одной карты/гнезда по сравнению с пресетом.
+        assertEquals(preset.getPowerConnectors().size(), nodeA.getPowerConnectors().size());
+        assertEquals(preset.getPowerConnectors().size(), nodeB.getPowerConnectors().size());
+        assertEquals(preset.getCards().size(), nodeA.getCards().size());
+        assertEquals(preset.getCards().size(), nodeB.getCards().size());
+        assertEquals(preset.getCards().get(0).getPorts().size(), nodeA.getCards().get(0).getPorts().size());
+
+        for (int i = 0; i < preset.getPowerConnectors().size(); i++) {
+            String presetId = preset.getPowerConnectors().get(i).getId();
+            String idA = nodeA.getPowerConnectors().get(i).getId();
+            String idB = nodeB.getPowerConnectors().get(i).getId();
+            assertNotEquals(presetId, idA, "Гнездо узла не должно совпадать с id гнезда пресета");
+            assertNotEquals(presetId, idB);
+            assertNotEquals(idA, idB, "Два узла из одного пресета не должны делить id одного и того же гнезда");
+            // Сами данные (тип/направление/количество) при этом совпадают с пресетом.
+            assertEquals(preset.getPowerConnectors().get(i).getConnectorType(), nodeA.getPowerConnectors().get(i).getConnectorType());
+            assertEquals(preset.getPowerConnectors().get(i).getCount(), nodeA.getPowerConnectors().get(i).getCount());
+        }
+
+        String presetCardId = preset.getCards().get(0).getId();
+        String cardIdA = nodeA.getCards().get(0).getId();
+        String cardIdB = nodeB.getCards().get(0).getId();
+        assertNotEquals(presetCardId, cardIdA);
+        assertNotEquals(presetCardId, cardIdB);
+        assertNotEquals(cardIdA, cardIdB);
+
+        String presetPortId = preset.getCards().get(0).getPorts().get(0).getId();
+        String portIdA = nodeA.getCards().get(0).getPorts().get(0).getId();
+        String portIdB = nodeB.getCards().get(0).getPorts().get(0).getId();
+        assertNotEquals(presetPortId, portIdA);
+        assertNotEquals(presetPortId, portIdB);
+        assertNotEquals(portIdA, portIdB, "Два узла из одного пресета не должны делить id одного и того же порта карты");
+        assertEquals(preset.getCards().get(0).getPorts().get(0).getConnectorType(),
+                nodeA.getCards().get(0).getPorts().get(0).getConnectorType());
     }
 
     @Test

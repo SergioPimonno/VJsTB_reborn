@@ -15,6 +15,17 @@ public class Scene {
     private List<SchemaEdge> schemaEdges = new ArrayList<>();
     /** Канвасы компоновки контента (выходные кадры сигнала) для этой сцены. */
     private List<ContentCanvas> canvases = new ArrayList<>();
+    /** Цепочки питания/сигнала — хранятся на уровне СЦЕНЫ, а не отдельного экрана
+     *  (см. независимый менеджер цепочек, Task #78): физически цепочка может
+     *  затрагивать кабинеты НЕСКОЛЬКИХ экранов одной сцены (общий силовой ввод/
+     *  сигнальный даунлинк на смежный экран) — привязка к одному конкретному
+     *  экрану раньше была источником повторяющихся багов (чья это цепочка, где
+     *  она "живёт", почему на другом экране её не видно/нельзя удалить). Старые
+     *  поля powerChains/signalChains на Screen оставлены только для чтения данных
+     *  из ранее сохранённых файлов проектов — миграция переносит их сюда один раз
+     *  при загрузке (см. WorkspaceStore). */
+    private List<PowerChain> powerChains = new ArrayList<>();
+    private List<SignalChain> signalChains = new ArrayList<>();
 
     public Scene() {
     }
@@ -77,5 +88,21 @@ public class Scene {
 
     public void setCanvases(List<ContentCanvas> canvases) {
         this.canvases = canvases;
+    }
+
+    public List<PowerChain> getPowerChains() {
+        return powerChains;
+    }
+
+    public void setPowerChains(List<PowerChain> powerChains) {
+        this.powerChains = powerChains;
+    }
+
+    public List<SignalChain> getSignalChains() {
+        return signalChains;
+    }
+
+    public void setSignalChains(List<SignalChain> signalChains) {
+        this.signalChains = signalChains;
     }
 }

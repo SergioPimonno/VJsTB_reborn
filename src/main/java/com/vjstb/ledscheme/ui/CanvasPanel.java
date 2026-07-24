@@ -140,10 +140,16 @@ public class CanvasPanel extends JPanel {
         int cw = cabW();
         int ch = cabH();
         boolean power = model.getMode() == AppModel.Mode.POWER;
+        // Цепочки хранятся на уровне сцены (Task #78) — link-хит-тест по-прежнему
+        // только в координатах ЭТОГО экрана (linkIndexAt пропускает пары, не
+        // резолвящиеся на scr), поэтому чужие (не рисуемые здесь) цепочки просто
+        // не находят совпадения, как и раньше.
+        Scene scene = model.getCurrentScene();
         Runnable split;
         if (power) {
             split = null;
-            for (PowerChain chain : scr.getPowerChains()) {
+            List<PowerChain> chains = scene != null ? scene.getPowerChains() : List.of();
+            for (PowerChain chain : chains) {
                 int idx = linkIndexAt(scr, chain.getCabinetInstanceIds(), e.getPoint(), cw, ch);
                 if (idx >= 0) {
                     split = () -> model.splitPowerChainLink(chain.getId(), idx);
@@ -152,7 +158,8 @@ public class CanvasPanel extends JPanel {
             }
         } else {
             Runnable found = null;
-            for (SignalChain chain : scr.getSignalChains()) {
+            List<SignalChain> chains = scene != null ? scene.getSignalChains() : List.of();
+            for (SignalChain chain : chains) {
                 int idx = linkIndexAt(scr, chain.getCabinetInstanceIds(), e.getPoint(), cw, ch);
                 if (idx >= 0) {
                     found = () -> model.splitSignalChainLink(chain.getId(), idx);
@@ -261,63 +268,32 @@ public class CanvasPanel extends JPanel {
         int ch = cabH();
         boolean power = model.getMode() == AppModel.Mode.POWER;
 
-        // кабинеты и сохранённые цепочки (общая отрисовка с экспортом)
-        SchemeRenderer.paintScheme(g2, scr, model.typeOf(scr), power, cw, ch, PADDING, PADDING, model.getWorkspace());
-
-        // Сегменты цепочек ДРУГИХ экранов сцены, которые физически затрагивают
-        // кабинеты ЭТОГО экрана. И питание, и сигнал могут физически продолжаться
-        // с одного экрана на другой — AppModel.add{Power,Signal}Chain хранит всю
-        // цепочку целиком на ОДНОМ экране (том, что был активен в момент завершения
-        // построения), поэтому экран, где цепочка НАЧИНАЛАСЬ, без этого блока не
-        // увидел бы у себя вообще никакой линии, хотя часть его кабинетов реально
-        // в этой цепочке состоит (см. Task #65, изначально найден для сигнала, но
-        // тот же механизм применим и к питанию после Task #64). paintScheme выше
-        // рисует только собственные цепочки scr — здесь то же самое для ЧУЖИХ
-        // списков, но с lookup по scr: drawChain сам пропускает пары, для которых
-        // кабинет не находится на scr, поэтому рисуется ровно локальный кусок.
+        // Цепочки хранятся на уровне СЦЕНЫ, а не экрана (см. Task #78, независимый
+        // менеджер цепочек) — передаём paintScheme ПОЛНЫЙ список сцены (не только
+        // то, что "принадлежит" этому экрану): он сам рисует ровно тот кусок каждой
+        // цепочки, что резолвится на scr, поэтому цепочка, физически начинающаяся
+        // на ДРУГОМ экране сцены, здесь тоже корректно продолжает рисоваться, без
+        // отдельного "довеска" для чужих экранов, как было раньше (Task #64/#65).
         Scene scene = model.getCurrentScene();
-        if (scene != null) {
-            for (Screen other : scene.getScreens()) {
-                if (other == scr) {
-                    continue;
-                }
-                if (power) {
-                    for (PowerChain chain : other.getPowerChains()) {
-                        SchemeRenderer.drawChain(g2, scr, chain.getCabinetInstanceIds(),
-                                Palette.phaseColor(chain.getPhase()), false, cw, ch, PADDING, PADDING,
-                                "L" + chain.getPhase(), null);
-                    }
-                } else {
-                    List<SignalChain> otherChains = other.getSignalChains();
-                    for (int i = 0; i < otherChains.size(); i++) {
-                        SignalChain chain = otherChains.get(i);
-                        SchemeRenderer.drawChain(g2, scr, chain.getCabinetInstanceIds(), Palette.signalColor(i),
-                                false, cw, ch, PADDING, PADDING,
-                                SchemeRenderer.signalChainLabel(scr, chain, model.getWorkspace()),
-                                SchemeRenderer.signalChainEndLabel(scr, chain, model.getWorkspace()));
-                    }
-                }
-            }
-        }
+        List<PowerChain> scenePowerChains = scene != null ? scene.getPowerChains() : List.of();
+        List<SignalChain> sceneSignalChains = scene != null ? scene.getSignalChains() : List.of();
+        SchemeRenderer.paintScheme(g2, scr, model.typeOf(scr), power, cw, ch, PADDING, PADDING, model.getWorkspace(),
+                scenePowerChains, sceneSignalChains);
 
-        // Кабинеты, уже занятые цепочкой, идущей сюда с ДРУГОГО экрана (цепочка
-        // может физически продолжаться на смежный экран) — тускло закрашиваем,
-        // чтобы не выглядело, будто их ещё можно расключить отдельно. Кабинеты
-        // СВОИХ цепочек уже видно по нарисованной цветной линии, поэтому их сюда
-        // не включаем — не нужно затемнять поверх собственной цепочки (проверяем
-        // по ВСЕЙ сцене, не только scr — см. блок выше, чья цепочка физически
-        // принадлежит другому экрану, но частично рисуется и здесь). Для сигнала
-        // используется только этот дим (нет цветовой заливки по фазе); для питания
-        // ячейка и так закрашена цветом фазы через paintScheme, дополнительный дим
-        // не нужен и только испортил бы цвет фазы.
+        // Кабинеты, уже занятые сигнальной цепочкой, но без видимого локального
+        // отрезка на ЭТОМ экране (например, кабинет — единственный представитель
+        // экрана в цепочке, оба соседа по цепочке физически на другом экране, тогда
+        // отрезка, целиком лежащего на scr, для него не находится) — тускло
+        // закрашиваем, чтобы не выглядело, будто кабинет ещё можно расключить
+        // отдельно. Для питания ячейка и так закрашена цветом фазы через
+        // paintScheme, дополнительный дим не нужен и только испортил бы цвет фазы.
         if (!power) {
             for (CabinetInstance cab : scr.getCabinets()) {
                 if (cab.isHidden()) {
                     continue;
                 }
-                boolean ownChain = scene != null && scene.getScreens().stream()
-                        .anyMatch(s -> s.getSignalChains().stream()
-                                .anyMatch(sc -> sc.getCabinetInstanceIds().contains(cab.getId())));
+                boolean ownChain = sceneSignalChains.stream()
+                        .anyMatch(sc -> sc.getCabinetInstanceIds().contains(cab.getId()));
                 if (!ownChain && model.isCabinetWiredForSignal(cab.getId())) {
                     int x = PADDING + cab.getColIndex() * cw;
                     int y = PADDING + cab.getRowIndex() * ch;

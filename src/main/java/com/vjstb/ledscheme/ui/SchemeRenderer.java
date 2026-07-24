@@ -43,16 +43,21 @@ public final class SchemeRenderer {
         return new Dimension(Math.max(w, 24), Math.max(h, 24));
     }
 
-    /** Рисует кабинеты и сохранённые цепочки указанного режима. */
-    public static void paintScheme(Graphics2D g2, Screen scr, CabinetType type, boolean power,
-                                   int cellW, int cellH, int offX, int offY) {
-        paintScheme(g2, scr, type, power, cellW, cellH, offX, offY, null);
-    }
-
     /** То же, но с указанием workspace — тогда для ячеек с переопределённым типом
-     *  метка формы (форма кабинета) рисуется по фактическому типу ячейки. */
+     *  метка формы (форма кабинета) рисуется по фактическому типу ячейки.
+     *  powerChains/signalChains — цепочки ВСЕЙ СЦЕНЫ этого экрана (не только его
+     *  собственные — цепочки хранятся на уровне сцены, см. Task #78, «независимый
+     *  менеджер цепочек»): цепочка физически может продолжаться на другой экран той
+     *  же сцены, а drawChain сам пропускает пары кабинетов, не найденные на ЭТОМ
+     *  scr — поэтому передача сюда ПОЛНОГО списка сцены (а не отфильтрованного по
+     *  экрану) автоматически рисует ровно тот кусок каждой цепочки, что физически
+     *  относится к этому экрану, и даёт одинаковый цвет цепочки на всех экранах,
+     *  которые она затрагивает (цвет = индекс в ОБЩЕМ списке сцены). Раньше экран,
+     *  где цепочка не хранилась целиком, вообще не рисовал свою часть — приходилось
+     *  дорисовывать её отдельным проходом в CanvasPanel/SceneCanvasPanel. */
     public static void paintScheme(Graphics2D g2, Screen scr, CabinetType type, boolean power,
-                                   int cellW, int cellH, int offX, int offY, Workspace workspace) {
+                                   int cellW, int cellH, int offX, int offY, Workspace workspace,
+                                   List<PowerChain> powerChains, List<SignalChain> signalChains) {
         // Подпись «строка,столбец» физически не помещается в мелкую ячейку (мини-
         // обзор сцены с несколькими экранами целиком, сильный зум-аут) — рисуем её,
         // только если в ячейке реально есть место, иначе текст соседних кабинетов
@@ -92,7 +97,7 @@ public final class SchemeRenderer {
         }
 
         if (power) {
-            for (PowerChain chain : scr.getPowerChains()) {
+            for (PowerChain chain : powerChains) {
                 // Метка фазы — только у НАЧАЛА цепочки: питание не закольцовывается
                 // (в отличие от сигнала с резервным портом на другом конце), поэтому
                 // дублировать фазу на последнем кабинете незачем.
@@ -100,9 +105,8 @@ public final class SchemeRenderer {
                         false, cellW, cellH, offX, offY, "L" + chain.getPhase(), null);
             }
         } else {
-            List<SignalChain> chains = scr.getSignalChains();
-            for (int i = 0; i < chains.size(); i++) {
-                SignalChain chain = chains.get(i);
+            for (int i = 0; i < signalChains.size(); i++) {
+                SignalChain chain = signalChains.get(i);
                 drawChain(g2, scr, chain.getCabinetInstanceIds(), Palette.signalColor(i),
                         false, cellW, cellH, offX, offY, signalChainLabel(scr, chain, workspace),
                         signalChainEndLabel(scr, chain, workspace));
@@ -317,12 +321,16 @@ public final class SchemeRenderer {
 
     /** Рендерит схему экрана в изображение (с заголовком и характеристиками). */
     public static BufferedImage renderImage(Screen scr, CabinetType type, boolean power, int base) {
-        return renderImage(scr, type, power, base, null);
+        return renderImage(scr, type, power, base, null, List.of(), List.of());
     }
 
-    /** То же, но вес/мощность в заголовке учитывают переопределение типа кабинета по ячейкам. */
+    /** То же, но вес/мощность в заголовке учитывают переопределение типа кабинета по ячейкам.
+     *  Цепочки хранятся на уровне сцены (Task #78) — вызывающая сторона передаёт сюда только те,
+     *  что физически затрагивают ИМЕННО этот экран (например, {@code AppModel.powerChainsTouchingScreen}),
+     *  т.к. изображение показывает один изолированный экран без контекста остальной сцены. */
     public static BufferedImage renderImage(Screen scr, CabinetType type, boolean power, int base,
-                                             com.vjstb.ledscheme.model.Workspace workspace) {
+                                             Workspace workspace, List<PowerChain> powerChains,
+                                             List<SignalChain> signalChains) {
         Dimension c = cellSize(type, base);
         int pad = 24;
         int headerH = 52;
@@ -353,7 +361,8 @@ public final class SchemeRenderer {
                 + trim(stats.totalPowerW()) + " Вт · " + trim(stats.totalWeightKg()) + " кг";
         g2.drawString(sub, pad, 42);
 
-        paintScheme(g2, scr, type, power, c.width, c.height, pad, pad + headerH, workspace);
+        paintScheme(g2, scr, type, power, c.width, c.height, pad, pad + headerH, workspace,
+                powerChains, signalChains);
         g2.dispose();
         return img;
     }

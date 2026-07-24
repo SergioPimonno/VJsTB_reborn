@@ -22,7 +22,9 @@ public final class ScreenLogic {
     private ScreenLogic() {
     }
 
-    /** Заполняет экран сеткой rows x cols новых кабинетов. */
+    /** Заполняет экран сеткой rows x cols новых кабинетов. Цепочки теперь хранятся
+     *  на уровне сцены (см. Task #78), а не экрана — для только что созданного
+     *  экрана их всё равно ещё ни у кого нет, дополнительная очистка не нужна. */
     public static void buildGrid(Screen screen) {
         List<CabinetInstance> cabinets = new ArrayList<>();
         for (int r = 0; r < screen.getRows(); r++) {
@@ -31,15 +33,16 @@ public final class ScreenLogic {
             }
         }
         screen.setCabinets(cabinets);
-        screen.getPowerChains().clear();
-        screen.getSignalChains().clear();
     }
 
     /**
      * Меняет размер сетки, сохраняя существующие кабинеты в пределах новых границ.
-     * Кабинеты, вышедшие за границы, удаляются, а ссылки на них — из цепочек.
+     * Кабинеты, вышедшие за границы, удаляются, а ссылки на них — из цепочек СЦЕНЫ
+     * (см. Task #78 — цепочки больше не хранятся на самом экране, поэтому для
+     * прунинга нужна сцена, которой принадлежит экран; null — прунить нечего,
+     * например если экран ещё нигде не числится).
      */
-    public static void resizeGrid(Screen screen, int newRows, int newCols) {
+    public static void resizeGrid(Screen screen, int newRows, int newCols, Scene scene) {
         Set<String> removedIds = new HashSet<>();
         List<CabinetInstance> kept = new ArrayList<>();
         for (CabinetInstance c : screen.getCabinets()) {
@@ -60,21 +63,21 @@ public final class ScreenLogic {
         screen.setRows(newRows);
         screen.setCols(newCols);
 
-        if (!removedIds.isEmpty()) {
-            for (PowerChain chain : screen.getPowerChains()) {
+        if (!removedIds.isEmpty() && scene != null) {
+            for (PowerChain chain : scene.getPowerChains()) {
                 chain.getCabinetInstanceIds().removeAll(removedIds);
             }
-            screen.getPowerChains().removeIf(ch -> ch.getCabinetInstanceIds().isEmpty());
-            for (SignalChain chain : screen.getSignalChains()) {
+            scene.getPowerChains().removeIf(ch -> ch.getCabinetInstanceIds().isEmpty());
+            for (SignalChain chain : scene.getSignalChains()) {
                 chain.getCabinetInstanceIds().removeAll(removedIds);
             }
-            screen.getSignalChains().removeIf(ch -> ch.getCabinetInstanceIds().isEmpty());
+            scene.getSignalChains().removeIf(ch -> ch.getCabinetInstanceIds().isEmpty());
         }
     }
 
     /** Фактический тип кабинета: переопределение по ячейке (если задано и разрешимо
      *  через workspace), иначе тип экрана по умолчанию. */
-    private static CabinetType effectiveType(CabinetInstance c, CabinetType defaultType, Workspace workspace) {
+    public static CabinetType effectiveType(CabinetInstance c, CabinetType defaultType, Workspace workspace) {
         if (workspace != null && c.getCabinetTypeId() != null) {
             CabinetType override = workspace.cabinetTypeById(c.getCabinetTypeId());
             if (override != null) {
@@ -239,17 +242,8 @@ public final class ScreenLogic {
             ctrls.add(c.copy());
         }
         live.setControllers(ctrls);
-
-        List<PowerChain> pc = new ArrayList<>();
-        for (PowerChain c : snapshot.getPowerChains()) {
-            pc.add(c.copy());
-        }
-        live.setPowerChains(pc);
-
-        List<SignalChain> sc = new ArrayList<>();
-        for (SignalChain c : snapshot.getSignalChains()) {
-            sc.add(c.copy());
-        }
-        live.setSignalChains(sc);
+        // Цепочки питания/сигнала больше не восстанавливаются здесь — они хранятся
+        // на уровне сцены, а не экрана (см. Task #78); AppModel.undo() снимает и
+        // восстанавливает их отдельно, вместе со снимком экрана.
     }
 }

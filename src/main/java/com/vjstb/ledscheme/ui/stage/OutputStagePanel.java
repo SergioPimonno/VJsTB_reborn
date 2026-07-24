@@ -1,5 +1,6 @@
 package com.vjstb.ledscheme.ui.stage;
 
+import com.vjstb.ledscheme.model.ContentCanvas;
 import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.Project;
 import com.vjstb.ledscheme.model.Scene;
@@ -12,16 +13,20 @@ import com.vjstb.ledscheme.service.ScreenLogic;
 import com.vjstb.ledscheme.service.ScreenStats;
 import com.vjstb.ledscheme.ui.ContextBar;
 import com.vjstb.ledscheme.ui.OutputPaths;
+import com.vjstb.ledscheme.ui.PixelGridRenderer;
+import com.vjstb.ledscheme.ui.SceneCanvasPanel;
 import com.vjstb.ledscheme.ui.SchemeRenderer;
 import com.vjstb.ledscheme.ui.UiKit;
 import java.awt.BorderLayout;
 import java.awt.Desktop;
+import java.awt.Dimension;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JFileChooser;
@@ -83,14 +88,16 @@ public class OutputStagePanel extends JPanel {
         body.add(generate);
 
         body.add(UiKit.vgap(10));
-        body.add(UiKit.muted("<html>В папку будут сохранены JPEG-схемы (питание и сигнал) каждого экрана всех сцен"
-                + " текущего проекта и текстовый отчёт: итоговые суммарные цифры по проекту (нагрузка, вес),"
+        body.add(UiKit.muted("<html>Для каждой сцены проекта в её собственной папке будут созданы подпапки"
+                + " «Сила», «Сигнал» и «Маски». В «Сила»/«Сигнал» — JPEG-схема каждого экрана сцены плюс одна"
+                + " общая схема «Все экраны сцены» (по ней видно цепочки, идущие через пару экранов — на схеме"
+                + " одного экрана это не видно). В «Маски» — тестовые маски (Pixel Grid) всех экранов и канвасов"
+                + " сцены. Плюс общий текстовый отчёт на весь проект: итоговые суммарные цифры (нагрузка, вес),"
                 + " спецификация оборудования (кабинеты по типам), спецификация коммутации (провода/линии,"
                 + " подписанные N×тип на стрелках общих схем — с метражом для питания), затем разбор"
                 + " по сценам/экранам (состав, мощность/вес, список цепочек).</html>"));
         body.add(UiKit.vgap(10));
-        body.add(UiKit.muted("Тестовые маски (Pixel Grid) экранов и канвасов, пресеты под медиасерверы —"
-                + " на этапе «Генерация масок», отдельными кнопками."));
+        body.add(UiKit.muted("Пресеты под медиасерверы (Resolume и т.п.) — на этапе «Генерация масок», отдельной кнопкой."));
         body.add(javax.swing.Box.createVerticalGlue());
 
         return body;
@@ -173,13 +180,37 @@ public class OutputStagePanel extends JPanel {
         report.append('\n');
         report.append(buildWiringSpec(project));
 
+        // Рендер схемы сцены целиком (SceneCanvasPanel) и маски канваса
+        // (PixelGridRenderer.renderCanvasMask) читают "текущую" сцену модели, а не
+        // параметр — на время экспорта временно переключаем выбор сцены, поэтому
+        // сохраняем исходный, чтобы вернуть его после (см. finally ниже). Побочный
+        // эффект: AppModel.selectScene очищает стек undo — то же самое произошло бы,
+        // если бы пользователь вручную переключил сцену, так что это не новый риск.
+        Scene origScene = model.getCurrentScene();
+        Screen origScreen = model.getCurrentScreen();
+
         int jpegCount = 0;
+        int maskCount = 0;
         try {
             for (Scene scene : project.getScenes()) {
+                model.selectScene(scene);
+
                 SceneStats ss = ScreenLogic.sceneStats(scene, model.getWorkspace());
                 report.append("Сцена: ").append(scene.getName()).append('\n');
                 report.append(String.format("  Экранов: %d, кабинетов: %d, мощность: %s Вт, вес: %s кг%n",
                         ss.screenCount(), ss.totalCabinetCount(), UiKit.fmt(ss.totalPowerW()), UiKit.fmt(ss.totalWeightKg())));
+
+                // Схемы и маски раньше сохранялись плоско в папку ПРОЕКТА — из-за
+                // этого схемы всех сцен смешивались в одном месте, и не было видно,
+                // какая схема к какой сцене относится, кроме как по имени файла.
+                // Теперь у каждой сцены своя папка с подпапками по назначению.
+                File sceneFolder = new File(folder, OutputPaths.sanitize(scene.getName()));
+                File powerFolder = new File(sceneFolder, "Сила");
+                File signalFolder = new File(sceneFolder, "Сигнал");
+                File masksFolder = new File(sceneFolder, "Маски");
+                powerFolder.mkdirs();
+                signalFolder.mkdirs();
+                masksFolder.mkdirs();
 
                 for (Screen scr : scene.getScreens()) {
                     CabinetType type = model.typeOf(scr);
@@ -193,27 +224,64 @@ public class OutputStagePanel extends JPanel {
                     report.append(String.format("    Мощность: %s Вт, вес: %s кг%n",
                             UiKit.fmt(st.totalPowerW()), UiKit.fmt(st.totalWeightKg())));
 
-                    report.append("    Цепочки питания (").append(scr.getPowerChains().size()).append("):\n");
-                    for (PowerChain pc : scr.getPowerChains()) {
+                    // Цепочки хранятся на уровне сцены (Task #78), а не экрана — берём
+                    // только те, что физически затрагивают кабинеты ЭТОГО экрана (цепочка
+                    // может начинаться на другом экране сцены и продолжаться сюда).
+                    List<PowerChain> scrPowerChains = model.powerChainsTouchingScreen(scr);
+                    List<SignalChain> scrSignalChains = model.signalChainsTouchingScreen(scr);
+                    report.append("    Цепочки питания (").append(scrPowerChains.size()).append("):\n");
+                    for (PowerChain pc : scrPowerChains) {
                         report.append("      L").append(pc.getPhase()).append(" — ")
                                 .append(pc.getCabinetInstanceIds().size()).append(" каб.\n");
                     }
-                    report.append("    Цепочки сигнала (").append(scr.getSignalChains().size()).append("):\n");
-                    for (SignalChain sc : scr.getSignalChains()) {
+                    report.append("    Цепочки сигнала (").append(scrSignalChains.size()).append("):\n");
+                    for (SignalChain sc : scrSignalChains) {
                         report.append("      порт ").append(sc.getPortNumber() != null ? sc.getPortNumber() : "—")
                                 .append(sc.isBackup() ? " (бэкап)" : "").append(" — ")
                                 .append(sc.getCabinetInstanceIds().size()).append(" каб.\n");
                     }
                     report.append('\n');
 
+                    BufferedImage powerImg = SchemeRenderer.renderImage(scr, type, true, 120, model.getWorkspace(),
+                            scrPowerChains, scrSignalChains);
+                    SchemeRenderer.writeJpeg(powerImg,
+                            new File(powerFolder, OutputPaths.sanitize(scr.getName()) + ".jpg"));
+                    jpegCount++;
+
+                    BufferedImage signalImg = SchemeRenderer.renderImage(scr, type, false, 120, model.getWorkspace(),
+                            scrPowerChains, scrSignalChains);
+                    SchemeRenderer.writeJpeg(signalImg,
+                            new File(signalFolder, OutputPaths.sanitize(scr.getName()) + ".jpg"));
+                    jpegCount++;
+
+                    BufferedImage maskImg = PixelGridRenderer.renderMask(scr, type, model.getWorkspace());
+                    PixelGridRenderer.writePng(maskImg,
+                            new File(masksFolder, OutputPaths.sanitize(scr.getName()) + "_Маска.png"));
+                    maskCount++;
+                }
+
+                // Схема сцены ЦЕЛИКОМ (все экраны сразу, как «Показать все экраны
+                // сцены») — если цепочка проходит через пару экранов, по отдельным
+                // схемам экранов этого не видно вовсе, только по этой общей схеме.
+                if (!scene.getScreens().isEmpty()) {
                     for (boolean power : new boolean[]{true, false}) {
-                        BufferedImage img = SchemeRenderer.renderImage(scr, type, power, 120, model.getWorkspace());
-                        String fname = OutputPaths.sanitize(scene.getName()) + "_" + OutputPaths.sanitize(scr.getName())
-                                + "_" + (power ? "Питание" : "Сигнал") + ".jpg";
-                        SchemeRenderer.writeJpeg(img, new File(folder, fname));
+                        SceneCanvasPanel overview = new SceneCanvasPanel(model);
+                        overview.setDetailMode(true, power, false);
+                        Dimension size = overview.getPreferredSize();
+                        BufferedImage img = overview.renderImage(size.width, size.height);
+                        File target = new File(power ? powerFolder : signalFolder, "_Все экраны сцены.jpg");
+                        SchemeRenderer.writeJpeg(img, target);
                         jpegCount++;
                     }
                 }
+
+                for (ContentCanvas c : scene.getCanvases()) {
+                    BufferedImage img = PixelGridRenderer.renderCanvasMask(c, model);
+                    PixelGridRenderer.writePng(img,
+                            new File(masksFolder, "Канвас_" + OutputPaths.sanitize(c.getName()) + ".png"));
+                    maskCount++;
+                }
+
                 report.append('\n');
             }
 
@@ -221,8 +289,8 @@ public class OutputStagePanel extends JPanel {
             Files.writeString(reportFile.toPath(), report.toString(), StandardCharsets.UTF_8);
 
             int answer = JOptionPane.showConfirmDialog(this,
-                    "Готово.\nJPEG-схем сохранено: " + jpegCount + "\nОтчёт: " + reportFile.getName()
-                            + "\n\nОткрыть папку?",
+                    "Готово.\nJPEG-схем сохранено: " + jpegCount + "\nМасок сохранено: " + maskCount
+                            + "\nОтчёт: " + reportFile.getName() + "\n\nОткрыть папку?",
                     "Пакет документации сформирован", JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE);
             if (answer == JOptionPane.YES_OPTION) {
                 openFolder(folder);
@@ -230,6 +298,9 @@ public class OutputStagePanel extends JPanel {
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(this, "Ошибка формирования пакета: " + ex.getMessage(), "Ошибка",
                     JOptionPane.ERROR_MESSAGE);
+        } finally {
+            model.selectScene(origScene);
+            model.selectScreen(origScreen);
         }
     }
 

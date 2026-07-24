@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.vjstb.ledscheme.model.CabinetType;
+import com.vjstb.ledscheme.model.Project;
+import com.vjstb.ledscheme.model.Scene;
+import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.Workspace;
 import java.io.File;
 import java.io.IOException;
@@ -45,9 +48,33 @@ public class WorkspaceStore {
             return new Workspace();
         }
         try {
-            return mapper.readValue(workspaceFile, Workspace.class);
+            Workspace workspace = mapper.readValue(workspaceFile, Workspace.class);
+            migrateLegacyChains(workspace);
+            return workspace;
         } catch (IOException e) {
             throw new RuntimeException("Не удалось загрузить данные из " + workspaceFile + ": " + e.getMessage(), e);
+        }
+    }
+
+    /** Одноразовая миграция: в файлах проектов, сохранённых до Task #78, цепочки
+     *  питания/сигнала хранились на уровне Screen, а не Scene. Переносим (не
+     *  копируем) их наверх в список сцены и очищаем legacy-поля экрана — иначе они
+     *  просто молча игнорировались бы всей текущей бизнес-логикой/отрисовкой,
+     *  которая теперь читает только Scene.getPowerChains()/getSignalChains(). */
+    private static void migrateLegacyChains(Workspace workspace) {
+        for (Project project : workspace.getProjects()) {
+            for (Scene scene : project.getScenes()) {
+                for (Screen screen : scene.getScreens()) {
+                    if (!screen.getPowerChains().isEmpty()) {
+                        scene.getPowerChains().addAll(screen.getPowerChains());
+                        screen.getPowerChains().clear();
+                    }
+                    if (!screen.getSignalChains().isEmpty()) {
+                        scene.getSignalChains().addAll(screen.getSignalChains());
+                        screen.getSignalChains().clear();
+                    }
+                }
+            }
         }
     }
 

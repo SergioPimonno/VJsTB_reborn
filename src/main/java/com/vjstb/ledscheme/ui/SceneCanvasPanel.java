@@ -340,9 +340,20 @@ public class SceneCanvasPanel extends JPanel {
         double sc = scaleFor(b, width, height);
         int padding = padding();
         Set<Screen> overlapping = overlappingScreens(scene);
-        // Заполняется ниже для каждого экрана, у которого реально нарисована детальная
-        // сетка (paintScheme) — нужно, чтобы потом дорисовать сегменты сигнальной
-        // цепочки, переходящие ГРАНИЦУ между экранами (см. drawCrossScreenChainSegments).
+        // Цепочки хранятся на уровне сцены (Task #78) — один и тот же полный список
+        // передаётся paintScheme для КАЖДОГО экрана сцены ниже; каждый экран сам
+        // рисует ровно тот кусок каждой цепочки, что резолвится на его кабинеты,
+        // поэтому переход цепочки с одного экрана на другой корректно рисуется на
+        // обоих без отдельного прохода "через границу" (см. также CanvasPanel).
+        List<com.vjstb.ledscheme.model.PowerChain> scenePowerChains = scene.getPowerChains();
+        List<com.vjstb.ledscheme.model.SignalChain> sceneSignalChains = scene.getSignalChains();
+        // Экран + прямоугольник его детальной сетки — заполняется ниже для каждого
+        // экрана, где реально нарисован paintScheme, нужно только чтобы потом
+        // дорисовать САМ ПЕРЕХОД цепочки через границу между экранами (см.
+        // drawCrossScreenBridges) — единственное, что paintScheme нарисовать не
+        // может (обе точки перехода в разных локальных системах координат разных
+        // экранов); внутренние отрезки цепочки внутри каждого экрана рисует сам
+        // paintScheme, т.к. ему передаётся ПОЛНЫЙ список цепочек сцены.
         java.util.Map<String, int[]> screenBoxes = new java.util.HashMap<>();
         for (Screen s : scene.getScreens()) {
             CabinetType t = model.typeOf(s);
@@ -407,10 +418,12 @@ public class SceneCanvasPanel extends JPanel {
                     if (overlapped) {
                         Graphics2D go = (Graphics2D) g2.create();
                         go.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.55f));
-                        SchemeRenderer.paintScheme(go, s, t, detailPower, cellW, cellH, x, y, model.getWorkspace());
+                        SchemeRenderer.paintScheme(go, s, t, detailPower, cellW, cellH, x, y, model.getWorkspace(),
+                                scenePowerChains, sceneSignalChains);
                         go.dispose();
                     } else {
-                        SchemeRenderer.paintScheme(g2, s, t, detailPower, cellW, cellH, x, y, model.getWorkspace());
+                        SchemeRenderer.paintScheme(g2, s, t, detailPower, cellW, cellH, x, y, model.getWorkspace(),
+                                scenePowerChains, sceneSignalChains);
                     }
                     screenBoxes.put(s.getId(), new int[]{x, y, cellW, cellH});
                 }
@@ -442,13 +455,21 @@ public class SceneCanvasPanel extends JPanel {
             g2.drawString(Math.round(wMm) + "×" + Math.round(hMm) + " мм", x + 4, y + 43);
         }
 
-        // Сегменты сигнальной цепочки, переходящие ГРАНИЦУ между экранами (см.
-        // Task #54 — цепочка может физически продолжаться на другой экран):
-        // paintScheme рисует цепочку только внутри СВОЕГО экрана (не может перейти
-        // границу — у него нет координат других экранов), поэтому недостающий
-        // межэкранный отрезок дорисовываем отдельно, когда видны сетки ОБОИХ экранов.
-        if (detailMode && !detailPower) {
-            drawCrossScreenChainSegments(g2, scene, screenBoxes);
+        // Сам переход цепочки через границу между экранами — единственное, что
+        // paintScheme нарисовать не может (см. комментарий выше). Регрессия Task #78:
+        // раньше это рисовалось только для сигнала (drawCrossScreenChainSegments,
+        // Task #69) — при переносе цепочек на уровень сцены весь метод был удалён
+        // как якобы избыточный, но избыточной была только часть, дублирующая ВНУТРЕННИЕ
+        // отрезки (это теперь и правда делает paintScheme) — сам переход границы
+        // по-прежнему нужно рисовать отдельно, и для питания тоже (раньше не рисовался
+        // вовсе). Только для РЕЖИМА, который сейчас показан (detailPower) — иначе
+        // мост чужого режима протекал бы поверх текущего вида (см. Task #78 follow-up).
+        if (detailMode) {
+            if (detailPower) {
+                drawCrossScreenBridges(g2, scene, scenePowerChains, List.of(), screenBoxes);
+            } else {
+                drawCrossScreenBridges(g2, scene, List.of(), sceneSignalChains, screenBoxes);
+            }
         }
 
         if (!overlapping.isEmpty() && !compact) {
@@ -503,62 +524,39 @@ public class SceneCanvasPanel extends JPanel {
         return null;
     }
 
-    /** Достраивает отображение сигнальных цепочек, которые физически продолжаются
-     *  с одного экрана на другой (см. Task #54): цепочка хранится целиком на ОДНОМ
-     *  экране (owner) — его собственный paintScheme рисует её, но только используя
-     *  СВОИ координаты, поэтому кабинеты цепочки, лежащие на ДРУГИХ экранах, у него
-     *  не рисуются вовсе. Раньше здесь дорисовывался только сам ПЕРЕХОД границы
-     *  (единственный отрезок между последним кабинетом одного экрана и первым
-     *  другого) — если цепочка после перехода продолжалась НЕСКОЛЬКИМИ кабинетами
-     *  подряд на том же чужом экране, эти внутренние отрезки не рисовались нигде
-     *  (обрыв линии сразу после перехода границы, баг из Task #69). Теперь для
-     *  каждого экрана, где нарисована детальная сетка, дополнительно рисуется ПОЛНАЯ
-     *  цепочка КАЖДОГО другого экрана средствами {@link SchemeRenderer#drawChain}
-     *  (он сам пропускает пары кабинетов, не найденные на данном экране — рисуется
-     *  ровно локальный кусок), а отдельным проходом — только сам переход границы
-     *  (который drawChain нарисовать не может: обе точки в разных системах координат
-     *  разных экранов). Питание сюда не попадает — оно строго в пределах одного
-     *  экрана (проверено на уровне модели), поэтому для него это не нужно. */
-    private void drawCrossScreenChainSegments(Graphics2D g2, Scene scene, java.util.Map<String, int[]> screenBoxes) {
-        for (Screen owner : scene.getScreens()) {
-            List<com.vjstb.ledscheme.model.SignalChain> chains = owner.getSignalChains();
-            for (int i = 0; i < chains.size(); i++) {
-                com.vjstb.ledscheme.model.SignalChain chain = chains.get(i);
-                List<String> ids = chain.getCabinetInstanceIds();
-                Color color = Palette.signalColor(i);
-
-                // Полная цепочка на КАЖДОМ ДРУГОМ экране, который её физически
-                // затрагивает — рисует все внутренние отрезки, не только переход.
-                for (Screen other : scene.getScreens()) {
-                    if (other == owner) {
-                        continue;
-                    }
-                    int[] box = screenBoxes.get(other.getId());
-                    if (box == null) {
-                        continue;
-                    }
-                    SchemeRenderer.drawChain(g2, other, ids, color, false, box[2], box[3], box[0], box[1],
-                            SchemeRenderer.signalChainLabel(owner, chain, model.getWorkspace()),
-                            SchemeRenderer.signalChainEndLabel(owner, chain, model.getWorkspace()));
-                }
-
-                // Сам переход границы между экранами — единственный отрезок, который
-                // drawChain нарисовать не может (обе точки в разных системах координат).
-                for (int k = 0; k < ids.size() - 1; k++) {
-                    CabinetLoc a = locateCabinet(scene, screenBoxes, ids.get(k));
-                    CabinetLoc b = locateCabinet(scene, screenBoxes, ids.get(k + 1));
-                    if (a == null || b == null || a.screen() == b.screen()) {
-                        continue;
-                    }
-                    int[] boxA = screenBoxes.get(a.screen().getId());
-                    int[] boxB = screenBoxes.get(b.screen().getId());
-                    int minCell = Math.min(Math.min(boxA[2], boxA[3]), Math.min(boxB[2], boxB[3]));
-                    SchemeRenderer.drawCrossScreenSegment(g2, a.cx(), a.cy(), b.cx(), b.cy(), color, minCell);
-                }
-            }
+    /** Дорисовывает сам ПЕРЕХОД цепочки (питания или сигнала) через границу между
+     *  двумя экранами сцены — единственный отрезок, который {@link SchemeRenderer#paintScheme}
+     *  нарисовать не может (обе точки в разных локальных системах координат разных
+     *  экранов). Внутренние отрезки цепочки внутри каждого отдельного экрана рисует
+     *  сам paintScheme (ему передаётся полный список цепочек сцены — см. paint()). */
+    private void drawCrossScreenBridges(Graphics2D g2, Scene scene,
+                                         List<com.vjstb.ledscheme.model.PowerChain> powerChains,
+                                         List<com.vjstb.ledscheme.model.SignalChain> signalChains,
+                                         java.util.Map<String, int[]> screenBoxes) {
+        for (com.vjstb.ledscheme.model.PowerChain chain : powerChains) {
+            drawBridgeSegments(g2, scene, chain.getCabinetInstanceIds(),
+                    Palette.phaseColor(chain.getPhase()), screenBoxes);
+        }
+        for (int i = 0; i < signalChains.size(); i++) {
+            drawBridgeSegments(g2, scene, signalChains.get(i).getCabinetInstanceIds(),
+                    Palette.signalColor(i), screenBoxes);
         }
     }
 
+    private void drawBridgeSegments(Graphics2D g2, Scene scene, List<String> ids, Color color,
+                                     java.util.Map<String, int[]> screenBoxes) {
+        for (int k = 0; k < ids.size() - 1; k++) {
+            CabinetLoc a = locateCabinet(scene, screenBoxes, ids.get(k));
+            CabinetLoc b = locateCabinet(scene, screenBoxes, ids.get(k + 1));
+            if (a == null || b == null || a.screen() == b.screen()) {
+                continue;
+            }
+            int[] boxA = screenBoxes.get(a.screen().getId());
+            int[] boxB = screenBoxes.get(b.screen().getId());
+            int minCell = Math.min(Math.min(boxA[2], boxA[3]), Math.min(boxB[2], boxB[3]));
+            SchemeRenderer.drawCrossScreenSegment(g2, a.cx(), a.cy(), b.cx(), b.cy(), color, minCell);
+        }
+    }
 
     /** Экраны, чьи прямоугольники (мм) пересекаются хотя бы с одним другим экраном сцены. */
     private Set<Screen> overlappingScreens(Scene scene) {
@@ -609,10 +607,12 @@ public class SceneCanvasPanel extends JPanel {
     }
 
     /** Доля НЕ скрытых кабинетов экрана, уже занятых какой-либо цепочкой (питания
-     *  или сигнала, включая цепочку сигнала, физически продолжающуюся сюда с
-     *  ДРУГОГО экрана сцены — см. Task #54) — используется, чтобы в компактном
-     *  обзоре (мини-превью прерига) экран визуально показывал текущее состояние
-     *  расключения, а не выглядел пустым независимо от факта. */
+     *  или сигнала, включая цепочку, физически продолжающуюся сюда с ДРУГОГО экрана
+     *  сцены) — используется, чтобы в компактном обзоре (мини-превью прерига) экран
+     *  визуально показывал текущее состояние расключения, а не выглядел пустым
+     *  независимо от факта. Цепочки хранятся на уровне сцены (Task #78), поэтому
+     *  здесь достаточно одного прохода по общему списку сцены — без перебора
+     *  "чужих" экранов, как раньше. */
     private double wiredFraction(Screen s) {
         int total = 0;
         for (CabinetInstance c : s.getCabinets()) {
@@ -623,39 +623,14 @@ public class SceneCanvasPanel extends JPanel {
         if (total == 0) {
             return 0;
         }
-        java.util.Set<String> wired = new HashSet<>();
-        for (com.vjstb.ledscheme.model.PowerChain pc : s.getPowerChains()) {
-            wired.addAll(pc.getCabinetInstanceIds());
-        }
-        for (com.vjstb.ledscheme.model.SignalChain sc : s.getSignalChains()) {
-            wired.addAll(sc.getCabinetInstanceIds());
-        }
         Scene scene = model.getCurrentScene();
+        java.util.Set<String> wired = new HashSet<>();
         if (scene != null) {
-            for (Screen other : scene.getScreens()) {
-                if (other == s) {
-                    continue;
-                }
-                // И питание, и сигнал могут физически продолжаться с другого экрана
-                // (см. Task #64) — цепочка целиком хранится на ОДНОМ экране (том, что
-                // был активен при завершении построения), поэтому экран, где она
-                // НАЧИНАЛАСЬ, без этого блока не увидел бы своих кабинетов "заполненными"
-                // в превью, хотя они реально уже прописаны (изначально было только для
-                // сигнала — асимметрия, из-за которой в питании превью не обновлялось).
-                for (com.vjstb.ledscheme.model.PowerChain pc : other.getPowerChains()) {
-                    for (String id : pc.getCabinetInstanceIds()) {
-                        if (s.cabinetById(id) != null) {
-                            wired.add(id);
-                        }
-                    }
-                }
-                for (com.vjstb.ledscheme.model.SignalChain sc : other.getSignalChains()) {
-                    for (String id : sc.getCabinetInstanceIds()) {
-                        if (s.cabinetById(id) != null) {
-                            wired.add(id);
-                        }
-                    }
-                }
+            for (com.vjstb.ledscheme.model.PowerChain pc : scene.getPowerChains()) {
+                wired.addAll(pc.getCabinetInstanceIds());
+            }
+            for (com.vjstb.ledscheme.model.SignalChain sc : scene.getSignalChains()) {
+                wired.addAll(sc.getCabinetInstanceIds());
             }
         }
         int wiredCount = 0;

@@ -7,6 +7,8 @@ import java.awt.BorderLayout;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
 import java.awt.Window;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
@@ -42,17 +44,19 @@ public class WireLabelDialog extends JDialog {
     private boolean confirmed = false;
 
     public WireLabelDialog(Window owner, SchemaMode mode, SchemaEdge edge) {
-        this(owner, mode, edge, null);
+        this(owner, mode, edge, Set.of());
     }
 
-    /** connectorHint — тип разъёма питания кабинета на одном из концов связи (если
-     *  связь ведёт к реальному экрану): сужает список кабелей до совместимых с этим
-     *  разъёмом (PowerCon/TRUEcon), т.к. основные типы силовой коммутации (CEE,
-     *  Schuko и т.д.) используются выше по цепи, а не на самом кабинете. null —
-     *  разъём не определён или не применимо (например, режим «Сигнал») — тогда
-     *  список не сужается. */
-    public WireLabelDialog(Window owner, SchemaMode mode, SchemaEdge edge, PowerConnectorType connectorHint) {
-        this(owner, mode, edge, connectorHint, null, null, null);
+    /** connectorHints — типы разъёма питания кабинетов на одном из концов связи
+     *  (если связь ведёт к реальному экрану): сужает список кабелей до совместимых
+     *  с этими разъёмами (PowerCon/TRUEcon), т.к. основные типы силовой коммутации
+     *  (CEE, Schuko и т.д.) используются выше по цепи, а не на самом кабинете.
+     *  Больше ОДНОГО значения — экран смешивает несколько типов кабинетов
+     *  (переопределение типа по ячейке): список кабелей объединяет варианты под
+     *  ВСЕ присутствующие типы, а не только первый попавшийся. Пустое множество —
+     *  тип не определён или не применимо (например, режим «Сигнал») — список не сужается. */
+    public WireLabelDialog(Window owner, SchemaMode mode, SchemaEdge edge, Set<PowerConnectorType> connectorHints) {
+        this(owner, mode, edge, connectorHints, null, null, null);
     }
 
     /** lockedConnectorType — если связь заведена через конкретные гнёзда разъёмов
@@ -65,14 +69,14 @@ public class WireLabelDialog extends JDialog {
      *  (лимит — минимум из обоих гнёзд, см. Task #70): без этого уточнения кажется
      *  багом, если у одного узла разъёмов явно больше, чем показанный максимум —
      *  на самом деле лимитирует ДРУГОЙ конец связи. */
-    public WireLabelDialog(Window owner, SchemaMode mode, SchemaEdge edge, PowerConnectorType connectorHint,
+    public WireLabelDialog(Window owner, SchemaMode mode, SchemaEdge edge, Set<PowerConnectorType> connectorHints,
                             String lockedConnectorType, Integer maxCount, String maxCountReason) {
         super(owner, "Подпись связи (коммутация)", ModalityType.APPLICATION_MODAL);
 
         int spinnerMax = maxCount != null ? maxCount : 999;
         countSpinner.setModel(new SpinnerNumberModel(1, 1, spinnerMax, 1));
 
-        String[] presets = mode == SchemaMode.POWER ? powerPresetsFor(connectorHint) : SIGNAL_PRESETS;
+        String[] presets = mode == SchemaMode.POWER ? powerPresetsFor(connectorHints) : SIGNAL_PRESETS;
         typeCombo = lockedConnectorType != null
                 ? new JComboBox<>(new String[]{lockedConnectorType})
                 : new JComboBox<>(presets);
@@ -113,6 +117,16 @@ public class WireLabelDialog extends JDialog {
             capHint.setForeground(Palette.MUTED);
             form.add(new JLabel());
             form.add(capHint);
+        }
+        if (lockedConnectorType == null && connectorHints.size() > 1) {
+            // Экран смешивает несколько типов кабинетов (переопределение по ячейке) —
+            // список кабелей объединяет варианты под все типы сразу, уточняем это,
+            // иначе непонятно, почему в списке сразу и PowerCon-, и TRUEcon-варианты.
+            JLabel mixHint = new JLabel("<html>Экран использует несколько типов кабинетов — уточните тип"
+                    + " кабеля вручную.</html>");
+            mixHint.setForeground(Palette.MUTED);
+            form.add(new JLabel());
+            form.add(mixHint);
         }
 
         countSpinner.addChangeListener(e -> updatePreview());
@@ -165,15 +179,25 @@ public class WireLabelDialog extends JDialog {
         setLocationRelativeTo(owner);
     }
 
-    private static String[] powerPresetsFor(PowerConnectorType connectorHint) {
-        if (connectorHint == null) {
+    /** Кабель, которым реально заводят питание В кабинет — переходник с силовой
+     *  магистрали (CEE16A у распределительного щита/проходной) на разъём САМОГО
+     *  кабинета (PowerCon/TRUEcon). connectorHints — типы разъёмов кабинетов
+     *  экрана на этом конце связи; больше ОДНОГО значения — экран смешивает
+     *  несколько типов кабинетов, тогда список объединяет варианты под все типы
+     *  сразу (см. WireLabelDialog(..., Set) выше), а не только под первый. */
+    private static String[] powerPresetsFor(Set<PowerConnectorType> connectorHints) {
+        if (connectorHints.isEmpty()) {
             return POWER_PRESETS;
         }
-        return switch (connectorHint) {
-            case POWERCON -> new String[]{"PowerCon TRUE1", "PowerCon 20A"};
-            case TRUECON -> new String[]{"TRUEcon"};
-            case OTHER -> POWER_PRESETS;
-        };
+        java.util.LinkedHashSet<String> presets = new LinkedHashSet<>();
+        for (PowerConnectorType hint : connectorHints) {
+            switch (hint) {
+                case POWERCON -> presets.add("CEE 16A → PowerCon");
+                case TRUECON -> presets.add("CEE 16A → TrueCON");
+                case OTHER -> { for (String p : POWER_PRESETS) presets.add(p); }
+            }
+        }
+        return presets.toArray(new String[0]);
     }
 
     private boolean clearRequested = false;

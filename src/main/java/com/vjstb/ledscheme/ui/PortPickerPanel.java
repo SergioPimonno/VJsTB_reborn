@@ -63,7 +63,10 @@ public class PortPickerPanel extends JPanel {
             repaint();
             return;
         }
-        List<SignalChain> chains = scr.getSignalChains();
+        // Цепочки хранятся на уровне СЦЕНЫ, а не экрана (см. Task #78) — порт может
+        // ссылаться на цепочку, физически лежащую на любом экране этой сцены.
+        List<SignalChain> chains = model.getCurrentScene() != null
+                ? model.getCurrentScene().getSignalChains() : List.of();
         int rangeStart;
         int rangeEnd;
         int labelOffset;
@@ -89,7 +92,7 @@ public class PortPickerPanel extends JPanel {
 
     private JButton portButton(Screen scr, List<SignalChain> chains, int port, Integer activePort,
                                 int labelOffset, int rangeStart, int rangeEnd) {
-        SignalChain main = scr.signalChainByPort(port, false);
+        SignalChain main = model.signalChainByPort(scr, port, false);
         Integer backupLink = main != null ? main.getBackupPortNumber() : null;
 
         // Порт, зарезервированный ПОД бэкап другого порта, — у него самого не может
