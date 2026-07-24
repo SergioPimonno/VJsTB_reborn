@@ -81,7 +81,6 @@ public class SignalStagePanel extends JPanel {
      *  (см. Task #73). null — контроллеров в сцене нет вовсе (старый ручной режим). */
     private String selectedControllerId;
 
-    private final JLabel hint = new JLabel(" ");
     private final JPanel chainListPanel = new JPanel();
     private javax.swing.JComponent portsSection;
     private javax.swing.JComponent chainsSection;
@@ -132,25 +131,50 @@ public class SignalStagePanel extends JPanel {
 
             @Override
             public void onPortBackupLinkRequested(int port) {
+                // Диалог работает ЛОКАЛЬНЫМИ номерами выбранного контроллера — так же,
+                // как и сама сетка портов (см. Task #73) — раньше здесь оставался
+                // сквозной номер по сцене (например "порт 17"), хотя сетка уже
+                // показывала локальные "1..4", что выглядело как потеря/рассинхрон
+                // данных порта (см. Task #75).
                 Screen scr = model.getCurrentScreen();
                 if (scr == null) return;
+                ControllerInstance selected = selectedController(scr);
+                int offset = 0;
+                int maxLocal = model.effectiveSignalPortCount(scr);
+                if (selected != null) {
+                    offset = model.portOffsetOf(scr, selected);
+                    ControllerType t = model.getWorkspace().controllerTypeById(selected.getControllerTypeId());
+                    maxLocal = t != null ? t.effectivePortCount() : 0;
+                }
+                int localPort = port - offset;
                 SignalChain main = scr.signalChainByPort(port, false);
-                Integer current = main != null ? main.getBackupPortNumber() : null;
+                Integer currentGlobal = main != null ? main.getBackupPortNumber() : null;
+                Integer currentLocal = null;
+                String crossControllerNote = "";
+                if (currentGlobal != null) {
+                    if (currentGlobal > offset && currentGlobal <= offset + maxLocal) {
+                        currentLocal = currentGlobal - offset;
+                    } else {
+                        crossControllerNote = " (сейчас резерв — порт ДРУГОГО контроллера сцены;"
+                                + " это окно назначает резерв только в пределах текущего контроллера)";
+                    }
+                }
                 String input = JOptionPane.showInputDialog(SignalStagePanel.this,
-                        "Номер резервного порта для порта " + port + " (пусто — снять):",
-                        current != null ? String.valueOf(current) : "");
+                        "Номер резервного порта (текущего контроллера) для порта " + localPort
+                                + crossControllerNote + " (пусто — снять):",
+                        currentLocal != null ? String.valueOf(currentLocal) : "");
                 if (input == null) return;
                 input = input.trim();
                 try {
-                    Integer backupPort = input.isEmpty() ? null : Integer.valueOf(input);
-                    int maxPort = model.effectiveSignalPortCount(scr);
-                    if (backupPort != null && (backupPort < 1 || backupPort > maxPort)) {
+                    Integer backupLocal = input.isEmpty() ? null : Integer.valueOf(input);
+                    if (backupLocal != null && (backupLocal < 1 || backupLocal > maxLocal)) {
                         JOptionPane.showMessageDialog(SignalStagePanel.this,
-                                "Номер порта должен быть от 1 до " + maxPort,
+                                "Номер порта должен быть от 1 до " + maxLocal,
                                 "Ошибка", JOptionPane.ERROR_MESSAGE);
                         return;
                     }
-                    model.setSignalBackupPortLink(port, backupPort);
+                    Integer backupGlobal = backupLocal != null ? offset + backupLocal : null;
+                    model.setSignalBackupPortLink(port, backupGlobal);
                 } catch (NumberFormatException ex) {
                     JOptionPane.showMessageDialog(SignalStagePanel.this, "Введите число порта",
                             "Ошибка", JOptionPane.ERROR_MESSAGE);
@@ -249,6 +273,27 @@ public class SignalStagePanel extends JPanel {
 
     public CanvasPanel canvas() {
         return canvas;
+    }
+
+    /** Человекочитаемая подпись ГЛОБАЛЬНОГО номера порта — локальный номер в пределах
+     *  его собственного контроллера (плюс "C{n}·" перед ним, если контроллеров в
+     *  сцене несколько — иначе к какому контроллеру относится порт неоднозначно),
+     *  а не сквозной номер по всей сцене. Раньше список "Существующие цепочки"
+     *  показывал сквозной номер, который не соответствовал локальным номерам сетки
+     *  портов (см. Task #75) — выглядело так, будто цепочка "потеряла" свой порт. */
+    private String portDisplayLabel(Screen scr, int globalPort) {
+        List<ControllerInstance> sceneControllers = model.controllersInScene(model.getCurrentScene());
+        ControllerInstance owner = model.controllerForPort(scr, globalPort);
+        if (owner == null) {
+            return String.valueOf(globalPort);
+        }
+        int offset = model.portOffsetOf(scr, owner);
+        int localPort = globalPort - offset;
+        if (sceneControllers.size() <= 1) {
+            return String.valueOf(localPort);
+        }
+        int idx = sceneControllers.indexOf(owner) + 1;
+        return "C" + idx + "·" + localPort;
     }
 
     /** Контроллер, чьи порты сейчас показаны — выбранный явно (ЛКМ по строке), или
@@ -376,11 +421,6 @@ public class SignalStagePanel extends JPanel {
         addRow.add(addButtons, BorderLayout.EAST);
         controllersBody.add(UiKit.vgap());
         controllersBody.add(addRow);
-        controllersBody.add(UiKit.vgap());
-        controllersBody.add(UiKit.muted(
-                "<html>Контроллеры общие для всей сцены — их видят все экраны сцены. ЛКМ по контроллеру"
-                        + " ниже — показать и расключать ЕГО порты (локальными номерами); сетка справа"
-                        + " всегда показывает порты только одного выбранного контроллера.</html>"));
         controllersSection = UiKit.dynamicSection("Контроллеры сцены", controllersBody);
         body.add(controllersSection);
         body.add(UiKit.vgap());
@@ -389,18 +429,9 @@ public class SignalStagePanel extends JPanel {
         body.add(portCountLabel);
         body.add(UiKit.vgap());
         // portPicker наполняется кнопками в rebuild(), уже после первой сборки — динамическая секция.
-        portsSection = UiKit.dynamicSection(
-                "Порты контроллера (ЛКМ/хоткей 1-9,0 — цель, ПКМ — бэкап-цепочка, 2×ЛКМ — резервный порт)",
-                portPicker);
+        portsSection = UiKit.dynamicSection("Порты контроллера", portPicker);
         body.add(portsSection);
-
-        hint.setForeground(Palette.MUTED);
-        hint.setText("<html>Клик по непрописанному кабинету — начать цепочку для выбранного порта.<br>"
-                + "Клик, зажатая ЛКМ или стрелки — добавить ещё кабинеты.<br>"
-                + "ПКМ по кабинету во время построения — убрать его из цепочки.<br>"
-                + "Esc — завершить и сохранить цепочку.</html>");
         body.add(UiKit.vgap());
-        body.add(hint);
 
         JButton clear = new JButton("Очистить цепочки сигнала");
         clear.addActionListener(e -> {
@@ -493,9 +524,10 @@ public class SignalStagePanel extends JPanel {
             for (int i = 0; i < chains.size(); i++) {
                 SignalChain c = chains.get(i);
                 boolean crossScreen = c.getCabinetInstanceIds().stream().anyMatch(id -> scr.cabinetById(id) == null);
-                String label = (c.getPortNumber() != null ? "Порт " + c.getPortNumber() : "Без порта")
+                String label = (c.getPortNumber() != null ? "Порт " + portDisplayLabel(scr, c.getPortNumber()) : "Без порта")
                         + (c.isBackup() ? " (бэкап)" : "") + " · " + c.getCabinetInstanceIds().size() + " каб."
-                        + (c.getBackupPortNumber() != null ? " · резерв: порт " + c.getBackupPortNumber() : "")
+                        + (c.getBackupPortNumber() != null
+                                ? " · резерв: порт " + portDisplayLabel(scr, c.getBackupPortNumber()) : "")
                         + (crossScreen ? " (продолжается на другом экране)" : "");
                 chainListPanel.add(chainRow(label, Palette.signalColor(i), () -> model.deleteSignalChain(c.getId())));
             }

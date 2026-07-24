@@ -75,7 +75,12 @@ public class MainFrame extends JFrame {
         javax.swing.JButton shortcutsBtn = new javax.swing.JButton("⌨");
         shortcutsBtn.setToolTipText("Горячие клавиши");
         shortcutsBtn.addActionListener(e -> showShortcuts());
+        javax.swing.JButton guideBtn = new javax.swing.JButton("📖 Руководство");
+        guideBtn.setToolTipText("Как пользоваться: построение цепочек, контроллеры/порты, радиальное меню,"
+                + " коммутация через гнёзда, библиотека карт");
+        guideBtn.addActionListener(e -> new GuideDialog(this).setVisible(true));
         toolRow.add(undoButton);
+        toolRow.add(guideBtn);
         toolRow.add(shortcutsBtn);
         top.add(toolRow, BorderLayout.EAST);
         top.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));

@@ -61,7 +61,6 @@ public class PowerStagePanel extends JPanel {
     private final JToggleButton phase1 = new JToggleButton("L1");
     private final JToggleButton phase2 = new JToggleButton("L2");
     private final JToggleButton phase3 = new JToggleButton("L3");
-    private final JLabel hint = new JLabel(" ");
     private final JPanel chainListPanel = new JPanel();
     private javax.swing.JComponent chainsSection;
     private javax.swing.JComponent statsSection;
@@ -202,15 +201,8 @@ public class PowerStagePanel extends JPanel {
         phase1.addActionListener(e -> selectPhase(1));
         phase2.addActionListener(e -> selectPhase(2));
         phase3.addActionListener(e -> selectPhase(3));
-        body.add(UiKit.section("Фаза (или хоткей 1/2/3) — цель для следующей цепочки", phaseRow));
-
-        hint.setForeground(Palette.MUTED);
-        hint.setText("<html>Клик по непрописанному кабинету — начать цепочку для выбранной фазы.<br>"
-                + "Клик, зажатая ЛКМ или стрелки — добавить ещё кабинеты.<br>"
-                + "ПКМ по кабинету во время построения — убрать его из цепочки.<br>"
-                + "Esc — завершить и сохранить цепочку.</html>");
+        body.add(UiKit.section("Фаза", phaseRow));
         body.add(UiKit.vgap());
-        body.add(hint);
 
         JButton clear = new JButton("Очистить цепочки питания");
         clear.addActionListener(e -> {
