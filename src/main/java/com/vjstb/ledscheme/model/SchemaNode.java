@@ -1,5 +1,7 @@
 package com.vjstb.ledscheme.model;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -16,8 +18,18 @@ public class SchemaNode {
     private String label = "";
     private double x;
     private double y;
+    private double width = 175;
+    private double height = 56;
     /** Для type == SCREEN: id реального экрана сцены, с которым связан узел. */
     private String screenRefId;
+    /** Комплектация карт ввода/вывода (медиасерверы/видеопроцессоры вроде Barco E2,
+     *  PixelHue Q8): у type == SERVER/CONTROLLER задаёт реальное число видео I/O. */
+    private List<SchemaCard> cards = new ArrayList<>();
+    /** Разъёмы питания узла (щиты/дистрибьюторы и т.п. в схеме ПИТАНИЯ): в отличие
+     *  от {@link #cards} тут нет группировки по картам — просто список «тип разъёма
+     *  (PowerCon/CEE/Schuko…) + направление + количество», т.к. силовое оборудование
+     *  не имеет сменных видеокарт. */
+    private List<CardPort> powerConnectors = new ArrayList<>();
 
     public SchemaNode() {
     }
@@ -79,12 +91,44 @@ public class SchemaNode {
         this.y = y;
     }
 
+    public double getWidth() {
+        return width;
+    }
+
+    public void setWidth(double width) {
+        this.width = width;
+    }
+
+    public double getHeight() {
+        return height;
+    }
+
+    public void setHeight(double height) {
+        this.height = height;
+    }
+
     public String getScreenRefId() {
         return screenRefId;
     }
 
     public void setScreenRefId(String screenRefId) {
         this.screenRefId = screenRefId;
+    }
+
+    public List<SchemaCard> getCards() {
+        return cards;
+    }
+
+    public void setCards(List<SchemaCard> cards) {
+        this.cards = cards;
+    }
+
+    public List<CardPort> getPowerConnectors() {
+        return powerConnectors;
+    }
+
+    public void setPowerConnectors(List<CardPort> powerConnectors) {
+        this.powerConnectors = powerConnectors;
     }
 
     public SchemaNode copy() {
@@ -95,7 +139,17 @@ public class SchemaNode {
         n.label = label;
         n.x = x;
         n.y = y;
+        n.width = width;
+        n.height = height;
         n.screenRefId = screenRefId;
+        n.cards = new ArrayList<>();
+        for (SchemaCard c : cards) {
+            n.cards.add(c.copy());
+        }
+        n.powerConnectors = new ArrayList<>();
+        for (CardPort p : powerConnectors) {
+            n.powerConnectors.add(p.copy());
+        }
         return n;
     }
 }

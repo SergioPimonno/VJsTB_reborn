@@ -72,6 +72,18 @@ public final class ScreenLogic {
         }
     }
 
+    /** Фактический тип кабинета: переопределение по ячейке (если задано и разрешимо
+     *  через workspace), иначе тип экрана по умолчанию. */
+    private static CabinetType effectiveType(CabinetInstance c, CabinetType defaultType, Workspace workspace) {
+        if (workspace != null && c.getCabinetTypeId() != null) {
+            CabinetType override = workspace.cabinetTypeById(c.getCabinetTypeId());
+            if (override != null) {
+                return override;
+            }
+        }
+        return defaultType;
+    }
+
     private static CabinetInstance findAt(List<CabinetInstance> list, int row, int col) {
         for (CabinetInstance c : list) {
             if (c.getRowIndex() == row && c.getColIndex() == col) {
@@ -84,6 +96,33 @@ public final class ScreenLogic {
     /** Характеристики экрана без учёта переопределения типа кабинета по ячейкам. */
     public static ScreenStats stats(Screen screen, CabinetType defaultType) {
         return stats(screen, defaultType, null);
+    }
+
+    /** Суммарные характеристики НЕСКОЛЬКИХ экранов (вся сцена) — для режима «показать
+     *  все экраны сцены» на этапах Питание/Сигнал, где статистика одного активного
+     *  экрана не даёт полной картины по нагрузке всей сцены (см. Task #71).
+     *  Разрешение/физический размер не агрегируются (экраны — не единый прямоугольник,
+     *  просто список независимых сеток) — в возвращаемой записи это 0, UI показывает
+     *  вместо них количество экранов отдельно. */
+    public static ScreenStats aggregateStats(List<Screen> screens,
+                                              java.util.function.Function<Screen, CabinetType> typeResolver,
+                                              Workspace workspace) {
+        int active = 0;
+        int[] phaseCounts = new int[4];
+        double[] phasePower = new double[4];
+        double totalPower = 0;
+        double totalWeight = 0;
+        for (Screen s : screens) {
+            ScreenStats st = stats(s, typeResolver.apply(s), workspace);
+            active += st.activeCabinetCount();
+            totalPower += st.totalPowerW();
+            totalWeight += st.totalWeightKg();
+            for (int i = 1; i <= 3; i++) {
+                phaseCounts[i] += st.phaseCabinetCounts()[i];
+                phasePower[i] += st.phasePowerW()[i];
+            }
+        }
+        return new ScreenStats(0, 0, 0, 0, active, totalPower, totalWeight, phaseCounts, phasePower);
     }
 
     /**
@@ -108,13 +147,7 @@ public final class ScreenLogic {
                 continue;
             }
             active++;
-            CabinetType effective = defaultType;
-            if (workspace != null && c.getCabinetTypeId() != null) {
-                CabinetType override = workspace.cabinetTypeById(c.getCabinetTypeId());
-                if (override != null) {
-                    effective = override;
-                }
-            }
+            CabinetType effective = effectiveType(c, defaultType, workspace);
             double p = effective != null ? effective.getPowerConsumptionW() : 0;
             double wt = effective != null ? effective.getWeightKg() : 0;
             totalPower += p;
@@ -138,18 +171,40 @@ public final class ScreenLogic {
         );
     }
 
-    /** Базовая сводка по сцене (прериг): суммарный вес и мощность всех экранов. */
+    /** Базовая сводка по сцене (прериг): суммарный вес/мощность и разбивка кабинетов
+     *  по фактическому типу (для отображения «128 (Base: 96, Heavy: 32)» в прериге). */
     public static SceneStats sceneStats(Scene scene, Workspace workspace) {
         int cabinets = 0;
         double power = 0;
         double weight = 0;
+        java.util.Map<CabinetType, Integer> byType = new java.util.LinkedHashMap<>();
         for (Screen s : scene.getScreens()) {
-            ScreenStats st = stats(s, workspace.cabinetTypeById(s.getCabinetTypeId()), workspace);
+            CabinetType defaultType = workspace.cabinetTypeById(s.getCabinetTypeId());
+            ScreenStats st = stats(s, defaultType, workspace);
             cabinets += st.activeCabinetCount();
             power += st.totalPowerW();
             weight += st.totalWeightKg();
+            for (CabinetInstance c : s.getCabinets()) {
+                if (c.isHidden()) {
+                    continue;
+                }
+                CabinetType effective = effectiveType(c, defaultType, workspace);
+                if (effective != null) {
+                    byType.merge(effective, 1, Integer::sum);
+                }
+            }
         }
-        return new SceneStats(scene.getScreens().size(), cabinets, power, weight);
+        return new SceneStats(scene.getScreens().size(), cabinets, power, weight, byType);
+    }
+
+    /** Авторасчёт количества точек подвеса по формуле из референсных таблиц
+     *  риг-тех расчёта заказчика: «Hanging bar» = ширина экрана в модулях / 2
+     *  (стандартный сегмент несущей балки перекрывает 2 модуля по ширине) —
+     *  трактуется как минимальное число точек подвеса, округлённое вверх, не
+     *  меньше 2 (подвес не бывает на одной точке). Даёт лишь стартовое значение —
+     *  пользователь может скорректировать вручную под конкретную ферму/траверс. */
+    public static int suggestRiggingPoints(Screen screen) {
+        return Math.max(2, (int) Math.ceil(screen.getCols() / 2.0));
     }
 
     // ---- undo: снимок и восстановление состояния экрана ----
@@ -167,6 +222,8 @@ public final class ScreenLogic {
         live.setPosXMm(snapshot.getPosXMm());
         live.setPosYMm(snapshot.getPosYMm());
         live.setSignalPortCount(snapshot.getSignalPortCount());
+        live.setRefreshRateHz(snapshot.getRefreshRateHz());
+        live.setColorBitDepth(snapshot.getColorBitDepth());
         live.setMountType(snapshot.getMountType());
         live.setRiggingPointsCount(snapshot.getRiggingPointsCount());
         live.setRiggingNotes(snapshot.getRiggingNotes());

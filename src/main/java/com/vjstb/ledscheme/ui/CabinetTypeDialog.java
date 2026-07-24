@@ -2,6 +2,7 @@ package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.model.CabinetShape;
 import com.vjstb.ledscheme.model.CabinetType;
+import com.vjstb.ledscheme.model.PowerConnectorType;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.FlowLayout;
@@ -30,6 +31,7 @@ public class CabinetTypeDialog extends JDialog {
     private final JTextField powerField = new JTextField();
     private final JTextField weightField = new JTextField();
     private final JComboBox<CabinetShape> shapeField = new JComboBox<>(CabinetShape.values());
+    private final JComboBox<PowerConnectorType> powerConnectorTypeField = new JComboBox<>(PowerConnectorType.values());
     private final JTextField powerConnectorsField = new JTextField();
     private final JTextField signalConnectorsField = new JTextField();
 
@@ -58,6 +60,8 @@ public class CabinetTypeDialog extends JDialog {
         form.add(weightField);
         form.add(new JLabel("Форма"));
         form.add(shapeField);
+        form.add(new JLabel("Тип разъёма питания"));
+        form.add(powerConnectorTypeField);
         form.add(new JLabel("Линий питания на кабинет (0 = встроено)"));
         form.add(powerConnectorsField);
         form.add(new JLabel("Линий сигнала на кабинет (0 = встроено)"));
@@ -73,6 +77,7 @@ public class CabinetTypeDialog extends JDialog {
         powerField.setText(num(src.getPowerConsumptionW()));
         weightField.setText(num(src.getWeightKg()));
         shapeField.setSelectedItem(src.getShape());
+        powerConnectorTypeField.setSelectedItem(src.getPowerConnectorType());
         powerConnectorsField.setText(String.valueOf(src.getPowerConnectorsNeeded()));
         signalConnectorsField.setText(String.valueOf(src.getSignalConnectorsNeeded()));
 
@@ -113,6 +118,7 @@ public class CabinetTypeDialog extends JDialog {
             ct.setPowerConsumptionW(parseNonNeg(powerField.getText(), "Мощность"));
             ct.setWeightKg(parseNonNeg(weightField.getText(), "Вес"));
             ct.setShape((CabinetShape) shapeField.getSelectedItem());
+            ct.setPowerConnectorType((PowerConnectorType) powerConnectorTypeField.getSelectedItem());
             ct.setPowerConnectorsNeeded((int) parseNonNeg(powerConnectorsField.getText(), "Линий питания"));
             ct.setSignalConnectorsNeeded((int) parseNonNeg(signalConnectorsField.getText(), "Линий сигнала"));
             result = ct;

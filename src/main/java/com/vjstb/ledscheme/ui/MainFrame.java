@@ -1,6 +1,9 @@
 package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.settings.HotkeyAction;
+import com.vjstb.ledscheme.settings.SettingsManager;
+import com.vjstb.ledscheme.ui.stage.LibrariesStagePanel;
 import com.vjstb.ledscheme.ui.stage.OutputStagePanel;
 import com.vjstb.ledscheme.ui.stage.PowerStagePanel;
 import com.vjstb.ledscheme.ui.stage.SetupStagePanel;
@@ -22,18 +25,20 @@ import javax.swing.text.JTextComponent;
 
 /**
  * Главное окно: верхнее меню, переключатель этапов работы (Сетап/Питание/Сигнал/
- * Визуализация/Вывод) и область содержимого текущего этапа. Координирует общие
+ * Генерация масок/Вывод) и область содержимого текущего этапа. Координирует общие
  * горячие клавиши (отмена, построение цепочек на активном этапе).
  */
 public class MainFrame extends JFrame {
 
     private final AppModel model;
+    private final SettingsManager settings;
 
     private final SetupStagePanel setupStage;
     private final PowerStagePanel powerStage;
     private final SignalStagePanel signalStage;
     private final VisualizationStagePanel visualizationStage;
     private final OutputStagePanel outputStage;
+    private final LibrariesStagePanel librariesStage;
 
     private final CardLayout cards = new CardLayout();
     private final JPanel content = new JPanel(cards);
@@ -42,22 +47,24 @@ public class MainFrame extends JFrame {
 
     private String currentStage = StageSwitcher.SETUP;
 
-    public MainFrame(AppModel model) {
+    public MainFrame(AppModel model, SettingsManager settings) {
         super("LED Scheme Designer");
         this.model = model;
+        this.settings = settings;
 
-        setupStage = new SetupStagePanel(model);
-        powerStage = new PowerStagePanel(model);
-        signalStage = new SignalStagePanel(model);
-        visualizationStage = new VisualizationStagePanel(model);
+        setupStage = new SetupStagePanel(model, settings);
+        powerStage = new PowerStagePanel(model, settings);
+        signalStage = new SignalStagePanel(model, settings);
+        visualizationStage = new VisualizationStagePanel(model, settings);
         outputStage = new OutputStagePanel(model);
+        librariesStage = new LibrariesStagePanel(model);
 
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setSize(1360, 860);
         setLocationRelativeTo(null);
         setLayout(new BorderLayout());
 
-        setJMenuBar(new MainMenuBar(this, model, this::showShortcuts));
+        setJMenuBar(new MainMenuBar(this, model, settings, this::showShortcuts));
 
         JPanel top = new JPanel(new BorderLayout());
         StageSwitcher switcher = new StageSwitcher(this::switchStage);
@@ -79,6 +86,7 @@ public class MainFrame extends JFrame {
         content.add(signalStage, StageSwitcher.SIGNAL);
         content.add(visualizationStage, StageSwitcher.VISUALIZATION);
         content.add(outputStage, StageSwitcher.OUTPUT);
+        content.add(librariesStage, StageSwitcher.LIBRARIES);
         add(content, BorderLayout.CENTER);
 
         statusBar.setBorder(BorderFactory.createEmptyBorder(4, 10, 4, 10));
@@ -86,6 +94,9 @@ public class MainFrame extends JFrame {
         add(statusBar, BorderLayout.SOUTH);
 
         model.addListener(this::refresh);
+        // после смены палитры (Персонализация) поля Palette обновляются, но холсты
+        // рисуются через Graphics2D напрямую и сами не перерисуются — просим окно целиком.
+        settings.addListener(this::repaint);
         installShortcuts();
         refresh();
     }
@@ -115,7 +126,11 @@ public class MainFrame extends JFrame {
                 if (e.getID() != KeyEvent.KEY_PRESSED || !isActive()) {
                     return false;
                 }
-                if (e.isControlDown() && e.getKeyCode() == KeyEvent.VK_Z) {
+                // Действия ниже переназначаемы (см. PersonalizationDialog, «Горячие
+                // клавиши») — раньше были жёстко зашиты на конкретные коды клавиш,
+                // из-за чего пользователь с нерабочей физической клавишей Esc не мог
+                // ничем её заменить и физически не мог завершить построение цепочки.
+                if (settings.bindingFor(HotkeyAction.UNDO).matchesKey(e)) {
                     model.undo();
                     return true;
                 }
@@ -123,28 +138,59 @@ public class MainFrame extends JFrame {
                 if (focus instanceof JTextComponent) {
                     return false; // не мешаем вводу текста
                 }
+                // Цифровые хоткеи фазы (Питание, 1-3) / порта (Сигнал, 1-9, 0 = 10) —
+                // выбирают цель для следующей цепочки без клика мышью по кнопке фазы/
+                // порта (см. PowerStagePanel.selectPhaseByHotkey/SignalStagePanel
+                // .selectPortByHotkey). Не переназначаемы — их 10 штук, отдельная
+                // горячая клавиша на каждую избыточна.
+                if (!e.isControlDown() && !e.isAltDown() && e.getKeyCode() >= KeyEvent.VK_0
+                        && e.getKeyCode() <= KeyEvent.VK_9) {
+                    int digit = e.getKeyCode() - KeyEvent.VK_0;
+                    if (currentStage.equals(StageSwitcher.POWER) && digit >= 1 && digit <= 3) {
+                        powerStage.selectPhaseByHotkey(digit);
+                        return true;
+                    }
+                    if (currentStage.equals(StageSwitcher.SIGNAL)) {
+                        signalStage.selectPortByHotkey(digit == 0 ? 10 : digit);
+                        return true;
+                    }
+                }
                 ChainInteractionController ctrl = activeChainController();
                 if (ctrl == null) {
                     return false;
                 }
-                switch (e.getKeyCode()) {
-                    case KeyEvent.VK_ESCAPE -> { ctrl.finish(); return true; }
-                    case KeyEvent.VK_UP -> { ctrl.moveCursor(-1, 0); return true; }
-                    case KeyEvent.VK_DOWN -> { ctrl.moveCursor(1, 0); return true; }
-                    case KeyEvent.VK_LEFT -> { ctrl.moveCursor(0, -1); return true; }
-                    case KeyEvent.VK_RIGHT -> { ctrl.moveCursor(0, 1); return true; }
-                    case KeyEvent.VK_DELETE, KeyEvent.VK_BACK_SPACE -> {
-                        if (!ctrl.isChainBuilding()) {
-                            String hovered = hoveredCabinetOnActiveStage();
-                            if (hovered != null) {
-                                model.toggleCabinetHidden(hovered);
-                                return true;
-                            }
-                        }
-                        return false;
-                    }
-                    default -> { return false; }
+                if (settings.bindingFor(HotkeyAction.FINISH_CHAIN).matchesKey(e)) {
+                    ctrl.finish();
+                    return true;
                 }
+                if (settings.bindingFor(HotkeyAction.MOVE_UP).matchesKey(e)) {
+                    ctrl.moveCursor(-1, 0);
+                    return true;
+                }
+                if (settings.bindingFor(HotkeyAction.MOVE_DOWN).matchesKey(e)) {
+                    ctrl.moveCursor(1, 0);
+                    return true;
+                }
+                if (settings.bindingFor(HotkeyAction.MOVE_LEFT).matchesKey(e)) {
+                    ctrl.moveCursor(0, -1);
+                    return true;
+                }
+                if (settings.bindingFor(HotkeyAction.MOVE_RIGHT).matchesKey(e)) {
+                    ctrl.moveCursor(0, 1);
+                    return true;
+                }
+                if (settings.bindingFor(HotkeyAction.TOGGLE_HIDDEN).matchesKey(e)
+                        || e.getKeyCode() == KeyEvent.VK_BACK_SPACE) {
+                    if (!ctrl.isChainBuilding()) {
+                        String hovered = hoveredCabinetOnActiveStage();
+                        if (hovered != null) {
+                            model.toggleCabinetHidden(hovered);
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                return false;
             }
         });
     }
@@ -170,16 +216,16 @@ public class MainFrame extends JFrame {
     }
 
     private void showShortcuts() {
-        String msg = """
-                Ctrl+Z — отменить действие (везде)
-
-                На этапах «Питание» / «Сигнал»:
-                Клик по фазе/порту — начать новую цепочку
-                Клик, зажатая ЛКМ или стрелки — добавить кабинеты
-                Esc — завершить цепочку
-                ПКМ по порту (Сигнал) — переключить бэкап
-                Del — скрыть/показать кабинет под курсором (вне построения)
-                Ctrl+колесо — масштаб холста""";
+        String msg = settings.bindingFor(HotkeyAction.UNDO).label() + " — отменить действие (везде)\n\n"
+                + "На этапах «Питание» / «Сигнал»:\n"
+                + "Клик по фазе/порту — начать новую цепочку\n"
+                + "Клик, зажатая ЛКМ или стрелки — добавить кабинеты\n"
+                + settings.bindingFor(HotkeyAction.FINISH_CHAIN).label() + " — завершить цепочку\n"
+                + "ПКМ по порту (Сигнал) — переключить бэкап\n"
+                + settings.bindingFor(HotkeyAction.TOGGLE_HIDDEN).label()
+                + " — скрыть/показать кабинет под курсором (вне построения)\n"
+                + "Ctrl+колесо — масштаб холста\n\n"
+                + "Все горячие клавиши выше можно переназначить: Персонализация → «Горячие клавиши».";
         JOptionPane.showMessageDialog(this, msg, "Горячие клавиши", JOptionPane.INFORMATION_MESSAGE);
     }
 

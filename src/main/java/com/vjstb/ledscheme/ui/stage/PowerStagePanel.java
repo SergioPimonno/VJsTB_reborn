@@ -10,6 +10,7 @@ import com.vjstb.ledscheme.ui.CanvasPanel;
 import com.vjstb.ledscheme.ui.ChainInteractionController;
 import com.vjstb.ledscheme.ui.ContextBar;
 import com.vjstb.ledscheme.ui.Palette;
+import com.vjstb.ledscheme.ui.SceneCanvasPanel;
 import com.vjstb.ledscheme.ui.SchemaPanel;
 import com.vjstb.ledscheme.ui.UiKit;
 import java.awt.BorderLayout;
@@ -17,14 +18,18 @@ import java.awt.CardLayout;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
+import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
 import javax.swing.ButtonGroup;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JLabel;
+import javax.swing.JLayeredPane;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.JSplitPane;
 import javax.swing.JToggleButton;
 
 /** Этап «Питание»: холст + построение цепочек расключения питания по фазам L1/L2/L3,
@@ -42,6 +47,16 @@ public class PowerStagePanel extends JPanel {
     private final SchemaPanel schemaPanel;
     private final JToggleButton chainViewBtn = new JToggleButton("Расключение экрана", true);
     private final JToggleButton schemaViewBtn = new JToggleButton("Общая схема питания");
+    private final JCheckBox showAllScreens = new JCheckBox("Показать все экраны сцены");
+    private final SceneCanvasPanel sceneOverview;
+    private final JScrollPane canvasScroll;
+    private final com.vjstb.ledscheme.settings.SettingsManager settings;
+    private final SceneCanvasPanel cornerPreview;
+    private final JPanel cornerPreviewHost;
+
+    private static final int CORNER_W = 260;
+    private static final int CORNER_H = 170;
+    private static final int CORNER_MARGIN = 10;
 
     private final JToggleButton phase1 = new JToggleButton("L1");
     private final JToggleButton phase2 = new JToggleButton("L2");
@@ -58,23 +73,80 @@ public class PowerStagePanel extends JPanel {
     private final JLabel statWeight = new JLabel("—");
     private final JLabel statPhases = new JLabel();
 
-    public PowerStagePanel(AppModel model) {
+    public PowerStagePanel(AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings) {
         this.model = model;
+        this.settings = settings;
         this.chainCtrl = new ChainInteractionController(model, this::refresh);
+        // Клик по непрописанному кабинету сам начинает цепочку для ТЕКУЩЕЙ выбранной
+        // фазы — кнопка фазы (или хоткей 1/2/3) только выбирает цель, не запускает
+        // построение сама по себе (см. selectPhase ниже).
+        this.chainCtrl.setStarter(cabId -> {
+            Screen scr = model.getCurrentScreen();
+            if (scr == null) {
+                return null;
+            }
+            // По ВСЕЙ сцене, а не только этому экрану — силовая цепочка тоже может
+            // физически продолжаться с одного экрана на другой (см. Task #64).
+            if (model.isCabinetWiredForPower(cabId)) {
+                return null;
+            }
+            int phase = model.getActivePhase();
+            return ids -> model.addPowerChain(phase, ids);
+        });
+        this.chainCtrl.setOnCommitError(msg ->
+                JOptionPane.showMessageDialog(this, msg, "Не удалось завершить цепочку",
+                        JOptionPane.ERROR_MESSAGE));
         this.canvas = new CanvasPanel(model, chainCtrl);
+        this.sceneOverview = new SceneCanvasPanel(model);
+        // "Показать все экраны сцены" был только для просмотра — весь смысл режима
+        // (видеть всю сцену и осознанно распределять нагрузку) требует уметь
+        // прописывать активный экран прямо отсюда, не переключаясь на одиночный вид.
+        this.sceneOverview.setChainController(chainCtrl);
 
-        JPanel perScreen = new JPanel(new BorderLayout());
-        JScrollPane canvasScroll = new JScrollPane(canvas);
+        canvasScroll = new JScrollPane(canvas);
         canvasScroll.getVerticalScrollBar().setUnitIncrement(24);
         canvasScroll.getHorizontalScrollBar().setUnitIncrement(24);
-        perScreen.add(canvasScroll, BorderLayout.CENTER);
+        showAllScreens.addActionListener(e -> {
+            boolean all = showAllScreens.isSelected();
+            sceneOverview.setDetailMode(all, true);
+            canvasScroll.setViewportView(all ? sceneOverview : canvas);
+            updateCornerPreviewVisibility();
+        });
+
+        // Корнер-виджет (всегда видимый мини-обзор сцены в правом нижнем углу холста,
+        // выключаемый в «Персонализации») — накладывается поверх canvasScroll через
+        // JLayeredPane, а не встраивается в раскладку, чтобы не отнимать место у холста.
+        cornerPreview = new SceneCanvasPanel(model);
+        cornerPreview.setDetailMode(true, true, true);
+        cornerPreviewHost = new JPanel(new BorderLayout());
+        cornerPreviewHost.setBorder(BorderFactory.createLineBorder(Palette.BORDER));
+        cornerPreviewHost.add(cornerPreview, BorderLayout.CENTER);
+        cornerPreviewHost.setBounds(0, 0, CORNER_W, CORNER_H);
+
+        JLayeredPane canvasLayered = new JLayeredPane();
+        canvasLayered.setLayout(null);
+        canvasLayered.add(canvasScroll, JLayeredPane.DEFAULT_LAYER);
+        canvasLayered.add(cornerPreviewHost, JLayeredPane.PALETTE_LAYER);
+        canvasLayered.addComponentListener(new java.awt.event.ComponentAdapter() {
+            @Override
+            public void componentResized(java.awt.event.ComponentEvent e) {
+                canvasScroll.setBounds(0, 0, canvasLayered.getWidth(), canvasLayered.getHeight());
+                cornerPreviewHost.setBounds(canvasLayered.getWidth() - CORNER_W - CORNER_MARGIN,
+                        canvasLayered.getHeight() - CORNER_H - CORNER_MARGIN, CORNER_W, CORNER_H);
+            }
+        });
+        settings.addListener(this::updateCornerPreviewVisibility);
 
         JScrollPane sideScroll = new JScrollPane(buildSide());
         sideScroll.setBorder(null);
-        sideScroll.setPreferredSize(new Dimension(SIDE_WIDTH + 20, 100));
-        perScreen.add(sideScroll, BorderLayout.EAST);
+        sideScroll.setMinimumSize(new Dimension(180, 100));
 
-        schemaPanel = new SchemaPanel(model, SchemaMode.POWER);
+        JSplitPane perScreen = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, canvasLayered, sideScroll);
+        perScreen.setContinuousLayout(true);
+        perScreen.setResizeWeight(1.0);
+        UiKit.persistentDivider(settings, "power.chainSplit", perScreen, 1.0 - (SIDE_WIDTH + 20) / 1360.0);
+
+        schemaPanel = new SchemaPanel(model, SchemaMode.POWER, settings);
         schemaPanel.setOnScreenActivated(scr -> {
             model.selectScreen(scr);
             chainViewBtn.setSelected(true);
@@ -92,6 +164,7 @@ public class PowerStagePanel extends JPanel {
         JPanel toggleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
         toggleRow.add(chainViewBtn);
         toggleRow.add(schemaViewBtn);
+        toggleRow.add(showAllScreens);
 
         JPanel top = new JPanel(new BorderLayout());
         top.add(new ContextBar(model, true), BorderLayout.NORTH);
@@ -103,6 +176,7 @@ public class PowerStagePanel extends JPanel {
 
         model.addListener(this::refresh);
         refresh();
+        updateCornerPreviewVisibility();
     }
 
     public ChainInteractionController chainController() {
@@ -128,10 +202,13 @@ public class PowerStagePanel extends JPanel {
         phase1.addActionListener(e -> selectPhase(1));
         phase2.addActionListener(e -> selectPhase(2));
         phase3.addActionListener(e -> selectPhase(3));
-        body.add(UiKit.section("Фаза (клик — новая цепочка)", phaseRow));
+        body.add(UiKit.section("Фаза (или хоткей 1/2/3) — цель для следующей цепочки", phaseRow));
 
         hint.setForeground(Palette.MUTED);
-        hint.setText("<html>Клик, зажатая ЛКМ или стрелки — добавить кабинеты.<br>Esc — завершить цепочку.</html>");
+        hint.setText("<html>Клик по непрописанному кабинету — начать цепочку для выбранной фазы.<br>"
+                + "Клик, зажатая ЛКМ или стрелки — добавить ещё кабинеты.<br>"
+                + "ПКМ по кабинету во время построения — убрать его из цепочки.<br>"
+                + "Esc — завершить и сохранить цепочку.</html>");
         body.add(UiKit.vgap());
         body.add(hint);
 
@@ -171,11 +248,25 @@ public class PowerStagePanel extends JPanel {
 
     private void selectPhase(int phase) {
         model.setActivePhase(phase);
-        Screen scr = model.getCurrentScreen();
-        if (scr == null) {
-            return;
+        // Завершает (сохраняет) то, что строилось для ПРЕЖНЕЙ фазы — новая цепочка
+        // теперь начинается не здесь, а по клику на непрописанный кабинет (см.
+        // ChainInteractionController.setStarter выше).
+        chainCtrl.finish();
+    }
+
+    /** Хоткей 1/2/3 (глобальный обработчик в MainFrame) — то же самое, что клик по
+     *  кнопке фазы, плюс визуально выделяет соответствующую кнопку. */
+    public void selectPhaseByHotkey(int phase) {
+        JToggleButton b = switch (phase) {
+            case 1 -> phase1;
+            case 2 -> phase2;
+            case 3 -> phase3;
+            default -> null;
+        };
+        if (b != null) {
+            b.setSelected(true);
+            selectPhase(phase);
         }
-        chainCtrl.startFor(ids -> model.addPowerChain(phase, ids));
     }
 
     private void refresh() {
@@ -193,12 +284,17 @@ public class PowerStagePanel extends JPanel {
 
         chainListPanel.removeAll();
         if (has) {
-            var chains = scr.getPowerChains();
+            // По всей сцене (не только scr.getPowerChains()) — цепочка, начатая на
+            // ЭТОМ экране, но физически хранящаяся на другом (см. Task #64/#68),
+            // иначе тут вообще не появлялась бы, хотя часть её кабинетов — свои.
+            var chains = model.powerChainsTouchingScreen(scr);
             if (chains.isEmpty()) {
                 chainListPanel.add(UiKit.muted("Цепочек ещё нет"));
             }
             for (PowerChain c : chains) {
-                chainListPanel.add(chainRow("L" + c.getPhase() + " · " + c.getCabinetInstanceIds().size() + " каб.",
+                boolean crossScreen = c.getCabinetInstanceIds().stream().anyMatch(id -> scr.cabinetById(id) == null);
+                String suffix = crossScreen ? " (продолжается на другом экране)" : "";
+                chainListPanel.add(chainRow("L" + c.getPhase() + " · " + c.getCabinetInstanceIds().size() + " каб." + suffix,
                         Palette.phaseColor(c.getPhase()), () -> model.deletePowerChain(c.getId())));
             }
         }
@@ -206,7 +302,22 @@ public class PowerStagePanel extends JPanel {
         chainListPanel.revalidate();
         chainListPanel.repaint();
 
-        if (has) {
+        if (has && showAllScreens.isSelected() && model.getCurrentScene() != null) {
+            // Показана вся сцена — статистика одного активного экрана не даёт полной
+            // картины нагрузки, показываем сумму по всем экранам сцены (Task #71).
+            List<Screen> screens = model.getCurrentScene().getScreens();
+            ScreenStats s = ScreenLogic.aggregateStats(screens, model::typeOf, model.getWorkspace());
+            statRes.setText(screens.size() + " экран(ов)");
+            statSize.setText("—");
+            statCount.setText(String.valueOf(s.activeCabinetCount()));
+            statPower.setText(UiKit.fmt(s.totalPowerW()) + " Вт");
+            statWeight.setText(UiKit.fmt(s.totalWeightKg()) + " кг");
+            statPhases.setText(String.format(
+                    "<html>L1: %d каб. · %s Вт<br>L2: %d каб. · %s Вт<br>L3: %d каб. · %s Вт</html>",
+                    s.phaseCabinetCounts()[1], UiKit.fmt(s.phasePowerW()[1]),
+                    s.phaseCabinetCounts()[2], UiKit.fmt(s.phasePowerW()[2]),
+                    s.phaseCabinetCounts()[3], UiKit.fmt(s.phasePowerW()[3])));
+        } else if (has) {
             ScreenStats s = ScreenLogic.stats(scr, model.typeOf(scr), model.getWorkspace());
             statRes.setText(s.resolutionWidthPx() + " × " + s.resolutionHeightPx() + " px");
             statSize.setText(UiKit.fmt(s.physicalWidthMm()) + " × " + UiKit.fmt(s.physicalHeightMm()) + " мм");
@@ -230,6 +341,13 @@ public class PowerStagePanel extends JPanel {
 
         canvas.revalidate();
         canvas.repaint();
+        sceneOverview.revalidate();
+        sceneOverview.repaint();
+        cornerPreview.repaint();
+    }
+
+    private void updateCornerPreviewVisibility() {
+        cornerPreviewHost.setVisible(settings.activeProfile().isPreviewWidgetEnabled() && !showAllScreens.isSelected());
     }
 
     private javax.swing.JComponent chainRow(String label, java.awt.Color dot, Runnable onDelete) {

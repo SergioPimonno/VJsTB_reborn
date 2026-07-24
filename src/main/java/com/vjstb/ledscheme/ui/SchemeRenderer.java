@@ -53,7 +53,12 @@ public final class SchemeRenderer {
      *  метка формы (форма кабинета) рисуется по фактическому типу ячейки. */
     public static void paintScheme(Graphics2D g2, Screen scr, CabinetType type, boolean power,
                                    int cellW, int cellH, int offX, int offY, Workspace workspace) {
-        Font labelFont = g2.getFont().deriveFont(Font.PLAIN, Math.max(9f, cellH * 0.14f));
+        // Подпись «строка,столбец» физически не помещается в мелкую ячейку (мини-
+        // обзор сцены с несколькими экранами целиком, сильный зум-аут) — рисуем её,
+        // только если в ячейке реально есть место, иначе текст соседних кабинетов
+        // наезжает друг на друга и на линии цепочек, превращаясь в нечитаемое пятно.
+        boolean showLabels = cellH >= 16 && cellW >= 16;
+        Font labelFont = showLabels ? g2.getFont().deriveFont(Font.PLAIN, Math.max(9f, cellH * 0.14f)) : null;
         for (CabinetInstance cab : scr.getCabinets()) {
             int x = offX + cab.getColIndex() * cellW;
             int y = offY + cab.getRowIndex() * cellH;
@@ -72,38 +77,120 @@ public final class SchemeRenderer {
                         effective = override;
                     }
                 }
-                if (effective != null && effective.getShape() != CabinetShape.RECTANGLE) {
-                    drawShapeMarker(g2, x, y, cellW, cellH, effective.getShape());
+                CabinetShape shape = cab.getShapeOverride() != null ? cab.getShapeOverride()
+                        : (effective != null ? effective.getShape() : null);
+                if (shape != null && shape != CabinetShape.RECTANGLE) {
+                    drawShapeMarker(g2, x, y, cellW, cellH, shape);
                 }
             }
 
-            g2.setColor(cab.isHidden() ? Palette.MUTED : new Color(0xc0, 0xc8, 0xd0));
-            g2.setFont(labelFont);
-            g2.drawString(cab.getDisplayRow() + "," + cab.getDisplayCol(), x + 4, y + labelFont.getSize() + 2);
+            if (showLabels) {
+                g2.setColor(cab.isHidden() ? Palette.MUTED : new Color(0xc0, 0xc8, 0xd0));
+                g2.setFont(labelFont);
+                g2.drawString(cab.getDisplayRow() + "," + cab.getDisplayCol(), x + 4, y + labelFont.getSize() + 2);
+            }
         }
 
         if (power) {
             for (PowerChain chain : scr.getPowerChains()) {
+                // Метка фазы — только у НАЧАЛА цепочки: питание не закольцовывается
+                // (в отличие от сигнала с резервным портом на другом конце), поэтому
+                // дублировать фазу на последнем кабинете незачем.
                 drawChain(g2, scr, chain.getCabinetInstanceIds(), Palette.phaseColor(chain.getPhase()),
-                        false, cellW, cellH, offX, offY);
+                        false, cellW, cellH, offX, offY, "L" + chain.getPhase(), null);
             }
         } else {
             List<SignalChain> chains = scr.getSignalChains();
             for (int i = 0; i < chains.size(); i++) {
-                drawChain(g2, scr, chains.get(i).getCabinetInstanceIds(), Palette.signalColor(i),
-                        false, cellW, cellH, offX, offY);
+                SignalChain chain = chains.get(i);
+                drawChain(g2, scr, chain.getCabinetInstanceIds(), Palette.signalColor(i),
+                        false, cellW, cellH, offX, offY, signalChainLabel(scr, chain, workspace),
+                        signalChainEndLabel(scr, chain, workspace));
             }
         }
     }
 
-    /** Рисует одну цепочку линиями между центрами кабинетов со стрелками направления. */
+    /** Порт -> контроллер, которому он принадлежит (порты нумеруются подряд по
+     *  назначенным экрану контроллерам: 1..N1 — первый, N1+1..N1+N2 — второй и т.д.).
+     *  null, если контроллеров нет (порты вручную) или порт вне диапазона. */
+    private static com.vjstb.ledscheme.model.ControllerInstance controllerForPort(
+            Screen scr, Workspace workspace, int port) {
+        if (workspace == null) {
+            return null;
+        }
+        int offset = 0;
+        for (com.vjstb.ledscheme.model.ControllerInstance ci : scr.getControllers()) {
+            com.vjstb.ledscheme.model.ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
+            int count = t != null ? t.effectivePortCount() : 0;
+            if (port > offset && port <= offset + count) {
+                return ci;
+            }
+            offset += count;
+        }
+        return null;
+    }
+
+    /** Опознавательная подпись порта: номер порта, и — если на экране назначено
+     *  НЕСКОЛЬКО контроллеров (иначе принадлежность и так однозначна) — номер
+     *  контроллера, которому этот порт принадлежит. */
+    static String portLabel(Screen scr, Workspace workspace, int port) {
+        if (scr.getControllers().size() <= 1) {
+            return "P" + port;
+        }
+        com.vjstb.ledscheme.model.ControllerInstance ci = controllerForPort(scr, workspace, port);
+        int idx = ci != null ? scr.getControllers().indexOf(ci) + 1 : 0;
+        return (idx > 0 ? "C" + idx + "·" : "") + "P" + port;
+    }
+
+    /** Метка НАЧАЛА сигнальной цепочки (первый кабинет) — основной порт. */
+    static String signalChainLabel(Screen scr, SignalChain chain, Workspace workspace) {
+        Integer port = chain.getPortNumber();
+        return port == null ? null : portLabel(scr, workspace, port);
+    }
+
+    /** Метка КОНЦА сигнальной цепочки (последний кабинет): если у порта назначен
+     *  резервный порт — это конец цепочки, где подключён резерв, поэтому метка
+     *  показывает резервный порт, а не повторяет основной. */
+    static String signalChainEndLabel(Screen scr, SignalChain chain, Workspace workspace) {
+        Integer backupPort = chain.getBackupPortNumber();
+        return backupPort != null ? portLabel(scr, workspace, backupPort) : signalChainLabel(scr, chain, workspace);
+    }
+
+    /** Рисует одну цепочку линиями между центрами кабинетов со стрелками направления —
+     *  без опознавательной метки на концах (для строящейся, ещё не сохранённой
+     *  цепочки — ей рисовать метку рано, у неё пока нет фиксированного порта/фазы
+     *  «на бумаге»). */
     public static void drawChain(Graphics2D g2, Screen scr, List<String> ids, Color color, boolean dashed,
                                  int cellW, int cellH, int offX, int offY) {
+        drawChain(g2, scr, ids, color, dashed, cellW, cellH, offX, offY, null);
+    }
+
+    /** То же самое, плюс опознавательный кружок с меткой (фаза L1/L2/L3 для питания;
+     *  порт, и контроллер — если их несколько на экране, для сигнала) на первом и
+     *  последнем кабинете цепочки — иначе на общей схеме с несколькими цепочками
+     *  не видно, какая линия куда физически подключена, только цвет.
+     *  Толщина линии и размер стрелки масштабируются вниз для мелких ячеек (мини-
+     *  обзор сцены целиком) — иначе при сильном зум-ауте стрелка/линия крупнее
+     *  самой ячейки и цепочка визуально накладывается на соседние кабинеты/подписи. */
+    public static void drawChain(Graphics2D g2, Screen scr, List<String> ids, Color color, boolean dashed,
+                                 int cellW, int cellH, int offX, int offY, String label) {
+        drawChain(g2, scr, ids, color, dashed, cellW, cellH, offX, offY, label, label);
+    }
+
+    /** То же самое, но с РАЗНЫМИ метками начала и конца — нужно для сигнальной
+     *  цепочки с назначенным резервным портом: первый кабинет подписан основным
+     *  портом, последний — резервным (это конец, куда физически приходит резерв),
+     *  а не дублирует основной. */
+    public static void drawChain(Graphics2D g2, Screen scr, List<String> ids, Color color, boolean dashed,
+                                 int cellW, int cellH, int offX, int offY, String startLabel, String endLabel) {
+        int minCell = Math.min(cellW, cellH);
+        float strokeWidth = (float) Math.max(0.8, Math.min(2.5, minCell * 0.08));
         g2.setStroke(dashed
-                ? new BasicStroke(2.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 0, new float[]{6, 5}, 0)
-                : new BasicStroke(2.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                ? new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 0, new float[]{6, 5}, 0)
+                : new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         g2.setColor(color);
-        double arrowSize = Math.max(7.0, Math.min(cellW, cellH) * 0.14);
+        double arrowSize = Math.max(3.0, Math.min(minCell * 0.25, 9.0));
+        boolean showArrowHeads = minCell >= 12;
         for (int i = 0; i < ids.size() - 1; i++) {
             CabinetInstance a = scr.cabinetById(ids.get(i));
             CabinetInstance b = scr.cabinetById(ids.get(i + 1));
@@ -115,14 +202,68 @@ public final class SchemeRenderer {
             int bx = offX + b.getColIndex() * cellW + cellW / 2;
             int by = offY + b.getRowIndex() * cellH + cellH / 2;
             g2.drawLine(ax, ay, bx, by);
+            if (showArrowHeads) {
+                drawArrowHead(g2, ax, ay, bx, by, color, arrowSize);
+            }
+        }
+        g2.setStroke(new BasicStroke(1f));
+
+        if (!ids.isEmpty() && minCell >= 22) {
+            if (startLabel != null && !startLabel.isEmpty()) {
+                drawChainEndpointLabel(g2, scr, ids.get(0), color, cellW, cellH, offX, offY, startLabel);
+            }
+            if (ids.size() > 1 && endLabel != null && !endLabel.isEmpty()) {
+                drawChainEndpointLabel(g2, scr, ids.get(ids.size() - 1), color, cellW, cellH, offX, offY, endLabel);
+            }
+        }
+    }
+
+    /** Один отрезок цепочки МЕЖДУ ДВУМЯ ЭКРАНАМИ в общем обзоре сцены (сигнальная
+     *  цепочка может физически продолжаться с одного экрана на другой) — обычная
+     *  {@link #drawChain} привязана к одному {@link Screen} и не может перейти
+     *  границу, поэтому здесь обе точки уже готовые АБСОЛЮТНЫЕ пиксельные координаты
+     *  (экраны в обзоре сцены рисуются каждый в своих локальных ячейках). Пунктир —
+     *  визуально отличить переход между экранами от обычного отрезка внутри одного. */
+    public static void drawCrossScreenSegment(Graphics2D g2, int ax, int ay, int bx, int by, Color color, int minCell) {
+        float strokeWidth = (float) Math.max(0.8, Math.min(2.5, minCell * 0.08));
+        g2.setColor(color);
+        g2.setStroke(new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 0, new float[]{7, 5}, 0));
+        g2.drawLine(ax, ay, bx, by);
+        if (minCell >= 12) {
+            double arrowSize = Math.max(3.0, Math.min(minCell * 0.25, 9.0));
             drawArrowHead(g2, ax, ay, bx, by, color, arrowSize);
         }
         g2.setStroke(new BasicStroke(1f));
     }
 
+    /** Кружок с меткой в углу ячейки кабинета — конец цепочки. */
+    static void drawChainEndpointLabel(Graphics2D g2, Screen scr, String cabId, Color color,
+                                                int cellW, int cellH, int offX, int offY, String label) {
+        CabinetInstance cab = scr.cabinetById(cabId);
+        if (cab == null) {
+            return;
+        }
+        int x = offX + cab.getColIndex() * cellW;
+        int y = offY + cab.getRowIndex() * cellH;
+        int d = Math.max(14, Math.min(Math.min(cellW, cellH) / 2, 20));
+        int cx = x + cellW - d / 2 - 2;
+        int cy = y + d / 2 + 2;
+        Font f = g2.getFont().deriveFont(Font.BOLD, Math.max(7f, d * 0.4f));
+        g2.setFont(f);
+        java.awt.FontMetrics fm = g2.getFontMetrics();
+        int textW = fm.stringWidth(label);
+        int w = Math.max(d, textW + 6);
+        g2.setColor(color);
+        g2.fillRoundRect(cx - w / 2, cy - d / 2, w, d, d, d);
+        g2.setColor(Color.BLACK);
+        g2.setStroke(new BasicStroke(1f));
+        g2.drawRoundRect(cx - w / 2, cy - d / 2, w, d, d, d);
+        g2.drawString(label, cx - textW / 2, cy + fm.getAscent() / 2 - 1);
+    }
+
     /** Метка формы кабинета (треугольная/угловая/круглая) в углу ячейки — сама сетка
      *  остаётся прямоугольной, метка лишь сигнализирует физическую форму кабинета. */
-    private static void drawShapeMarker(Graphics2D g2, int x, int y, int w, int h, CabinetShape shape) {
+    static void drawShapeMarker(Graphics2D g2, int x, int y, int w, int h, CabinetShape shape) {
         Color prev = g2.getColor();
         g2.setColor(Palette.ACCENT);
         int s = Math.max(8, Math.min(w, h) / 3);

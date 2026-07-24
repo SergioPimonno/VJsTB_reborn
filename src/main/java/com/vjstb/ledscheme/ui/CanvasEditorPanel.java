@@ -1,0 +1,306 @@
+package com.vjstb.ledscheme.ui;
+
+import com.vjstb.ledscheme.model.CabinetType;
+import com.vjstb.ledscheme.model.CanvasPlacement;
+import com.vjstb.ledscheme.model.ContentCanvas;
+import com.vjstb.ledscheme.model.Scene;
+import com.vjstb.ledscheme.model.Screen;
+import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.service.ScreenLogic;
+import com.vjstb.ledscheme.service.ScreenStats;
+import com.vjstb.ledscheme.settings.SettingsManager;
+import java.awt.BasicStroke;
+import java.awt.Color;
+import java.awt.Font;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.Point;
+import java.awt.RenderingHints;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.util.ArrayList;
+import java.util.List;
+import javax.swing.JOptionPane;
+import javax.swing.JPanel;
+
+/**
+ * Холст канваса — виртуального выходного кадра (как Advanced Output в Resolume):
+ * прямоугольник размером с сам канвас (масштабируется под окно), внутри — размещённые
+ * экраны сцены на своих пиксельных позициях, перетаскиваются мышью. Shift во время
+ * перетаскивания — прилипание к краям уже размещённых экранов и краям канваса
+ * (и, опционально, к центру канваса — см. «Персонализация»).
+ */
+public class CanvasEditorPanel extends JPanel {
+
+    private static final int PADDING = 24;
+    /** Порог прилипания в экранных пикселях редактора (не в px канваса) — не зависит
+     *  от текущего масштаба, поэтому одинаково удобен и при мелком, и при крупном канвасе. */
+    private static final int SNAP_THRESHOLD_SCREEN_PX = 10;
+
+    private final AppModel model;
+    private final SettingsManager settings;
+    private ContentCanvas canvas;
+    private Runnable onChanged = () -> { };
+
+    private CanvasPlacement dragging;
+    private double dragOffXpx, dragOffYpx;
+    private CanvasPlacement selected;
+
+    public CanvasEditorPanel(AppModel model, SettingsManager settings) {
+        this.model = model;
+        this.settings = settings;
+        setBackground(Palette.BG);
+        setFocusable(true);
+
+        MouseAdapter mouse = new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                requestFocusInWindow();
+                if (canvas == null) {
+                    return;
+                }
+                CanvasPlacement hit = placementAt(e.getPoint());
+                selected = hit;
+                if (hit != null) {
+                    double scale = scale();
+                    Screen scr = screenById(hit.getScreenId());
+                    double px = PADDING + hit.getX() * scale;
+                    double py = PADDING + hit.getY() * scale;
+                    dragOffXpx = e.getX() - px;
+                    dragOffYpx = e.getY() - py;
+                    dragging = hit;
+                }
+                repaint();
+            }
+
+            @Override
+            public void mouseDragged(MouseEvent e) {
+                if (dragging == null || canvas == null) {
+                    return;
+                }
+                double scale = scale();
+                int nx = (int) Math.max(0, Math.round((e.getX() - dragOffXpx - PADDING) / scale));
+                int ny = (int) Math.max(0, Math.round((e.getY() - dragOffYpx - PADDING) / scale));
+                if (e.isShiftDown()) {
+                    Screen scr = screenById(dragging.getScreenId());
+                    if (scr != null) {
+                        ScreenStats st = ScreenLogic.stats(scr, model.typeOf(scr), model.getWorkspace());
+                        int[] snapped = snap(nx, ny, st.resolutionWidthPx(), st.resolutionHeightPx(), scale);
+                        nx = snapped[0];
+                        ny = snapped[1];
+                    }
+                }
+                dragging.setX(nx);
+                dragging.setY(ny);
+                repaint();
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                if (dragging != null) {
+                    model.movePlacement(dragging, dragging.getX(), dragging.getY());
+                    dragging = null;
+                    onChanged.run();
+                }
+            }
+        };
+        addMouseListener(mouse);
+        addMouseMotionListener(mouse);
+    }
+
+    /** Обновляет отображаемый канвас. ВАЖНО: раньше безусловно сбрасывал selected —
+     *  это ломало выделение при КАЖДОМ вызове, включая refreshCanvasSide() после
+     *  mouseReleased (клик/перетаскивание экрана вызывает onChanged → setCanvas(тот
+     *  же канвас) → выделение мгновенно терялось, поэтому кнопка «Убрать выбранный
+     *  экран из канваса» не работала). Сбрасываем selected только при смене самого
+     *  канваса или если выбранное размещение реально исчезло (удалено). */
+    public void setCanvas(ContentCanvas canvas) {
+        if (this.canvas != canvas) {
+            this.selected = null;
+        } else if (selected != null && (canvas == null || !canvas.getPlacements().contains(selected))) {
+            this.selected = null;
+        }
+        this.canvas = canvas;
+        repaint();
+    }
+
+    public void setOnChanged(Runnable onChanged) {
+        this.onChanged = onChanged != null ? onChanged : () -> { };
+    }
+
+    public CanvasPlacement getSelected() {
+        return selected;
+    }
+
+    public void deleteSelected() {
+        if (selected != null && canvas != null) {
+            model.removePlacement(canvas, selected.getId());
+            selected = null;
+            onChanged.run();
+            repaint();
+        }
+    }
+
+    /** Прилипание (nx,ny) — верхнего левого угла перетаскиваемого размещения (w×h px
+     *  канваса) — к ближайшим краям других размещений и краям канваса, и опционально
+     *  к центру канваса (настройка профиля). Порог задан в экранных пикселях
+     *  редактора и переводится в px канваса через текущий scale. */
+    private int[] snap(int nx, int ny, int w, int h, double scale) {
+        double thresholdCanvasPx = SNAP_THRESHOLD_SCREEN_PX / scale;
+        List<Integer> xTargets = new ArrayList<>();
+        List<Integer> yTargets = new ArrayList<>();
+        xTargets.add(0);
+        xTargets.add(canvas.getWidthPx() - w);
+        yTargets.add(0);
+        yTargets.add(canvas.getHeightPx() - h);
+        if (settings.activeProfile().isCanvasSnapToCenter()) {
+            xTargets.add((canvas.getWidthPx() - w) / 2);
+            yTargets.add((canvas.getHeightPx() - h) / 2);
+        }
+        for (CanvasPlacement pl : canvas.getPlacements()) {
+            if (pl == dragging) {
+                continue;
+            }
+            Screen other = screenById(pl.getScreenId());
+            if (other == null) {
+                continue;
+            }
+            ScreenStats ost = ScreenLogic.stats(other, model.typeOf(other), model.getWorkspace());
+            int ow = ost.resolutionWidthPx();
+            int oh = ost.resolutionHeightPx();
+            xTargets.add(pl.getX());
+            xTargets.add(pl.getX() + ow);
+            xTargets.add(pl.getX() + ow - w);
+            xTargets.add(pl.getX() - w);
+            yTargets.add(pl.getY());
+            yTargets.add(pl.getY() + oh);
+            yTargets.add(pl.getY() + oh - h);
+            yTargets.add(pl.getY() - h);
+        }
+        return new int[]{
+                closest(nx, xTargets, thresholdCanvasPx),
+                closest(ny, yTargets, thresholdCanvasPx)
+        };
+    }
+
+    private static int closest(int value, List<Integer> targets, double threshold) {
+        int best = value;
+        double bestDist = threshold;
+        for (int t : targets) {
+            double d = Math.abs(t - value);
+            if (d < bestDist) {
+                bestDist = d;
+                best = t;
+            }
+        }
+        return best;
+    }
+
+    private Screen screenById(String id) {
+        Scene scene = model.getCurrentScene();
+        if (scene == null) {
+            return null;
+        }
+        for (Screen s : scene.getScreens()) {
+            if (s.getId().equals(id)) {
+                return s;
+            }
+        }
+        return null;
+    }
+
+    private double scale() {
+        if (canvas == null) {
+            return 1;
+        }
+        double availW = Math.max(50, getWidth() - PADDING * 2);
+        double availH = Math.max(50, getHeight() - PADDING * 2);
+        return Math.max(0.01, Math.min(availW / canvas.getWidthPx(), availH / canvas.getHeightPx()));
+    }
+
+    private CanvasPlacement placementAt(Point p) {
+        if (canvas == null) {
+            return null;
+        }
+        double scale = scale();
+        for (int i = canvas.getPlacements().size() - 1; i >= 0; i--) {
+            CanvasPlacement pl = canvas.getPlacements().get(i);
+            Screen scr = screenById(pl.getScreenId());
+            if (scr == null) {
+                continue;
+            }
+            ScreenStats st = ScreenLogic.stats(scr, model.typeOf(scr), model.getWorkspace());
+            int x = (int) (PADDING + pl.getX() * scale);
+            int y = (int) (PADDING + pl.getY() * scale);
+            int w = (int) Math.max(2, st.resolutionWidthPx() * scale);
+            int h = (int) Math.max(2, st.resolutionHeightPx() * scale);
+            if (p.x >= x && p.x <= x + w && p.y >= y && p.y <= y + h) {
+                return pl;
+            }
+        }
+        return null;
+    }
+
+    @Override
+    protected void paintComponent(Graphics g) {
+        super.paintComponent(g);
+        Graphics2D g2 = (Graphics2D) g.create();
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+
+        if (canvas == null) {
+            g2.setColor(Palette.MUTED);
+            g2.setFont(getFont().deriveFont(14f));
+            String msg = "Выберите или создайте канвас справа.";
+            g2.drawString(msg, PADDING, PADDING + 20);
+            g2.dispose();
+            return;
+        }
+
+        double scale = scale();
+        int cw = (int) (canvas.getWidthPx() * scale);
+        int ch = (int) (canvas.getHeightPx() * scale);
+
+        g2.setColor(new Color(0, 0, 0, 255));
+        g2.fillRect(PADDING, PADDING, cw, ch);
+        g2.setColor(Palette.ACCENT);
+        g2.setStroke(new BasicStroke(2f));
+        g2.drawRect(PADDING, PADDING, cw, ch);
+
+        Font labelFont = getFont().deriveFont(Font.BOLD, 12f);
+        Font metaFont = getFont().deriveFont(10f);
+        for (CanvasPlacement pl : canvas.getPlacements()) {
+            Screen scr = screenById(pl.getScreenId());
+            if (scr == null) {
+                continue;
+            }
+            CabinetType type = model.typeOf(scr);
+            ScreenStats st = ScreenLogic.stats(scr, type, model.getWorkspace());
+            int x = (int) (PADDING + pl.getX() * scale);
+            int y = (int) (PADDING + pl.getY() * scale);
+            int w = (int) Math.max(2, st.resolutionWidthPx() * scale);
+            int h = (int) Math.max(2, st.resolutionHeightPx() * scale);
+
+            boolean isSelected = pl == selected;
+            g2.setColor(Palette.PHASE_NONE);
+            g2.fillRect(x, y, w, h);
+            g2.setColor(isSelected ? Color.WHITE : Palette.BORDER);
+            g2.setStroke(new BasicStroke(isSelected ? 2.5f : 1.4f));
+            g2.drawRect(x, y, w, h);
+
+            g2.setColor(isSelected ? Palette.ACCENT : new Color(0xc0, 0xc8, 0xd0));
+            g2.setFont(labelFont);
+            g2.drawString(scr.getName(), x + 4, y + 16);
+            g2.setColor(Palette.MUTED);
+            g2.setFont(metaFont);
+            g2.drawString(st.resolutionWidthPx() + "×" + st.resolutionHeightPx() + " px", x + 4, y + 30);
+        }
+
+        g2.setColor(Palette.MUTED);
+        g2.setFont(metaFont);
+        g2.drawString(canvas.getName() + " — " + canvas.getWidthPx() + "×" + canvas.getHeightPx() + " px",
+                PADDING, PADDING + ch + 16);
+
+        g2.dispose();
+    }
+}

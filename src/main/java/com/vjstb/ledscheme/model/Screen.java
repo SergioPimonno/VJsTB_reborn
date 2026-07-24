@@ -22,9 +22,13 @@ public class Screen {
     private double posYMm;
     /** Количество портов контроллера, доступных для расключения сигнала на этом экране. */
     private int signalPortCount = 8;
+    /** Герцовка контента, Гц — влияет на реальную ёмкость порта контроллера в пикселях. */
+    private int refreshRateHz = 60;
+    /** Глубина цвета на канал, бит (8/10/12) — тоже влияет на ёмкость порта. */
+    private int colorBitDepth = 8;
 
     /** Способ монтажа — влияет на применимость расчёта точек подвеса. */
-    private ScreenMountType mountType = ScreenMountType.FLOOR;
+    private ScreenMountType mountType = ScreenMountType.RIGGED;
     /** Заготовка под расчёт точек подвеса (формула будет добавлена отдельно):
      *  пока просто вручную вводимое количество точек и заметки. */
     private int riggingPointsCount = 0;
@@ -103,6 +107,22 @@ public class Screen {
 
     public void setSignalPortCount(int signalPortCount) {
         this.signalPortCount = signalPortCount;
+    }
+
+    public int getRefreshRateHz() {
+        return refreshRateHz;
+    }
+
+    public void setRefreshRateHz(int refreshRateHz) {
+        this.refreshRateHz = refreshRateHz;
+    }
+
+    public int getColorBitDepth() {
+        return colorBitDepth;
+    }
+
+    public void setColorBitDepth(int colorBitDepth) {
+        this.colorBitDepth = colorBitDepth;
     }
 
     public ScreenMountType getMountType() {
@@ -203,6 +223,8 @@ public class Screen {
         s.posXMm = posXMm;
         s.posYMm = posYMm;
         s.signalPortCount = signalPortCount;
+        s.refreshRateHz = refreshRateHz;
+        s.colorBitDepth = colorBitDepth;
         s.mountType = mountType;
         s.riggingPointsCount = riggingPointsCount;
         s.riggingNotes = riggingNotes;

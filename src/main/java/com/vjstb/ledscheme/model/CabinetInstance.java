@@ -17,6 +17,8 @@ public class CabinetInstance {
     private int phase;
     /** Тип кабинета для ЭТОЙ ячейки, если отличается от типа экрана по умолчанию (null = тип экрана). */
     private String cabinetTypeId;
+    /** Форма ЭТОЙ ячейки, если отличается от формы эффективного типа кабинета (null = форма типа). */
+    private CabinetShape shapeOverride;
 
     public CabinetInstance() {
     }
@@ -86,6 +88,14 @@ public class CabinetInstance {
         this.cabinetTypeId = cabinetTypeId;
     }
 
+    public CabinetShape getShapeOverride() {
+        return shapeOverride;
+    }
+
+    public void setShapeOverride(CabinetShape shapeOverride) {
+        this.shapeOverride = shapeOverride;
+    }
+
     public CabinetInstance copy() {
         CabinetInstance c = new CabinetInstance();
         c.id = id;
@@ -94,6 +104,7 @@ public class CabinetInstance {
         c.hidden = hidden;
         c.phase = phase;
         c.cabinetTypeId = cabinetTypeId;
+        c.shapeOverride = shapeOverride;
         return c;
     }
 }

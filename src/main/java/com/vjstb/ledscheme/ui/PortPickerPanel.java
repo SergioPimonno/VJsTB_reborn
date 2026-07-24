@@ -1,5 +1,6 @@
 package com.vjstb.ledscheme.ui;
 
+import com.vjstb.ledscheme.model.ControllerInstance;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SignalChain;
 import com.vjstb.ledscheme.service.AppModel;
@@ -17,14 +18,15 @@ import javax.swing.SwingUtilities;
 
 /**
  * Сетка портов контроллера для расключения сигнала: ЛКМ по порту — начать
- * (перезапустить) цепочку на этот порт, ПКМ — переключить пометку «бэкап»
- * (для бэкапа расключение кабинетов не требуется).
+ * (перезапустить) цепочку на этот порт. Резерв назначается либо на уровне
+ * порта (2×клик — {@link PortListener#onPortBackupLinkRequested}), либо на
+ * уровне целого контроллера (ПКМ по строке контроллера — см. SignalStagePanel) —
+ * в обоих случаях зарезервированный порт красится и блокируется здесь одинаково.
  */
 public class PortPickerPanel extends JPanel {
 
     public interface PortListener {
         void onPortSelected(int port);
-        void onPortBackupToggled(int port);
         /** Двойной клик — запросить назначение резервного (другого) порта для этого порта. */
         void onPortBackupLinkRequested(int port);
     }
@@ -42,7 +44,18 @@ public class PortPickerPanel extends JPanel {
         setLayout(new GridLayout(0, COLUMNS, 4, 4));
     }
 
+    /** Без выбранного контроллера — старое поведение (сквозная нумерация 1..N по
+     *  вручную заданному числу портов, для экранов вовсе без контроллеров сцены). */
     public void rebuild(Integer activePort) {
+        rebuild(activePort, null);
+    }
+
+    /** selectedController — если задан, сетка показывает ТОЛЬКО порты ЭТОГО
+     *  контроллера, локальными номерами (1..N), а не сквозным номером по всем
+     *  контроллерам сцены — раньше "Действующее число портов" суммировало порты
+     *  всех контроллеров сцены и подписи вида "1→9" сбивали с толку, к какому
+     *  контроллеру какой порт относится на самом деле (см. Task #73). */
+    public void rebuild(Integer activePort, ControllerInstance selectedController) {
         removeAll();
         Screen scr = model.getCurrentScreen();
         if (scr == null) {
@@ -51,21 +64,67 @@ public class PortPickerPanel extends JPanel {
             return;
         }
         List<SignalChain> chains = scr.getSignalChains();
-        for (int p = 1; p <= model.effectiveSignalPortCount(scr); p++) {
-            add(portButton(scr, chains, p, activePort));
+        int rangeStart;
+        int rangeEnd;
+        int labelOffset;
+        if (selectedController != null) {
+            int offset = model.portOffsetOf(scr, selectedController);
+            com.vjstb.ledscheme.model.ControllerType t =
+                    model.getWorkspace().controllerTypeById(selectedController.getControllerTypeId());
+            int count = t != null ? t.effectivePortCount() : 0;
+            rangeStart = offset + 1;
+            rangeEnd = offset + count;
+            labelOffset = offset;
+        } else {
+            rangeStart = 1;
+            rangeEnd = model.effectiveSignalPortCount(scr);
+            labelOffset = 0;
+        }
+        for (int p = rangeStart; p <= rangeEnd; p++) {
+            add(portButton(scr, chains, p, activePort, labelOffset, rangeStart, rangeEnd));
         }
         revalidate();
         repaint();
     }
 
-    private JButton portButton(Screen scr, List<SignalChain> chains, int port, Integer activePort) {
+    private JButton portButton(Screen scr, List<SignalChain> chains, int port, Integer activePort,
+                                int labelOffset, int rangeStart, int rangeEnd) {
         SignalChain main = scr.signalChainByPort(port, false);
-        boolean hasBackup = scr.signalChainByPort(port, true) != null;
         Integer backupLink = main != null ? main.getBackupPortNumber() : null;
+
+        // Порт, зарезервированный ПОД бэкап другого порта, — у него самого не может
+        // быть собственной цепочки (main == null для такого порта), поэтому раньше
+        // он не получал никакой заливки и визуально не отличался от свободного.
+        // Ищем, чей это резерв, чтобы дать ту же заливку, что и у «хозяина» —
+        // по аналогии с тем, как уже прописанный порт красится цветом своей цепочки.
+        SignalChain reservedFor = null;
+        for (SignalChain c : chains) {
+            if (c.getBackupPortNumber() != null && c.getBackupPortNumber() == port) {
+                reservedFor = c;
+                break;
+            }
+        }
+        // Порт целиком принадлежит контроллеру, который сам назначен резервным для
+        // другого контроллера этого экрана (см. SignalStagePanel — ПКМ по строке
+        // контроллера) — такой порт не может получить свою цепочку вообще, поэтому
+        // тускло закрашивается и блокируется, а не просто подсвечивается.
+        boolean controllerReserved = reservedFor == null && main == null && model.isPortReservedAsBackup(scr, port);
+
+        int localPort = port - labelOffset;
+        // Если резервный порт лежит в диапазоне ЭТОГО ЖЕ контроллера — показываем
+        // его тоже локальным номером (согласованно с основным); если резерв на
+        // ДРУГОМ контроллере — локальный номер был бы бессмысленным/обманчивым,
+        // показываем глобальный со знаком "P" как опознавательную метку.
+        String backupLabel = null;
+        if (backupLink != null) {
+            backupLabel = (backupLink >= rangeStart && backupLink <= rangeEnd)
+                    ? String.valueOf(backupLink - labelOffset)
+                    : "P" + backupLink;
+        }
 
         // Ширина у всех кнопок ОДИНАКОВАЯ: GridLayout растягивает каждую ячейку
         // до размера самой широкой — переменная ширина раздула бы всю сетку.
-        JButton b = new JButton(String.valueOf(port) + (hasBackup ? "⛨" : "") + (backupLink != null ? "→" + backupLink : ""));
+        JButton b = new JButton(String.valueOf(localPort) + (backupLabel != null ? "→" + backupLabel : ""));
         b.setPreferredSize(new Dimension(42, 30));
         b.setMargin(new java.awt.Insets(1, 1, 1, 1));
         b.setFont(b.getFont().deriveFont(10f));
@@ -78,17 +137,27 @@ public class PortPickerPanel extends JPanel {
             int idx = chains.indexOf(main);
             b.setBackground(Palette.signalColor(idx));
             b.setForeground(java.awt.Color.BLACK);
+        } else if (reservedFor != null) {
+            // Приглушённый (не полный) цвет "хозяина" — этот порт сам НЕ активен, а
+            // только ждёт подхвата на случай отказа основного, полноценный яркий цвет
+            // выглядел бы так же "занято", как у реально прописанного порта (см. Task #74).
+            int idx = chains.indexOf(reservedFor);
+            b.setBackground(dim(Palette.signalColor(idx)));
+            b.setForeground(Palette.TEXT);
+        } else if (controllerReserved) {
+            b.setBackground(Palette.BORDER);
+            b.setForeground(Palette.MUTED);
         }
-        b.setToolTipText("Порт " + port
+        b.setEnabled(!controllerReserved);
+        b.setToolTipText("Порт " + localPort + " (глобально P" + port + ")"
                 + (main != null ? " · цепочка: " + main.getCabinetInstanceIds().size() + " каб." : " · без цепочки")
-                + (hasBackup ? " · есть бэкап-цепочка на этом же порту" : "")
-                + (backupLink != null ? " · резервный порт: " + backupLink : "")
+                + (backupLink != null ? " · резервный порт: " + backupLabel : "")
+                + (reservedFor != null ? " · зарезервирован под бэкап порта " + reservedFor.getPortNumber() : "")
+                + (controllerReserved ? " · порт принадлежит контроллеру, зарезервированному под бэкап" : "")
                 + " · 2×клик — назначить резервный порт");
-        b.setBorder(backupLink != null
+        b.setBorder(reservedFor != null || backupLink != null || controllerReserved
                 ? BorderFactory.createLineBorder(Color.ORANGE, 2)
-                : (hasBackup
-                        ? BorderFactory.createLineBorder(Palette.ACCENT, 2)
-                        : BorderFactory.createLineBorder(Palette.BORDER, 1)));
+                : BorderFactory.createLineBorder(Palette.BORDER, 1));
 
         b.addMouseListener(new MouseAdapter() {
             @Override
@@ -97,11 +166,18 @@ public class PortPickerPanel extends JPanel {
                     listener.onPortBackupLinkRequested(port);
                 } else if (SwingUtilities.isLeftMouseButton(e)) {
                     listener.onPortSelected(port);
-                } else if (SwingUtilities.isRightMouseButton(e)) {
-                    listener.onPortBackupToggled(port);
                 }
             }
         });
         return b;
+    }
+
+    /** Приглушённая версия цвета — блендинг к фону панели вполовину (см. Task #74:
+     *  бэкап-порты должны визуально отличаться от активных, а не быть такими же яркими). */
+    private static Color dim(Color c) {
+        return new Color(
+                (c.getRed() + Palette.PANEL.getRed()) / 2,
+                (c.getGreen() + Palette.PANEL.getGreen()) / 2,
+                (c.getBlue() + Palette.PANEL.getBlue()) / 2);
     }
 }

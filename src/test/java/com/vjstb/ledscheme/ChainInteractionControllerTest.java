@@ -147,6 +147,68 @@ class ChainInteractionControllerTest {
     }
 
     @Test
+    void clickOnUnwiredCabinetAutoStartsChainViaStarter(@TempDir Path dir) {
+        // Новое поведение (Task #40): клик по кабинету без предварительного старта
+        // сам начинает цепочку через зарегистрированный ChainStarter — не нужно
+        // отдельно нажимать кнопку фазы/порта перед первым кликом по кабинету.
+        AppModel model = freshModelWithScreen(dir, 2, 2);
+        Screen scr = model.getCurrentScreen();
+        List<List<String>> committed = new ArrayList<>();
+        ChainInteractionController ctrl = new ChainInteractionController(model, () -> { });
+        ctrl.setStarter(cabId -> committed::add);
+
+        assertFalse(ctrl.isChainBuilding());
+        String a = scr.cabinetAt(0, 0).getId();
+        ctrl.cabinetClicked(a);
+        assertTrue(ctrl.isChainBuilding());
+        assertEquals(List.of(a), ctrl.activeChainCabIds());
+
+        String b = scr.cabinetAt(0, 1).getId();
+        ctrl.cabinetClicked(b);
+        ctrl.finish();
+        assertEquals(List.of(a, b), committed.get(0));
+    }
+
+    @Test
+    void starterReturningNullBlocksAutoStart(@TempDir Path dir) {
+        // Например, кабинет уже прописан в другой цепочке — ChainStarter возвращает
+        // null, клик должен быть проигнорирован (никакая цепочка не начинается).
+        AppModel model = freshModelWithScreen(dir, 2, 2);
+        Screen scr = model.getCurrentScreen();
+        ChainInteractionController ctrl = new ChainInteractionController(model, () -> { });
+        ctrl.setStarter(cabId -> null);
+
+        ctrl.cabinetClicked(scr.cabinetAt(0, 0).getId());
+        assertFalse(ctrl.isChainBuilding());
+        assertTrue(ctrl.activeChainCabIds().isEmpty());
+    }
+
+    @Test
+    void rightClickDuringBuildRemovesCabinetFromActiveChain(@TempDir Path dir) {
+        AppModel model = freshModelWithScreen(dir, 2, 3);
+        Screen scr = model.getCurrentScreen();
+        List<List<String>> committed = new ArrayList<>();
+        ChainInteractionController ctrl = new ChainInteractionController(model, () -> { });
+
+        String a = scr.cabinetAt(0, 0).getId();
+        String b = scr.cabinetAt(0, 1).getId();
+        String c = scr.cabinetAt(0, 2).getId();
+        ctrl.startFor(committed::add);
+        ctrl.cabinetClicked(a);
+        ctrl.cabinetClicked(b);
+        ctrl.cabinetClicked(c);
+        assertEquals(List.of(a, b, c), ctrl.activeChainCabIds());
+
+        ctrl.removeFromActive(b);
+        assertEquals(List.of(a, c), ctrl.activeChainCabIds());
+
+        // ПКМ по кабинету, когда цепочка НЕ строится — не должно ничего ломать (no-op).
+        ctrl.finish();
+        ctrl.removeFromActive(a);
+        assertEquals(List.of(a, c), committed.get(0));
+    }
+
+    @Test
     void cursorClampsAtGridBounds(@TempDir Path dir) {
         AppModel model = freshModelWithScreen(dir, 2, 2);
         ChainInteractionController ctrl = new ChainInteractionController(model, () -> { });

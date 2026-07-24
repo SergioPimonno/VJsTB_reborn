@@ -13,6 +13,8 @@ public class Scene {
     /** Узлы/связи общей схемы площадки (питание и сигнал вместе, различаются полем mode). */
     private List<SchemaNode> schemaNodes = new ArrayList<>();
     private List<SchemaEdge> schemaEdges = new ArrayList<>();
+    /** Канвасы компоновки контента (выходные кадры сигнала) для этой сцены. */
+    private List<ContentCanvas> canvases = new ArrayList<>();
 
     public Scene() {
     }
@@ -67,5 +69,13 @@ public class Scene {
 
     public void setSchemaEdges(List<SchemaEdge> schemaEdges) {
         this.schemaEdges = schemaEdges;
+    }
+
+    public List<ContentCanvas> getCanvases() {
+        return canvases;
+    }
+
+    public void setCanvases(List<ContentCanvas> canvases) {
+        this.canvases = canvases;
     }
 }

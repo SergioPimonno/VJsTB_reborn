@@ -2,12 +2,18 @@ package com.vjstb.ledscheme.service;
 
 import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
+import com.vjstb.ledscheme.model.CanvasPlacement;
+import com.vjstb.ledscheme.model.CardPort;
+import com.vjstb.ledscheme.model.ContentCanvas;
 import com.vjstb.ledscheme.model.ControllerInstance;
 import com.vjstb.ledscheme.model.ControllerType;
+import com.vjstb.ledscheme.model.EquipmentPreset;
+import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.Project;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
+import com.vjstb.ledscheme.model.SchemaCard;
 import com.vjstb.ledscheme.model.SchemaEdge;
 import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.SchemaNode;
@@ -280,7 +286,20 @@ public class AppModel {
         existing.setName(edited.getName());
         existing.setVendor(edited.getVendor());
         existing.setPortCount(edited.getPortCount());
-        existing.setMaxPixelsPerPort(edited.getMaxPixelsPerPort());
+        existing.setPortBandwidthMbps(edited.getPortBandwidthMbps());
+        existing.setInputPortCount(edited.getInputPortCount());
+        changed();
+    }
+
+    public SchemaCard addCardToController(ControllerType ct, String name, List<CardPort> ports) {
+        SchemaCard card = new SchemaCard(name, ports);
+        ct.getCards().add(card);
+        changed();
+        return card;
+    }
+
+    public void removeCardFromController(ControllerType ct, String cardId) {
+        ct.getCards().removeIf(c -> c.getId().equals(cardId));
         changed();
     }
 
@@ -315,38 +334,187 @@ public class AppModel {
         }
     }
 
-    // ---- контроллеры, назначенные экрану ----
+    // ---- контроллеры, общие для СЦЕНЫ (не для одного экрана — см. Task #58) ----
 
-    /** Добавляет экран экрану контроллер выбранного типа. */
+    /** Сцена, содержащая указанный экран — контроллеры общие для всей сцены, у
+     *  Screen нет обратной ссылки на Scene, поэтому ищем по всем проектам. */
+    private Scene sceneContaining(Screen screen) {
+        for (Project p : workspace.getProjects()) {
+            for (Scene s : p.getScenes()) {
+                if (s.getScreens().contains(screen)) {
+                    return s;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Все контроллеры, добавленные к ЛЮБОМУ экрану этой сцены — хранятся физически
+     *  под конкретными экранами (без миграции формата на диске), но используются
+     *  как ОБЩИЙ для сцены пул: экраны одной сцены должны видеть все добавленные
+     *  в сцену контроллеры, а не только те, что добавили именно на этом экране. */
+    public List<ControllerInstance> controllersInScene(Scene scene) {
+        List<ControllerInstance> all = new ArrayList<>();
+        if (scene != null) {
+            for (Screen s : scene.getScreens()) {
+                all.addAll(s.getControllers());
+            }
+        }
+        return all;
+    }
+
+    /** Добавляет сцене (физически — переданному экрану, см. {@link #controllersInScene})
+     *  контроллер выбранного типа. */
     public ControllerInstance addControllerToScreen(Screen screen, String controllerTypeId) {
         if (workspace.controllerTypeById(controllerTypeId) == null) {
             throw new IllegalArgumentException("Тип контроллера не найден");
         }
         pushUndo();
-        int n = screen.getControllers().size() + 1;
+        Scene scene = sceneContaining(screen);
+        int n = controllersInScene(scene).size() + 1;
         ControllerInstance ci = new ControllerInstance(controllerTypeId, "Контроллер " + n);
         screen.getControllers().add(ci);
         changed();
         return ci;
     }
 
+    /** Удаляет контроллер из сцены — ищет его среди ВСЕХ экранов сцены (физическое
+     *  место хранения не важно вызывающему коду, контроллеры общие для сцены). */
+    public void removeControllerFromScene(Scene scene, String controllerInstanceId) {
+        if (scene == null) {
+            return;
+        }
+        for (Screen s : scene.getScreens()) {
+            if (s.getControllers().stream().anyMatch(c -> c.getId().equals(controllerInstanceId))) {
+                removeControllerFromScreen(s, controllerInstanceId);
+                return;
+            }
+        }
+    }
+
     public void removeControllerFromScreen(Screen screen, String controllerInstanceId) {
         pushUndo();
         screen.getControllers().removeIf(c -> c.getId().equals(controllerInstanceId));
+        // Не оставляем висячую ссылку — если удаляемый контроллер был чьим-то
+        // резервом (или чей-то резерв удаляли), связка снимается вместе с ним.
+        // Резерв мог указывать на контроллер с ДРУГОГО экрана той же сцены.
+        for (ControllerInstance ci : controllersInScene(sceneContaining(screen))) {
+            if (controllerInstanceId.equals(ci.getBackupControllerId())) {
+                ci.setBackupControllerId(null);
+            }
+        }
         changed();
     }
 
-    /** Суммарное число портов сигнала: по назначенным контроллерам, если они есть,
-     *  иначе — по вручную заданному signalPortCount (для экранов без контроллеров). */
+    /** Контроллер, которому принадлежит порт {@code port} (порты нумеруются подряд
+     *  по всем контроллерам СЦЕНЫ экрана: 1..N1 — первый, N1+1..N1+N2 — второй и
+     *  т.д.); null — контроллеров в сцене нет (порты вручную) или порт вне диапазона. */
+    public ControllerInstance controllerForPort(Screen screen, int port) {
+        int offset = 0;
+        for (ControllerInstance ci : controllersInScene(sceneContaining(screen))) {
+            ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
+            int count = t != null ? t.effectivePortCount() : 0;
+            if (port > offset && port <= offset + count) {
+                return ci;
+            }
+            offset += count;
+        }
+        return null;
+    }
+
+    /**
+     * Назначает/снимает для контроллера {@code mainId} резервный контроллер
+     * {@code backupId}, который целиком подхватывает сигнал при отказе основного —
+     * один контроллер полностью дублирует все порты другого (в отличие от
+     * {@link #setSignalBackupPortLink}, где резерв назначается отдельному порту).
+     * Оба контроллера ищутся по всей СЦЕНЕ экрана, не только по нему самому.
+     */
+    public void setControllerBackupLink(Screen screen, String mainId, String backupId) {
+        Scene scene = sceneContaining(screen);
+        ControllerInstance main = controllerById(scene, mainId);
+        if (main == null) {
+            throw new IllegalArgumentException("Основной контроллер не найден");
+        }
+        if (backupId != null) {
+            if (backupId.equals(mainId)) {
+                throw new IllegalArgumentException("Резервный контроллер должен отличаться от основного");
+            }
+            ControllerInstance backup = controllerById(scene, backupId);
+            if (backup == null) {
+                throw new IllegalArgumentException("Резервный контроллер не найден");
+            }
+            if (backup.getBackupControllerId() != null) {
+                throw new IllegalArgumentException("Этот контроллер уже резервирует другой — сначала снимите ту связку");
+            }
+            int offset = portOffsetOf(scene, backup);
+            ControllerType backupType = workspace.controllerTypeById(backup.getControllerTypeId());
+            int count = backupType != null ? backupType.effectivePortCount() : 0;
+            for (SignalChain c : screen.getSignalChains()) {
+                if (c.getPortNumber() != null && c.getPortNumber() > offset && c.getPortNumber() <= offset + count
+                        && !c.getCabinetInstanceIds().isEmpty()) {
+                    throw new IllegalArgumentException("У резервного контроллера уже есть собственная цепочка"
+                            + " (порт " + c.getPortNumber() + ") — сначала очистите её");
+                }
+            }
+        }
+        pushUndo();
+        main.setBackupControllerId(backupId);
+        changed();
+    }
+
+    private ControllerInstance controllerById(Scene scene, String id) {
+        for (ControllerInstance ci : controllersInScene(scene)) {
+            if (ci.getId().equals(id)) {
+                return ci;
+            }
+        }
+        return null;
+    }
+
+    private int portOffsetOf(Scene scene, ControllerInstance target) {
+        int offset = 0;
+        for (ControllerInstance ci : controllersInScene(scene)) {
+            if (ci == target) {
+                return offset;
+            }
+            ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
+            offset += t != null ? t.effectivePortCount() : 0;
+        }
+        return offset;
+    }
+
+    /** Публичная версия {@link #portOffsetOf(Scene, ControllerInstance)} для UI —
+     *  нужна, чтобы показать/расключать порты КОНКРЕТНОГО выбранного контроллера
+     *  локальными номерами (1..N), а не суммарным сквозным номером по сцене (см.
+     *  Task #73: суммирование портов по всем контроллерам сцены сильно дизориентирует). */
+    public int portOffsetOf(Screen screen, ControllerInstance target) {
+        return portOffsetOf(sceneContaining(screen), target);
+    }
+
+    /** true, если этот контроллер уже назначен чьим-то резервным (backupControllerId
+     *  другого контроллера) — такой контроллер целиком отдан под подхват сигнала
+     *  основного и не должен получать собственную независимую прописку портов. */
+    public boolean isControllerReservedAsBackup(Screen screen, String controllerInstanceId) {
+        for (ControllerInstance ci : controllersInScene(sceneContaining(screen))) {
+            if (controllerInstanceId.equals(ci.getBackupControllerId())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Суммарное число портов сигнала: по контроллерам, добавленным в СЦЕНУ этого
+     *  экрана (если они есть), иначе — по вручную заданному signalPortCount. */
     public int effectiveSignalPortCount(Screen screen) {
-        if (screen.getControllers().isEmpty()) {
+        List<ControllerInstance> all = controllersInScene(sceneContaining(screen));
+        if (all.isEmpty()) {
             return screen.getSignalPortCount();
         }
         int total = 0;
-        for (ControllerInstance ci : screen.getControllers()) {
+        for (ControllerInstance ci : all) {
             ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
             if (t != null) {
-                total += t.getPortCount();
+                total += t.effectivePortCount();
             }
         }
         return Math.max(total, 1);
@@ -406,11 +574,14 @@ public class AppModel {
      * (без наложения) — по умолчанию новые экраны иначе оказались бы все в (0,0).
      */
     public Screen addScreenAutoPosition(String name, String cabinetTypeId, int rows, int cols) {
-        double[] pos = nextFreePosition(cabinetTypeId, cols);
+        double[] pos = suggestedNextPosition(cabinetTypeId, cols);
         return addScreen(name, cabinetTypeId, rows, cols, pos[0], pos[1]);
     }
 
-    private double[] nextFreePosition(String cabinetTypeId, int cols) {
+    /** Предлагаемая позиция (X, Y мм) для нового экрана — правее уже существующих
+     *  на текущей сцене, без наложения. Используется для предзаполнения диалога
+     *  создания экрана. */
+    public double[] suggestedNextPosition(String cabinetTypeId, int cols) {
         if (currentScene == null || currentScene.getScreens().isEmpty()) {
             return new double[]{0, 0};
         }
@@ -442,6 +613,7 @@ public class AppModel {
         scr.setPosXMm(posX);
         scr.setPosYMm(posY);
         ScreenLogic.buildGrid(scr);
+        scr.setRiggingPointsCount(ScreenLogic.suggestRiggingPoints(scr));
         currentScene.getScreens().add(scr);
         changed();
         return scr;
@@ -471,6 +643,21 @@ public class AppModel {
         screen.setMountType(mountType);
         screen.setRiggingPointsCount(Math.max(0, riggingPointsCount));
         screen.setRiggingNotes(riggingNotes);
+        changed();
+    }
+
+    /** Герцовка/глубина цвета контента экрана — влияют на реальную ёмкость порта
+     *  контроллера в пикселях (см. {@link ControllerType#maxPixelsFor}). */
+    public void updateScreenSignalSpec(Screen screen, int refreshRateHz, int colorBitDepth) {
+        if (refreshRateHz <= 0) {
+            throw new IllegalArgumentException("Герцовка должна быть больше 0");
+        }
+        if (colorBitDepth <= 0) {
+            throw new IllegalArgumentException("Глубина цвета должна быть больше 0");
+        }
+        pushUndo();
+        screen.setRefreshRateHz(refreshRateHz);
+        screen.setColorBitDepth(colorBitDepth);
         changed();
     }
 
@@ -587,6 +774,43 @@ public class AppModel {
         changed();
     }
 
+    private static final double SCHEMA_NODE_MIN_WIDTH = 110;
+    private static final double SCHEMA_NODE_MIN_HEIGHT = 44;
+
+    /** Изменение размера узла (драг за угол) — вызывать один раз по отпусканию кнопки. */
+    public void resizeSchemaNode(SchemaNode node, double width, double height) {
+        node.setWidth(Math.max(SCHEMA_NODE_MIN_WIDTH, width));
+        node.setHeight(Math.max(SCHEMA_NODE_MIN_HEIGHT, height));
+        changed();
+    }
+
+    /** Геометрия построчной отрисовки гнёзд разъёмов — те же числа, что и в
+     *  SchemaCanvasPanel.computeSocketRects, продублированы здесь намеренно (модель
+     *  не должна зависеть от UI-класса) для расчёта минимальной высоты под все порты. */
+    private static final int PORT_ROW_H = 13;
+    private static final int PORT_ROWS_TOP_OFFSET = 34;
+    private static final int PORT_ROWS_BOTTOM_PAD = 6;
+
+    /** Растягивает высоту узла так, чтобы были видны ВСЕ его порты (карты сигнала
+     *  или разъёмы питания), не обрезаясь в «+N ещё» — вызывается при создании узла
+     *  из пресета и при добавлении карты/разъёма к уже существующему узлу. Только
+     *  РАСТЯГИВАЕТ, когда узел ниже нужного — не уменьшает то, что пользователь уже
+     *  подстроил вручную крупнее необходимого. */
+    public void autoFitNodeToPorts(SchemaNode node) {
+        int portCount = 0;
+        for (SchemaCard c : node.getCards()) {
+            portCount += c.getPorts().size();
+        }
+        portCount += node.getPowerConnectors().size();
+        if (portCount == 0) {
+            return;
+        }
+        double needed = PORT_ROWS_TOP_OFFSET + portCount * PORT_ROW_H + PORT_ROWS_BOTTOM_PAD;
+        if (node.getHeight() < needed) {
+            node.setHeight(needed);
+        }
+    }
+
     public void updateSchemaNode(SchemaNode node, String label, SchemaNodeType type, String screenRefId) {
         node.setLabel(label);
         node.setType(type);
@@ -604,21 +828,31 @@ public class AppModel {
         changed();
     }
 
+    /**
+     * Добавляет связь между узлами. Между одной и той же парой узлов может быть
+     * несколько связей разного типа/цвета (например, отдельно силовая линия и
+     * отдельно резервная) — они не дедуплицируются, каждый клик «Соединение»
+     * создаёт новую связь; на холсте параллельные связи разносятся визуально.
+     */
     public SchemaEdge addSchemaEdge(SchemaMode mode, String fromNodeId, String toNodeId, String label) {
+        return addSchemaEdge(mode, fromNodeId, null, toNodeId, null, label);
+    }
+
+    /** То же самое, но привязано к конкретным гнёздам (CardPort) на каждом узле —
+     *  используется, когда включена настройка «коммутация через гнёзда разъёмов»:
+     *  тогда связь на схеме показывает, какой именно разъём с каким соединён,
+     *  а не просто «узел с узлом». fromPortId/toPortId — null для обычного соединения. */
+    public SchemaEdge addSchemaEdge(SchemaMode mode, String fromNodeId, String fromPortId,
+                                     String toNodeId, String toPortId, String label) {
         if (currentScene == null) {
             throw new IllegalStateException("Не выбрана сцена");
         }
         if (fromNodeId.equals(toNodeId)) {
             throw new IllegalArgumentException("Нельзя соединить узел сам с собой");
         }
-        for (SchemaEdge e : currentScene.getSchemaEdges()) {
-            if (e.getMode() == mode
-                    && ((e.getFromNodeId().equals(fromNodeId) && e.getToNodeId().equals(toNodeId))
-                        || (e.getFromNodeId().equals(toNodeId) && e.getToNodeId().equals(fromNodeId)))) {
-                return e; // уже соединены — не дублируем
-            }
-        }
         SchemaEdge edge = new SchemaEdge(mode, fromNodeId, toNodeId, label);
+        edge.setFromPortId(fromPortId);
+        edge.setToPortId(toPortId);
         currentScene.getSchemaEdges().add(edge);
         changed();
         return edge;
@@ -626,6 +860,25 @@ public class AppModel {
 
     public void updateSchemaEdgeLabel(SchemaEdge edge, String label) {
         edge.setLabel(label);
+        edge.setWireCount(null);
+        edge.setWireType(null);
+        edge.setLengthM(null);
+        changed();
+    }
+
+    /** Структурированная подпись связи «N×тип» (+ метраж для питания) — коммутация,
+     *  которую обозначает стрелка. Такие связи учитываются в спецификации на «Выводе». */
+    public void updateSchemaEdgeWire(SchemaEdge edge, int count, String wireType, Double lengthM) {
+        if (count <= 0) {
+            throw new IllegalArgumentException("Количество линий должно быть больше 0");
+        }
+        if (wireType == null || wireType.isBlank()) {
+            throw new IllegalArgumentException("Укажите тип линии");
+        }
+        edge.setWireCount(count);
+        edge.setWireType(wireType.trim());
+        edge.setLengthM(lengthM != null && lengthM > 0 ? lengthM : null);
+        edge.setLabel(edge.displayLabel());
         changed();
     }
 
@@ -643,6 +896,226 @@ public class AppModel {
         }
         currentScene.getSchemaNodes().removeIf(n -> n.getMode() == mode);
         currentScene.getSchemaEdges().removeIf(e -> e.getMode() == mode);
+        changed();
+    }
+
+    // ---- карты ввода/вывода узла (медиасерверы/видеопроцессоры) ----
+
+    public SchemaCard addCardToNode(SchemaNode node, String name, List<CardPort> ports) {
+        SchemaCard card = new SchemaCard(name, ports);
+        node.getCards().add(card);
+        autoFitNodeToPorts(node);
+        changed();
+        return card;
+    }
+
+    public void removeCardFromNode(SchemaNode node, String cardId) {
+        node.getCards().removeIf(c -> c.getId().equals(cardId));
+        changed();
+    }
+
+    // ---- разъёмы питания узла (щиты/дистрибьюторы и т.п., схема ПИТАНИЯ) ----
+
+    public CardPort addPowerConnectorToNode(SchemaNode node, String connectorType, PortDirection direction, int count) {
+        CardPort port = new CardPort(connectorType, direction, count);
+        node.getPowerConnectors().add(port);
+        autoFitNodeToPorts(node);
+        changed();
+        return port;
+    }
+
+    public void removePowerConnectorFromNode(SchemaNode node, String portId) {
+        node.getPowerConnectors().removeIf(p -> p.getId().equals(portId));
+        changed();
+    }
+
+    // ---- пресеты оборудования (библиотека, для быстрой вставки узлов схемы) ----
+
+    public List<EquipmentPreset> getEquipmentPresets() {
+        return workspace.getEquipmentPresets();
+    }
+
+    public List<EquipmentPreset> presetsForCategory(SchemaMode mode, SchemaNodeType category) {
+        List<EquipmentPreset> result = new ArrayList<>();
+        for (EquipmentPreset p : workspace.getEquipmentPresets()) {
+            if (p.getMode() == mode && p.getCategory() == category) {
+                result.add(p);
+            }
+        }
+        return result;
+    }
+
+    public EquipmentPreset addEquipmentPreset(SchemaMode mode, SchemaNodeType category, String name,
+                                               String description, List<SchemaCard> cards) {
+        String trimmed = name == null ? "" : name.trim();
+        if (trimmed.isEmpty()) {
+            throw new IllegalArgumentException("Укажите название пресета");
+        }
+        EquipmentPreset preset = new EquipmentPreset(mode, category, trimmed,
+                description == null ? "" : description.trim());
+        if (cards != null) {
+            for (SchemaCard c : cards) {
+                preset.getCards().add(c.copy());
+            }
+        }
+        workspace.getEquipmentPresets().add(preset);
+        changed();
+        return preset;
+    }
+
+    public void updateEquipmentPreset(EquipmentPreset preset, SchemaMode mode, SchemaNodeType category, String name,
+                                       String description) {
+        String trimmed = name == null ? "" : name.trim();
+        if (trimmed.isEmpty()) {
+            throw new IllegalArgumentException("Укажите название пресета");
+        }
+        preset.setMode(mode);
+        preset.setCategory(category);
+        preset.setName(trimmed);
+        preset.setDescription(description == null ? "" : description.trim());
+        changed();
+    }
+
+    public void deleteEquipmentPreset(EquipmentPreset preset) {
+        workspace.getEquipmentPresets().remove(preset);
+        changed();
+    }
+
+    public SchemaCard addCardToPreset(EquipmentPreset preset, String name, List<CardPort> ports) {
+        SchemaCard card = new SchemaCard(name, ports);
+        preset.getCards().add(card);
+        changed();
+        return card;
+    }
+
+    public void removeCardFromPreset(EquipmentPreset preset, String cardId) {
+        preset.getCards().removeIf(c -> c.getId().equals(cardId));
+        changed();
+    }
+
+    public CardPort addPowerConnectorToPreset(EquipmentPreset preset, String connectorType, PortDirection direction, int count) {
+        CardPort port = new CardPort(connectorType, direction, count);
+        preset.getPowerConnectors().add(port);
+        changed();
+        return port;
+    }
+
+    public void removePowerConnectorFromPreset(EquipmentPreset preset, String portId) {
+        preset.getPowerConnectors().removeIf(p -> p.getId().equals(portId));
+        changed();
+    }
+
+    /** Создаёт узел схемы из пресета: копирует название, карты и разъёмы питания в
+     *  новый узел (для type == SCREEN пресеты не применяются — там имя/данные берутся
+     *  из экрана). */
+    public SchemaNode addSchemaNodeFromPreset(SchemaMode mode, EquipmentPreset preset, double x, double y) {
+        SchemaNode node = addSchemaNode(mode, preset.getCategory(), preset.getName(), x, y, null);
+        for (SchemaCard c : preset.getCards()) {
+            node.getCards().add(c.copy());
+        }
+        for (CardPort p : preset.getPowerConnectors()) {
+            node.getPowerConnectors().add(p.copy());
+        }
+        autoFitNodeToPorts(node);
+        changed();
+        return node;
+    }
+
+    /** Как {@link #addSchemaNodeFromPreset}, но карты собираются из ШАБЛОНОВ
+     *  пресета в ЯВНО заданном порядке (шаблон может повторяться в списке — так
+     *  задаются несколько одинаковых карт в одном устройстве, см. Task #59), а не
+     *  копируются один-в-один как есть. Порядок списка — это и порядок размещения/
+     *  отрисовки карт в получившемся узле (см. Task #66: пользователь собирает
+     *  этот список в AssembleCardsDialog двойным кликом/перетаскиванием карт
+     *  из библиотеки, в любой нужной последовательности). templateIdsInOrder —
+     *  id шаблонов (preset.getCards()[i].getId()), с повторами при дублях. */
+    public SchemaNode addSchemaNodeFromPresetWithCardOrder(SchemaMode mode, EquipmentPreset preset,
+                                                            double x, double y, List<String> templateIdsInOrder) {
+        SchemaNode node = addSchemaNode(mode, preset.getCategory(), preset.getName(), x, y, null);
+        for (String templateId : templateIdsInOrder) {
+            for (SchemaCard template : preset.getCards()) {
+                if (template.getId().equals(templateId)) {
+                    node.getCards().add(duplicateCardWithFreshIds(template));
+                    break;
+                }
+            }
+        }
+        for (CardPort p : preset.getPowerConnectors()) {
+            node.getPowerConnectors().add(p.copy());
+        }
+        autoFitNodeToPorts(node);
+        changed();
+        return node;
+    }
+
+    /** Копия карты с НОВЫМИ id (у самой карты и у каждого её разъёма) — в отличие
+     *  от {@link SchemaCard#copy()} (сохраняет id для случаев, где важна идентичность,
+     *  например снапшоты undo), нужна, когда в узел добавляется НЕСКОЛЬКО экземпляров
+     *  одного и того же шаблона карты: с одинаковыми id гнёзда стали бы неразличимы
+     *  для коммутации через гнёзда (Task #52) и удаления конкретной карты. */
+    private static SchemaCard duplicateCardWithFreshIds(SchemaCard template) {
+        SchemaCard c = template.copy();
+        c.setId(java.util.UUID.randomUUID().toString());
+        for (CardPort p : c.getPorts()) {
+            p.setId(java.util.UUID.randomUUID().toString());
+        }
+        return c;
+    }
+
+    // ---- канвасы компоновки контента (выходные кадры сигнала, сцена-scoped) ----
+
+    public List<ContentCanvas> canvasesForCurrentScene() {
+        return currentScene == null ? List.of() : currentScene.getCanvases();
+    }
+
+    public ContentCanvas addCanvas(String name, int widthPx, int heightPx) {
+        if (currentScene == null) {
+            throw new IllegalStateException("Не выбрана сцена");
+        }
+        ContentCanvas c = new ContentCanvas();
+        c.setName(name);
+        c.setWidthPx(Math.max(1, widthPx));
+        c.setHeightPx(Math.max(1, heightPx));
+        currentScene.getCanvases().add(c);
+        changed();
+        return c;
+    }
+
+    public void updateCanvas(ContentCanvas canvas, String name, int widthPx, int heightPx) {
+        canvas.setName(name);
+        canvas.setWidthPx(Math.max(1, widthPx));
+        canvas.setHeightPx(Math.max(1, heightPx));
+        changed();
+    }
+
+    public void deleteCanvas(ContentCanvas canvas) {
+        if (currentScene == null) {
+            return;
+        }
+        currentScene.getCanvases().remove(canvas);
+        changed();
+    }
+
+    public CanvasPlacement addScreenToCanvas(ContentCanvas canvas, String screenId, int x, int y) {
+        for (CanvasPlacement p : canvas.getPlacements()) {
+            if (p.getScreenId().equals(screenId)) {
+                return p; // уже размещён — не дублируем
+            }
+        }
+        CanvasPlacement p = new CanvasPlacement(screenId, x, y);
+        canvas.getPlacements().add(p);
+        changed();
+        return p;
+    }
+
+    public void movePlacement(CanvasPlacement placement, int x, int y) {
+        placement.setX(x);
+        placement.setY(y);
+        changed();
+    }
+
+    public void removePlacement(ContentCanvas canvas, String placementId) {
+        canvas.getPlacements().removeIf(p -> p.getId().equals(placementId));
         changed();
     }
 
@@ -665,6 +1138,9 @@ public class AppModel {
         currentScene.getSchemaNodes().removeIf(n -> orphanNodeIds.contains(n.getId()));
         currentScene.getSchemaEdges().removeIf(e ->
                 orphanNodeIds.contains(e.getFromNodeId()) || orphanNodeIds.contains(e.getToNodeId()));
+        for (ContentCanvas c : currentScene.getCanvases()) {
+            c.getPlacements().removeIf(p -> screen.getId().equals(p.getScreenId()));
+        }
         changed();
     }
 
@@ -700,16 +1176,37 @@ public class AppModel {
         changed();
     }
 
+    /** Назначает конкретной ячейке отдельную форму (null — вернуть форму эффективного типа кабинета). */
+    public void setCabinetShapeOverride(String cabId, com.vjstb.ledscheme.model.CabinetShape shape) {
+        if (currentScreen == null) {
+            return;
+        }
+        CabinetInstance cab = currentScreen.cabinetById(cabId);
+        if (cab == null) {
+            return;
+        }
+        pushUndo();
+        cab.setShapeOverride(shape);
+        changed();
+    }
+
     // ---- chains ----
 
     public void addPowerChain(int phase, List<String> cabinetIds) {
         if (currentScreen == null || cabinetIds.isEmpty()) {
             return;
         }
-        validateCabinetIds(cabinetIds);
+        // Как и сигнальная цепочка, силовая цепочка физически может продолжаться с
+        // одного экрана на другой (общий ввод/проходной щит на смежные экраны) —
+        // раньше проверка была строго по текущему экрану (validateCabinetIds), из-за
+        // чего ЛЮБАЯ попытка завершить цепочку, зашедшую на другой экран, бросала
+        // исключение и застревала (ChainInteractionController.finish() не ожидал
+        // ошибки от commitHandler) — пользователь физически не мог завершить
+        // построение (см. Task #64).
+        validateCabinetIdsAcrossScene(cabinetIds);
         pushUndo();
         for (String cabId : cabinetIds) {
-            CabinetInstance cab = currentScreen.cabinetById(cabId);
+            CabinetInstance cab = cabinetInScene(cabId);
             if (cab != null) {
                 cab.setPhase(phase);
             }
@@ -722,51 +1219,114 @@ public class AppModel {
         if (currentScreen == null || cabinetIds.isEmpty()) {
             return;
         }
-        validateCabinetIds(cabinetIds);
+        // Проверка здесь, а не только в UI-колбэке (SignalStagePanel.onPortSelected) —
+        // защита от любого другого пути вызова (сейчас или в будущем), а не только
+        // от клика по кнопке порта. Порт, отданный под резерв другого порта, не
+        // должен получать собственную ручную цепочку ни при каких обстоятельствах.
+        if (port != null && isPortReservedAsBackup(currentScreen, port)) {
+            throw new IllegalStateException("Порт " + port + " зарезервирован как резервный для другого порта"
+                    + " и не может иметь собственную цепочку");
+        }
+        // Сигнальная цепочка (в отличие от питания) физически может продолжаться с
+        // одного экрана на другой (общий даунлинк на смежные экраны) — поэтому
+        // кабинет ищется по ВСЕЙ сцене, а не только на текущем экране.
+        validateCabinetIdsAcrossScene(cabinetIds);
         pushUndo();
-        currentScreen.getSignalChains().add(new SignalChain(port, backup, cabinetIds));
+        // Если для порта уже есть цепочка-заглушка (создана setSignalBackupPortLink
+        // только чтобы было куда сохранить резервный порт, кабинетов ещё нет) —
+        // заполняем именно её, а не добавляем вторую запись того же порта: резерв
+        // и реальная прокладка — один и тот же порт, а не два разных.
+        SignalChain existing = port != null ? currentScreen.signalChainByPort(port, backup) : null;
+        if (existing != null && existing.getCabinetInstanceIds().isEmpty()) {
+            existing.setCabinetInstanceIds(new ArrayList<>(cabinetIds));
+        } else {
+            currentScreen.getSignalChains().add(new SignalChain(port, backup, cabinetIds));
+        }
         changed();
     }
 
     public void deletePowerChain(String chainId) {
-        if (currentScreen == null) {
+        if (currentScene == null) {
             return;
         }
         pushUndo();
-        currentScreen.getPowerChains().removeIf(c -> c.getId().equals(chainId));
+        // По всей сцене, а не только currentScreen — цепочка физически хранится на
+        // ОДНОМ экране (том, что был активен при завершении построения), который
+        // может быть ДРУГИМ, чем экран, откуда пользователь сейчас удаляет её из
+        // списка «Существующие цепочки» (см. Task #68).
+        for (Screen s : currentScene.getScreens()) {
+            s.getPowerChains().removeIf(c -> c.getId().equals(chainId));
+        }
         changed();
     }
 
     public void deleteSignalChain(String chainId) {
-        if (currentScreen == null) {
+        if (currentScene == null) {
             return;
         }
         pushUndo();
-        currentScreen.getSignalChains().removeIf(c -> c.getId().equals(chainId));
+        // По всей сцене — см. deletePowerChain выше (та же причина, Task #68).
+        for (Screen s : currentScene.getScreens()) {
+            s.getSignalChains().removeIf(c -> c.getId().equals(chainId));
+        }
         changed();
     }
 
-    /**
-     * Переключает пометку «бэкап» для порта: бэкап-цепочка не требует расключения
-     * кабинетов — она лишь декларирует, что у порта есть резерв. Возвращает
-     * новое состояние (true — бэкап включён).
-     */
-    public boolean toggleSignalPortBackup(int port) {
+    /** Разрывает цепочку питания в указанном месте (между кабинетами linkIndex и
+     *  linkIndex+1), не удаляя всю цепочку — вместо неё остаются одна или две
+     *  цепочки по обе стороны разрыва (та же фаза). */
+    public void splitPowerChainLink(String chainId, int linkIndex) {
         if (currentScreen == null) {
-            return false;
+            return;
         }
+        PowerChain chain = currentScreen.getPowerChains().stream()
+                .filter(c -> c.getId().equals(chainId)).findFirst().orElse(null);
+        if (chain == null) {
+            return;
+        }
+        List<String> ids = chain.getCabinetInstanceIds();
+        if (linkIndex < 0 || linkIndex >= ids.size() - 1) {
+            return;
+        }
+        List<String> first = new ArrayList<>(ids.subList(0, linkIndex + 1));
+        List<String> second = new ArrayList<>(ids.subList(linkIndex + 1, ids.size()));
         pushUndo();
-        SignalChain existing = currentScreen.signalChainByPort(port, true);
-        boolean nowBackup;
-        if (existing != null) {
-            currentScreen.getSignalChains().remove(existing);
-            nowBackup = false;
-        } else {
-            currentScreen.getSignalChains().add(new SignalChain(port, true, List.of()));
-            nowBackup = true;
+        currentScreen.getPowerChains().removeIf(c -> c.getId().equals(chainId));
+        if (!first.isEmpty()) {
+            currentScreen.getPowerChains().add(new PowerChain(chain.getPhase(), first));
+        }
+        if (!second.isEmpty()) {
+            currentScreen.getPowerChains().add(new PowerChain(chain.getPhase(), second));
         }
         changed();
-        return nowBackup;
+    }
+
+    /** То же для цепочки сигнала (см. {@link #splitPowerChainLink}) — порт/бэкап
+     *  сохраняются на обеих половинах. */
+    public void splitSignalChainLink(String chainId, int linkIndex) {
+        if (currentScreen == null) {
+            return;
+        }
+        SignalChain chain = currentScreen.getSignalChains().stream()
+                .filter(c -> c.getId().equals(chainId)).findFirst().orElse(null);
+        if (chain == null) {
+            return;
+        }
+        List<String> ids = chain.getCabinetInstanceIds();
+        if (linkIndex < 0 || linkIndex >= ids.size() - 1) {
+            return;
+        }
+        List<String> first = new ArrayList<>(ids.subList(0, linkIndex + 1));
+        List<String> second = new ArrayList<>(ids.subList(linkIndex + 1, ids.size()));
+        pushUndo();
+        currentScreen.getSignalChains().removeIf(c -> c.getId().equals(chainId));
+        if (!first.isEmpty()) {
+            currentScreen.getSignalChains().add(new SignalChain(chain.getPortNumber(), chain.isBackup(), first));
+        }
+        if (!second.isEmpty()) {
+            currentScreen.getSignalChains().add(new SignalChain(chain.getPortNumber(), chain.isBackup(), second));
+        }
+        changed();
     }
 
     /**
@@ -782,6 +1342,13 @@ public class AppModel {
         if (backupPort != null && backupPort == port) {
             throw new IllegalArgumentException("Резервный порт должен отличаться от основного");
         }
+        if (backupPort != null) {
+            SignalChain backupMain = currentScreen.signalChainByPort(backupPort, false);
+            if (backupMain != null && !backupMain.getCabinetInstanceIds().isEmpty()) {
+                throw new IllegalArgumentException("Порт " + backupPort + " уже используется для собственной"
+                        + " цепочки — сначала очистите её, чтобы отдать порт под резерв");
+            }
+        }
         pushUndo();
         SignalChain main = currentScreen.signalChainByPort(port, false);
         if (main == null) {
@@ -790,6 +1357,33 @@ public class AppModel {
         }
         main.setBackupPortNumber(backupPort);
         changed();
+    }
+
+    /** true, если этот порт уже назначен чьим-то резервным (backupPortNumber другого
+     *  порта) — такой порт не должен получать собственную ручную цепочку: он целиком
+     *  отдан под подхват сигнала основного порта, а не под независимый контент. */
+    public boolean isPortReservedAsBackup(Screen screen, int port) {
+        for (SignalChain c : screen.getSignalChains()) {
+            if (c.getBackupPortNumber() != null && c.getBackupPortNumber() == port) {
+                return true;
+            }
+        }
+        // Порт также зарезервирован, если ЦЕЛИКОМ принадлежит контроллеру, который
+        // сам назначен резервным для другого контроллера этого экрана.
+        ControllerInstance owner = controllerForPort(screen, port);
+        return owner != null && isControllerReservedAsBackup(screen, owner.getId());
+    }
+
+    /** Число активных резервных связок портов на экране (для учёта в общей схеме
+     *  сигнала — на каждую нужна отдельная витая пара между основным и резервным портом). */
+    public int backupPortLinkCount(Screen screen) {
+        int n = 0;
+        for (SignalChain c : screen.getSignalChains()) {
+            if (c.getBackupPortNumber() != null) {
+                n++;
+            }
+        }
+        return n;
     }
 
     public void updateSignalPortCount(Screen screen, int count) {
@@ -814,12 +1408,99 @@ public class AppModel {
         changed();
     }
 
-    private void validateCabinetIds(List<String> ids) {
+    /** И силовая, и сигнальная цепочка могут физически продолжаться с одного экрана
+     *  сцены на другой — кабинет ищется по всей сцене, а не только по текущему экрану. */
+    private void validateCabinetIdsAcrossScene(List<String> ids) {
         for (String id : ids) {
-            if (currentScreen.cabinetById(id) == null) {
-                throw new IllegalArgumentException("Кабинет не принадлежит этому экрану");
+            if (cabinetInScene(id) == null) {
+                throw new IllegalArgumentException("Кабинет не найден в сцене");
             }
         }
+    }
+
+    private CabinetInstance cabinetInScene(String id) {
+        if (currentScene == null) {
+            return null;
+        }
+        for (Screen s : currentScene.getScreens()) {
+            CabinetInstance c = s.cabinetById(id);
+            if (c != null) {
+                return c;
+            }
+        }
+        return null;
+    }
+
+    /** true, если этот кабинет (на любом экране текущей сцены) уже используется
+     *  какой-либо сигнальной цепочкой — в т.ч. цепочкой, которая физически
+     *  продолжается сюда с ДРУГОГО экрана (см. {@link #validateCabinetIdsAcrossScene}). */
+    public boolean isCabinetWiredForSignal(String cabinetId) {
+        if (currentScene == null) {
+            return false;
+        }
+        for (Screen s : currentScene.getScreens()) {
+            for (SignalChain c : s.getSignalChains()) {
+                if (c.getCabinetInstanceIds().contains(cabinetId)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Как {@link #isCabinetWiredForSignal}, но для силовой цепочки — тоже проверяется
+     *  по ВСЕЙ сцене, т.к. силовая цепочка тоже может физически продолжаться на другой
+     *  экран (см. {@link #addPowerChain}, Task #64). */
+    public boolean isCabinetWiredForPower(String cabinetId) {
+        if (currentScene == null) {
+            return false;
+        }
+        for (Screen s : currentScene.getScreens()) {
+            for (PowerChain c : s.getPowerChains()) {
+                if (c.getCabinetInstanceIds().contains(cabinetId)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Все цепочки питания сцены, которые физически затрагивают этот экран — и
+     *  "родные" (хранящиеся на нём же), и пришедшие с другого экрана (цепочка
+     *  хранится целиком на ОДНОМ экране — том, что был активен при завершении
+     *  построения — а не обязательно на том, где она реально начиналась, см.
+     *  Task #64). Без этого метода экран, где цепочка НАЧИНАЛАСЬ, но не был активен
+     *  на момент завершения, вообще не видел бы её в своём списке «Существующие
+     *  цепочки», хотя часть его собственных кабинетов ею занята (см. Task #68). */
+    public List<PowerChain> powerChainsTouchingScreen(Screen screen) {
+        List<PowerChain> result = new ArrayList<>();
+        if (currentScene == null) {
+            return result;
+        }
+        for (Screen s : currentScene.getScreens()) {
+            for (PowerChain c : s.getPowerChains()) {
+                if (c.getCabinetInstanceIds().stream().anyMatch(id -> screen.cabinetById(id) != null)) {
+                    result.add(c);
+                }
+            }
+        }
+        return result;
+    }
+
+    /** Как {@link #powerChainsTouchingScreen}, но для сигнала (Task #68). */
+    public List<SignalChain> signalChainsTouchingScreen(Screen screen) {
+        List<SignalChain> result = new ArrayList<>();
+        if (currentScene == null) {
+            return result;
+        }
+        for (Screen s : currentScene.getScreens()) {
+            for (SignalChain c : s.getSignalChains()) {
+                if (c.getCabinetInstanceIds().stream().anyMatch(id -> screen.cabinetById(id) != null)) {
+                    result.add(c);
+                }
+            }
+        }
+        return result;
     }
 
     // ---- undo ----

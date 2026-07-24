@@ -12,6 +12,9 @@ public class Workspace {
     private List<CabinetType> cabinetTypes = new ArrayList<>();
     /** Библиотека типов контроллеров (аналог SmartLCT: модель, число портов, лимит на порт). */
     private List<ControllerType> controllerTypes = new ArrayList<>();
+    /** Библиотека пресетов оборудования (медиасерверы/видеопроцессоры/конвертеры и т.д.)
+     *  для быстрой вставки узлов общей схемы. */
+    private List<EquipmentPreset> equipmentPresets = new ArrayList<>();
     private List<Project> projects = new ArrayList<>();
 
     public List<CabinetType> getCabinetTypes() {
@@ -28,6 +31,14 @@ public class Workspace {
 
     public void setControllerTypes(List<ControllerType> controllerTypes) {
         this.controllerTypes = controllerTypes;
+    }
+
+    public List<EquipmentPreset> getEquipmentPresets() {
+        return equipmentPresets;
+    }
+
+    public void setEquipmentPresets(List<EquipmentPreset> equipmentPresets) {
+        this.equipmentPresets = equipmentPresets;
     }
 
     public List<Project> getProjects() {

@@ -10,15 +10,16 @@ import javax.swing.ButtonGroup;
 import javax.swing.JPanel;
 import javax.swing.JToggleButton;
 
-/** Переключатель этапов работы (Сетап/Питание/Сигнал/Визуализация/Вывод), по аналогии со страницами DaVinci/Pixera. */
+/** Переключатель этапов работы (Сетап/Питание/Сигнал/Генерация масок/Вывод), по аналогии со страницами DaVinci/Pixera. */
 public class StageSwitcher extends JPanel {
 
     public static final String SETUP = "Сетап";
     public static final String POWER = "Питание";
     public static final String SIGNAL = "Сигнал";
-    public static final String VISUALIZATION = "Визуализация";
+    public static final String VISUALIZATION = "Генерация масок";
     public static final String OUTPUT = "Вывод";
-    public static final String[] STAGES = {SETUP, POWER, SIGNAL, VISUALIZATION, OUTPUT};
+    public static final String LIBRARIES = "Библиотеки";
+    public static final String[] STAGES = {SETUP, POWER, SIGNAL, VISUALIZATION, OUTPUT, LIBRARIES};
 
     private final Map<String, JToggleButton> buttons = new LinkedHashMap<>();
 

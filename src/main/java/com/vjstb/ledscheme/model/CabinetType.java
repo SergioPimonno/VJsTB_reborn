@@ -26,6 +26,9 @@ public class CabinetType {
     private double weightKg = 12;
     /** Физическая форма кабинета. */
     private CabinetShape shape = CabinetShape.RECTANGLE;
+    /** Тип разъёма ввода питания — сужает список доступных силовых кабелей при
+     *  подписи связи в общей схеме питания, если узел ссылается на экран этого типа. */
+    private PowerConnectorType powerConnectorType = PowerConnectorType.OTHER;
     /** Сколько отдельных линий питания нужно развести на кабинет (0 = коммутация встроена/сквозная). */
     private int powerConnectorsNeeded = 0;
     /** Сколько отдельных линий сигнала нужно развести на кабинет (0 = коммутация встроена/сквозная). */
@@ -114,6 +117,14 @@ public class CabinetType {
         this.shape = shape;
     }
 
+    public PowerConnectorType getPowerConnectorType() {
+        return powerConnectorType;
+    }
+
+    public void setPowerConnectorType(PowerConnectorType powerConnectorType) {
+        this.powerConnectorType = powerConnectorType;
+    }
+
     public int getPowerConnectorsNeeded() {
         return powerConnectorsNeeded;
     }
@@ -142,6 +153,7 @@ public class CabinetType {
         c.powerConsumptionW = powerConsumptionW;
         c.weightKg = weightKg;
         c.shape = shape;
+        c.powerConnectorType = powerConnectorType;
         c.powerConnectorsNeeded = powerConnectorsNeeded;
         c.signalConnectorsNeeded = signalConnectorsNeeded;
         return c;

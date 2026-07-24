@@ -11,6 +11,7 @@ import com.vjstb.ledscheme.service.SceneStats;
 import com.vjstb.ledscheme.service.ScreenLogic;
 import com.vjstb.ledscheme.service.ScreenStats;
 import com.vjstb.ledscheme.ui.ContextBar;
+import com.vjstb.ledscheme.ui.OutputPaths;
 import com.vjstb.ledscheme.ui.SchemeRenderer;
 import com.vjstb.ledscheme.ui.UiKit;
 import java.awt.BorderLayout;
@@ -43,6 +44,24 @@ public class OutputStagePanel extends JPanel {
         setLayout(new BorderLayout());
         add(new ContextBar(model, false), BorderLayout.NORTH);
         add(buildBody(), BorderLayout.CENTER);
+        model.addListener(this::refreshFolderField);
+        refreshFolderField();
+    }
+
+    /** Папка вывода: явно выбранная пользователем — если её ещё не выбирали,
+     *  подставляется дефолтная ~/Documents/Video/{проект} (без блокирующего
+     *  «сначала выберите папку» — путь создаётся автоматически при необходимости). */
+    private File resolveFolder() {
+        if (chosenFolder != null) {
+            return chosenFolder;
+        }
+        Project project = model.getCurrentProject();
+        return project != null ? OutputPaths.defaultFolder(project, null) : null;
+    }
+
+    private void refreshFolderField() {
+        File f = resolveFolder();
+        folderField.setText(f != null ? f.getAbsolutePath() : "(сначала выберите проект)");
     }
 
     private JPanel buildBody() {
@@ -66,8 +85,12 @@ public class OutputStagePanel extends JPanel {
         body.add(UiKit.vgap(10));
         body.add(UiKit.muted("<html>В папку будут сохранены JPEG-схемы (питание и сигнал) каждого экрана всех сцен"
                 + " текущего проекта и текстовый отчёт: итоговые суммарные цифры по проекту (нагрузка, вес),"
-                + " спецификация оборудования (кабинеты по типам), затем разбор по сценам/экранам"
-                + " (состав, мощность/вес, список цепочек).</html>"));
+                + " спецификация оборудования (кабинеты по типам), спецификация коммутации (провода/линии,"
+                + " подписанные N×тип на стрелках общих схем — с метражом для питания), затем разбор"
+                + " по сценам/экранам (состав, мощность/вес, список цепочек).</html>"));
+        body.add(UiKit.vgap(10));
+        body.add(UiKit.muted("Тестовые маски (Pixel Grid) экранов и канвасов, пресеты под медиасерверы —"
+                + " на этапе «Генерация масок», отдельными кнопками."));
         body.add(javax.swing.Box.createVerticalGlue());
 
         return body;
@@ -92,10 +115,7 @@ public class OutputStagePanel extends JPanel {
             JOptionPane.showMessageDialog(this, "Сначала выберите проект", "Нет проекта", JOptionPane.WARNING_MESSAGE);
             return;
         }
-        if (chosenFolder == null) {
-            JOptionPane.showMessageDialog(this, "Сначала выберите папку вывода", "Нет папки", JOptionPane.WARNING_MESSAGE);
-            return;
-        }
+        File folder = resolveFolder();
 
         StringBuilder report = new StringBuilder();
         report.append("Отчёт по проекту: ").append(project.getName()).append('\n');
@@ -150,7 +170,8 @@ public class OutputStagePanel extends JPanel {
                     t.getName(), qty, UiKit.fmt(t.getPowerConsumptionW()), UiKit.fmt(t.getPowerConsumptionW() * qty),
                     UiKit.fmt(t.getWeightKg()), UiKit.fmt(t.getWeightKg() * qty)));
         }
-        report.append("\nКонтроллеры/конвертеры/серверы — появятся в спецификации после реализации общей схемы площадки.\n\n");
+        report.append('\n');
+        report.append(buildWiringSpec(project));
 
         int jpegCount = 0;
         try {
@@ -187,16 +208,16 @@ public class OutputStagePanel extends JPanel {
 
                     for (boolean power : new boolean[]{true, false}) {
                         BufferedImage img = SchemeRenderer.renderImage(scr, type, power, 120, model.getWorkspace());
-                        String fname = sanitize(scene.getName()) + "_" + sanitize(scr.getName())
+                        String fname = OutputPaths.sanitize(scene.getName()) + "_" + OutputPaths.sanitize(scr.getName())
                                 + "_" + (power ? "Питание" : "Сигнал") + ".jpg";
-                        SchemeRenderer.writeJpeg(img, new File(chosenFolder, fname));
+                        SchemeRenderer.writeJpeg(img, new File(folder, fname));
                         jpegCount++;
                     }
                 }
                 report.append('\n');
             }
 
-            File reportFile = new File(chosenFolder, sanitize(project.getName()) + "_отчёт.txt");
+            File reportFile = new File(folder, OutputPaths.sanitize(project.getName()) + "_отчёт.txt");
             Files.writeString(reportFile.toPath(), report.toString(), StandardCharsets.UTF_8);
 
             int answer = JOptionPane.showConfirmDialog(this,
@@ -204,12 +225,66 @@ public class OutputStagePanel extends JPanel {
                             + "\n\nОткрыть папку?",
                     "Пакет документации сформирован", JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE);
             if (answer == JOptionPane.YES_OPTION) {
-                openFolder(chosenFolder);
+                openFolder(folder);
             }
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(this, "Ошибка формирования пакета: " + ex.getMessage(), "Ошибка",
                     JOptionPane.ERROR_MESSAGE);
         }
+    }
+
+    /** Спецификация коммутации: провода/линии, подписанные структурированно (N×тип)
+     *  на стрелках общих схем питания/сигнала всех сцен проекта — сгруппированы по типу,
+     *  для питания также суммируется метраж (N линий × длина каждой). */
+    private String buildWiringSpec(Project project) {
+        java.util.LinkedHashMap<String, double[]> powerWires = new java.util.LinkedHashMap<>();
+        java.util.LinkedHashMap<String, double[]> signalWires = new java.util.LinkedHashMap<>();
+        int totalEdges = 0;
+        int structuredEdges = 0;
+
+        for (Scene scene : project.getScenes()) {
+            for (com.vjstb.ledscheme.model.SchemaEdge edge : scene.getSchemaEdges()) {
+                totalEdges++;
+                if (!edge.hasStructuredWire()) {
+                    continue;
+                }
+                structuredEdges++;
+                java.util.LinkedHashMap<String, double[]> target =
+                        edge.getMode() == com.vjstb.ledscheme.model.SchemaMode.POWER ? powerWires : signalWires;
+                double[] agg = target.computeIfAbsent(edge.getWireType(), k -> new double[2]);
+                agg[0] += edge.getWireCount();
+                if (edge.getLengthM() != null) {
+                    agg[1] += edge.getWireCount() * edge.getLengthM();
+                }
+            }
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("=== СПЕЦИФИКАЦИЯ КОММУТАЦИИ (провода/линии по общим схемам) ===\n");
+        if (powerWires.isEmpty() && signalWires.isEmpty()) {
+            sb.append("(нет связей с подписью вида N×тип — задайте их в общей схеме питания/сигнала: клик по"
+                    + " чипу «+ подпись» на стрелке)\n");
+        } else {
+            if (!powerWires.isEmpty()) {
+                sb.append("Питание:\n");
+                for (var e : powerWires.entrySet()) {
+                    String lenPart = e.getValue()[1] > 0 ? " · " + UiKit.fmt(e.getValue()[1]) + " м суммарно" : "";
+                    sb.append(String.format("  %s — %s лин.%s%n", e.getKey(), UiKit.fmt(e.getValue()[0]), lenPart));
+                }
+            }
+            if (!signalWires.isEmpty()) {
+                sb.append("Сигнал:\n");
+                for (var e : signalWires.entrySet()) {
+                    sb.append(String.format("  %s — %s лин.%n", e.getKey(), UiKit.fmt(e.getValue()[0])));
+                }
+            }
+            if (totalEdges > structuredEdges) {
+                sb.append("(").append(totalEdges - structuredEdges)
+                        .append(" связей без структурированной подписи не учтены в подсчёте)\n");
+            }
+        }
+        sb.append('\n');
+        return sb.toString();
     }
 
     private void openFolder(File dir) {
@@ -220,11 +295,5 @@ public class OutputStagePanel extends JPanel {
         } catch (Exception ignored) {
             // не критично
         }
-    }
-
-    private static String sanitize(String name) {
-        String s = name == null ? "" : name.trim();
-        s = s.replaceAll("[\\\\/:*?\"<>|]+", "_").replaceAll("\\s+", " ");
-        return s.isEmpty() ? "проект" : s;
     }
 }

@@ -6,10 +6,16 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
+import com.vjstb.ledscheme.model.CanvasPlacement;
+import com.vjstb.ledscheme.model.CardPort;
+import com.vjstb.ledscheme.model.ContentCanvas;
 import com.vjstb.ledscheme.model.ControllerInstance;
 import com.vjstb.ledscheme.model.ControllerType;
+import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.Project;
+import com.vjstb.ledscheme.model.SchemaCard;
 import com.vjstb.ledscheme.model.SchemaEdge;
 import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.SchemaNode;
@@ -91,6 +97,55 @@ class AppModelTest {
     }
 
     @Test
+    void splitPowerChainLinkBreaksOneLinkNotWholeChain(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 1, 4, 0, 0);
+        model.selectScreen(screen);
+
+        List<String> ids = screen.getCabinets().stream().map(c -> c.getId()).toList();
+        model.addPowerChain(1, ids);
+        String chainId = screen.getPowerChains().get(0).getId();
+
+        model.splitPowerChainLink(chainId, 1); // разрыв между 2-м и 3-м кабинетом
+        assertEquals(2, screen.getPowerChains().size(), "Должно остаться две цепочки по обе стороны разрыва");
+        List<Integer> sizes = screen.getPowerChains().stream()
+                .map(c -> c.getCabinetInstanceIds().size()).sorted().toList();
+        assertEquals(List.of(2, 2), sizes);
+        assertTrue(screen.getPowerChains().stream().allMatch(c -> c.getPhase() == 1));
+
+        model.undo();
+        assertEquals(1, screen.getPowerChains().size(), "Отмена должна вернуть исходную единую цепочку");
+        assertEquals(4, screen.getPowerChains().get(0).getCabinetInstanceIds().size());
+    }
+
+    @Test
+    void splitSignalChainLinkPreservesPortAndBackup(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 1, 3, 0, 0);
+        model.selectScreen(screen);
+
+        List<String> ids = screen.getCabinets().stream().map(c -> c.getId()).toList();
+        model.addSignalChain(2, false, ids);
+        String chainId = screen.getSignalChains().get(0).getId();
+
+        model.splitSignalChainLink(chainId, 0); // разрыв после 1-го кабинета
+        assertEquals(2, screen.getSignalChains().size());
+        for (SignalChain c : screen.getSignalChains()) {
+            assertEquals(2, c.getPortNumber());
+            assertFalse(c.isBackup());
+        }
+        List<Integer> sizes = screen.getSignalChains().stream()
+                .map(c -> c.getCabinetInstanceIds().size()).sorted().toList();
+        assertEquals(List.of(1, 2), sizes);
+    }
+
+    @Test
     void resizeGridPrunesOutOfBoundsCabinetsFromChains(@TempDir Path dir) {
         AppModel model = freshModel(dir);
         CabinetType type = model.addCabinetType(sampleType());
@@ -129,34 +184,6 @@ class AppModelTest {
         assertEquals(4, screen.getCabinets().size());
         assertEquals(100.0, screen.getPosXMm());
         assertEquals(200.0, screen.getPosYMm());
-    }
-
-    @Test
-    void signalBackupTogglesWithoutRequiringCabinets(@TempDir Path dir) {
-        AppModel model = freshModel(dir);
-        CabinetType type = model.addCabinetType(sampleType());
-        model.selectProject(model.addProject("P"));
-        model.selectScene(model.addScene("S"));
-        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
-        model.selectScreen(screen);
-
-        assertNull(screen.signalChainByPort(3, true));
-        boolean nowBackup = model.toggleSignalPortBackup(3);
-        assertTrue(nowBackup);
-        SignalChain backup = screen.signalChainByPort(3, true);
-        assertNotNull(backup);
-        assertTrue(backup.getCabinetInstanceIds().isEmpty(), "Бэкап не должен требовать расключения кабинетов");
-
-        boolean nowBackup2 = model.toggleSignalPortBackup(3);
-        assertFalse(nowBackup2);
-        assertNull(screen.signalChainByPort(3, true));
-
-        // основная (не бэкап) цепочка на том же порту сосуществует независимо
-        List<String> ids = screen.getCabinets().stream().map(c -> c.getId()).limit(2).toList();
-        model.addSignalChain(3, false, ids);
-        model.toggleSignalPortBackup(3);
-        assertNotNull(screen.signalChainByPort(3, false));
-        assertNotNull(screen.signalChainByPort(3, true));
     }
 
     @Test
@@ -281,11 +308,113 @@ class AppModelTest {
         SignalChain main = screen.signalChainByPort(3, false);
         assertNotNull(main);
         assertEquals(7, main.getBackupPortNumber());
+        // Порт 7 теперь целиком отдан под резерв порта 3 — свою ручную цепочку получать не должен.
+        assertTrue(model.isPortReservedAsBackup(screen, 7));
+        assertFalse(model.isPortReservedAsBackup(screen, 3));
+        assertEquals(1, model.backupPortLinkCount(screen));
 
         model.setSignalBackupPortLink(3, null);
         assertNull(screen.signalChainByPort(3, false).getBackupPortNumber());
+        assertFalse(model.isPortReservedAsBackup(screen, 7));
+        assertEquals(0, model.backupPortLinkCount(screen));
 
         assertTrue(assertThrowsRuntime(() -> model.setSignalBackupPortLink(5, 5)));
+
+        // Нельзя отдать под резерв порт, уже несущий собственную цепочку с кабинетами.
+        model.selectScreen(screen);
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).limit(1).toList();
+        model.addSignalChain(4, false, ids);
+        assertTrue(assertThrowsRuntime(() -> model.setSignalBackupPortLink(1, 4)));
+    }
+
+    @Test
+    void addSignalChainRejectsReservedBackupPortDirectly(@TempDir Path dir) {
+        // Защита должна срабатывать на уровне AppModel.addSignalChain САМОМ ПО СЕБЕ,
+        // а не только через проверку в UI-колбэке (SignalStagePanel.onPortSelected) —
+        // вызов напрямую, в обход UI, должен точно так же получить отказ.
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+        model.selectScreen(screen);
+        model.updateSignalPortCount(screen, 8);
+
+        model.setSignalBackupPortLink(2, 4);
+        assertTrue(model.isPortReservedAsBackup(screen, 4));
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).limit(1).toList();
+        assertTrue(assertThrowsRuntime(() -> model.addSignalChain(4, false, ids)));
+        // Порт, который НЕ зарезервирован, по-прежнему можно расключить как обычно.
+        model.addSignalChain(5, false, ids);
+        assertNotNull(screen.signalChainByPort(5, false));
+    }
+
+    @Test
+    void signalAndPowerChainsCanBothSpanMultipleScreens(@TempDir Path dir) {
+        // И питание, и сигнал физически могут продолжаться на другой экран сцены
+        // (общий силовой ввод/проходной щит или сигнальный даунлинк на смежные
+        // экраны) — раньше питание было строго ограничено текущим экраном и любая
+        // попытка завершить цепочку, зашедшую на другой экран, бросала исключение,
+        // из-за которого пользователь физически не мог завершить построение (см.
+        // Task #64). Обе цепочки теперь проверяются по всей сцене одинаково.
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen a = model.addScreen("A", type.getId(), 2, 2, 0, 0);
+        Screen b = model.addScreen("B", type.getId(), 2, 2, 1000, 0);
+        model.selectScreen(a);
+
+        String lastOfA = a.getCabinets().get(a.getCabinets().size() - 1).getId();
+        String firstOfB = b.getCabinets().get(0).getId();
+
+        model.addSignalChain(1, false, List.of(lastOfA, firstOfB));
+        assertEquals(1, a.getSignalChains().size());
+        assertTrue(model.isCabinetWiredForSignal(firstOfB), "Кабинет экрана B занят цепочкой, живущей на экране A");
+        assertTrue(model.isCabinetWiredForSignal(lastOfA));
+        assertFalse(model.isCabinetWiredForSignal(b.getCabinets().get(1).getId()));
+
+        String lastOfA2 = a.getCabinets().get(a.getCabinets().size() - 2).getId();
+        String secondOfB = b.getCabinets().get(1).getId();
+        model.addPowerChain(2, List.of(lastOfA2, secondOfB));
+        assertEquals(1, a.getPowerChains().size());
+        assertTrue(model.isCabinetWiredForPower(lastOfA2));
+        assertTrue(model.isCabinetWiredForPower(secondOfB), "Кабинет экрана B занят силовой цепочкой, живущей на экране A");
+        assertFalse(model.isCabinetWiredForPower(firstOfB));
+        // Фаза применяется к кабинету на ЕГО СОБСТВЕННОМ экране (B), а не только к
+        // кабинетам currentScreen (A) — иначе addPowerChain молча пропускал бы фазу
+        // для кросс-экранных кабинетов (та же причина, что и Task #64).
+        assertEquals(2, b.cabinetById(secondOfB).getPhase());
+    }
+
+    @Test
+    void addSignalChainFillsExistingBackupStubInsteadOfDuplicating(@TempDir Path dir) {
+        // Регрессия: setSignalBackupPortLink(2, 5), назначенный ДО построения
+        // цепочки порта 2, создаёт цепочку-заглушку (0 кабинетов) только чтобы
+        // было где хранить резервный порт. Реальное построение цепочки на порту 2
+        // должно заполнить именно эту заглушку, а не завести вторую отдельную
+        // запись «Порт 2» — иначе в списке цепочек одна и та же прокладка
+        // раздваивается на «0 каб. · резерв: порт 5» и «N каб.».
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+        model.selectScreen(screen);
+        model.updateSignalPortCount(screen, 8);
+
+        model.setSignalBackupPortLink(2, 5);
+        assertEquals(1, screen.getSignalChains().size());
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).limit(2).toList();
+        model.addSignalChain(2, false, ids);
+
+        assertEquals(1, screen.getSignalChains().size());
+        SignalChain chain = screen.signalChainByPort(2, false);
+        assertNotNull(chain);
+        assertEquals(2, chain.getCabinetInstanceIds().size());
+        assertEquals(5, chain.getBackupPortNumber());
     }
 
     @Test
@@ -316,6 +445,102 @@ class AppModelTest {
 
         model.removeControllerFromScreen(screen, ci2.getId());
         assertEquals(10, model.effectiveSignalPortCount(screen));
+    }
+
+    @Test
+    void controllersAreSharedAcrossAllScreensOfSameScene(@TempDir Path dir) {
+        // Task #58: контроллеры общие для СЦЕНЫ, а не привязаны к одному экрану —
+        // экран B должен видеть контроллер, добавленный (физически) под экраном A
+        // той же сцены, и наоборот.
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen a = model.addScreen("A", type.getId(), 2, 2, 0, 0);
+        Screen b = model.addScreen("B", type.getId(), 2, 2, 1000, 0);
+
+        ControllerType ct = new ControllerType();
+        ct.setName("VX1000");
+        ct.setPortCount(4);
+        model.addControllerType(ct);
+
+        ControllerInstance ci = model.addControllerToScreen(a, ct.getId());
+        assertEquals(4, model.effectiveSignalPortCount(a));
+        assertEquals(4, model.effectiveSignalPortCount(b), "Экран B должен видеть контроллер, добавленный на A");
+
+        List<ControllerInstance> sceneControllers = model.controllersInScene(model.getCurrentScene());
+        assertEquals(1, sceneControllers.size());
+        assertTrue(sceneControllers.contains(ci));
+
+        // Удаление через сцену (не важно, под каким экраном физически хранится) —
+        // после удаления оба экрана возвращаются к ручному signalPortCount (по
+        // умолчанию 8 — см. Screen), а не к нулю.
+        model.removeControllerFromScene(model.getCurrentScene(), ci.getId());
+        assertEquals(8, model.effectiveSignalPortCount(a));
+        assertEquals(8, model.effectiveSignalPortCount(b));
+        assertTrue(model.controllersInScene(model.getCurrentScene()).isEmpty());
+    }
+
+    @Test
+    void controllerLevelBackupReservesAllItsPorts(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+        model.selectScreen(screen);
+
+        ControllerType ct = new ControllerType();
+        ct.setName("VX1000");
+        ct.setPortCount(4);
+        model.addControllerType(ct);
+
+        ControllerInstance main = model.addControllerToScreen(screen, ct.getId());
+        ControllerInstance backup = model.addControllerToScreen(screen, ct.getId());
+        ControllerInstance third = model.addControllerToScreen(screen, ct.getId());
+        assertEquals(12, model.effectiveSignalPortCount(screen));
+
+        assertEquals(main, model.controllerForPort(screen, 1));
+        assertEquals(backup, model.controllerForPort(screen, 5));
+        assertFalse(model.isPortReservedAsBackup(screen, 5));
+
+        model.setControllerBackupLink(screen, main.getId(), backup.getId());
+        assertEquals(backup.getId(), main.getBackupControllerId());
+        // ВСЕ порты резервного контроллера (5-8) зарезервированы, порты основного (1-4) — нет.
+        assertTrue(model.isPortReservedAsBackup(screen, 5));
+        assertTrue(model.isPortReservedAsBackup(screen, 8));
+        assertFalse(model.isPortReservedAsBackup(screen, 1));
+        assertTrue(model.isControllerReservedAsBackup(screen, backup.getId()));
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).limit(1).toList();
+        assertTrue(assertThrowsRuntime(() -> model.addSignalChain(5, false, ids)));
+        model.addSignalChain(1, false, ids); // порт основного контроллера по-прежнему доступен
+
+        // нельзя назначить резервным контроллер, у которого уже есть собственная цепочка (порт 9 — у third)
+        model.addSignalChain(9, false, ids);
+        assertTrue(assertThrowsRuntime(() -> model.setControllerBackupLink(screen, main.getId(), third.getId())));
+
+        // удаление резервного контроллера снимает связку с основного (не остаётся висячей ссылки)
+        model.removeControllerFromScreen(screen, backup.getId());
+        assertNull(main.getBackupControllerId());
+    }
+
+    @Test
+    void cardBasedControllerPortCountOverridesManualCount() {
+        // Novastar H-серии и подобные модульные контроллеры: если заданы карты,
+        // эффективное число портов считается по ним, а не по ручному portCount.
+        ControllerType h = new ControllerType();
+        h.setName("H2");
+        h.setPortCount(8); // ручное значение — должно игнорироваться при наличии карт
+        assertEquals(8, h.effectivePortCount());
+
+        h.getCards().add(new SchemaCard("Карта вывода 1", List.of(new CardPort("RJ45", PortDirection.OUT, 4))));
+        h.getCards().add(new SchemaCard("Карта вывода 2", List.of(new CardPort("оптика", PortDirection.OUT, 2))));
+        assertEquals(6, h.effectivePortCount());
+
+        ControllerType copy = h.copy();
+        assertEquals(6, copy.effectivePortCount());
+        assertEquals(2, copy.getCards().size());
     }
 
     @Test
@@ -368,9 +593,10 @@ class AppModelTest {
         assertEquals(1, model.schemaEdgesForCurrentScene(SchemaMode.POWER).size());
         assertEquals("3x2.5", edge.getLabel());
 
-        // повторное соединение тех же двух узлов не дублирует связь
+        // между той же парой узлов можно провести ещё одну связь другого типа/цвета —
+        // не дедуплицируется (несколько параллельных линий разного назначения)
         model.addSchemaEdge(SchemaMode.POWER, source.getId(), screenNode.getId(), null);
-        assertEquals(1, model.schemaEdgesForCurrentScene(SchemaMode.POWER).size());
+        assertEquals(2, model.schemaEdgesForCurrentScene(SchemaMode.POWER).size());
 
         model.deleteSchemaNode(screenNode);
         assertEquals(1, model.schemaNodesForCurrentScene(SchemaMode.POWER).size());
@@ -395,6 +621,251 @@ class AppModelTest {
 
         assertEquals(1, model.schemaNodesForCurrentScene(SchemaMode.SIGNAL).size(), "Узел-ссылка на удалённый экран должен исчезнуть");
         assertTrue(model.schemaEdgesForCurrentScene(SchemaMode.SIGNAL).isEmpty());
+    }
+
+    @Test
+    void schemaEdgeCanAnchorToSpecificConnectorSockets(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+
+        SchemaNode pdu = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "PDU", 0, 0, null);
+        CardPort in = model.addPowerConnectorToNode(pdu, "CEE 32A", PortDirection.IN, 1);
+        SchemaNode box = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "Box", 200, 0, null);
+        CardPort out = model.addPowerConnectorToNode(box, "Schuko", PortDirection.OUT, 1);
+
+        // Обычное соединение (без гнёзд) — portId остаются null, поведение как раньше.
+        SchemaEdge plain = model.addSchemaEdge(SchemaMode.POWER, pdu.getId(), box.getId(), null);
+        assertNull(plain.getFromPortId());
+        assertNull(plain.getToPortId());
+
+        // Соединение через конкретные гнёзда.
+        SchemaEdge socketEdge = model.addSchemaEdge(SchemaMode.POWER, pdu.getId(), in.getId(),
+                box.getId(), out.getId(), null);
+        assertEquals(in.getId(), socketEdge.getFromPortId());
+        assertEquals(out.getId(), socketEdge.getToPortId());
+        assertEquals(2, model.schemaEdgesForCurrentScene(SchemaMode.POWER).size());
+    }
+
+    @Test
+    void structuredWireLabelComposesAndFeedsSpec(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        model.addScreen("E", type.getId(), 2, 2, 0, 0);
+
+        SchemaNode a = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SOURCE, "Щит", 0, 0, null);
+        SchemaNode b = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "Бокс", 200, 0, null);
+        SchemaEdge edge = model.addSchemaEdge(SchemaMode.POWER, a.getId(), b.getId(), null);
+        assertFalse(edge.hasStructuredWire());
+
+        model.updateSchemaEdgeWire(edge, 3, "CEE 32A", 25.0);
+        assertTrue(edge.hasStructuredWire());
+        assertEquals("3×CEE 32A, 25м", edge.displayLabel());
+        assertEquals(edge.displayLabel(), edge.getLabel());
+
+        assertTrue(assertThrowsRuntime(() -> model.updateSchemaEdgeWire(edge, 0, "CEE 32A", null)));
+        assertTrue(assertThrowsRuntime(() -> model.updateSchemaEdgeWire(edge, 2, " ", null)));
+
+        // свободная подпись сбрасывает структуру
+        model.updateSchemaEdgeLabel(edge, "просто заметка");
+        assertFalse(edge.hasStructuredWire());
+        assertEquals("просто заметка", edge.displayLabel());
+    }
+
+    @Test
+    void schemaNodeCardsSumInputsOutputs(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+
+        SchemaNode server = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SERVER, "E2", 0, 0, null);
+        assertTrue(server.getCards().isEmpty());
+
+        SchemaCard c1 = model.addCardToNode(server, "Вход 4xHDMI",
+                List.of(new CardPort("HDMI", PortDirection.IN, 4)));
+        model.addCardToNode(server, "Выход 2xSDI", List.of(new CardPort("SDI", PortDirection.OUT, 2)));
+        assertEquals(2, server.getCards().size());
+        int totalIn = server.getCards().stream().mapToInt(SchemaCard::totalInputs).sum();
+        int totalOut = server.getCards().stream().mapToInt(SchemaCard::totalOutputs).sum();
+        assertEquals(4, totalIn);
+        assertEquals(2, totalOut);
+
+        model.removeCardFromNode(server, c1.getId());
+        assertEquals(1, server.getCards().size());
+    }
+
+    @Test
+    void schemaNodePowerConnectorsIndependentFromCards(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+
+        SchemaNode distro = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "Щит", 0, 0, null);
+        assertTrue(distro.getPowerConnectors().isEmpty());
+
+        CardPort in = model.addPowerConnectorToNode(distro, "CEE 32A", PortDirection.IN, 1);
+        model.addPowerConnectorToNode(distro, "Schuko", PortDirection.OUT, 8);
+        assertEquals(2, distro.getPowerConnectors().size());
+        // не смешивается с видеокартами (cards остаётся отдельным списком)
+        assertTrue(distro.getCards().isEmpty());
+
+        model.removePowerConnectorFromNode(distro, in.getId());
+        assertEquals(1, distro.getPowerConnectors().size());
+        assertEquals("Schuko", distro.getPowerConnectors().get(0).getConnectorType());
+    }
+
+    @Test
+    void equipmentPresetPowerConnectorsCopiedToNewNode(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+
+        var preset = model.addEquipmentPreset(SchemaMode.POWER, SchemaNodeType.DISTRO, "PDU-16", "Дистрибьютор", null);
+        model.addPowerConnectorToPreset(preset, "CEE 32A", PortDirection.IN, 1);
+        model.addPowerConnectorToPreset(preset, "Schuko", PortDirection.OUT, 8);
+        assertEquals(2, preset.getPowerConnectors().size());
+
+        SchemaNode node = model.addSchemaNodeFromPreset(SchemaMode.POWER, preset, 10, 20);
+        assertEquals("PDU-16", node.getLabel());
+        assertEquals(2, node.getPowerConnectors().size());
+        // копии, а не общие ссылки — правка узла не должна задевать пресет
+        model.removePowerConnectorFromNode(node, node.getPowerConnectors().get(0).getId());
+        assertEquals(1, node.getPowerConnectors().size());
+        assertEquals(2, preset.getPowerConnectors().size());
+    }
+
+    @Test
+    void equipmentPresetCrudAndApplyToNewNode(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+
+        assertTrue(model.getEquipmentPresets().isEmpty());
+        var preset = model.addEquipmentPreset(SchemaMode.SIGNAL, SchemaNodeType.SERVER, "Barco E2", "Медиасервер", null);
+        model.addCardToPreset(preset, "Вход 4xHDMI", List.of(new CardPort("HDMI", PortDirection.IN, 4)));
+        model.addCardToPreset(preset, "Выход 2xSDI", List.of(new CardPort("SDI", PortDirection.OUT, 2)));
+        assertEquals(1, model.getEquipmentPresets().size());
+        assertEquals(2, preset.getCards().size());
+        assertEquals(1, model.presetsForCategory(SchemaMode.SIGNAL, SchemaNodeType.SERVER).size());
+        assertTrue(model.presetsForCategory(SchemaMode.SIGNAL, SchemaNodeType.CONTROLLER).isEmpty());
+        assertTrue(model.presetsForCategory(SchemaMode.POWER, SchemaNodeType.SERVER).isEmpty());
+
+        SchemaNode node = model.addSchemaNodeFromPreset(SchemaMode.SIGNAL, preset, 10, 20);
+        assertEquals("Barco E2", node.getLabel());
+        assertEquals(SchemaNodeType.SERVER, node.getType());
+        assertEquals(2, node.getCards().size());
+        // копии карт, а не общие ссылки — правка узла не должна задевать пресет
+        model.removeCardFromNode(node, node.getCards().get(0).getId());
+        assertEquals(1, node.getCards().size());
+        assertEquals(2, preset.getCards().size());
+
+        model.updateEquipmentPreset(preset, SchemaMode.SIGNAL, SchemaNodeType.CONTROLLER, "PixelHue Q8", "Видеопроцессор");
+        assertEquals(SchemaNodeType.CONTROLLER, preset.getCategory());
+        assertEquals("PixelHue Q8", preset.getName());
+        assertTrue(assertThrowsRuntime(() ->
+                model.updateEquipmentPreset(preset, SchemaMode.SIGNAL, SchemaNodeType.CONTROLLER, " ", "")));
+
+        model.deleteEquipmentPreset(preset);
+        assertTrue(model.getEquipmentPresets().isEmpty());
+    }
+
+    @Test
+    void newScreenDefaultsToRiggedMountWithSuggestedPoints(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = sampleType();
+        model.addCabinetType(type);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+
+        // Формула из риг-тех таблиц заказчика: "Hanging bar" = ширина в модулях / 2,
+        // округление вверх, минимум 2 точки.
+        Screen narrow = model.addScreen("Узкий", type.getId(), 5, 3, 0, 0);
+        assertEquals(com.vjstb.ledscheme.model.ScreenMountType.RIGGED, narrow.getMountType());
+        assertEquals(2, narrow.getRiggingPointsCount()); // ceil(3/2)=2, floor 2
+
+        Screen wide = model.addScreen("Широкий", type.getId(), 5, 12, 0, 0);
+        assertEquals(6, wide.getRiggingPointsCount()); // 12/2=6
+
+        Screen odd = model.addScreen("Нечётный", type.getId(), 5, 7, 0, 0);
+        assertEquals(4, odd.getRiggingPointsCount()); // ceil(7/2)=4
+    }
+
+    @Test
+    void controllerPortBandwidthAndPixelsAreInterdependent() {
+        // опорная точка из документации NovaStar: 1 Гбит/с @ 60Гц/8бит = 650 000 px/порт
+        assertEquals(650_000, ControllerType.maxPixelsFor(1000, 60, 8));
+        // при той же пропускной способности бОльшая герцовка/глубина цвета — меньше пикселей
+        assertTrue(ControllerType.maxPixelsFor(1000, 120, 8) < 650_000);
+        assertTrue(ControllerType.maxPixelsFor(1000, 60, 10) < 650_000);
+
+        ControllerType ct = new ControllerType();
+        ct.setPortBandwidthMbps(1000);
+        assertEquals(650_000, ct.referencePixelsPerPort());
+
+        // обратный пересчёт: сколько Мбит/с нужно для 650 000 px @60/8 — снова ~1000
+        double mbps = ControllerType.bandwidthForPixels(650_000, 60, 8);
+        assertEquals(1000.0, mbps, 1.0);
+    }
+
+    @Test
+    void screenSignalSpecAffectsEffectivePortCapacity(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+        model.selectScreen(screen);
+        assertEquals(60, screen.getRefreshRateHz());
+        assertEquals(8, screen.getColorBitDepth());
+
+        model.updateScreenSignalSpec(screen, 120, 10);
+        assertEquals(120, screen.getRefreshRateHz());
+        assertEquals(10, screen.getColorBitDepth());
+
+        assertTrue(assertThrowsRuntime(() -> model.updateScreenSignalSpec(screen, 0, 8)));
+        assertTrue(assertThrowsRuntime(() -> model.updateScreenSignalSpec(screen, 60, 0)));
+
+        model.undo();
+        assertEquals(60, screen.getRefreshRateHz());
+        assertEquals(8, screen.getColorBitDepth());
+    }
+
+    @Test
+    void canvasHoldsScreenPlacementsAndCleansUpOnScreenDelete(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen a = model.addScreen("A", type.getId(), 2, 2, 0, 0);
+        Screen b = model.addScreen("B", type.getId(), 2, 2, 900, 0);
+
+        assertTrue(model.canvasesForCurrentScene().isEmpty());
+        ContentCanvas canvas = model.addCanvas("Resolume 1080p", 1920, 1080);
+        assertEquals(1, model.canvasesForCurrentScene().size());
+
+        CanvasPlacement pa = model.addScreenToCanvas(canvas, a.getId(), 0, 0);
+        model.addScreenToCanvas(canvas, b.getId(), 300, 0);
+        assertEquals(2, canvas.getPlacements().size());
+
+        // повторное добавление того же экрана не дублирует размещение
+        model.addScreenToCanvas(canvas, a.getId(), 999, 999);
+        assertEquals(2, canvas.getPlacements().size());
+
+        model.movePlacement(pa, 50, 60);
+        assertEquals(50, pa.getX());
+        assertEquals(60, pa.getY());
+
+        model.updateCanvas(canvas, "Renamed", 3840, 2160);
+        assertEquals("Renamed", canvas.getName());
+        assertEquals(3840, canvas.getWidthPx());
+
+        model.deleteScreen(a);
+        assertEquals(1, canvas.getPlacements().size(), "Удаление экрана должно убрать его размещение из канваса");
+
+        model.deleteCanvas(canvas);
+        assertTrue(model.canvasesForCurrentScene().isEmpty());
     }
 
     private static boolean assertThrowsRuntime(Runnable r) {

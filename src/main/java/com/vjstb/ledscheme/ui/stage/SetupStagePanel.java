@@ -1,15 +1,12 @@
 package com.vjstb.ledscheme.ui.stage;
 
 import com.vjstb.ledscheme.model.CabinetType;
-import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.Project;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.SceneStats;
-import com.vjstb.ledscheme.ui.CabinetTypeDialog;
 import com.vjstb.ledscheme.ui.CabinetTypeRenderer;
-import com.vjstb.ledscheme.ui.ControllerTypeDialog;
 import com.vjstb.ledscheme.ui.ListSizing;
 import com.vjstb.ledscheme.ui.NamedRenderer;
 import com.vjstb.ledscheme.ui.Palette;
@@ -18,8 +15,6 @@ import com.vjstb.ledscheme.ui.UiKit;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
-import java.awt.GridLayout;
-import java.io.File;
 import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
@@ -27,7 +22,6 @@ import javax.swing.DefaultComboBoxModel;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
-import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JOptionPane;
@@ -38,7 +32,7 @@ import javax.swing.JSplitPane;
 import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
 import javax.swing.SpinnerNumberModel;
-import javax.swing.filechooser.FileNameExtensionFilter;
+import javax.swing.SwingUtilities;
 
 /**
  * Этап «Сетап»: состав проекта (проекты → сцены → экраны), библиотека кабинетов,
@@ -47,6 +41,7 @@ import javax.swing.filechooser.FileNameExtensionFilter;
 public class SetupStagePanel extends JPanel {
 
     private final AppModel model;
+    private final com.vjstb.ledscheme.settings.SettingsManager settings;
     private boolean refreshing;
 
     private final DefaultListModel<Project> projModel = new DefaultListModel<>();
@@ -70,71 +65,74 @@ public class SetupStagePanel extends JPanel {
     private final JLabel prerigCabinets = new JLabel();
     private final JLabel prerigPower = new JLabel();
     private final JLabel prerigWeight = new JLabel();
+    private final com.vjstb.ledscheme.ui.SceneCanvasPanel prerigPreview;
+    private final JButton calcRiggingBtn = new JButton("Рассчитать точки подвеса");
 
     private final JPanel paramsSection;
-    private final JTextField pName = new JTextField();
+    // Явное число колонок (а не пустой конструктор) — предпочтительная ширина поля
+    // тогда предсказуема и небольшая; иначе GridLayout(0,2) в узком окне раздувал
+    // всю секцию «Параметры экрана» шире доступного места (поля обрезались, у
+    // секции появлялся горизонтальный скролл).
+    private final JTextField pName = new JTextField(10);
     private final JComboBox<CabinetType> pType = new JComboBox<>();
     private final JSpinner pCols = new JSpinner(new SpinnerNumberModel(3, 1, 200, 1));
     private final JSpinner pRows = new JSpinner(new SpinnerNumberModel(5, 1, 200, 1));
-    private final JTextField pX = new JTextField();
-    private final JTextField pY = new JTextField();
+    private final JTextField pX = new JTextField(8);
+    private final JTextField pY = new JTextField(8);
     private final JComboBox<com.vjstb.ledscheme.model.ScreenMountType> pMountType =
             new JComboBox<>(com.vjstb.ledscheme.model.ScreenMountType.values());
     private final JSpinner pRiggingPoints = new JSpinner(new SpinnerNumberModel(0, 0, 500, 1));
-    private final JTextField pRiggingNotes = new JTextField();
-
-    private final DefaultListModel<CabinetType> libModel = new DefaultListModel<>();
-    private final JList<CabinetType> libList = new JList<>(libModel);
-    private final JScrollPane libScroll = new JScrollPane(libList);
-
-    private final DefaultListModel<ControllerType> ctrlLibModel = new DefaultListModel<>();
-    private final JList<ControllerType> ctrlLibList = new JList<>(ctrlLibModel);
-    private final JScrollPane ctrlLibScroll = new JScrollPane(ctrlLibList);
+    private final JTextField pRiggingNotes = new JTextField(10);
+    private final JComboBox<Integer> pRefreshHz = new JComboBox<>(new Integer[]{50, 60, 120, 144, 240});
+    private final JComboBox<Integer> pBitDepth = new JComboBox<>(new Integer[]{8, 10, 12});
 
     private final JPanel shapeSection;
     private final ShapeEditorPanel shapeEditor;
     private final JScrollPane shapeScroll;
-    private final javax.swing.JToggleButton shapeModeBtn = new javax.swing.JToggleButton("Форма", true);
-    private final javax.swing.JToggleButton typeModeBtn = new javax.swing.JToggleButton("Тип");
-    private final JComboBox<CabinetType> paintTypeCombo = new JComboBox<>();
     private final JLabel shapeHint = new JLabel();
 
-    public SetupStagePanel(AppModel model) {
+    // Поля (не локальные переменные), чтобы rebuild() мог явно дёрнуть revalidate/repaint
+    // именно на тех разделителях, чьи дети меняют видимость — иначе секции иногда не
+    // перерисовываются сразу после выбора проекта/сцены, а только после следующего
+    // взаимодействия с интерфейсом (см. UiKit.setInitialDividerOnShow — похожая природа).
+    private final JSplitPane leftSplit3;
+    private final JSplitPane leftSplit2;
+    private final JSplitPane leftSplitNav;
+
+    public SetupStagePanel(AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings) {
         this.model = model;
+        this.settings = settings;
         setLayout(new BorderLayout());
 
         // Левая колонка — навигация (Проекты/Сцены/Экраны) + параметры выбранного
         // экрана внизу; между блоками — перетаскиваемые разделители (высота каждого
-        // блока регулируется пользователем, а не только по количеству элементов).
+        // блока регулируется пользователем, а не только по количеству элементов,
+        // и запоминается в профиле настроек — переживает перезапуск).
         scenesSection = buildScenes();
         screensSection = buildScreens();
         paramsSection = buildScreenParams();
-        JSplitPane leftSplit3 = new JSplitPane(JSplitPane.VERTICAL_SPLIT, screensSection, paramsSection);
+        leftSplit3 = new JSplitPane(JSplitPane.VERTICAL_SPLIT, screensSection, paramsSection);
         leftSplit3.setResizeWeight(0.32);
-        JSplitPane leftSplit2 = new JSplitPane(JSplitPane.VERTICAL_SPLIT, scenesSection, leftSplit3);
+        leftSplit2 = new JSplitPane(JSplitPane.VERTICAL_SPLIT, scenesSection, leftSplit3);
         leftSplit2.setResizeWeight(0.18);
-        JSplitPane leftSplit1 = new JSplitPane(JSplitPane.VERTICAL_SPLIT, buildProjects(), leftSplit2);
-        leftSplit1.setResizeWeight(0.16);
-        // resizeWeight сам по себе определяет только распределение ПРИ ИЗМЕНЕНИИ размера —
-        // начальное положение разделителя Swing вычисляет отдельно (и не по resizeWeight),
-        // из-за чего «Параметры экрана» без этого оказывались видны только после прокрутки
-        // в самый низ. Задаём стартовую позицию явно при первом появлении на экране.
-        setInitialDividerOnShow(leftSplit3, 0.32);
-        setInitialDividerOnShow(leftSplit2, 0.18);
-        setInitialDividerOnShow(leftSplit1, 0.16);
+        leftSplitNav = new JSplitPane(JSplitPane.VERTICAL_SPLIT, buildProjects(), leftSplit2);
+        leftSplitNav.setResizeWeight(0.16);
+        UiKit.persistentDivider(settings, "setup.screensParams", leftSplit3, 0.32);
+        UiKit.persistentDivider(settings, "setup.scenes", leftSplit2, 0.18);
+        UiKit.persistentDivider(settings, "setup.projects", leftSplitNav, 0.16);
         JPanel left = new JPanel(new BorderLayout());
-        left.add(leftSplit1, BorderLayout.CENTER);
+        left.add(leftSplitNav, BorderLayout.CENTER);
 
-        // Правая колонка — сводка (прериг) сверху, форма/типы ячеек, библиотека.
+        // Правая колонка — только сводка (прериг) и предпросмотр/редактор формы экрана.
         JPanel right = UiKit.vbox();
+        prerigPreview = new com.vjstb.ledscheme.ui.SceneCanvasPanel(model);
+        prerigPreview.setShowRiggingPoints(true);
         prerigSection = buildPrerig();
         right.add(prerigSection);
         shapeEditor = new ShapeEditorPanel(model);
         shapeScroll = new JScrollPane(shapeEditor);
         shapeSection = buildShapeEditor();
         right.add(shapeSection);
-        right.add(buildLibrary());
-        right.add(buildControllerLibrary());
         right.add(javax.swing.Box.createVerticalGlue());
 
         JScrollPane leftScroll = new JScrollPane(left);
@@ -145,26 +143,19 @@ public class SetupStagePanel extends JPanel {
         rightScroll.getVerticalScrollBar().setUnitIncrement(16);
 
         JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftScroll, rightScroll);
-        split.setDividerLocation(380);
         split.setContinuousLayout(true);
+        UiKit.persistentDivider(settings, "setup.outer", split, 0.28);
         add(split, BorderLayout.CENTER);
+
+        // Минимум — заголовок секции + одна позиция списка, чтобы после выбора
+        // проекта/сцены содержимое было видно сразу, без ручной растяжки разделителей.
+        // Расти дальше секции могут и сами (если позиций больше) и от руки (перетаскиванием).
+        for (JScrollPane sp : new JScrollPane[]{projScroll, sceneScroll, screenScroll}) {
+            sp.setMinimumSize(new Dimension(120, 56));
+        }
 
         model.addListener(this::rebuild);
         rebuild();
-    }
-
-    /** Ставит начальное положение разделителя один раз, когда компонент реально
-     *  впервые отображается (до этого момента у него ещё нет корректного размера). */
-    private static void setInitialDividerOnShow(JSplitPane sp, double proportion) {
-        sp.addHierarchyListener(new java.awt.event.HierarchyListener() {
-            @Override
-            public void hierarchyChanged(java.awt.event.HierarchyEvent e) {
-                if ((e.getChangeFlags() & java.awt.event.HierarchyEvent.SHOWING_CHANGED) != 0 && sp.isShowing()) {
-                    sp.setDividerLocation(proportion);
-                    sp.removeHierarchyListener(this);
-                }
-            }
-        });
     }
 
     // ---- проекты ----
@@ -266,7 +257,7 @@ public class SetupStagePanel extends JPanel {
         body.add(UiKit.vgap());
         body.add(arrange);
 
-        JLabel hint = UiKit.muted("Параметры нового экрана — справа, в «Параметры экрана».");
+        JLabel hint = UiKit.muted("<html>Параметры нового экрана — справа, в «Параметры экрана».</html>");
         body.add(UiKit.vgap());
         body.add(hint);
         return (JPanel) UiKit.dynamicSection("Экраны на сцене", body);
@@ -278,10 +269,17 @@ public class SetupStagePanel extends JPanel {
                     JOptionPane.WARNING_MESSAGE);
             return;
         }
-        CabinetType type = model.getCabinetTypes().get(0);
         int n = model.getCurrentScene() != null ? model.getCurrentScene().getScreens().size() + 1 : 1;
+        double[] pos = model.suggestedNextPosition(model.getCabinetTypes().get(0).getId(), 3);
+        com.vjstb.ledscheme.ui.NewScreenDialog dialog = new com.vjstb.ledscheme.ui.NewScreenDialog(
+                javax.swing.SwingUtilities.getWindowAncestor(this), model.getCabinetTypes(), "Экран " + n,
+                pos[0], pos[1]);
+        com.vjstb.ledscheme.ui.NewScreenDialog.Result r = dialog.showDialog();
+        if (r == null) {
+            return;
+        }
         try {
-            Screen s = model.addScreenAutoPosition("Экран " + n, type.getId(), 5, 3);
+            Screen s = model.addScreen(r.name(), r.cabinetTypeId(), r.rows(), r.cols(), r.posX(), r.posY());
             model.selectScreen(s);
         } catch (RuntimeException ex) {
             JOptionPane.showMessageDialog(this, ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
@@ -297,8 +295,59 @@ public class SetupStagePanel extends JPanel {
         body.add(statRow("Мощность сцены", prerigPower));
         body.add(statRow("Вес сцены", prerigWeight));
         body.add(UiKit.vgap());
-        body.add(UiKit.muted("Точки подвеса и проверка нагрузки — будут добавлены отдельным расчётом."));
+        // Мини-превью раскладки сцены: показывает все экраны сцены сразу, но
+        // активным (выделенным) становится только выбранный в списке слева —
+        // остальные притушены (setCompact(true)), без подписей и метража. Точки
+        // подвеса (жёлтые треугольники по верхнему краю) рисуются здесь же — сама
+        // SceneCanvasPanel решает это по mountType/riggingPointsCount экрана.
+        prerigPreview.setCompact(true);
+        prerigPreview.setPreferredSize(new Dimension(10, 220));
+        prerigPreview.setMaximumSize(new Dimension(Integer.MAX_VALUE, 220));
+        prerigPreview.setBorder(BorderFactory.createLineBorder(Palette.BORDER));
+        body.add(prerigPreview);
+
+        body.add(UiKit.vgap(10));
+        body.add(UiKit.formRow("Точек подвеса", pRiggingPoints));
+        body.add(UiKit.vgap());
+        body.add(UiKit.formRow("Заметки по подвесу", pRiggingNotes));
+        body.add(UiKit.vgap());
+
+        calcRiggingBtn.setToolTipText("Активно только для экрана с монтажом «Подвес» — способ монтажа задаётся"
+                + " в «Параметры экрана».");
+        calcRiggingBtn.addActionListener(e -> calculateRiggingPoints());
+        body.add(calcRiggingBtn);
+        body.add(UiKit.vgap());
+        body.add(UiKit.muted("<html>Пересчитывает точки подвеса по формуле из риг-тех таблиц (по ширине экрана),"
+                + " рисует их на схеме выше и сохраняет схему отдельной картинкой.</html>"));
         return (JPanel) UiKit.section("Прериг сцены", body);
+    }
+
+    /** Пересчитывает точки подвеса выбранного экрана, обновляет их на схеме сцены
+     *  (мини-превью прерига) и сохраняет эту схему отдельным PNG в папку вывода
+     *  проекта/сцены — «нельзя экспортировать то, что нельзя сначала увидеть». */
+    private void calculateRiggingPoints() {
+        Screen scr = model.getCurrentScreen();
+        if (scr == null) {
+            return;
+        }
+        int suggested = com.vjstb.ledscheme.service.ScreenLogic.suggestRiggingPoints(scr);
+        model.updateScreenMount(scr, scr.getMountType(), suggested, scr.getRiggingNotes());
+        pRiggingPoints.setValue(suggested);
+        prerigPreview.revalidate();
+        prerigPreview.repaint();
+
+        try {
+            java.io.File folder = com.vjstb.ledscheme.ui.OutputPaths.defaultFolder(
+                    model.getCurrentProject(), model.getCurrentScene());
+            java.io.File out = new java.io.File(folder,
+                    "rigging_" + com.vjstb.ledscheme.ui.OutputPaths.sanitize(scr.getName()) + ".png");
+            java.awt.image.BufferedImage img = prerigPreview.renderImage(900, 500);
+            javax.imageio.ImageIO.write(img, "png", out);
+            JOptionPane.showMessageDialog(this, "Точек подвеса: " + suggested
+                    + "\nСхема сохранена: " + out.getAbsolutePath(), "Готово", JOptionPane.INFORMATION_MESSAGE);
+        } catch (java.io.IOException ex) {
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "Ошибка сохранения", JOptionPane.ERROR_MESSAGE);
+        }
     }
 
     // ---- параметры экрана ----
@@ -306,68 +355,68 @@ public class SetupStagePanel extends JPanel {
     private JPanel buildScreenParams() {
         JPanel body = UiKit.vbox();
         pType.setRenderer(new CabinetTypeRenderer());
-        JPanel form = new JPanel(new GridLayout(0, 2, 4, 4));
-        form.add(new JLabel("Название"));
-        form.add(pName);
-        form.add(new JLabel("Кабинет"));
-        form.add(pType);
-        form.add(new JLabel("Колонны"));
-        form.add(pCols);
-        form.add(new JLabel("Строки"));
-        form.add(pRows);
-        body.add(form);
+        // formRow — подпись сверху, поле снизу, на всю доступную ширину секции —
+        // вместо GridLayout(0,2), который заставлял обе колонки быть шириной самого
+        // широкого элемента сетки (в т.ч. длинных подписей) и просто обрезал их,
+        // не умея сжиматься в узком окне.
+        body.add(UiKit.formRow("Название", pName));
+        body.add(UiKit.vgap());
+        body.add(UiKit.formRow("Кабинет", pType));
+        body.add(UiKit.vgap());
+        body.add(UiKit.formRow("Колонны", pCols));
+        body.add(UiKit.vgap());
+        body.add(UiKit.formRow("Строки", pRows));
 
-        JButton applyGrid = new JButton("Применить сетку");
-        applyGrid.addActionListener(e -> {
+        body.add(UiKit.vgap(10));
+        body.add(UiKit.formRow("X (мм)", pX));
+        body.add(UiKit.vgap());
+        body.add(UiKit.formRow("Y (мм)", pY));
+
+        body.add(UiKit.vgap(10));
+        body.add(UiKit.formRow("Способ монтажа", pMountType));
+        // Точки подвеса/заметки и авторасчёт переехали в прериг сцены (там же, где
+        // сводка по весу и мини-превью раскладки) — тип монтажа остаётся здесь.
+        pMountType.addActionListener(e -> {
+            if (refreshing) return;
+            Screen scr = model.getCurrentScreen();
+            if (scr == null) return;
+            if (pMountType.getSelectedItem() == com.vjstb.ledscheme.model.ScreenMountType.RIGGED
+                    && (Integer) pRiggingPoints.getValue() == 0) {
+                pRiggingPoints.setValue(com.vjstb.ledscheme.service.ScreenLogic.suggestRiggingPoints(scr));
+            }
+            calcRiggingBtn.setEnabled(pMountType.getSelectedItem() == com.vjstb.ledscheme.model.ScreenMountType.RIGGED);
+        });
+
+        body.add(UiKit.vgap(10));
+        body.add(UiKit.formRow("Герцовка контента", pRefreshHz));
+        body.add(UiKit.vgap());
+        body.add(UiKit.formRow("Глубина цвета, бит", pBitDepth));
+        body.add(UiKit.vgap());
+        body.add(UiKit.muted("<html>Влияют на реальную ёмкость порта контроллера в пикселях"
+                + " (см. этап «Сигнал»).</html>"));
+
+        // Единая кнопка «Применить» вместо 4 разных — несколько похожих кнопок
+        // подряд только путали (какая из них что именно сохраняет).
+        JButton apply = new JButton("Применить настройки экрана");
+        apply.addActionListener(e -> {
             Screen scr = model.getCurrentScreen();
             CabinetType type = (CabinetType) pType.getSelectedItem();
             if (scr == null || type == null) return;
             try {
                 model.updateScreenGrid(scr, orDefault(pName.getText(), scr.getName()), type.getId(),
                         (Integer) pRows.getValue(), (Integer) pCols.getValue());
+                model.updateScreenPosition(scr, parseDouble(pX.getText()), parseDouble(pY.getText()));
+                com.vjstb.ledscheme.model.ScreenMountType mt =
+                        (com.vjstb.ledscheme.model.ScreenMountType) pMountType.getSelectedItem();
+                model.updateScreenMount(scr, mt, (Integer) pRiggingPoints.getValue(), pRiggingNotes.getText());
+                model.updateScreenSignalSpec(scr, (Integer) pRefreshHz.getSelectedItem(),
+                        (Integer) pBitDepth.getSelectedItem());
             } catch (RuntimeException ex) {
                 JOptionPane.showMessageDialog(this, ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
             }
         });
         body.add(UiKit.vgap());
-        body.add(applyGrid);
-
-        JPanel posForm = new JPanel(new GridLayout(0, 2, 4, 4));
-        posForm.add(new JLabel("X (мм)"));
-        posForm.add(pX);
-        posForm.add(new JLabel("Y (мм)"));
-        posForm.add(pY);
-        body.add(UiKit.vgap());
-        body.add(posForm);
-        JButton applyPos = new JButton("Применить позицию");
-        applyPos.addActionListener(e -> {
-            Screen scr = model.getCurrentScreen();
-            if (scr != null) model.updateScreenPosition(scr, parseDouble(pX.getText()), parseDouble(pY.getText()));
-        });
-        body.add(UiKit.vgap());
-        body.add(applyPos);
-
-        JPanel mountForm = new JPanel(new GridLayout(0, 2, 4, 4));
-        mountForm.add(new JLabel("Способ монтажа"));
-        mountForm.add(pMountType);
-        mountForm.add(new JLabel("Точек подвеса"));
-        mountForm.add(pRiggingPoints);
-        mountForm.add(new JLabel("Заметки по подвесу"));
-        mountForm.add(pRiggingNotes);
-        body.add(UiKit.vgap());
-        body.add(mountForm);
-        body.add(UiKit.muted("Расчёт точек подвеса по формуле — будет добавлен позже; пока значение вводится вручную."));
-
-        JButton applyMount = new JButton("Применить монтаж");
-        applyMount.addActionListener(e -> {
-            Screen scr = model.getCurrentScreen();
-            if (scr == null) return;
-            com.vjstb.ledscheme.model.ScreenMountType mt =
-                    (com.vjstb.ledscheme.model.ScreenMountType) pMountType.getSelectedItem();
-            model.updateScreenMount(scr, mt, (Integer) pRiggingPoints.getValue(), pRiggingNotes.getText());
-        });
-        body.add(UiKit.vgap());
-        body.add(applyMount);
+        body.add(apply);
 
         JButton del = new JButton("Удалить экран");
         del.addActionListener(e -> {
@@ -384,47 +433,10 @@ public class SetupStagePanel extends JPanel {
     private JPanel buildShapeEditor() {
         JPanel body = UiKit.vbox();
 
-        JPanel modeRow = new JPanel(new GridLayout(1, 2, 4, 0));
-        javax.swing.ButtonGroup g = new javax.swing.ButtonGroup();
-        g.add(shapeModeBtn);
-        g.add(typeModeBtn);
-        shapeModeBtn.addActionListener(e -> {
-            shapeEditor.setMode(ShapeEditorPanel.Mode.SHAPE);
-            paintTypeCombo.setEnabled(false);
-            shapeHint.setText("<html>Клик по ячейке — исключить/включить (так задаётся не прямоугольная форма:"
-                    + " треугольная, ступенчатая и т.д.)</html>");
-        });
-        typeModeBtn.addActionListener(e -> {
-            shapeEditor.setMode(ShapeEditorPanel.Mode.TYPE);
-            paintTypeCombo.setEnabled(true);
-            shapeHint.setText("<html>Выберите тип ниже, затем клик/протяжка ЛКМ по ячейкам — покрасить их этим"
-                    + " типом (например, вставка другого модуля). Пункт «тип экрана» — вернуть по умолчанию.</html>");
-        });
-        modeRow.add(shapeModeBtn);
-        modeRow.add(typeModeBtn);
-        body.add(modeRow);
-
-        body.add(UiKit.vgap());
-        paintTypeCombo.setRenderer(new javax.swing.DefaultListCellRenderer() {
-            @Override
-            public java.awt.Component getListCellRendererComponent(javax.swing.JList<?> list, Object value,
-                    int index, boolean isSelected, boolean cellHasFocus) {
-                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
-                setText(value instanceof CabinetType ct ? ct.getName() : "— тип экрана по умолчанию —");
-                return this;
-            }
-        });
-        paintTypeCombo.setEnabled(false);
-        paintTypeCombo.addActionListener(e -> {
-            if (refreshing) return;
-            CabinetType sel = (CabinetType) paintTypeCombo.getSelectedItem();
-            shapeEditor.setPaintType(sel == null ? null : sel.getId());
-        });
-        body.add(paintTypeCombo);
-
-        body.add(UiKit.vgap());
         shapeHint.setForeground(Palette.MUTED);
-        shapeModeBtn.doClick(); // выставит текст подсказки для стартового режима «Форма»
+        shapeHint.setText(UiKit.wrapHtml("<html>Клик (или протяжка ЛКМ) по ячейке — исключить/включить (так задаётся не"
+                + " прямоугольная форма экрана). ПКМ (зажать и повести к пункту) — скрыть/восстановить,"
+                + " изменить форму или тип конкретной ячейки. Ctrl+колесо — масштаб.</html>"));
         body.add(shapeHint);
 
         body.add(UiKit.vgap());
@@ -433,141 +445,53 @@ public class SetupStagePanel extends JPanel {
         shapeScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, 220));
         body.add(shapeScroll);
 
-        return (JPanel) UiKit.section("Форма экрана и типы по ячейкам", body);
-    }
-
-    // ---- библиотека кабинетов ----
-
-    private JPanel buildLibrary() {
-        JPanel body = UiKit.vbox();
-        libList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        libList.setCellRenderer(new NamedRenderer<CabinetType>(CabinetType::getName, ct ->
-                UiKit.fmt(ct.getWidthMm()) + "×" + UiKit.fmt(ct.getHeightMm()) + "мм · "
-                        + ct.getResolutionWidth() + "×" + ct.getResolutionHeight() + "px · "
-                        + UiKit.fmt(ct.getPowerConsumptionW()) + "Вт · " + UiKit.fmt(ct.getWeightKg()) + "кг"));
-        body.add(libScroll);
-
-        JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
-        JButton add = new JButton("Добавить");
-        add.addActionListener(e -> {
-            CabinetType ct = new CabinetTypeDialog(topWindow(), null).showDialog();
-            if (ct != null) tryRun(() -> model.addCabinetType(ct));
-        });
-        JButton edit = new JButton("Изменить");
-        edit.addActionListener(e -> {
-            CabinetType sel = libList.getSelectedValue();
-            if (sel == null) return;
-            CabinetType ct = new CabinetTypeDialog(topWindow(), sel).showDialog();
-            if (ct != null) tryRun(() -> model.updateCabinetType(ct));
-        });
-        JButton del = new JButton("Удалить");
-        del.addActionListener(e -> {
-            CabinetType sel = libList.getSelectedValue();
-            if (sel != null && confirm("Удалить кабинет из библиотеки?")) tryRun(() -> model.deleteCabinetType(sel.getId()));
-        });
-        crud.add(add);
-        crud.add(edit);
-        crud.add(del);
-        body.add(crud);
-
-        JPanel io = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-        JButton exp = new JButton("Экспорт JSON");
-        exp.addActionListener(e -> exportLibrary());
-        JButton imp = new JButton("Импорт JSON");
-        imp.addActionListener(e -> importLibrary());
-        io.add(exp);
-        io.add(imp);
-        body.add(io);
-        return (JPanel) UiKit.section("Библиотека кабинетов", body);
-    }
-
-    // ---- библиотека контроллеров (аналог SmartLCT) ----
-
-    private JPanel buildControllerLibrary() {
-        JPanel body = UiKit.vbox();
-        ctrlLibList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        ctrlLibList.setCellRenderer(new NamedRenderer<ControllerType>(
-                ct -> ct.getName() + (ct.getVendor().isEmpty() ? "" : " (" + ct.getVendor() + ")"),
-                ct -> ct.getPortCount() + " портов · до " + ct.getMaxPixelsPerPort() + " px/порт"));
-        ctrlLibScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, 140));
-        body.add(ctrlLibScroll);
-
-        JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
-        JButton add = new JButton("Добавить");
-        add.addActionListener(e -> {
-            ControllerType ct = new ControllerTypeDialog(topWindow(), null).showDialog();
-            if (ct != null) tryRun(() -> model.addControllerType(ct));
-        });
-        JButton edit = new JButton("Изменить");
-        edit.addActionListener(e -> {
-            ControllerType sel = ctrlLibList.getSelectedValue();
-            if (sel == null) return;
-            ControllerType ct = new ControllerTypeDialog(topWindow(), sel).showDialog();
-            if (ct != null) tryRun(() -> model.updateControllerType(ct));
-        });
-        JButton del = new JButton("Удалить");
-        del.addActionListener(e -> {
-            ControllerType sel = ctrlLibList.getSelectedValue();
-            if (sel != null && confirm("Удалить контроллер из библиотеки?")) {
-                tryRun(() -> model.deleteControllerType(sel.getId()));
-            }
-        });
-        crud.add(add);
-        crud.add(edit);
-        crud.add(del);
-        body.add(crud);
-        return (JPanel) UiKit.section("Библиотека контроллеров", body);
-    }
-
-    private void exportLibrary() {
-        JFileChooser fc = new JFileChooser();
-        fc.setSelectedFile(new File("led-cabinet-library.json"));
-        fc.setFileFilter(new FileNameExtensionFilter("JSON", "json"));
-        if (fc.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
-            tryRun(() -> model.exportLibrary(fc.getSelectedFile()));
-        }
-    }
-
-    private void importLibrary() {
-        JFileChooser fc = new JFileChooser();
-        fc.setFileFilter(new FileNameExtensionFilter("JSON", "json"));
-        if (fc.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-            try {
-                int n = model.importLibrary(fc.getSelectedFile());
-                JOptionPane.showMessageDialog(this, "Импортировано кабинетов: " + n, "Импорт",
-                        JOptionPane.INFORMATION_MESSAGE);
-            } catch (RuntimeException ex) {
-                JOptionPane.showMessageDialog(this, ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
-            }
-        }
+        return (JPanel) UiKit.section("Форма экрана", body);
     }
 
     // ---- rebuild ----
 
+    /** Публичный вход — выполняет пересборку отложенно (invokeLater), как и
+     *  MainFrame.refresh(): вызывается синхронно из колбэков выбора в JList
+     *  (ProjectList/SceneList и т.д.), и без отсрочки видимость вложенных секций
+     *  внутри JSplitPane иногда не перерисовывалась сразу — только при следующем
+     *  взаимодействии с интерфейсом (свайп/ресайз/клик где-то ещё). */
     public void rebuild() {
+        SwingUtilities.invokeLater(this::doRebuild);
+    }
+
+    private void doRebuild() {
         refreshing = true;
         try {
             syncList(projModel, model.getProjects());
             projList.setSelectedValue(model.getCurrentProject(), true);
+            // ListSizing.fit() даёт списку ЯВНЫЙ preferred/maximum размер по числу строк —
+            // без этого JList с многострочным HTML-рендерером (NamedRenderer) иногда
+            // на раннем layout-проходе (пока ширина ещё не установлена окончательно)
+            // сообщает совершенно неверный preferred height; в JSplitPane это провоцирует
+            // собственный внутренний пересчёт позиции разделителя (BasicSplitPaneUI),
+            // раздувающий секцию со списком почти на всю высоту соседнего сплита.
+            ListSizing.fit(projList, projScroll, 2, 6);
 
             boolean hasProject = model.getCurrentProject() != null;
-            scenesSection.setVisible(hasProject);
+            UiKit.setSectionVisible(scenesSection, hasProject, leftSplit2, settings, "setup.scenes", 0.18);
             if (hasProject) {
                 syncList(sceneModel, model.getCurrentProject().getScenes());
                 sceneList.setSelectedValue(model.getCurrentScene(), true);
+                ListSizing.fit(sceneList, sceneScroll, 2, 6);
             }
 
             boolean hasScene = model.getCurrentScene() != null;
-            screensSection.setVisible(hasScene);
+            UiKit.setSectionVisible(screensSection, hasScene, leftSplit3, settings, "setup.screensParams", 0.32);
             prerigSection.setVisible(hasScene);
             if (hasScene) {
                 syncList(screenModel, model.getCurrentScene().getScreens());
                 screenList.setSelectedValue(model.getCurrentScreen(), true);
+                ListSizing.fit(screenList, screenScroll, 2, 8);
                 rebuildPrerig();
             }
 
             Screen scr = model.getCurrentScreen();
-            paramsSection.setVisible(scr != null);
+            UiKit.setSectionVisible(paramsSection, scr != null, leftSplit3, settings, "setup.screensParams", 0.32);
             shapeSection.setVisible(scr != null);
             if (scr != null) {
                 pName.setText(scr.getName());
@@ -579,28 +503,24 @@ public class SetupStagePanel extends JPanel {
                 pMountType.setSelectedItem(scr.getMountType());
                 pRiggingPoints.setValue(scr.getRiggingPointsCount());
                 pRiggingNotes.setText(scr.getRiggingNotes() != null ? scr.getRiggingNotes() : "");
-
-                CabinetType prevPaint = (CabinetType) paintTypeCombo.getSelectedItem();
-                DefaultComboBoxModel<CabinetType> paintModel = new DefaultComboBoxModel<>();
-                paintModel.addElement(null); // «тип экрана по умолчанию»
-                for (CabinetType ct : model.getCabinetTypes()) {
-                    paintModel.addElement(ct);
-                }
-                paintTypeCombo.setModel(paintModel);
-                if (prevPaint != null && model.getCabinetTypes().contains(prevPaint)) {
-                    paintTypeCombo.setSelectedItem(prevPaint);
-                }
+                pRefreshHz.setSelectedItem(scr.getRefreshRateHz());
+                pBitDepth.setSelectedItem(scr.getColorBitDepth());
             }
+            calcRiggingBtn.setEnabled(scr != null
+                    && scr.getMountType() == com.vjstb.ledscheme.model.ScreenMountType.RIGGED);
 
-            syncList(libModel, model.getCabinetTypes());
-            ListSizing.fit(libList, libScroll, 2, 8);
-            syncList(ctrlLibModel, model.getWorkspace().getControllerTypes());
-            ListSizing.fit(ctrlLibList, ctrlLibScroll, 2, 6);
         } finally {
             refreshing = false;
         }
         shapeEditor.revalidate();
         shapeEditor.repaint();
+        // Явно на каждом разделителе, чьи дети (Сцены/Экраны/Параметры) только что
+        // поменяли видимость — иначе место под них не пересчитывается немедленно
+        // (revalidate() на верхнем this не всегда достаточен).
+        for (JSplitPane sp : new JSplitPane[]{leftSplit3, leftSplit2, leftSplitNav}) {
+            sp.revalidate();
+            sp.repaint();
+        }
         revalidate();
         repaint();
     }
@@ -609,9 +529,31 @@ public class SetupStagePanel extends JPanel {
         SceneStats s = model.currentSceneStats();
         if (s == null) return;
         prerigScreens.setText(String.valueOf(s.screenCount()));
-        prerigCabinets.setText(String.valueOf(s.totalCabinetCount()));
+        prerigCabinets.setText(s.totalCabinetCount() + cabinetBreakdownSuffix(s));
         prerigPower.setText(UiKit.fmt(s.totalPowerW()) + " Вт");
         prerigWeight.setText(UiKit.fmt(s.totalWeightKg()) + " кг");
+    }
+
+    /** «(Base: 96, Heavy: 32)» — по одному типу на позицию, нулевые (их и не должно
+     *  быть в карте) не выводятся; для одного типа или пустой сцены — ничего. */
+    private static String cabinetBreakdownSuffix(SceneStats s) {
+        if (s.cabinetCountByType().size() < 2) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(" (");
+        boolean first = true;
+        for (var entry : s.cabinetCountByType().entrySet()) {
+            if (entry.getValue() <= 0) {
+                continue;
+            }
+            if (!first) {
+                sb.append(", ");
+            }
+            sb.append(entry.getKey().getName()).append(": ").append(entry.getValue());
+            first = false;
+        }
+        sb.append(')');
+        return sb.length() > 3 ? sb.toString() : "";
     }
 
     // ---- helpers ----

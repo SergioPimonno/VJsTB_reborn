@@ -11,6 +11,12 @@ public class ControllerInstance {
     private String id = UUID.randomUUID().toString();
     private String controllerTypeId;
     private String label = "";
+    /** id ДРУГОГО контроллера этого же экрана, который целиком подхватывает сигнал,
+     *  если этот (основной) откажет — резерв на уровне контроллера, а не отдельного
+     *  порта: второй контроллер полностью дублирует все порты первого. null — резерв
+     *  не назначен. Задаётся на ОСНОВНОМ контроллере (см. {@link #getBackupControllerId()}),
+     *  как и {@code SignalChain.backupPortNumber} для отдельного порта. */
+    private String backupControllerId;
 
     public ControllerInstance() {
     }
@@ -44,11 +50,20 @@ public class ControllerInstance {
         this.label = label;
     }
 
+    public String getBackupControllerId() {
+        return backupControllerId;
+    }
+
+    public void setBackupControllerId(String backupControllerId) {
+        this.backupControllerId = backupControllerId;
+    }
+
     public ControllerInstance copy() {
         ControllerInstance c = new ControllerInstance();
         c.id = id;
         c.controllerTypeId = controllerTypeId;
         c.label = label;
+        c.backupControllerId = backupControllerId;
         return c;
     }
 }

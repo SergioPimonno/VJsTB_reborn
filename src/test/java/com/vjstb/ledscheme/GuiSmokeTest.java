@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.settings.SettingsManager;
+import com.vjstb.ledscheme.settings.SettingsStore;
 import com.vjstb.ledscheme.store.WorkspaceStore;
 import com.vjstb.ledscheme.ui.MainFrame;
 import java.awt.GraphicsEnvironment;
@@ -34,7 +36,8 @@ class GuiSmokeTest {
             model.selectScreen(model.addScreen("E", ct.getId(), 2, 2, 0, 0));
             model.addPowerChain(1, java.util.List.of(model.getCurrentScreen().getCabinets().get(0).getId()));
 
-            MainFrame frame = new MainFrame(model);
+            SettingsManager settings = new SettingsManager(new SettingsStore(new File(dir.toFile(), "settings.json")));
+            MainFrame frame = new MainFrame(model, settings);
             frame.pack();
             frame.dispose();
         });

@@ -3,6 +3,7 @@ package com.vjstb.ledscheme.ui;
 import com.formdev.flatlaf.FlatDarkLaf;
 import com.formdev.flatlaf.FlatLightLaf;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.settings.SettingsManager;
 import java.awt.Desktop;
 import java.io.File;
 import javax.swing.ButtonGroup;
@@ -20,10 +21,12 @@ import javax.swing.filechooser.FileNameExtensionFilter;
 /** Верхнее меню: настройки, инструменты, персонализация, справка. */
 public class MainMenuBar extends JMenuBar {
 
-    public MainMenuBar(JFrame owner, AppModel model, Runnable onShowShortcuts) {
+    private PersonalizationDialog personalizationDialog;
+
+    public MainMenuBar(JFrame owner, AppModel model, SettingsManager settings, Runnable onShowShortcuts) {
         add(buildSettingsMenu(model));
         add(buildToolsMenu(owner, model));
-        add(buildPersonalizationMenu(owner));
+        add(buildPersonalizationMenu(owner, settings));
         add(buildHelpMenu(onShowShortcuts));
     }
 
@@ -81,7 +84,7 @@ public class MainMenuBar extends JMenuBar {
         return menu;
     }
 
-    private JMenu buildPersonalizationMenu(JFrame owner) {
+    private JMenu buildPersonalizationMenu(JFrame owner, SettingsManager settings) {
         JMenu menu = new JMenu("Персонализация");
         ButtonGroup group = new ButtonGroup();
 
@@ -93,6 +96,17 @@ public class MainMenuBar extends JMenuBar {
         group.add(light);
         menu.add(dark);
         menu.add(light);
+
+        menu.addSeparator();
+        JMenuItem colors = new JMenuItem("Цвета и профили…");
+        colors.addActionListener(e -> {
+            if (personalizationDialog == null) {
+                personalizationDialog = new PersonalizationDialog(owner, settings);
+            }
+            personalizationDialog.setVisible(true);
+            personalizationDialog.toFront();
+        });
+        menu.add(colors);
         return menu;
     }
 

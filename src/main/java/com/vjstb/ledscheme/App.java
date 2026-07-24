@@ -2,8 +2,11 @@ package com.vjstb.ledscheme;
 
 import com.formdev.flatlaf.FlatDarkLaf;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.settings.SettingsManager;
+import com.vjstb.ledscheme.settings.SettingsStore;
 import com.vjstb.ledscheme.store.WorkspaceStore;
 import com.vjstb.ledscheme.ui.MainFrame;
+import com.vjstb.ledscheme.ui.Palette;
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
@@ -21,7 +24,9 @@ public class App {
             try {
                 WorkspaceStore store = new WorkspaceStore();
                 AppModel model = new AppModel(store);
-                new MainFrame(model).setVisible(true);
+                SettingsManager settings = new SettingsManager(new SettingsStore());
+                Palette.applyProfile(settings.activeProfile());
+                new MainFrame(model, settings).setVisible(true);
             } catch (RuntimeException ex) {
                 JOptionPane.showMessageDialog(null,
                         "Не удалось запустить приложение: " + ex.getMessage(),
