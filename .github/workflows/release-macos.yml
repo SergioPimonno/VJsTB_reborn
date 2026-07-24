@@ -1,0 +1,75 @@
+name: Release macOS build
+
+# Собирает нативный .dmg для macOS (с встроенным Java-рантаймом — пользователю
+# не нужно ставить Java отдельно) и прикладывает его к существующему GitHub
+# Release с указанным тегом. jpackage умеет собирать только под ту ОС, на
+# которой запущен, поэтому mac-сборка обязательно идёт на macos-latest раннере,
+# а не локально (разработка ведётся на Windows).
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Тег релиза, к которому прикладывать .dmg (например v1.3)'
+        required: true
+        default: 'v1.3'
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos-dmg:
+    runs-on: macos-latest
+    steps:
+      - name: Определить тег
+        id: ver
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ver.outputs.tag }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Собрать jar
+        run: mvn -q -DskipTests package
+
+      - name: Подготовить вход для jpackage
+        run: |
+          mkdir -p dist-input
+          cp target/led-scheme.jar dist-input/led-scheme.jar
+
+      - name: Собрать .dmg (jpackage, со встроенным рантаймом)
+        run: |
+          jpackage \
+            --type dmg \
+            --input dist-input \
+            --dest dist \
+            --name "LED Scheme Designer" \
+            --main-jar led-scheme.jar \
+            --main-class com.vjstb.ledscheme.App \
+            --app-version "${{ steps.ver.outputs.version }}" \
+            --vendor "VJsTB" \
+            --mac-package-name "LED Scheme Designer"
+
+      - name: Загрузить .dmg в релиз
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DMG=$(find dist -name '*.dmg' | head -n1)
+          mv "$DMG" "dist/LED-Scheme-Designer-${{ steps.ver.outputs.tag }}-mac.dmg"
+          gh release upload "${{ steps.ver.outputs.tag }}" \
+            "dist/LED-Scheme-Designer-${{ steps.ver.outputs.tag }}-mac.dmg" \
+            --repo "${{ github.repository }}" \
+            --clobber
