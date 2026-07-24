@@ -56,7 +56,7 @@ public class MainFrame extends JFrame {
         powerStage = new PowerStagePanel(model, settings);
         signalStage = new SignalStagePanel(model, settings);
         visualizationStage = new VisualizationStagePanel(model, settings);
-        outputStage = new OutputStagePanel(model);
+        outputStage = new OutputStagePanel(model, settings);
         librariesStage = new LibrariesStagePanel(model);
 
         setDefaultCloseOperation(EXIT_ON_CLOSE);

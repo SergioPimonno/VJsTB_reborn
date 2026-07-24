@@ -4,6 +4,7 @@ import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.CardPort;
 import com.vjstb.ledscheme.model.PortDirection;
+import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.PowerConnectorType;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.SchemaCard;
@@ -12,6 +13,7 @@ import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.SchemaNode;
 import com.vjstb.ledscheme.model.SchemaNodeType;
 import com.vjstb.ledscheme.model.Screen;
+import com.vjstb.ledscheme.model.SignalChain;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.ScreenLogic;
 import java.awt.BasicStroke;
@@ -26,6 +28,7 @@ import java.awt.Point;
 import java.awt.RenderingHints;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -816,8 +819,31 @@ public class SchemaCanvasPanel extends JPanel {
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
         Graphics2D g2 = (Graphics2D) g.create();
+        paint(g2, getWidth(), getHeight(), false);
+    }
+
+    /** Рендерит схему в изображение заданного размера — не зависит от реального
+     *  размера/видимости компонента (используется при экспорте пакета документации,
+     *  см. OutputStagePanel, где панель никогда не добавляется в контейнер).
+     *  renderScreenWiring — false: обычный блок экрана (имя + краткая статистика),
+     *  как в редакторе; true — "тестовая" версия, где в ТОМ ЖЕ прямоугольнике узла
+     *  вместо текста рисуется уменьшенная схема расключения этого экрана (см.
+     *  drawScreenWiringThumbnail) — геометрия схемы (позиции/размеры узлов, линии
+     *  связей) в обоих вариантах одна и та же, отличается только содержимое внутри
+     *  блоков экранов. */
+    public BufferedImage renderImage(int width, int height, boolean renderScreenWiring) {
+        BufferedImage img = new BufferedImage(Math.max(1, width), Math.max(1, height), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g2 = img.createGraphics();
+        paint(g2, width, height, renderScreenWiring);
+        g2.dispose();
+        return img;
+    }
+
+    private void paint(Graphics2D g2, int width, int height, boolean renderScreenWiring) {
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        g2.setColor(Palette.BG);
+        g2.fillRect(0, 0, width, height);
 
         List<SchemaNode> ns = nodes();
         List<SchemaEdge> es = edges();
@@ -902,7 +928,11 @@ public class SchemaCanvasPanel extends JPanel {
             g2.setFont(metaFont);
             g2.setColor(new Color(0, 0, 0, 160));
             if (n.getType() == SchemaNodeType.SCREEN) {
-                drawClipped(g2, screenMeta(n), (int) n.getX() + 8, (int) n.getY() + 38, nw - 16);
+                if (renderScreenWiring) {
+                    drawScreenWiringThumbnail(g2, n, nw, nh);
+                } else {
+                    drawClipped(g2, screenMeta(n), (int) n.getX() + 8, (int) n.getY() + 38, nw - 16);
+                }
             } else if (!portsOf(n).isEmpty()) {
                 drawConnectorRows(g2, n, portsOf(n), (int) n.getX(), (int) n.getY(), nw, nh);
             } else {
@@ -950,6 +980,48 @@ public class SchemaCanvasPanel extends JPanel {
         }
         return "портов: " + model.effectiveSignalPortCount(scr) + " · " + model.signalChainsTouchingScreen(scr).size()
                 + " вводных" + (controllerBackups > 0 ? " · резерв контроллера: " + controllerBackups : "");
+    }
+
+    /** "Тестовая" замена обычного текста статистики узла-экрана (см. renderScreenWiring
+     *  в {@link #paint}) — рисует уменьшенную схему расключения ЭТОГО экрана (сетка
+     *  кабинетов + цепочки текущего режима) внутри того же прямоугольника узла, где
+     *  обычно был бы текст "20×10 каб. · N вводных". Масштаб подбирается так, чтобы
+     *  вся сетка кабинетов экрана поместилась в доступную область узла (под заголовком
+     *  с именем экрана) — если узел маленький, сетка мелкая (как и было бы у любой
+     *  миниатюры); чтобы получить более подробную картинку, нужно заранее увеличить
+     *  узел в редакторе (см. уголок изменения размера). Не выходит за границы узла —
+     *  область рисования обрезается по прямоугольнику узла. */
+    private void drawScreenWiringThumbnail(Graphics2D g2, SchemaNode n, int nw, int nh) {
+        Screen scr = screenById(n.getScreenRefId());
+        if (scr == null) {
+            return;
+        }
+        CabinetType t = model.typeOf(scr);
+        if (t == null || t.getWidthMm() <= 0 || t.getHeightMm() <= 0 || scr.getCols() <= 0 || scr.getRows() <= 0) {
+            return;
+        }
+        int pad = 4;
+        int top = (int) n.getY() + 34;
+        int left = (int) n.getX() + pad;
+        int availW = nw - pad * 2;
+        int availH = (int) (n.getY() + nh) - top - pad;
+        if (availW < 10 || availH < 10) {
+            return;
+        }
+        double scale = Math.min(availW / (scr.getCols() * t.getWidthMm()), availH / (scr.getRows() * t.getHeightMm()));
+        if (scale <= 0) {
+            return;
+        }
+        int cellW = Math.max(1, (int) Math.round(t.getWidthMm() * scale));
+        int cellH = Math.max(1, (int) Math.round(t.getHeightMm() * scale));
+        Scene scene = model.getCurrentScene();
+        List<PowerChain> powerChains = scene != null ? scene.getPowerChains() : List.of();
+        List<SignalChain> signalChains = scene != null ? scene.getSignalChains() : List.of();
+        Graphics2D clipped = (Graphics2D) g2.create();
+        clipped.clipRect((int) n.getX(), (int) n.getY(), nw, nh);
+        SchemeRenderer.paintScheme(clipped, scr, t, mode == SchemaMode.POWER, cellW, cellH, left, top,
+                model.getWorkspace(), powerChains, signalChains);
+        clipped.dispose();
     }
 
     private static List<PortEntry> flattenCardPorts(List<SchemaCard> cards) {

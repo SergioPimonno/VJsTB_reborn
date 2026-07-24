@@ -5,6 +5,7 @@ import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.Project;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.CabinetType;
+import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SignalChain;
 import com.vjstb.ledscheme.service.AppModel;
@@ -15,6 +16,7 @@ import com.vjstb.ledscheme.ui.ContextBar;
 import com.vjstb.ledscheme.ui.OutputPaths;
 import com.vjstb.ledscheme.ui.PixelGridRenderer;
 import com.vjstb.ledscheme.ui.SceneCanvasPanel;
+import com.vjstb.ledscheme.ui.SchemaCanvasPanel;
 import com.vjstb.ledscheme.ui.SchemeRenderer;
 import com.vjstb.ledscheme.ui.UiKit;
 import java.awt.BorderLayout;
@@ -41,11 +43,13 @@ import javax.swing.JTextField;
 public class OutputStagePanel extends JPanel {
 
     private final AppModel model;
+    private final com.vjstb.ledscheme.settings.SettingsManager settings;
     private final JTextField folderField = new JTextField();
     private File chosenFolder;
 
-    public OutputStagePanel(AppModel model) {
+    public OutputStagePanel(AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings) {
         this.model = model;
+        this.settings = settings;
         setLayout(new BorderLayout());
         add(new ContextBar(model, false), BorderLayout.NORTH);
         add(buildBody(), BorderLayout.CENTER);
@@ -89,9 +93,11 @@ public class OutputStagePanel extends JPanel {
 
         body.add(UiKit.vgap(10));
         body.add(UiKit.muted("<html>Для каждой сцены проекта в её собственной папке будут созданы подпапки"
-                + " «Сила», «Сигнал» и «Маски». В «Сила»/«Сигнал» — JPEG-схема каждого экрана сцены плюс одна"
-                + " общая схема «Все экраны сцены» (по ней видно цепочки, идущие через пару экранов — на схеме"
-                + " одного экрана это не видно). В «Маски» — тестовые маски (Pixel Grid) всех экранов и канвасов"
+                + " «Сила», «Сигнал» и «Маски». В «Сила»/«Сигнал» — JPEG-схема каждого экрана сцены, общая схема"
+                + " «Все экраны сцены» (по ней видно цепочки, идущие через пару экранов — на схеме одного экрана"
+                + " это не видно), а также нарисованная блок-схема площадки («Общая схема питания/сигнала» из"
+                + " редактора) — в обычном виде и в «тестовом», где вместо блока экрана нарисована уменьшённая"
+                + " схема его расключения. В «Маски» — тестовые маски (Pixel Grid) всех экранов и канвасов"
                 + " сцены. Плюс общий текстовый отчёт на весь проект: итоговые суммарные цифры (нагрузка, вес),"
                 + " спецификация оборудования (кабинеты по типам), спецификация коммутации (провода/линии,"
                 + " подписанные N×тип на стрелках общих схем — с метражом для питания), затем разбор"
@@ -273,6 +279,29 @@ public class OutputStagePanel extends JPanel {
                         SchemeRenderer.writeJpeg(img, target);
                         jpegCount++;
                     }
+                }
+
+                // Общая нарисованная блок-схема площадки («Общая схема питания/сигнала»
+                // из редактора) раньше вообще не попадала в пакет документации, хотя
+                // на ней размечена вся коммутация оборудования (щиты/дистрибьюторы/
+                // конвертеры/медиасерверы/контроллеры), а не только сами экраны. Две
+                // версии: обычная (как в редакторе) и "тестовая", где вместо блока
+                // экрана рисуется уменьшённая схема его расключения (см.
+                // SchemaCanvasPanel.renderImage(..., renderScreenWiring=true)) — так
+                // видно, к какому физическому оборудованию подключён каждый экран, не
+                // открывая отдельно схему расключения каждого экрана.
+                for (SchemaMode schemaMode : SchemaMode.values()) {
+                    File modeFolder = schemaMode == SchemaMode.POWER ? powerFolder : signalFolder;
+                    SchemaCanvasPanel schemaCanvas = new SchemaCanvasPanel(model, schemaMode, settings);
+                    Dimension size = schemaCanvas.getPreferredSize();
+
+                    BufferedImage standard = schemaCanvas.renderImage(size.width, size.height, false);
+                    SchemeRenderer.writeJpeg(standard, new File(modeFolder, "_Блок-схема.jpg"));
+                    jpegCount++;
+
+                    BufferedImage withScreenWiring = schemaCanvas.renderImage(size.width, size.height, true);
+                    SchemeRenderer.writeJpeg(withScreenWiring, new File(modeFolder, "_Блок-схема (тест).jpg"));
+                    jpegCount++;
                 }
 
                 for (ContentCanvas c : scene.getCanvases()) {
