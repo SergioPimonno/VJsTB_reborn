@@ -44,21 +44,26 @@ public class PortPickerPanel extends JPanel {
         setLayout(new GridLayout(0, COLUMNS, 4, 4));
     }
 
-    /** Без выбранного контроллера — старое поведение (сквозная нумерация 1..N по
-     *  вручную заданному числу портов, для экранов вовсе без контроллеров сцены). */
+    /** Без выбранного контроллера — сетка пуста (см. rebuild(Integer, ControllerInstance)). */
     public void rebuild(Integer activePort) {
         rebuild(activePort, null);
     }
 
-    /** selectedController — если задан, сетка показывает ТОЛЬКО порты ЭТОГО
-     *  контроллера, локальными номерами (1..N), а не сквозным номером по всем
-     *  контроллерам сцены — раньше "Действующее число портов" суммировало порты
-     *  всех контроллеров сцены и подписи вида "1→9" сбивали с толку, к какому
-     *  контроллеру какой порт относится на самом деле (см. Task #73). */
+    /** selectedController — сетка показывает ТОЛЬКО порты ЭТОГО контроллера,
+     *  локальными номерами (1..N), а не сквозным номером по всем контроллерам
+     *  сцены — раньше "Действующее число портов" суммировало порты всех
+     *  контроллеров сцены и подписи вида "1→9" сбивали с толку, к какому
+     *  контроллеру какой порт относится на самом деле (см. Task #73).
+     *  null (контроллеров в сцене нет вовсе) — сетка ПУСТАЯ: раньше здесь рисовалась
+     *  полностью кликабельная сетка по legacy Screen.signalPortCount (никогда не
+     *  редактируемому из текущего UI, всегда равному дефолтным 8) — клик создавал
+     *  цепочку, ссылающуюся на порт несуществующего контроллера ("осиротевшие"
+     *  данные, баг-репорт v1.5). Панель над сеткой уже сообщает "Контроллеры не
+     *  назначены" — рисовать под этим сообщением активные кнопки нечего. */
     public void rebuild(Integer activePort, ControllerInstance selectedController) {
         removeAll();
         Screen scr = model.getCurrentScreen();
-        if (scr == null) {
+        if (scr == null || selectedController == null) {
             revalidate();
             repaint();
             return;
@@ -67,24 +72,14 @@ public class PortPickerPanel extends JPanel {
         // ссылаться на цепочку, физически лежащую на любом экране этой сцены.
         List<SignalChain> chains = model.getCurrentScene() != null
                 ? model.getCurrentScene().getSignalChains() : List.of();
-        int rangeStart;
-        int rangeEnd;
-        int labelOffset;
-        if (selectedController != null) {
-            int offset = model.portOffsetOf(scr, selectedController);
-            com.vjstb.ledscheme.model.ControllerType t =
-                    model.getWorkspace().controllerTypeById(selectedController.getControllerTypeId());
-            int count = t != null ? t.effectivePortCount() : 0;
-            rangeStart = offset + 1;
-            rangeEnd = offset + count;
-            labelOffset = offset;
-        } else {
-            rangeStart = 1;
-            rangeEnd = model.effectiveSignalPortCount(scr);
-            labelOffset = 0;
-        }
+        int offset = model.portOffsetOf(scr, selectedController);
+        com.vjstb.ledscheme.model.ControllerType t =
+                model.getWorkspace().controllerTypeById(selectedController.getControllerTypeId());
+        int count = t != null ? t.effectivePortCount() : 0;
+        int rangeStart = offset + 1;
+        int rangeEnd = offset + count;
         for (int p = rangeStart; p <= rangeEnd; p++) {
-            add(portButton(scr, chains, p, activePort, labelOffset, rangeStart, rangeEnd));
+            add(portButton(scr, chains, p, activePort, offset, rangeStart, rangeEnd));
         }
         revalidate();
         repaint();

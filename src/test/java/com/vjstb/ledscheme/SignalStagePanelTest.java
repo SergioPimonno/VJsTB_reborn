@@ -67,4 +67,39 @@ class SignalStagePanelTest {
             assertEquals(2, chain.getCabinetInstanceIds().size());
         });
     }
+
+    @Test
+    void selectPortByHotkeyDoesNothingWithoutAnyControllerInScene(@TempDir Path dir) throws Exception {
+        // Баг-репорт: без единого контроллера в сцене сетка портов раньше всё равно
+        // рисовалась кликабельной (legacy Screen.signalPortCount) — хоткей/клик по
+        // порту мог "выбрать" порт несуществующего контроллера и построение цепочки
+        // по клику на кабинеты создавало осиротевшую запись. Ни хоткей, ни клики по
+        // кабинетам не должны ничего построить, пока в сцене нет ни одного контроллера.
+        assumeFalse(GraphicsEnvironment.isHeadless(), "Нет дисплея — UI-тест пропущен");
+
+        SwingUtilities.invokeAndWait(() -> {
+            AppModel model = new AppModel(new WorkspaceStore(new File(dir.toFile(), "ws.json")));
+            CabinetType ct = new CabinetType();
+            ct.setName("T 500x500");
+            model.addCabinetType(ct);
+
+            model.selectProject(model.addProject("P"));
+            model.selectScene(model.addScene("S"));
+            Screen scr = model.addScreen("E", ct.getId(), 2, 2, 0, 0);
+            model.selectScreen(scr);
+            // Намеренно НЕ добавляем ни одного контроллера в сцену.
+
+            SettingsManager settings = new SettingsManager(new SettingsStore(new File(dir.toFile(), "settings.json")));
+            SignalStagePanel panel = new SignalStagePanel(model, settings);
+
+            panel.selectPortByHotkey(1);
+            String cab1 = scr.getCabinets().get(0).getId();
+            String cab2 = scr.getCabinets().get(1).getId();
+            panel.chainController().cabinetClicked(cab1);
+            panel.chainController().cabinetClicked(cab2);
+            panel.chainController().finish();
+
+            assertEquals(0, model.getCurrentScene().getSignalChains().size());
+        });
+    }
 }

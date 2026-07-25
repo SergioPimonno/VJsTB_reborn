@@ -322,6 +322,13 @@ public class SignalStagePanel extends JPanel {
         if (scr == null) {
             return;
         }
+        if (model.controllersInScene(model.getCurrentScene()).isEmpty()) {
+            JOptionPane.showMessageDialog(this,
+                    "В сцене нет ни одного контроллера — сначала добавьте контроллер выше,"
+                            + " иначе цепочка будет ссылаться на несуществующий порт.",
+                    "Контроллер не назначен", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
         if (model.isPortReservedAsBackup(scr, port)) {
             JOptionPane.showMessageDialog(this,
                     "Порт " + port + " назначен резервным для другого порта — он подхватывает сигнал"
@@ -345,17 +352,16 @@ public class SignalStagePanel extends JPanel {
             return;
         }
         ControllerInstance selected = selectedController(scr);
-        int offset;
-        int count;
-        if (selected != null) {
-            offset = model.portOffsetOf(scr, selected);
-            com.vjstb.ledscheme.model.ControllerType t =
-                    model.getWorkspace().controllerTypeById(selected.getControllerTypeId());
-            count = t != null ? t.effectivePortCount() : 0;
-        } else {
-            offset = 0;
-            count = model.effectiveSignalPortCount(scr);
+        if (selected == null) {
+            // Контроллеров в сцене нет вовсе — раньше здесь падали на legacy
+            // Screen.signalPortCount и хоткей мог создать цепочку на несуществующий
+            // порт (тот же баг, что и в selectPort/PortPickerPanel).
+            return;
         }
+        int offset = model.portOffsetOf(scr, selected);
+        com.vjstb.ledscheme.model.ControllerType t =
+                model.getWorkspace().controllerTypeById(selected.getControllerTypeId());
+        int count = t != null ? t.effectivePortCount() : 0;
         if (localPort < 1 || localPort > count) {
             return;
         }
