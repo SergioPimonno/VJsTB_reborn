@@ -9,6 +9,7 @@ import com.vjstb.ledscheme.model.ContentCanvas;
 import com.vjstb.ledscheme.model.ControllerInstance;
 import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.EquipmentPreset;
+import com.vjstb.ledscheme.model.LibraryBundle;
 import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.Project;
@@ -228,8 +229,8 @@ public class AppModel {
     }
 
     /** Импорт: существующие по имени обновляются, новые добавляются. */
-    public int importLibrary(File file) {
-        List<CabinetType> incoming = store.importLibrary(file);
+    public int importCabinetLibrary(File file) {
+        List<CabinetType> incoming = store.importList(file, CabinetType.class);
         for (CabinetType inc : incoming) {
             CabinetType match = null;
             for (CabinetType ct : workspace.getCabinetTypes()) {
@@ -253,8 +254,8 @@ public class AppModel {
         existing.applyEditedValues(edited);
     }
 
-    public void exportLibrary(File file) {
-        store.exportLibrary(workspace.getCabinetTypes(), file);
+    public void exportCabinetLibrary(File file) {
+        store.exportList(workspace.getCabinetTypes(), file);
     }
 
     // ---- controller types (библиотека контроллеров, аналог SmartLCT) ----
@@ -317,6 +318,31 @@ public class AppModel {
                 throw new IllegalStateException("Контроллер с именем \"" + name + "\" уже есть в библиотеке");
             }
         }
+    }
+
+    /** Импорт: существующие по имени обновляются, новые добавляются (см. importCabinetLibrary). */
+    public int importControllerLibrary(File file) {
+        List<ControllerType> incoming = store.importList(file, ControllerType.class);
+        for (ControllerType inc : incoming) {
+            ControllerType match = null;
+            for (ControllerType ct : workspace.getControllerTypes()) {
+                if (ct.getName().equalsIgnoreCase(inc.getName())) {
+                    match = ct;
+                    break;
+                }
+            }
+            if (match != null) {
+                match.applyEditedValues(inc);
+            } else {
+                workspace.getControllerTypes().add(inc);
+            }
+        }
+        changed();
+        return incoming.size();
+    }
+
+    public void exportControllerLibrary(File file) {
+        store.exportList(workspace.getControllerTypes(), file);
     }
 
     // ---- контроллеры, общие для СЦЕНЫ (не для одного экрана — см. Task #58) ----
@@ -1073,6 +1099,141 @@ public class AppModel {
     public void deleteCableType(CableType cable) {
         workspace.getCableTypes().remove(cable);
         changed();
+    }
+
+    /** Импорт: существующие по (режим, подпись) обновляются, новые добавляются
+     *  (тот же ключ совпадения, что и у {@link #addCableType}). */
+    public int importCableLibrary(File file) {
+        List<CableType> incoming = store.importList(file, CableType.class);
+        for (CableType inc : incoming) {
+            CableType match = null;
+            for (CableType c : workspace.getCableTypes()) {
+                if (c.getMode() == inc.getMode() && c.getLabel().equalsIgnoreCase(inc.getLabel())) {
+                    match = c;
+                    break;
+                }
+            }
+            if (match != null) {
+                match.setLabel(inc.getLabel());
+            } else {
+                workspace.getCableTypes().add(inc);
+            }
+        }
+        changed();
+        return incoming.size();
+    }
+
+    public void exportCableLibrary(File file) {
+        store.exportList(workspace.getCableTypes(), file);
+    }
+
+    /** Импорт: существующие по (режим, категория, имя) обновляются, новые добавляются. */
+    public int importEquipmentPresetLibrary(File file) {
+        List<EquipmentPreset> incoming = store.importList(file, EquipmentPreset.class);
+        for (EquipmentPreset inc : incoming) {
+            EquipmentPreset match = null;
+            for (EquipmentPreset p : workspace.getEquipmentPresets()) {
+                if (p.getMode() == inc.getMode() && p.getCategory() == inc.getCategory()
+                        && p.getName().equalsIgnoreCase(inc.getName())) {
+                    match = p;
+                    break;
+                }
+            }
+            if (match != null) {
+                inc.setId(match.getId());
+                workspace.getEquipmentPresets().remove(match);
+            }
+            workspace.getEquipmentPresets().add(inc);
+        }
+        changed();
+        return incoming.size();
+    }
+
+    public void exportEquipmentPresetLibrary(File file) {
+        store.exportList(workspace.getEquipmentPresets(), file);
+    }
+
+    // ---- экспорт/импорт ВСЕХ библиотек разом ----
+
+    public void exportAllLibraries(File file) {
+        LibraryBundle bundle = new LibraryBundle();
+        bundle.setCabinetTypes(workspace.getCabinetTypes());
+        bundle.setControllerTypes(workspace.getControllerTypes());
+        bundle.setEquipmentPresets(workspace.getEquipmentPresets());
+        bundle.setCableTypes(workspace.getCableTypes());
+        store.exportBundle(bundle, file);
+    }
+
+    /** Импортирует все 4 библиотеки из файла, сохранённого через
+     *  {@link #exportAllLibraries}, по тем же правилам совпадения, что и у
+     *  импорта одного типа. Возвращает суммарное число обработанных записей. */
+    public int importAllLibraries(File file) {
+        LibraryBundle bundle = store.importBundle(file);
+        int total = 0;
+        for (CabinetType inc : bundle.getCabinetTypes()) {
+            CabinetType match = null;
+            for (CabinetType ct : workspace.getCabinetTypes()) {
+                if (ct.getName().equalsIgnoreCase(inc.getName())) {
+                    match = ct;
+                    break;
+                }
+            }
+            if (match != null) {
+                inc.setId(match.getId());
+                updateCabinetTypeNoFire(match, inc);
+            } else {
+                workspace.getCabinetTypes().add(inc);
+            }
+            total++;
+        }
+        for (ControllerType inc : bundle.getControllerTypes()) {
+            ControllerType match = null;
+            for (ControllerType ct : workspace.getControllerTypes()) {
+                if (ct.getName().equalsIgnoreCase(inc.getName())) {
+                    match = ct;
+                    break;
+                }
+            }
+            if (match != null) {
+                match.applyEditedValues(inc);
+            } else {
+                workspace.getControllerTypes().add(inc);
+            }
+            total++;
+        }
+        for (EquipmentPreset inc : bundle.getEquipmentPresets()) {
+            EquipmentPreset match = null;
+            for (EquipmentPreset p : workspace.getEquipmentPresets()) {
+                if (p.getMode() == inc.getMode() && p.getCategory() == inc.getCategory()
+                        && p.getName().equalsIgnoreCase(inc.getName())) {
+                    match = p;
+                    break;
+                }
+            }
+            if (match != null) {
+                inc.setId(match.getId());
+                workspace.getEquipmentPresets().remove(match);
+            }
+            workspace.getEquipmentPresets().add(inc);
+            total++;
+        }
+        for (CableType inc : bundle.getCableTypes()) {
+            CableType match = null;
+            for (CableType c : workspace.getCableTypes()) {
+                if (c.getMode() == inc.getMode() && c.getLabel().equalsIgnoreCase(inc.getLabel())) {
+                    match = c;
+                    break;
+                }
+            }
+            if (match != null) {
+                match.setLabel(inc.getLabel());
+            } else {
+                workspace.getCableTypes().add(inc);
+            }
+            total++;
+        }
+        changed();
+        return total;
     }
 
     public SchemaCard addCardToPreset(EquipmentPreset preset, String name, List<CardPort> ports) {

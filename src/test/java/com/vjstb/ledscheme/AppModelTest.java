@@ -647,6 +647,69 @@ class AppModelTest {
     }
 
     @Test
+    void cabinetLibraryExportImportRoundTripsAndUpdatesByName(@TempDir Path dir) throws Exception {
+        AppModel model = freshModel(dir);
+        model.addCabinetType(sampleType());
+        File file = new File(dir.toFile(), "cabinets.json");
+        model.exportCabinetLibrary(file);
+
+        AppModel other = freshModel(dir.resolve("other"));
+        int n = other.importCabinetLibrary(file);
+        assertEquals(1, n);
+        assertEquals(1, other.getCabinetTypes().size());
+        assertEquals("Test P3 500x500", other.getCabinetTypes().get(0).getName());
+
+        // повторный импорт того же файла не плодит дубликат — обновляет существующий по имени
+        other.importCabinetLibrary(file);
+        assertEquals(1, other.getCabinetTypes().size());
+    }
+
+    @Test
+    void cableLibraryExportImportMatchesByModeAndLabel(@TempDir Path dir) throws Exception {
+        AppModel model = freshModel(dir);
+        model.addCableType(SchemaMode.SIGNAL, "Optical fiber");
+        File file = new File(dir.toFile(), "cables.json");
+        model.exportCableLibrary(file);
+
+        AppModel other = freshModel(dir.resolve("other"));
+        int n = other.importCableLibrary(file);
+        assertEquals(1, n);
+        assertEquals(1, other.getCableTypes().size());
+
+        other.importCableLibrary(file);
+        assertEquals(1, other.getCableTypes().size());
+    }
+
+    @Test
+    void allLibrariesBundleExportImportCoversEveryType(@TempDir Path dir) throws Exception {
+        AppModel model = freshModel(dir);
+        model.addCabinetType(sampleType());
+        com.vjstb.ledscheme.model.ControllerType controllerType = new com.vjstb.ledscheme.model.ControllerType();
+        controllerType.setName("MCTRL4K");
+        model.addControllerType(controllerType);
+        model.addEquipmentPreset(SchemaMode.SIGNAL, SchemaNodeType.SERVER, "Media Server", "", List.of());
+        model.addCableType(SchemaMode.POWER, "CEE 32A");
+
+        File file = new File(dir.toFile(), "all.json");
+        model.exportAllLibraries(file);
+
+        AppModel other = freshModel(dir.resolve("other"));
+        int total = other.importAllLibraries(file);
+        assertEquals(4, total);
+        assertEquals(1, other.getCabinetTypes().size());
+        assertEquals(1, other.getWorkspace().getControllerTypes().size());
+        assertEquals(1, other.getEquipmentPresets().size());
+        assertEquals(1, other.getCableTypes().size());
+
+        // повторный импорт не плодит дубликаты
+        other.importAllLibraries(file);
+        assertEquals(1, other.getCabinetTypes().size());
+        assertEquals(1, other.getWorkspace().getControllerTypes().size());
+        assertEquals(1, other.getEquipmentPresets().size());
+        assertEquals(1, other.getCableTypes().size());
+    }
+
+    @Test
     void hidingCabinetMasksShapeAndExcludesFromStats(@TempDir Path dir) {
         AppModel model = freshModel(dir);
         CabinetType type = model.addCabinetType(sampleType());

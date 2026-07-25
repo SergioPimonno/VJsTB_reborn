@@ -6,10 +6,8 @@ import com.vjstb.ledscheme.AppInfo;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.settings.SettingsManager;
 import java.awt.Desktop;
-import java.io.File;
 import java.net.URI;
 import javax.swing.ButtonGroup;
-import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JMenu;
 import javax.swing.JMenuBar;
@@ -18,7 +16,6 @@ import javax.swing.JOptionPane;
 import javax.swing.JRadioButtonMenuItem;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
-import javax.swing.filechooser.FileNameExtensionFilter;
 
 /** Верхнее меню: настройки, инструменты, персонализация, справка. */
 public class MainMenuBar extends JMenuBar {
@@ -74,37 +71,16 @@ public class MainMenuBar extends JMenuBar {
     private JMenu buildToolsMenu(JFrame owner, AppModel model) {
         JMenu menu = new JMenu("Инструменты");
 
-        JMenuItem exportLib = new JMenuItem("Экспорт библиотеки кабинетов…");
-        exportLib.addActionListener(e -> {
-            JFileChooser fc = new JFileChooser();
-            fc.setSelectedFile(new File("led-cabinet-library.json"));
-            fc.setFileFilter(new FileNameExtensionFilter("JSON", "json"));
-            if (fc.showSaveDialog(owner) == JFileChooser.APPROVE_OPTION) {
-                try {
-                    model.exportLibrary(fc.getSelectedFile());
-                } catch (RuntimeException ex) {
-                    JOptionPane.showMessageDialog(owner, ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
-                }
-            }
+        JMenuItem exportImportLib = new JMenuItem("Экспорт/импорт библиотек…");
+        exportImportLib.addActionListener(e -> {
+            javax.swing.JDialog dlg = new javax.swing.JDialog(owner, "Экспорт/импорт библиотек", true);
+            dlg.getContentPane().add(new LibraryExportImportPanel(model));
+            dlg.pack();
+            dlg.setLocationRelativeTo(owner);
+            dlg.setVisible(true);
         });
 
-        JMenuItem importLib = new JMenuItem("Импорт библиотеки кабинетов…");
-        importLib.addActionListener(e -> {
-            JFileChooser fc = new JFileChooser();
-            fc.setFileFilter(new FileNameExtensionFilter("JSON", "json"));
-            if (fc.showOpenDialog(owner) == JFileChooser.APPROVE_OPTION) {
-                try {
-                    int n = model.importLibrary(fc.getSelectedFile());
-                    JOptionPane.showMessageDialog(owner, "Импортировано кабинетов: " + n, "Импорт",
-                            JOptionPane.INFORMATION_MESSAGE);
-                } catch (RuntimeException ex) {
-                    JOptionPane.showMessageDialog(owner, ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
-                }
-            }
-        });
-
-        menu.add(exportLib);
-        menu.add(importLib);
+        menu.add(exportImportLib);
         return menu;
     }
 

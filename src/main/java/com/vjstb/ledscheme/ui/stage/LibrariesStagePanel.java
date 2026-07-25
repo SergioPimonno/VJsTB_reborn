@@ -20,19 +20,16 @@ import com.vjstb.ledscheme.ui.UiKit;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
-import java.io.File;
 import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
-import javax.swing.JFileChooser;
 import javax.swing.JList;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.ListSelectionModel;
-import javax.swing.filechooser.FileNameExtensionFilter;
 
 /**
  * Этап «Библиотеки»: общие для всех проектов справочники оборудования —
@@ -83,6 +80,9 @@ public class LibrariesStagePanel extends JPanel {
         // ширину самой рамки секции здесь же, а не меняем общее поведение
         // UiKit.section (которым пользуются и другие этапы) — баг-репорт со
         // скриншотом собранного релиза, Task #100/v1.4.1.
+        javax.swing.JComponent exportImportSection = (javax.swing.JComponent) UiKit.section(
+                "Экспорт / импорт библиотек",
+                new com.vjstb.ledscheme.ui.LibraryExportImportPanel(model));
         javax.swing.JComponent cabinetsSection = buildLibrary();
         javax.swing.JComponent controllersSection = buildControllerLibrary();
         javax.swing.JComponent powerPresetsSection = buildEquipmentPresetSection(SchemaMode.POWER,
@@ -90,9 +90,12 @@ public class LibrariesStagePanel extends JPanel {
         javax.swing.JComponent signalEquipmentSection = buildSignalEquipmentSection();
         javax.swing.JComponent cableSection = buildCableLibrary();
         for (javax.swing.JComponent section : new javax.swing.JComponent[]{
-                cabinetsSection, controllersSection, powerPresetsSection, signalEquipmentSection, cableSection}) {
+                exportImportSection, cabinetsSection, controllersSection, powerPresetsSection,
+                signalEquipmentSection, cableSection}) {
             capSectionWidth(section, 720);
         }
+        body.add(exportImportSection);
+        body.add(UiKit.vgap(10));
         body.add(cabinetsSection);
         body.add(UiKit.vgap(10));
         body.add(controllersSection);
@@ -160,15 +163,6 @@ public class LibrariesStagePanel extends JPanel {
         crud.add(edit);
         crud.add(del);
         body.add(crud);
-
-        JPanel io = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-        JButton exp = new JButton("Экспорт JSON");
-        exp.addActionListener(e -> exportLibrary());
-        JButton imp = new JButton("Импорт JSON");
-        imp.addActionListener(e -> importLibrary());
-        io.add(exp);
-        io.add(imp);
-        body.add(io);
         return (JPanel) UiKit.section("Библиотека кабинетов", body);
     }
 
@@ -450,29 +444,6 @@ public class LibrariesStagePanel extends JPanel {
         List<SchemaCard> cards = sel == null ? List.of() : sel.getCards();
         syncList(signalCardModel, cards);
         ListSizing.fit(signalCardList, signalCardScroll, 2, 6, true);
-    }
-
-    private void exportLibrary() {
-        JFileChooser fc = new JFileChooser();
-        fc.setSelectedFile(new File("led-cabinet-library.json"));
-        fc.setFileFilter(new FileNameExtensionFilter("JSON", "json"));
-        if (fc.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
-            tryRun(() -> model.exportLibrary(fc.getSelectedFile()));
-        }
-    }
-
-    private void importLibrary() {
-        JFileChooser fc = new JFileChooser();
-        fc.setFileFilter(new FileNameExtensionFilter("JSON", "json"));
-        if (fc.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-            try {
-                int n = model.importLibrary(fc.getSelectedFile());
-                JOptionPane.showMessageDialog(this, "Импортировано кабинетов: " + n, "Импорт",
-                        JOptionPane.INFORMATION_MESSAGE);
-            } catch (RuntimeException ex) {
-                JOptionPane.showMessageDialog(this, ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
-            }
-        }
     }
 
     private void refresh() {

@@ -3,7 +3,7 @@ package com.vjstb.ledscheme.store;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
-import com.vjstb.ledscheme.model.CabinetType;
+import com.vjstb.ledscheme.model.LibraryBundle;
 import com.vjstb.ledscheme.model.Project;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
@@ -90,22 +90,39 @@ public class WorkspaceStore {
         }
     }
 
-    /** Экспорт библиотеки кабинетов в отдельный JSON-файл. */
-    public void exportLibrary(List<CabinetType> cabinetTypes, File target) {
+    /** Экспорт библиотеки ОДНОГО типа (кабинеты/контроллеры/пресеты/кабели) в JSON-файл. */
+    public <T> void exportList(List<T> items, File target) {
         try {
-            mapper.writeValue(target, cabinetTypes);
+            mapper.writeValue(target, items);
         } catch (IOException e) {
             throw new RuntimeException("Не удалось экспортировать библиотеку: " + e.getMessage(), e);
         }
     }
 
-    /** Импорт библиотеки кабинетов из JSON-файла (массив кабинетов). */
-    public List<CabinetType> importLibrary(File source) {
+    /** Импорт библиотеки ОДНОГО типа из JSON-файла (плоский массив элементов). */
+    public <T> List<T> importList(File source, Class<T> type) {
         try {
-            return mapper.readValue(source,
-                    mapper.getTypeFactory().constructCollectionType(List.class, CabinetType.class));
+            return mapper.readValue(source, mapper.getTypeFactory().constructCollectionType(List.class, type));
         } catch (IOException e) {
             throw new RuntimeException("Не удалось импортировать библиотеку: " + e.getMessage(), e);
+        }
+    }
+
+    /** Экспорт ВСЕХ библиотек разом («Экспорт всего») в один JSON-файл. */
+    public void exportBundle(LibraryBundle bundle, File target) {
+        try {
+            mapper.writeValue(target, bundle);
+        } catch (IOException e) {
+            throw new RuntimeException("Не удалось экспортировать библиотеки: " + e.getMessage(), e);
+        }
+    }
+
+    /** Импорт файла, ранее сохранённого через {@link #exportBundle}. */
+    public LibraryBundle importBundle(File source) {
+        try {
+            return mapper.readValue(source, LibraryBundle.class);
+        } catch (IOException e) {
+            throw new RuntimeException("Не удалось импортировать библиотеки: " + e.getMessage(), e);
         }
     }
 }
