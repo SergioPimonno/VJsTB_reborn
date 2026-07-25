@@ -74,16 +74,34 @@ public class LibrariesStagePanel extends JPanel {
 
         JPanel body = UiKit.vbox();
         body.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-        body.add(buildLibrary());
+        // Секции (UiKit.section) сами по себе НАМЕРЕННО безграничны по ширине
+        // (см. UiKit.recapHeight — фиксирует только высоту), чтобы заголовок с
+        // рамкой красиво тянулся во всю ширину этапа. Но после того как списки
+        // внутри перестали растягиваться (см. ListSizing.fit(..., true)), это
+        // обернулось ДРУГИМ видом той же жалобы: компактный список внутри —
+        // и большая пустая серая область справа ВНУТРИ рамки секции. Ограничиваем
+        // ширину самой рамки секции здесь же, а не меняем общее поведение
+        // UiKit.section (которым пользуются и другие этапы) — баг-репорт со
+        // скриншотом собранного релиза, Task #100/v1.4.1.
+        javax.swing.JComponent cabinetsSection = buildLibrary();
+        javax.swing.JComponent controllersSection = buildControllerLibrary();
+        javax.swing.JComponent powerPresetsSection = buildEquipmentPresetSection(SchemaMode.POWER,
+                "Оборудование питания (пресеты для схемы)", powerPresetList, powerPresetScroll);
+        javax.swing.JComponent signalEquipmentSection = buildSignalEquipmentSection();
+        javax.swing.JComponent cableSection = buildCableLibrary();
+        for (javax.swing.JComponent section : new javax.swing.JComponent[]{
+                cabinetsSection, controllersSection, powerPresetsSection, signalEquipmentSection, cableSection}) {
+            capSectionWidth(section, 720);
+        }
+        body.add(cabinetsSection);
         body.add(UiKit.vgap(10));
-        body.add(buildControllerLibrary());
+        body.add(controllersSection);
         body.add(UiKit.vgap(10));
-        body.add(buildEquipmentPresetSection(SchemaMode.POWER, "Оборудование питания (пресеты для схемы)",
-                powerPresetList, powerPresetScroll));
+        body.add(powerPresetsSection);
         body.add(UiKit.vgap(10));
-        body.add(buildSignalEquipmentSection());
+        body.add(signalEquipmentSection);
         body.add(UiKit.vgap(10));
-        body.add(buildCableLibrary());
+        body.add(cableSection);
         body.add(javax.swing.Box.createVerticalGlue());
 
         JScrollPane scroll = new JScrollPane(body);
@@ -97,6 +115,13 @@ public class LibrariesStagePanel extends JPanel {
 
         model.addListener(this::refresh);
         refresh();
+    }
+
+    /** Ограничивает МАКСИМАЛЬНУЮ ширину секции (см. комментарий в конструкторе) —
+     *  высоту, которую уже зафиксировал UiKit.recapHeight, не трогаем. */
+    private static void capSectionWidth(javax.swing.JComponent section, int maxWidth) {
+        Dimension current = section.getMaximumSize();
+        section.setMaximumSize(new Dimension(maxWidth, current.height));
     }
 
     // ---- библиотека кабинетов ----
