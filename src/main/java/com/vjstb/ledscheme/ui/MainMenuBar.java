@@ -24,13 +24,13 @@ public class MainMenuBar extends JMenuBar {
     private PersonalizationDialog personalizationDialog;
 
     public MainMenuBar(JFrame owner, AppModel model, SettingsManager settings, Runnable onShowShortcuts) {
-        add(buildSettingsMenu(model));
+        add(buildSettingsMenu(owner, model));
         add(buildToolsMenu(owner, model));
         add(buildPersonalizationMenu(owner, settings));
         add(buildHelpMenu(onShowShortcuts));
     }
 
-    private JMenu buildSettingsMenu(AppModel model) {
+    private JMenu buildSettingsMenu(JFrame owner, AppModel model) {
         JMenu menu = new JMenu("Настройки");
         JMenuItem openDataFolder = new JMenuItem("Открыть папку с данными…");
         openDataFolder.addActionListener(e -> {
@@ -44,6 +44,11 @@ public class MainMenuBar extends JMenuBar {
             }
         });
         menu.add(openDataFolder);
+
+        JMenuItem update = new JMenuItem("Обновить версию…");
+        update.addActionListener(e -> com.vjstb.ledscheme.ui.UpdateDialog.show(owner));
+        menu.add(update);
+
         return menu;
     }
 
