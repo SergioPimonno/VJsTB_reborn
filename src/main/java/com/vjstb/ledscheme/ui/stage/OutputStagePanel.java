@@ -38,7 +38,9 @@ import javax.swing.JTextField;
 
 /**
  * Этап «Вывод»: выбор папки и формирование пакета документации проекта —
- * JPEG-схемы (питание/сигнал) всех экранов + текстовый отчёт.
+ * JPEG-схемы (питание/сигнал) всех экранов + два текстовых файла: отчёт (нагрузки/
+ * веса/точки подвеса, без цепочек) и спецификация (только количество оборудования,
+ * см. {@link #buildEquipmentSpec}).
  */
 public class OutputStagePanel extends JPanel {
 
@@ -96,17 +98,33 @@ public class OutputStagePanel extends JPanel {
                 + " «Сила», «Сигнал» и «Маски». В «Сила»/«Сигнал» — JPEG-схема каждого экрана сцены, общая схема"
                 + " «Все экраны сцены» (по ней видно цепочки, идущие через пару экранов — на схеме одного экрана"
                 + " это не видно), а также нарисованная блок-схема площадки («Общая схема питания/сигнала» из"
-                + " редактора) — в обычном виде и в «тестовом», где вместо блока экрана нарисована уменьшённая"
-                + " схема его расключения. В «Маски» — тестовые маски (Pixel Grid) всех экранов и канвасов"
-                + " сцены. Плюс общий текстовый отчёт на весь проект: итоговые суммарные цифры (нагрузка, вес),"
-                + " спецификация оборудования (кабинеты по типам), спецификация коммутации (провода/линии,"
-                + " подписанные N×тип на стрелках общих схем — с метражом для питания), затем разбор"
-                + " по сценам/экранам (состав, мощность/вес, список цепочек).</html>"));
+                + " редактора) — узлы экранов рисуются блоком или уменьшённой схемой расключения, смотря по"
+                + " переключателю в Персонализации. В «Маски» — тестовые маски (Pixel Grid) всех экранов и канвасов"
+                + " сцены. Плюс два текстовых файла на весь проект: <b>«…_отчёт.txt»</b> — итоговые суммарные цифры"
+                + " (нагрузка, вес), затем разбор по сценам/экранам (состав, разрешение/габариты, мощность/вес,"
+                + " точек подвеса) — без цепочек; <b>«…_спецификация.txt»</b> — только количество используемого"
+                + " оборудования: кабинеты по типам, оборудование общей схемы по типу узла (щиты/дистрибьюторы/"
+                + "контроллеры/медиасерверы/конвертеры и т.д.), спецификация коммутации (провода/линии,"
+                + " подписанные N×тип на стрелках общих схем — с метражом для питания).</html>"));
         body.add(UiKit.vgap(10));
         body.add(UiKit.muted("Пресеты под медиасерверы (Resolume и т.п.) — на этапе «Генерация масок», отдельной кнопкой."));
         body.add(javax.swing.Box.createVerticalGlue());
 
         return body;
+    }
+
+    /** true, если в проекте (любой сцене) есть цепочка питания с превышением ёмкости
+     *  разъёма её кабинетов, ещё не подтверждённая кнопкой «Я знаю» (Task #81) —
+     *  блокирует «Сформировать пакет документации», пока инженер не разберётся. */
+    private boolean hasUnacknowledgedOverload(Project project) {
+        for (Scene scene : project.getScenes()) {
+            for (PowerChain chain : scene.getPowerChains()) {
+                if (model.powerChainLoadStatus(scene, chain).blocksExport()) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private void chooseFolder() {
@@ -128,18 +146,26 @@ public class OutputStagePanel extends JPanel {
             JOptionPane.showMessageDialog(this, "Сначала выберите проект", "Нет проекта", JOptionPane.WARNING_MESSAGE);
             return;
         }
+        if (settings.activeProfile().isLoadTrackingEnabled() && hasUnacknowledgedOverload(project)) {
+            JOptionPane.showMessageDialog(this,
+                    "<html>В проекте есть цепочки питания с неподтверждённой перегрузкой"
+                            + " (превышение ёмкости разъёма кабинета).<br>Откройте этап «Питание» нужной сцены,"
+                            + " проверьте цепочки, отмеченные ⚠, и подтвердите кнопкой «Я знаю»"
+                            + " (или измените коммутацию).<br>Экспорт остановлен, пока такие цепочки есть.</html>",
+                    "Перегрузка цепочек питания", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
         File folder = resolveFolder();
 
         StringBuilder report = new StringBuilder();
         report.append("Отчёт по проекту: ").append(project.getName()).append('\n');
         report.append("Дата: ").append(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))).append("\n\n");
 
-        // --- итоги по проекту и спецификация оборудования (сквозные по всем сценам) ---
+        // --- итоги по проекту (сквозные по всем сценам) ---
         int totalScreens = 0;
         int totalCabinets = 0;
         double totalPower = 0;
         double totalWeight = 0;
-        java.util.Map<CabinetType, Integer> equipment = new java.util.LinkedHashMap<>();
 
         for (Scene scene : project.getScenes()) {
             for (Screen scr : scene.getScreens()) {
@@ -160,7 +186,6 @@ public class OutputStagePanel extends JPanel {
                     if (effective != null) {
                         totalPower += effective.getPowerConsumptionW();
                         totalWeight += effective.getWeightKg();
-                        equipment.merge(effective, 1, Integer::sum);
                     }
                 }
             }
@@ -171,20 +196,6 @@ public class OutputStagePanel extends JPanel {
                 totalScreens, project.getScenes().size(), totalCabinets));
         report.append(String.format("Суммарная мощность: %s Вт, суммарный вес: %s кг%n%n",
                 UiKit.fmt(totalPower), UiKit.fmt(totalWeight)));
-
-        report.append("=== СПЕЦИФИКАЦИЯ ОБОРУДОВАНИЯ (кабинеты) ===\n");
-        if (equipment.isEmpty()) {
-            report.append("(нет активных кабинетов)\n");
-        }
-        for (var entry : equipment.entrySet()) {
-            CabinetType t = entry.getKey();
-            int qty = entry.getValue();
-            report.append(String.format("  %s — %d шт. · %s Вт/шт (%s Вт) · %s кг/шт (%s кг)%n",
-                    t.getName(), qty, UiKit.fmt(t.getPowerConsumptionW()), UiKit.fmt(t.getPowerConsumptionW() * qty),
-                    UiKit.fmt(t.getWeightKg()), UiKit.fmt(t.getWeightKg() * qty)));
-        }
-        report.append('\n');
-        report.append(buildWiringSpec(project));
 
         // Рендер схемы сцены целиком (SceneCanvasPanel) и маски канваса
         // (PixelGridRenderer.renderCanvasMask) читают "текущую" сцену модели, а не
@@ -229,24 +240,16 @@ public class OutputStagePanel extends JPanel {
                             UiKit.fmt(st.physicalWidthMm()), UiKit.fmt(st.physicalHeightMm())));
                     report.append(String.format("    Мощность: %s Вт, вес: %s кг%n",
                             UiKit.fmt(st.totalPowerW()), UiKit.fmt(st.totalWeightKg())));
+                    report.append(String.format("    Точек подвеса: %d%n", scr.getRiggingPointsCount()));
+                    report.append('\n');
 
                     // Цепочки хранятся на уровне сцены (Task #78), а не экрана — берём
                     // только те, что физически затрагивают кабинеты ЭТОГО экрана (цепочка
-                    // может начинаться на другом экране сцены и продолжаться сюда).
+                    // может начинаться на другом экране сцены и продолжаться сюда). Нужны
+                    // только для рендера схем ниже — сам список цепочек в отчёт не входит
+                    // (см. Task v1.4: отчёт — только нагрузки/веса/точки подвеса).
                     List<PowerChain> scrPowerChains = model.powerChainsTouchingScreen(scr);
                     List<SignalChain> scrSignalChains = model.signalChainsTouchingScreen(scr);
-                    report.append("    Цепочки питания (").append(scrPowerChains.size()).append("):\n");
-                    for (PowerChain pc : scrPowerChains) {
-                        report.append("      L").append(pc.getPhase()).append(" — ")
-                                .append(pc.getCabinetInstanceIds().size()).append(" каб.\n");
-                    }
-                    report.append("    Цепочки сигнала (").append(scrSignalChains.size()).append("):\n");
-                    for (SignalChain sc : scrSignalChains) {
-                        report.append("      порт ").append(sc.getPortNumber() != null ? sc.getPortNumber() : "—")
-                                .append(sc.isBackup() ? " (бэкап)" : "").append(" — ")
-                                .append(sc.getCabinetInstanceIds().size()).append(" каб.\n");
-                    }
-                    report.append('\n');
 
                     BufferedImage powerImg = SchemeRenderer.renderImage(scr, type, true, 120, model.getWorkspace(),
                             scrPowerChains, scrSignalChains);
@@ -290,17 +293,16 @@ public class OutputStagePanel extends JPanel {
                 // SchemaCanvasPanel.renderImage(..., renderScreenWiring=true)) — так
                 // видно, к какому физическому оборудованию подключён каждый экран, не
                 // открывая отдельно схему расключения каждого экрана.
+                // Экраны в общей схеме рисуются блоком или схемой расключения — по
+                // тому же переключателю Персонализации, что и в живом редакторе схемы
+                // (см. Task #83/#84/v1.4), а не всегда обоими вариантами сразу.
+                boolean screensAsWiring = settings.activeProfile().isSchemaScreensAsWiringDiagram();
                 for (SchemaMode schemaMode : SchemaMode.values()) {
                     File modeFolder = schemaMode == SchemaMode.POWER ? powerFolder : signalFolder;
                     SchemaCanvasPanel schemaCanvas = new SchemaCanvasPanel(model, schemaMode, settings);
                     Dimension size = schemaCanvas.getPreferredSize();
-
-                    BufferedImage standard = schemaCanvas.renderImage(size.width, size.height, false);
-                    SchemeRenderer.writeJpeg(standard, new File(modeFolder, "_Блок-схема.jpg"));
-                    jpegCount++;
-
-                    BufferedImage withScreenWiring = schemaCanvas.renderImage(size.width, size.height, true);
-                    SchemeRenderer.writeJpeg(withScreenWiring, new File(modeFolder, "_Блок-схема (тест).jpg"));
+                    BufferedImage img = schemaCanvas.renderImage(size.width, size.height, screensAsWiring);
+                    SchemeRenderer.writeJpeg(img, new File(modeFolder, "_Блок-схема.jpg"));
                     jpegCount++;
                 }
 
@@ -317,9 +319,13 @@ public class OutputStagePanel extends JPanel {
             File reportFile = new File(folder, OutputPaths.sanitize(project.getName()) + "_отчёт.txt");
             Files.writeString(reportFile.toPath(), report.toString(), StandardCharsets.UTF_8);
 
+            File specFile = new File(folder, OutputPaths.sanitize(project.getName()) + "_спецификация.txt");
+            Files.writeString(specFile.toPath(), buildEquipmentSpec(project), StandardCharsets.UTF_8);
+
             int answer = JOptionPane.showConfirmDialog(this,
                     "Готово.\nJPEG-схем сохранено: " + jpegCount + "\nМасок сохранено: " + maskCount
-                            + "\nОтчёт: " + reportFile.getName() + "\n\nОткрыть папку?",
+                            + "\nОтчёт: " + reportFile.getName() + "\nСпецификация: " + specFile.getName()
+                            + "\n\nОткрыть папку?",
                     "Пакет документации сформирован", JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE);
             if (answer == JOptionPane.YES_OPTION) {
                 openFolder(folder);
@@ -331,6 +337,81 @@ public class OutputStagePanel extends JPanel {
             model.selectScene(origScene);
             model.selectScreen(origScreen);
         }
+    }
+
+    /** Второй файл пакета документации — "сколько чего понадобится": кабинеты (по
+     *  типу, из фактического состава экранов), оборудование общей схемы (по типу
+     *  узла + подписи, БЕЗ узлов-экранов — это ссылки, не отдельное оборудование)
+     *  и спецификация коммутации (см. {@link #buildWiringSpec}). Никаких нагрузок/
+     *  весов/цепочек здесь — это в отчёте (см. generate()) — тут только количества. */
+    private String buildEquipmentSpec(Project project) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Спецификация оборудования по проекту: ").append(project.getName()).append('\n');
+        sb.append("Дата: ").append(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")))
+                .append("\n\n");
+
+        java.util.Map<CabinetType, Integer> cabinets = new java.util.LinkedHashMap<>();
+        for (Scene scene : project.getScenes()) {
+            for (Screen scr : scene.getScreens()) {
+                CabinetType defaultType = model.typeOf(scr);
+                for (com.vjstb.ledscheme.model.CabinetInstance c : scr.getCabinets()) {
+                    if (c.isHidden()) {
+                        continue;
+                    }
+                    CabinetType effective = defaultType;
+                    if (c.getCabinetTypeId() != null) {
+                        CabinetType override = model.getWorkspace().cabinetTypeById(c.getCabinetTypeId());
+                        if (override != null) {
+                            effective = override;
+                        }
+                    }
+                    if (effective != null) {
+                        cabinets.merge(effective, 1, Integer::sum);
+                    }
+                }
+            }
+        }
+        sb.append("=== КАБИНЕТЫ ===\n");
+        if (cabinets.isEmpty()) {
+            sb.append("(нет активных кабинетов)\n");
+        }
+        for (var entry : cabinets.entrySet()) {
+            CabinetType t = entry.getKey();
+            int qty = entry.getValue();
+            sb.append(String.format("  %s — %d шт. · %s Вт/шт (%s Вт) · %s кг/шт (%s кг)%n",
+                    t.getName(), qty, UiKit.fmt(t.getPowerConsumptionW()), UiKit.fmt(t.getPowerConsumptionW() * qty),
+                    UiKit.fmt(t.getWeightKg()), UiKit.fmt(t.getWeightKg() * qty)));
+        }
+        sb.append('\n');
+
+        // Оборудование общей схемы (щиты/дистрибьюторы/конвертеры/медиасерверы/
+        // контроллеры/прочее) — узлы-экраны не считаются: это ссылка на уже
+        // посчитанный выше экран, а не отдельная физическая единица оборудования.
+        // Группируется по (режим схемы, тип узла, подпись) — одинаково подписанные
+        // узлы одного типа считаются одной моделью оборудования.
+        java.util.Map<String, Integer> equipmentNodes = new java.util.LinkedHashMap<>();
+        for (Scene scene : project.getScenes()) {
+            for (com.vjstb.ledscheme.model.SchemaNode n : scene.getSchemaNodes()) {
+                if (n.getType() == com.vjstb.ledscheme.model.SchemaNodeType.SCREEN) {
+                    continue;
+                }
+                String modeLabel = n.getMode() == com.vjstb.ledscheme.model.SchemaMode.POWER ? "Питание" : "Сигнал";
+                String label = n.getLabel() == null || n.getLabel().isBlank() ? n.getType().getLabel() : n.getLabel();
+                String key = modeLabel + " · " + n.getType().getLabel() + " · " + label;
+                equipmentNodes.merge(key, 1, Integer::sum);
+            }
+        }
+        sb.append("=== ОБОРУДОВАНИЕ ОБЩЕЙ СХЕМЫ ===\n");
+        if (equipmentNodes.isEmpty()) {
+            sb.append("(в общей схеме нет узлов оборудования)\n");
+        }
+        for (var entry : equipmentNodes.entrySet()) {
+            sb.append("  ").append(entry.getKey()).append(" — ").append(entry.getValue()).append(" шт.\n");
+        }
+        sb.append('\n');
+
+        sb.append(buildWiringSpec(project));
+        return sb.toString();
     }
 
     /** Спецификация коммутации: провода/линии, подписанные структурированно (N×тип)

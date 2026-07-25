@@ -1,5 +1,8 @@
 package com.vjstb.ledscheme.model;
 
+import java.util.EnumSet;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -24,8 +27,16 @@ public class CabinetType {
     private double powerConsumptionW = 150;
     /** Вес, кг. */
     private double weightKg = 12;
-    /** Физическая форма кабинета. */
+    /** Физическая форма кабинета по умолчанию — назначается новым ячейкам этого типа. */
     private CabinetShape shape = CabinetShape.RECTANGLE;
+    /** Формы, которые физически СУЩЕСТВУЮТ для этой модели кабинета (кроме shape —
+     *  см. Task #79/v1.4) — сужает выбор в радиальном меню "Форма" при ручном
+     *  назначении формы конкретной ячейке: раньше можно было назначить ЛЮБУЮ из 4
+     *  форм любому кабинету, даже ту, которой у данной модели физически не бывает
+     *  (например, круглый вариант прямоугольного кабинета). Пустое множество (в т.ч.
+     *  файлы проектов, сохранённые до появления этого поля) трактуется как "только
+     *  shape" — см. {@link #getAllowedShapes()}, поэтому явной миграции не требуется. */
+    private Set<CabinetShape> allowedShapes = new LinkedHashSet<>();
     /** Тип разъёма ввода питания — сужает список доступных силовых кабелей при
      *  подписи связи в общей схеме питания, если узел ссылается на экран этого типа. */
     private PowerConnectorType powerConnectorType = PowerConnectorType.OTHER;
@@ -33,6 +44,13 @@ public class CabinetType {
     private int powerConnectorsNeeded = 0;
     /** Сколько отдельных линий сигнала нужно развести на кабинет (0 = коммутация встроена/сквозная). */
     private int signalConnectorsNeeded = 0;
+    /** Номинал разъёма (А) для {@link PowerConnectorType#OTHER} — для PowerCon/TRUEcon
+     *  номинал фиксирован (см. {@link com.vjstb.ledscheme.service.PowerCalc#CABINET_CONNECTOR_DEFAULT_AMPS}:
+     *  ограничивает не сам разъём, а вводной кабель за ним), а для произвольного
+     *  разъёма его нужно указать вручную, иначе расчёт нагрузки цепочки (Task #80/#81)
+     *  не сможет проверить эту цепочку. null — не указан (проверка нагрузки для
+     *  цепочек с этим типом кабинета не выполняется). */
+    private Double customConnectorAmpRating;
 
     public CabinetType() {
     }
@@ -117,6 +135,17 @@ public class CabinetType {
         this.shape = shape;
     }
 
+    /** Формы, допустимые для РУЧНОГО назначения конкретной ячейке этого типа —
+     *  всегда непустое: если явно не заданы (старые файлы проектов, либо тип с
+     *  единственной физически возможной формой), это ровно {@link #getShape()}. */
+    public Set<CabinetShape> getAllowedShapes() {
+        return allowedShapes.isEmpty() ? EnumSet.of(shape) : allowedShapes;
+    }
+
+    public void setAllowedShapes(Set<CabinetShape> allowedShapes) {
+        this.allowedShapes = allowedShapes == null ? new LinkedHashSet<>() : new LinkedHashSet<>(allowedShapes);
+    }
+
     public PowerConnectorType getPowerConnectorType() {
         return powerConnectorType;
     }
@@ -141,6 +170,14 @@ public class CabinetType {
         this.signalConnectorsNeeded = signalConnectorsNeeded;
     }
 
+    public Double getCustomConnectorAmpRating() {
+        return customConnectorAmpRating;
+    }
+
+    public void setCustomConnectorAmpRating(Double customConnectorAmpRating) {
+        this.customConnectorAmpRating = customConnectorAmpRating;
+    }
+
     public CabinetType copy() {
         CabinetType c = new CabinetType();
         c.id = id;
@@ -153,9 +190,11 @@ public class CabinetType {
         c.powerConsumptionW = powerConsumptionW;
         c.weightKg = weightKg;
         c.shape = shape;
+        c.allowedShapes = new LinkedHashSet<>(allowedShapes);
         c.powerConnectorType = powerConnectorType;
         c.powerConnectorsNeeded = powerConnectorsNeeded;
         c.signalConnectorsNeeded = signalConnectorsNeeded;
+        c.customConnectorAmpRating = customConnectorAmpRating;
         return c;
     }
 }

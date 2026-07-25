@@ -3,6 +3,7 @@ package com.vjstb.ledscheme.ui;
 import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.CardPort;
+import com.vjstb.ledscheme.model.EdgeWaypoint;
 import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.PowerConnectorType;
@@ -64,6 +65,10 @@ public class SchemaCanvasPanel extends JPanel {
     private SchemaNode dragNode;
     private double dragOffX, dragOffY;
     private SchemaNode resizeNode;
+    /** Точка излома связи, которую сейчас тащат мышью (см. Task #85/v1.4) — null,
+     *  если ничего не тащат. */
+    private SchemaEdge draggingWaypointEdge;
+    private int draggingWaypointIndex = -1;
     private String connectPendingId;
     /** Гнездо (CardPort), от которого начато соединение — только когда включена
      *  настройка «коммутация через гнёзда разъёмов»; null — соединение идёт от
@@ -107,6 +112,9 @@ public class SchemaCanvasPanel extends JPanel {
         this.settings = settings;
         setBackground(Palette.BG);
         setFocusable(true);
+        // Переключатель "экран блоком/схемой" в Персонализации должен сразу
+        // отразиться на уже открытой схеме, не только при следующем открытии панели.
+        settings.addListener(this::repaint);
 
         MouseAdapter mouse = new MouseAdapter() {
             @Override
@@ -135,8 +143,9 @@ public class SchemaCanvasPanel extends JPanel {
                             CardPort toPort = findPort(socketHit.node().getId(), socketHit.port().getId());
                             String capError = capacityError(fromPort, connectPendingPortId,
                                     toPort, socketHit.port().getId());
-                            if (capError != null) {
-                                JOptionPane.showMessageDialog(SchemaCanvasPanel.this, capError,
+                            String dirError = capError == null ? directionError(fromPort, toPort) : null;
+                            if (capError != null || dirError != null) {
+                                JOptionPane.showMessageDialog(SchemaCanvasPanel.this, capError != null ? capError : dirError,
                                         "Ошибка", JOptionPane.ERROR_MESSAGE);
                             } else {
                                 try {
@@ -185,6 +194,15 @@ public class SchemaCanvasPanel extends JPanel {
                     repaint();
                     return;
                 }
+                WaypointHit wpHit = waypointAt(e.getPoint());
+                if (wpHit != null) {
+                    selectedEdge = wpHit.edge();
+                    selectedNode = null;
+                    draggingWaypointEdge = wpHit.edge();
+                    draggingWaypointIndex = wpHit.index();
+                    repaint();
+                    return;
+                }
                 if (hit != null) {
                     selectedNode = hit;
                     selectedEdge = null;
@@ -213,6 +231,12 @@ public class SchemaCanvasPanel extends JPanel {
                     resizeNode.setWidth(Math.max(MIN_NODE_W, e.getX() - resizeNode.getX()));
                     resizeNode.setHeight(Math.max(MIN_NODE_H, e.getY() - resizeNode.getY()));
                     revalidate();
+                    repaint();
+                } else if (draggingWaypointEdge != null) {
+                    com.vjstb.ledscheme.model.EdgeWaypoint w =
+                            draggingWaypointEdge.getWaypoints().get(draggingWaypointIndex);
+                    w.setX(e.getX());
+                    w.setY(e.getY());
                     repaint();
                 } else if (dragNode != null) {
                     dragNode.setX(Math.max(0, e.getX() - dragOffX));
@@ -251,6 +275,11 @@ public class SchemaCanvasPanel extends JPanel {
                     model.resizeSchemaNode(resizeNode, resizeNode.getWidth(), resizeNode.getHeight());
                     resizeNode = null;
                     onChanged.run();
+                } else if (draggingWaypointEdge != null) {
+                    model.setSchemaEdgeWaypoints(draggingWaypointEdge, draggingWaypointEdge.getWaypoints());
+                    draggingWaypointEdge = null;
+                    draggingWaypointIndex = -1;
+                    onChanged.run();
                 } else if (dragNode != null) {
                     model.moveSchemaNode(dragNode, dragNode.getX(), dragNode.getY());
                     dragNode = null;
@@ -267,6 +296,18 @@ public class SchemaCanvasPanel extends JPanel {
                         Screen scr = screenById(hit.getScreenRefId());
                         if (scr != null) {
                             onScreenActivated.accept(scr);
+                        }
+                        return;
+                    }
+                    // Двойной клик по пустому месту на линии связи (не по узлу, не по
+                    // чипу подписи) — добавляет точку излома маршрута прямо там, где
+                    // кликнули (см. Task #85/v1.4). Работает только в режиме
+                    // «Перемещение» — в режиме «Соединение» двойной клик там же ничего
+                    // особого не значит, но лучше не путать с логикой соединения гнёзд.
+                    if (hit == null && interaction == Interaction.MOVE && edgeLabelChipAt(e.getPoint()) == null) {
+                        SchemaEdge edgeHit = edgeAt(e.getPoint());
+                        if (edgeHit != null) {
+                            insertWaypoint(edgeHit, e.getPoint());
                         }
                     }
                 }
@@ -429,31 +470,125 @@ public class SchemaCanvasPanel extends JPanel {
         return new double[]{ax, ay, bx, by};
     }
 
+    /** Полный маршрут связи в экранных координатах: начало, все точки излома по
+     *  порядку, конец — прямые отрезки между соседними точками рисуются как одна
+     *  ломаная линия (см. Task #85/v1.4). Без точек излома — те же 2 точки, что и
+     *  раньше (обычная прямая линия узел-узел). */
+    private List<double[]> routePoints(SchemaEdge edge) {
+        double[] ends = endpointsFor(edge);
+        if (ends == null) {
+            return null;
+        }
+        List<double[]> pts = new ArrayList<>();
+        pts.add(new double[]{ends[0], ends[1]});
+        for (com.vjstb.ledscheme.model.EdgeWaypoint w : edge.getWaypoints()) {
+            pts.add(new double[]{w.getX(), w.getY()});
+        }
+        pts.add(new double[]{ends[2], ends[3]});
+        return pts;
+    }
+
+    /** Точка на середине ОБЩЕЙ длины ломаной (по пройденному пути, а не просто
+     *  геометрический центр между началом и концом) — чтобы подпись не залезала в
+     *  угол излома при сильно изогнутом маршруте. */
+    private static double[] midOfRoute(List<double[]> pts) {
+        double total = 0;
+        for (int i = 0; i < pts.size() - 1; i++) {
+            total += Math.hypot(pts.get(i + 1)[0] - pts.get(i)[0], pts.get(i + 1)[1] - pts.get(i)[1]);
+        }
+        double half = total / 2;
+        double walked = 0;
+        for (int i = 0; i < pts.size() - 1; i++) {
+            double ax = pts.get(i)[0], ay = pts.get(i)[1];
+            double bx = pts.get(i + 1)[0], by = pts.get(i + 1)[1];
+            double segLen = Math.hypot(bx - ax, by - ay);
+            if (walked + segLen >= half || i == pts.size() - 2) {
+                double t = segLen > 0.0001 ? (half - walked) / segLen : 0;
+                t = Math.max(0, Math.min(1, t));
+                return new double[]{ax + t * (bx - ax), ay + t * (by - ay)};
+            }
+            walked += segLen;
+        }
+        return pts.get(0);
+    }
+
     private SchemaEdge edgeAt(Point p) {
         for (SchemaEdge edge : edges()) {
-            double[] ends = endpointsFor(edge);
-            if (ends == null) {
+            List<double[]> pts = routePoints(edge);
+            if (pts == null) {
                 continue;
             }
-            if (distanceToSegment(p.x, p.y, ends[0], ends[1], ends[2], ends[3]) < 8) {
-                return edge;
+            for (int i = 0; i < pts.size() - 1; i++) {
+                if (distanceToSegment(p.x, p.y, pts.get(i)[0], pts.get(i)[1],
+                        pts.get(i + 1)[0], pts.get(i + 1)[1]) < 8) {
+                    return edge;
+                }
             }
         }
         return null;
     }
 
-    private static final Font EDGE_FONT = new Font(Font.SANS_SERIF, Font.PLAIN, 10);
+    /** Точка излома под курсором (для перетаскивания) — попадание только у
+     *  ВЫДЕЛЕННОЙ связи, т.к. только её точки излома вообще видны и кликабельны
+     *  (см. отрисовку выше). */
+    private record WaypointHit(SchemaEdge edge, int index) { }
 
-    /** Границы кликабельного «чипа» подписи связи (на середине линии) — используются
-     *  и при отрисовке, и при хит-тесте клика, чтобы не разъезжались. */
-    private java.awt.Rectangle labelChipBounds(SchemaEdge edge) {
-        double[] ends = endpointsFor(edge);
-        if (ends == null) {
+    private WaypointHit waypointAt(Point p) {
+        if (selectedEdge == null) {
             return null;
         }
-        double ax = ends[0], ay = ends[1], bx = ends[2], by = ends[3];
-        int mx = (int) ((ax + bx) / 2);
-        int my = (int) ((ay + by) / 2);
+        List<com.vjstb.ledscheme.model.EdgeWaypoint> wps = selectedEdge.getWaypoints();
+        for (int i = 0; i < wps.size(); i++) {
+            com.vjstb.ledscheme.model.EdgeWaypoint w = wps.get(i);
+            if (Math.hypot(p.x - w.getX(), p.y - w.getY()) < 8) {
+                return new WaypointHit(selectedEdge, i);
+            }
+        }
+        return null;
+    }
+
+    /** Добавляет новую точку излома в связь на месте клика — вставляется в список
+     *  ровно на позицию отрезка ломаной, к которому клик ближе всего, чтобы новая
+     *  точка встала в правильное место маршрута, а не всегда в конец списка. */
+    private void insertWaypoint(SchemaEdge edge, Point p) {
+        List<double[]> pts = routePoints(edge);
+        if (pts == null) {
+            return;
+        }
+        int insertAt = 0;
+        double best = Double.MAX_VALUE;
+        for (int i = 0; i < pts.size() - 1; i++) {
+            double d = distanceToSegment(p.x, p.y, pts.get(i)[0], pts.get(i)[1], pts.get(i + 1)[0], pts.get(i + 1)[1]);
+            if (d < best) {
+                best = d;
+                insertAt = i;
+            }
+        }
+        List<com.vjstb.ledscheme.model.EdgeWaypoint> newWps = new ArrayList<>();
+        for (com.vjstb.ledscheme.model.EdgeWaypoint w : edge.getWaypoints()) {
+            newWps.add(w.copy());
+        }
+        newWps.add(insertAt, new com.vjstb.ledscheme.model.EdgeWaypoint(p.x, p.y));
+        model.setSchemaEdgeWaypoints(edge, newWps);
+        selectedEdge = edge;
+        selectedNode = null;
+        onChanged.run();
+        repaint();
+    }
+
+    private static final Font EDGE_FONT = new Font(Font.SANS_SERIF, Font.PLAIN, 10);
+
+    /** Границы кликабельного «чипа» подписи связи (на середине ЛОМАНОЙ линии, не
+     *  просто между началом и концом) — используются и при отрисовке, и при
+     *  хит-тесте клика, чтобы не разъезжались. */
+    private java.awt.Rectangle labelChipBounds(SchemaEdge edge) {
+        List<double[]> pts = routePoints(edge);
+        if (pts == null) {
+            return null;
+        }
+        double[] mid = midOfRoute(pts);
+        int mx = (int) mid[0];
+        int my = (int) mid[1];
         String display = edge.displayLabel();
         boolean hasLabel = display != null && !display.isEmpty();
         String text = hasLabel ? display : "+ подпись";
@@ -678,6 +813,23 @@ public class SchemaCanvasPanel extends JPanel {
         return null;
     }
 
+    /** "Защита от дурака" (см. Personalization) — при создании НОВОЙ связи через
+     *  гнёзда запрещает соединять ВХОД со ВХОДОМ или ВЫХОД с ВЫХОДОМ, если у обоих
+     *  гнёзд направление вообще определено (сравнение по {@link CardPort#getDirection()}).
+     *  Ничего не проверяет, если настройка выключена или хотя бы одно из гнёзд не
+     *  найдено (обычная связь узел-узел без привязки к конкретному гнезду). */
+    private String directionError(CardPort fromPort, CardPort toPort) {
+        if (!settings.activeProfile().isFoolProofWiringEnabled() || fromPort == null || toPort == null) {
+            return null;
+        }
+        if (fromPort.getDirection() == toPort.getDirection()) {
+            String dir = fromPort.getDirection() == PortDirection.IN ? "входа" : "выхода";
+            return "Нельзя соединить два " + dir + " напрямую — проверьте направление гнёзд"
+                    + " (можно отключить в Персонализации: «Защита от дурака»)";
+        }
+        return null;
+    }
+
     private static double distanceToSegment(double px, double py, double ax, double ay, double bx, double by) {
         double dx = bx - ax, dy = by - ay;
         double len2 = dx * dx + dy * dy;
@@ -693,6 +845,15 @@ public class SchemaCanvasPanel extends JPanel {
             selectedEdge = null;
             repaint();
             showNodeMenu(hitNode, e.getX(), e.getY());
+            return;
+        }
+        // Точки излома видны/хватаются только у уже ВЫДЕЛЕННОЙ связи (см. waypointAt),
+        // поэтому этот хит-тест что-то находит, только если ПКМ пришёлся по излому связи,
+        // которая уже была выделена левым кликом — в этом случае показываем отдельное
+        // меню одной точки, а не общее меню связи.
+        WaypointHit wpHit = waypointAt(e.getPoint());
+        if (wpHit != null) {
+            showWaypointMenu(wpHit.edge(), wpHit.index(), e.getX(), e.getY());
             return;
         }
         SchemaEdge hitEdge = edgeAt(e.getPoint());
@@ -793,6 +954,25 @@ public class SchemaCanvasPanel extends JPanel {
         JPopupMenu menu = new JPopupMenu();
         javax.swing.JMenuItem label = new javax.swing.JMenuItem("Подпись связи…");
         label.addActionListener(ev -> editEdgeLabel(edge));
+        menu.add(label);
+
+        javax.swing.JCheckBoxMenuItem dashedItem = new javax.swing.JCheckBoxMenuItem("Пунктиром", edge.isDashed());
+        dashedItem.addActionListener(ev -> {
+            model.setSchemaEdgeDashed(edge, dashedItem.isSelected());
+            onChanged.run();
+            repaint();
+        });
+        menu.add(dashedItem);
+
+        javax.swing.JMenuItem straighten = new javax.swing.JMenuItem("Выпрямить");
+        straighten.setEnabled(!edge.getWaypoints().isEmpty());
+        straighten.addActionListener(ev -> {
+            model.setSchemaEdgeWaypoints(edge, List.of());
+            onChanged.run();
+            repaint();
+        });
+        menu.add(straighten);
+
         javax.swing.JMenuItem del = new javax.swing.JMenuItem("Удалить связь");
         del.addActionListener(ev -> {
             model.deleteSchemaEdge(edge);
@@ -800,7 +980,20 @@ public class SchemaCanvasPanel extends JPanel {
             onChanged.run();
             repaint();
         });
-        menu.add(label);
+        menu.add(del);
+        menu.show(this, x, y);
+    }
+
+    private void showWaypointMenu(SchemaEdge edge, int index, int x, int y) {
+        JPopupMenu menu = new JPopupMenu();
+        javax.swing.JMenuItem del = new javax.swing.JMenuItem("Удалить точку излома");
+        del.addActionListener(ev -> {
+            List<EdgeWaypoint> updated = new ArrayList<>(edge.getWaypoints());
+            updated.remove(index);
+            model.setSchemaEdgeWaypoints(edge, updated);
+            onChanged.run();
+            repaint();
+        });
         menu.add(del);
         menu.show(this, x, y);
     }
@@ -819,7 +1012,7 @@ public class SchemaCanvasPanel extends JPanel {
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
         Graphics2D g2 = (Graphics2D) g.create();
-        paint(g2, getWidth(), getHeight(), false);
+        paint(g2, getWidth(), getHeight(), settings.activeProfile().isSchemaScreensAsWiringDiagram());
     }
 
     /** Рендерит схему в изображение заданного размера — не зависит от реального
@@ -862,16 +1055,41 @@ public class SchemaCanvasPanel extends JPanel {
         g2.setFont(EDGE_FONT);
         java.awt.FontMetrics edgeFm = g2.getFontMetrics();
         for (SchemaEdge edge : es) {
-            double[] ends = endpointsFor(edge);
-            if (ends == null) {
+            List<double[]> pts = routePoints(edge);
+            if (pts == null) {
                 continue;
             }
             boolean selected = edge == selectedEdge;
             g2.setColor(selected ? Palette.ACCENT : Palette.MUTED);
-            g2.setStroke(new BasicStroke(selected ? 3f : 2f));
-            double ax = ends[0], ay = ends[1], bx = ends[2], by = ends[3];
-            g2.drawLine((int) ax, (int) ay, (int) bx, (int) by);
-            drawArrow(g2, ax, ay, bx, by);
+            float strokeWidth = selected ? 3f : 2f;
+            // Пунктир — переключатель "Пунктиром" в контекстном меню связи (Task #85/v1.4),
+            // например для обходного/резервного/мониторингового пути, как в референсном PDF.
+            g2.setStroke(edge.isDashed()
+                    ? new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 0, new float[]{7, 5}, 0)
+                    : new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            // Ломаная линия через точки излома (см. EdgeWaypoint) вместо одной прямой —
+            // ортогональная/произвольная маршрутизация, стрелка — только на последнем
+            // отрезке (указывает на конечный узел), не на каждом изломе.
+            for (int i = 0; i < pts.size() - 1; i++) {
+                double ax = pts.get(i)[0], ay = pts.get(i)[1];
+                double bx = pts.get(i + 1)[0], by = pts.get(i + 1)[1];
+                g2.drawLine((int) ax, (int) ay, (int) bx, (int) by);
+                if (i == pts.size() - 2) {
+                    drawArrow(g2, ax, ay, bx, by);
+                }
+            }
+            // Точки излома видны и хватаются мышью только у ВЫДЕЛЕННОЙ связи — иначе
+            // маленькие кружки на каждом изломе каждой связи захламляли бы обычный вид.
+            if (selected) {
+                for (int i = 1; i < pts.size() - 1; i++) {
+                    int wx = (int) pts.get(i)[0], wy = (int) pts.get(i)[1];
+                    g2.setColor(Color.WHITE);
+                    g2.fillOval(wx - 4, wy - 4, 8, 8);
+                    g2.setColor(Palette.ACCENT);
+                    g2.drawOval(wx - 4, wy - 4, 8, 8);
+                }
+            }
+            g2.setStroke(new BasicStroke(strokeWidth));
 
             // всегда видимый кликабельный «чип» подписи — клик по нему сразу открывает
             // ввод подписи, без необходимости искать тонкую линию и знать про ПКМ
@@ -918,6 +1136,24 @@ public class SchemaCanvasPanel extends JPanel {
             g2.setStroke(new BasicStroke(selected || pending ? 2.5f : 1.4f));
             g2.drawRoundRect((int) n.getX(), (int) n.getY(), nw, nh, 10, 10);
 
+            // Перегрузка силового узла (Task #87) — суммарная нагрузка, уходящая через
+            // исходящие связи узла, превышает ёмкость его входных разъёмов (см.
+            // SchemaLoadCalc). Отдельный контур поверх обычной рамки + значок в углу —
+            // не заменяет обычное выделение, а накладывается на него.
+            boolean overloaded = false;
+            if (mode == SchemaMode.POWER && n.getType() != SchemaNodeType.SCREEN
+                    && settings.activeProfile().isLoadTrackingEnabled()) {
+                Scene loadScene = model.getCurrentScene();
+                if (loadScene != null) {
+                    overloaded = com.vjstb.ledscheme.service.SchemaLoadCalc.evaluate(n, loadScene, model).overloaded();
+                }
+            }
+            if (overloaded) {
+                g2.setColor(Palette.WARN);
+                g2.setStroke(new BasicStroke(3f));
+                g2.drawRoundRect((int) n.getX() - 1, (int) n.getY() - 1, nw + 2, nh + 2, 12, 12);
+            }
+
             String title = n.getType() == SchemaNodeType.SCREEN ? resolveScreenLabel(n) : n.getLabel();
             if (title == null || title.isEmpty()) {
                 title = n.getType().getLabel();
@@ -937,6 +1173,12 @@ public class SchemaCanvasPanel extends JPanel {
                 drawConnectorRows(g2, n, portsOf(n), (int) n.getX(), (int) n.getY(), nw, nh);
             } else {
                 drawClipped(g2, n.getType().getLabel(), (int) n.getX() + 8, (int) n.getY() + 38, nw - 16);
+            }
+
+            if (overloaded) {
+                g2.setColor(Palette.WARN);
+                g2.setFont(titleFont);
+                g2.drawString("⚠", (int) n.getX() + nw - 20, (int) n.getY() + 16);
             }
 
             // Уголок изменения размера — маленький треугольник в правом нижнем углу,
@@ -964,8 +1206,9 @@ public class SchemaCanvasPanel extends JPanel {
             return "ссылка недействительна";
         }
         if (mode == SchemaMode.POWER) {
+            String sockets = inSocketsSummary(n.getPowerConnectors());
             return scr.getCols() + "×" + scr.getRows() + " каб. · " + model.powerChainsTouchingScreen(scr).size()
-                    + " вводных";
+                    + " вводных" + (sockets.isEmpty() ? "" : " (" + sockets + ")");
         }
         // Резерв порта (витая пара) подразумевается по умолчанию на используемом
         // контроллере — в блок-схеме площадки это лишняя детализация, не нужно
@@ -978,8 +1221,34 @@ public class SchemaCanvasPanel extends JPanel {
                 controllerBackups++;
             }
         }
+        String signalSockets = "";
+        for (SchemaCard c : n.getCards()) {
+            if ("Вводы сигнала".equals(c.getName())) {
+                signalSockets = inSocketsSummary(c.getPorts());
+                break;
+            }
+        }
         return "портов: " + model.effectiveSignalPortCount(scr) + " · " + model.signalChainsTouchingScreen(scr).size()
-                + " вводных" + (controllerBackups > 0 ? " · резерв контроллера: " + controllerBackups : "");
+                + " вводных" + (signalSockets.isEmpty() ? "" : " (" + signalSockets + ")")
+                + (controllerBackups > 0 ? " · резерв контроллера: " + controllerBackups : "");
+    }
+
+    /** Краткая сводка ВХОДНЫХ гнёзд узла-экрана вида «2×PowerCon, 1×Cat6/RJ45» —
+     *  показывает автоматически отслеженные гнёзда (см. AppModel.addPowerChain/
+     *  addSignalChain) прямо в блоке экрана, без переключения на подробную схему
+     *  расключения. */
+    private static String inSocketsSummary(List<CardPort> ports) {
+        StringBuilder sb = new StringBuilder();
+        for (CardPort p : ports) {
+            if (p.getDirection() != PortDirection.IN) {
+                continue;
+            }
+            if (sb.length() > 0) {
+                sb.append(", ");
+            }
+            sb.append(p.getCount()).append('×').append(p.getConnectorType());
+        }
+        return sb.toString();
     }
 
     /** "Тестовая" замена обычного текста статистики узла-экрана (см. renderScreenWiring
@@ -1004,7 +1273,16 @@ public class SchemaCanvasPanel extends JPanel {
         int top = (int) n.getY() + 34;
         int left = (int) n.getX() + pad;
         int availW = nw - pad * 2;
-        int availH = (int) (n.getY() + nh) - top - pad;
+        // Полоса контроллеров (см. SchemeRenderer.drawControllerSummaryBar) — только
+        // для сигнала, отнимает фиксированную полосу СНИЗУ у сетки кабинетов, если
+        // вообще помещается хоть с какой-то разумной высотой сетки.
+        int barH = mode == SchemaMode.POWER ? 0 : SchemeRenderer.controllerSummaryBarHeight(scr);
+        int gridBottom = (int) (n.getY() + nh) - pad;
+        int availH = gridBottom - top - barH;
+        if (availH < 20) {
+            barH = 0;
+            availH = gridBottom - top;
+        }
         if (availW < 10 || availH < 10) {
             return;
         }
@@ -1019,8 +1297,12 @@ public class SchemaCanvasPanel extends JPanel {
         List<SignalChain> signalChains = scene != null ? scene.getSignalChains() : List.of();
         Graphics2D clipped = (Graphics2D) g2.create();
         clipped.clipRect((int) n.getX(), (int) n.getY(), nw, nh);
-        SchemeRenderer.paintScheme(clipped, scr, t, mode == SchemaMode.POWER, cellW, cellH, left, top,
+        SchemeRenderer.paintWiringDiagram(clipped, scr, t, mode == SchemaMode.POWER, cellW, cellH, left, top,
                 model.getWorkspace(), powerChains, signalChains);
+        if (barH > 0) {
+            SchemeRenderer.drawControllerSummaryBar(clipped, scr, model.getWorkspace(),
+                    left, top + scr.getRows() * cellH + 2, availW);
+        }
         clipped.dispose();
     }
 

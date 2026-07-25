@@ -1,5 +1,7 @@
 package com.vjstb.ledscheme.model;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -27,6 +29,14 @@ public class SchemaEdge {
     private String wireType;
     /** Метраж линии, м — применимо в основном для питания (для сигнала обычно не заполняется). */
     private Double lengthM;
+    /** Точки излома маршрута связи (см. {@link EdgeWaypoint}) — пусто (по умолчанию)
+     *  означает прямую линию узел-узел, как раньше; непустой список рисует связь
+     *  ломаной линией через эти точки (ортогональная/произвольная маршрутизация,
+     *  Task #85/v1.4, задаётся перетаскиванием в редакторе схемы). */
+    private List<EdgeWaypoint> waypoints = new ArrayList<>();
+    /** Пунктирная линия связи вместо сплошной — визуальное отличие (например, для
+     *  обходного/резервного/мониторингового пути, как в референсном PDF). */
+    private boolean dashed;
 
     public SchemaEdge() {
     }
@@ -118,6 +128,22 @@ public class SchemaEdge {
         this.lengthM = lengthM;
     }
 
+    public List<EdgeWaypoint> getWaypoints() {
+        return waypoints;
+    }
+
+    public void setWaypoints(List<EdgeWaypoint> waypoints) {
+        this.waypoints = waypoints != null ? waypoints : new ArrayList<>();
+    }
+
+    public boolean isDashed() {
+        return dashed;
+    }
+
+    public void setDashed(boolean dashed) {
+        this.dashed = dashed;
+    }
+
     /** true, если подпись задана структурированно (N×тип) — только такие связи
      *  попадают в автоматическую спецификацию коммутации на этапе «Вывод». */
     public boolean hasStructuredWire() {
@@ -153,6 +179,10 @@ public class SchemaEdge {
         e.wireCount = wireCount;
         e.wireType = wireType;
         e.lengthM = lengthM;
+        for (EdgeWaypoint w : waypoints) {
+            e.waypoints.add(w.copy());
+        }
+        e.dashed = dashed;
         return e;
     }
 }

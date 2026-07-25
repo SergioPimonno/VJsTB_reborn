@@ -18,7 +18,11 @@ import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageWriteParam;
@@ -111,6 +115,278 @@ public final class SchemeRenderer {
                         false, cellW, cellH, offX, offY, signalChainLabel(scr, chain, workspace),
                         signalChainEndLabel(scr, chain, workspace));
             }
+        }
+    }
+
+    /** Кабинет принадлежит цепочке под индексом chainIndex (для цвета — тот же
+     *  индекс, что использует paintScheme/Palette.signalColor) на позиции seq
+     *  (1-based, порядок физического подключения в цепочке). */
+    private record ChainMembership(int chainIndex, int seq, Color color, Integer phase, Integer port) { }
+
+    /** "Богатая" схема расключения экрана в духе профессиональных PDF-схем
+     *  (сплошная заливка ячейки цветом её цепочки, кружок-разъём и стрелка между
+     *  соседними кабинетами одной цепочки, многострочная подпись на кабинете —
+     *  фаза/порт, порядковый номер в цепочке, разрешение или мощность) — задумана
+     *  для встраиваемой миниатюры узла-экрана в общей схеме площадки (см.
+     *  SchemaCanvasPanel), не для основного интерактивного холста прописи (там
+     *  по-прежнему {@link #paintScheme} — привычный вид для клика по кабинетам). */
+    public static void paintWiringDiagram(Graphics2D g2, Screen scr, CabinetType type, boolean power,
+                                           int cellW, int cellH, int offX, int offY, Workspace workspace,
+                                           List<PowerChain> powerChains, List<SignalChain> signalChains) {
+        Map<String, ChainMembership> byCab = new HashMap<>();
+        if (power) {
+            for (int ci = 0; ci < powerChains.size(); ci++) {
+                PowerChain chain = powerChains.get(ci);
+                Color color = Palette.phaseColor(chain.getPhase());
+                List<String> ids = chain.getCabinetInstanceIds();
+                for (int i = 0; i < ids.size(); i++) {
+                    byCab.put(ids.get(i), new ChainMembership(ci, i + 1, color, chain.getPhase(), null));
+                }
+            }
+        } else {
+            for (int ci = 0; ci < signalChains.size(); ci++) {
+                SignalChain chain = signalChains.get(ci);
+                Color color = Palette.signalColor(ci);
+                List<String> ids = chain.getCabinetInstanceIds();
+                for (int i = 0; i < ids.size(); i++) {
+                    byCab.put(ids.get(i), new ChainMembership(ci, i + 1, color, null, chain.getPortNumber()));
+                }
+            }
+        }
+
+        // Многострочная подпись физически не помещается в мелкую ячейку (узел схемы
+        // маленького размера) — тогда просто закрашиваем цветом цепочки без текста,
+        // как обычная миниатюра, вместо нечитаемой мешанины из строк.
+        boolean showLabels = cellH >= 34 && cellW >= 46;
+        Font labelFont = showLabels
+                ? g2.getFont().deriveFont(Font.PLAIN, Math.max(8f, Math.min(cellH, cellW) * 0.13f)) : null;
+
+        for (CabinetInstance cab : scr.getCabinets()) {
+            if (cab.isHidden()) {
+                continue;
+            }
+            int x = offX + cab.getColIndex() * cellW;
+            int y = offY + cab.getRowIndex() * cellH;
+            ChainMembership m = byCab.get(cab.getId());
+            g2.setColor(m != null ? m.color() : Palette.PANEL);
+            g2.fillRect(x, y, cellW, cellH);
+            g2.setColor(Palette.BORDER);
+            g2.drawRect(x, y, cellW, cellH);
+
+            if (m != null && showLabels) {
+                CabinetType effective = effectiveTypeOf(cab, type, workspace);
+                List<String> lines = new ArrayList<>();
+                lines.add(power ? "L" + m.phase() : portLabel(scr, workspace, m.port() != null ? m.port() : 0));
+                lines.add("#" + m.seq());
+                if (effective != null) {
+                    lines.add(power ? trim(effective.getPowerConsumptionW()) + "Вт"
+                            : effective.getResolutionWidth() + "×" + effective.getResolutionHeight());
+                }
+                g2.setFont(labelFont);
+                g2.setColor(Color.BLACK);
+                java.awt.FontMetrics fm = g2.getFontMetrics();
+                int lineH = fm.getHeight();
+                int ty = y + lineH;
+                int maxTextW = cellW - 6;
+                for (String line : lines) {
+                    if (ty > y + cellH - 2) {
+                        break;
+                    }
+                    g2.drawString(clipToWidth(g2, line, maxTextW), x + 3, ty);
+                    ty += lineH;
+                }
+            }
+        }
+
+        // Подписи начал цепочек группируются ПО ПОЗИЦИИ первого кабинета и рисуются
+        // ОДНИМ проходом после всех линий — резервная цепочка сигнала на практике
+        // почти всегда физически идёт через ТЕ ЖЕ кабинеты, что и основная (второй
+        // кабель на тот же ряд панелей), т.е. у обеих один и тот же первый кабинет;
+        // рисовать подписи независимо, как раньше, означало, что вторая просто
+        // затирала первую в том же самом месте — теперь обе подписи одной плашкой.
+        Map<String, List<String>> startLabelsByCabinet = new LinkedHashMap<>();
+        if (power) {
+            for (PowerChain chain : powerChains) {
+                drawChainWithDots(g2, scr, chain.getCabinetInstanceIds(), cellW, cellH, offX, offY, false);
+                addStartLabel(startLabelsByCabinet, chain.getCabinetInstanceIds(), "L" + chain.getPhase());
+            }
+        } else {
+            for (SignalChain chain : signalChains) {
+                drawChainWithDots(g2, scr, chain.getCabinetInstanceIds(), cellW, cellH, offX, offY, chain.isBackup());
+                if (chain.getPortNumber() != null) {
+                    String lbl = portLabel(scr, workspace, chain.getPortNumber());
+                    addStartLabel(startLabelsByCabinet, chain.getCabinetInstanceIds(),
+                            chain.isBackup() ? "рез:" + lbl : lbl);
+                }
+            }
+        }
+        int minCellGlobal = Math.min(cellW, cellH);
+        if (minCellGlobal >= 10) {
+            for (var entry : startLabelsByCabinet.entrySet()) {
+                CabinetInstance cab = scr.cabinetById(entry.getKey());
+                if (cab != null) {
+                    drawStartLabelBadge(g2, cab, cellW, cellH, offX, offY, entry.getValue());
+                }
+            }
+        }
+    }
+
+    private static void addStartLabel(Map<String, List<String>> byCabinet, List<String> chainIds, String label) {
+        if (chainIds.isEmpty()) {
+            return;
+        }
+        byCabinet.computeIfAbsent(chainIds.get(0), k -> new ArrayList<>()).add(label);
+    }
+
+    /** Плашка с одной или несколькими подписями (основная цепочка + резерв(ы), если
+     *  начинаются на том же кабинете) в углу ПЕРВОЙ ячейки цепочки — независимо от
+     *  showLabels (тот отключается для мелких ячеек, но видеть, где начинается КАКАЯ
+     *  линия, нужно всегда, пока ячейка вообще различима). */
+    private static void drawStartLabelBadge(Graphics2D g2, CabinetInstance cab, int cellW, int cellH,
+                                             int offX, int offY, List<String> lines) {
+        int minCell = Math.min(cellW, cellH);
+        int x = offX + cab.getColIndex() * cellW;
+        int y = offY + cab.getRowIndex() * cellH;
+        Font f = g2.getFont().deriveFont(Font.BOLD, Math.max(7f, Math.min(minCell * 0.32f, 11f)));
+        g2.setFont(f);
+        java.awt.FontMetrics fm = g2.getFontMetrics();
+        int pad = 2;
+        int maxTextW = 0;
+        for (String line : lines) {
+            maxTextW = Math.max(maxTextW, fm.stringWidth(line));
+        }
+        int tw = Math.min(cellW - 2, maxTextW + pad * 2);
+        int lineH = fm.getHeight();
+        int th = lineH * lines.size();
+        int bx = x + 1;
+        int by = y + 1;
+        g2.setColor(new Color(0, 0, 0, 190));
+        g2.fillRoundRect(bx, by, tw, th, 4, 4);
+        g2.setColor(Color.WHITE);
+        int ty = by + fm.getAscent();
+        for (String line : lines) {
+            g2.drawString(clipToWidth(g2, line, tw - pad * 2), bx + pad, ty);
+            ty += lineH;
+        }
+    }
+
+    /** Фактический тип кабинета конкретной ячейки (переопределение по ячейке, если
+     *  задано и разрешимо через workspace, иначе тип экрана по умолчанию). */
+    private static CabinetType effectiveTypeOf(CabinetInstance cab, CabinetType defaultType, Workspace workspace) {
+        if (workspace != null && cab.getCabinetTypeId() != null) {
+            CabinetType override = workspace.cabinetTypeById(cab.getCabinetTypeId());
+            if (override != null) {
+                return override;
+            }
+        }
+        return defaultType;
+    }
+
+    /** Обрезает строку по ширине (с "…"), чтобы не наезжала на соседние ячейки при
+     *  мелком шрифте миниатюры расключения. */
+    private static String clipToWidth(Graphics2D g2, String text, int maxWidth) {
+        java.awt.FontMetrics fm = g2.getFontMetrics();
+        if (fm.stringWidth(text) <= maxWidth) {
+            return text;
+        }
+        String s = text;
+        while (s.length() > 1 && fm.stringWidth(s + "…") > maxWidth) {
+            s = s.substring(0, s.length() - 1);
+        }
+        return s + "…";
+    }
+
+    /** Как {@link #drawChain}, но дополнительно рисует небольшой кружок-разъём в
+     *  центре каждого кабинета цепочки (не только стрелку между соседними) — как в
+     *  профессиональных схемах расключения, где виден сам физический разъём/точка
+     *  подключения, а не только направление линии. */
+    /** dashed — пунктирная линия вместо сплошной; используется для РЕЗЕРВНОЙ
+     *  сигнальной цепочки, которая на практике почти всегда физически идёт через
+     *  ТЕ ЖЕ кабинеты, что и основная (см. вызов из paintWiringDiagram) — без
+     *  визуального различия основной и резервный путь были бы неотличимы, рисуясь
+     *  друг поверх друга в одних и тех же точках. */
+    private static void drawChainWithDots(Graphics2D g2, Screen scr, List<String> ids,
+                                           int cellW, int cellH, int offX, int offY, boolean dashed) {
+        int minCell = Math.min(cellW, cellH);
+        float strokeWidth = (float) Math.max(0.8, Math.min(2.5, minCell * 0.08));
+        g2.setStroke(dashed
+                ? new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 0,
+                        new float[]{Math.max(3f, minCell * 0.25f), Math.max(2f, minCell * 0.18f)}, 0)
+                : new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        // ЧЁРНЫЙ, а не цвет цепочки — ячейки здесь залиты СПЛОШНЫМ цветом цепочки
+        // (в отличие от обычного paintScheme), линия того же цвета была бы попросту
+        // не видна поверх такой заливки. Цвет цепочки и так виден по заливке ячеек —
+        // линии нужны только показать САМ путь/порядок подключения.
+        Color lineColor = Color.BLACK;
+        g2.setColor(lineColor);
+        double arrowSize = Math.max(3.0, Math.min(minCell * 0.25, 9.0));
+        boolean showArrowHeads = minCell >= 12;
+        int dotR = Math.max(2, Math.min(minCell / 8, 5));
+        for (int i = 0; i < ids.size() - 1; i++) {
+            CabinetInstance a = scr.cabinetById(ids.get(i));
+            CabinetInstance b = scr.cabinetById(ids.get(i + 1));
+            if (a == null || b == null) {
+                continue;
+            }
+            int ax = offX + a.getColIndex() * cellW + cellW / 2;
+            int ay = offY + a.getRowIndex() * cellH + cellH / 2;
+            int bx = offX + b.getColIndex() * cellW + cellW / 2;
+            int by = offY + b.getRowIndex() * cellH + cellH / 2;
+            g2.drawLine(ax, ay, bx, by);
+            if (showArrowHeads) {
+                drawArrowHead(g2, ax, ay, bx, by, lineColor, arrowSize);
+            }
+        }
+        if (minCell >= 18) {
+            g2.setColor(Color.WHITE);
+            for (String id : ids) {
+                CabinetInstance c = scr.cabinetById(id);
+                if (c == null) {
+                    continue;
+                }
+                int cx = offX + c.getColIndex() * cellW + cellW / 2;
+                int cy = offY + c.getRowIndex() * cellH + cellH / 2;
+                g2.fillOval(cx - dotR, cy - dotR, dotR * 2, dotR * 2);
+                g2.setColor(Color.BLACK);
+                g2.drawOval(cx - dotR, cy - dotR, dotR * 2, dotR * 2);
+                g2.setColor(Color.WHITE);
+            }
+        }
+        g2.setStroke(new BasicStroke(1f));
+    }
+
+    /** Компактная сводная полоса контроллеров экрана под сеткой расключения сигнала —
+     *  как строка "MCTRL4K-1" с портами и цветом резерва в исходной схеме-образце:
+     *  по одному контроллеру на строку, с меткой резервной связки, если она есть. */
+    public static int controllerSummaryBarHeight(Screen scr) {
+        return scr.getControllers().isEmpty() ? 0 : 14 * scr.getControllers().size() + 4;
+    }
+
+    public static void drawControllerSummaryBar(Graphics2D g2, Screen scr, Workspace workspace,
+                                                 int x, int y, int width) {
+        List<com.vjstb.ledscheme.model.ControllerInstance> controllers = scr.getControllers();
+        if (controllers.isEmpty() || workspace == null) {
+            return;
+        }
+        Font f = g2.getFont().deriveFont(Font.PLAIN, 9f);
+        g2.setFont(f);
+        java.awt.FontMetrics fm = g2.getFontMetrics();
+        int offset = 0;
+        int rowY = y + fm.getAscent();
+        for (int i = 0; i < controllers.size(); i++) {
+            com.vjstb.ledscheme.model.ControllerInstance ci = controllers.get(i);
+            com.vjstb.ledscheme.model.ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
+            int count = t != null ? t.effectivePortCount() : 0;
+            boolean isBackupOfAnother = controllers.stream().anyMatch(o -> ci.getId().equals(o.getBackupControllerId()));
+            String name = t != null ? t.getName() : "?";
+            String text = "C" + (i + 1) + " " + name + " · P" + (offset + 1) + "-" + (offset + count)
+                    + (ci.getBackupControllerId() != null ? " (резерв: следующий)" : "");
+            g2.setColor(isBackupOfAnother ? Palette.MUTED : Color.WHITE);
+            g2.drawString(clipToWidth(g2, text, width - 14), x + 12, rowY);
+            g2.setColor(isBackupOfAnother ? Color.RED : new Color(0x3f, 0xb9, 0x50));
+            g2.fillOval(x + 2, rowY - fm.getAscent() + 2, 8, 8);
+            rowY += 14;
+            offset += count;
         }
     }
 

@@ -1,22 +1,12 @@
 package com.vjstb.ledscheme.ui;
 
-import com.vjstb.ledscheme.settings.HotkeyAction;
-import com.vjstb.ledscheme.settings.KeyCombo;
 import com.vjstb.ledscheme.settings.SettingsManager;
 import com.vjstb.ledscheme.settings.UserProfile;
-import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
-import java.awt.GridLayout;
 import java.awt.Window;
-import java.awt.event.KeyAdapter;
-import java.awt.event.KeyEvent;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
-import java.awt.event.WindowAdapter;
-import java.awt.event.WindowEvent;
 import java.util.ArrayList;
 import java.util.List;
 import javax.swing.BorderFactory;
@@ -24,10 +14,8 @@ import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.JButton;
-import javax.swing.JCheckBox;
 import javax.swing.JColorChooser;
 import javax.swing.JComboBox;
-import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -37,8 +25,11 @@ import javax.swing.JPanel;
  * цветов (фазы питания, цвет блока без фазы, акцент, цвета цепочек сигнала).
  * Изменения применяются и сохраняются сразу — отдельной кнопки «Сохранить» нет,
  * как и для остальных данных приложения (единая логика автосохранения).
+ * Горячие клавиши и поведенческие переключатели — в отдельных окошках, см.
+ * {@link HotkeysDialog} и {@link PreferencesDialog}: каждый раздел персонализации
+ * открывается и настраивается независимо от остальных.
  */
-public class PersonalizationDialog extends JDialog {
+public class PersonalizationDialog extends javax.swing.JDialog {
 
     private final SettingsManager settings;
     private final JComboBox<UserProfile> profileCombo = new JComboBox<>();
@@ -48,9 +39,6 @@ public class PersonalizationDialog extends JDialog {
     private JButton phase3Swatch;
     private JButton phaseNoneSwatch;
     private JButton accentSwatch;
-    private JCheckBox previewWidgetCheck;
-    private JCheckBox canvasSnapToCenterCheck;
-    private JCheckBox socketWiringCheck;
 
     public PersonalizationDialog(Window owner, SettingsManager settings) {
         super(owner, "Персонализация — цвета и профили", ModalityType.MODELESS);
@@ -63,10 +51,6 @@ public class PersonalizationDialog extends JDialog {
         content.add(buildProfileRow());
         content.add(Box.createVerticalStrut(10));
         content.add(buildColorsPanel());
-        content.add(Box.createVerticalStrut(10));
-        content.add(buildBehaviorPanel());
-        content.add(Box.createVerticalStrut(10));
-        content.add(buildHotkeysPanel());
         content.add(Box.createVerticalStrut(10));
 
         JButton reset = new JButton("Сбросить к встроенным цветам");
@@ -194,141 +178,6 @@ public class PersonalizationDialog extends JDialog {
         return (JPanel) UiKit.section("Цвета", body);
     }
 
-    private JPanel buildBehaviorPanel() {
-        JPanel body = new JPanel();
-        body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
-        body.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        previewWidgetCheck = new JCheckBox("Мини-превью сцены в углу холста (Питание/Сигнал)",
-                settings.activeProfile().isPreviewWidgetEnabled());
-        previewWidgetCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
-        previewWidgetCheck.addActionListener(e -> settings.setPreviewWidgetEnabled(previewWidgetCheck.isSelected()));
-        body.add(previewWidgetCheck);
-
-        canvasSnapToCenterCheck = new JCheckBox("Shift-перетаскивание в канвасе: прилипание к центру канваса",
-                settings.activeProfile().isCanvasSnapToCenter());
-        canvasSnapToCenterCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
-        canvasSnapToCenterCheck.addActionListener(e ->
-                settings.setCanvasSnapToCenter(canvasSnapToCenterCheck.isSelected()));
-        body.add(canvasSnapToCenterCheck);
-
-        socketWiringCheck = new JCheckBox("Общая схема: коммутация через гнёзда разъёмов (а не узел целиком)",
-                settings.activeProfile().isSocketWiringEnabled());
-        socketWiringCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
-        socketWiringCheck.addActionListener(e -> settings.setSocketWiringEnabled(socketWiringCheck.isSelected()));
-        body.add(socketWiringCheck);
-
-        return (JPanel) UiKit.section("Поведение", body);
-    }
-
-    /** Секция «Горячие клавиши»: у каждого переназначаемого действия — текущая
-     *  комбинация, кнопка «Назначить…» (открывает захват следующей нажатой клавиши
-     *  или кнопки мыши, в т.ч. с модификаторами — например, Shift+ЛКМ) и «Сброс»
-     *  к встроенному значению по умолчанию. */
-    private JPanel buildHotkeysPanel() {
-        JPanel body = new JPanel();
-        body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
-        body.setAlignmentX(Component.LEFT_ALIGNMENT);
-        for (HotkeyAction action : HotkeyAction.values()) {
-            body.add(hotkeyRow(action));
-        }
-        body.add(Box.createVerticalStrut(4));
-        JLabel hint = new JLabel("<html>«Назначить…» — далее нажмите клавишу (можно с Ctrl/Shift/Alt) или"
-                + " кликните нужной кнопкой мыши в открывшемся окошке.</html>");
-        hint.setForeground(Palette.MUTED);
-        hint.setAlignmentX(Component.LEFT_ALIGNMENT);
-        body.add(hint);
-        return (JPanel) UiKit.section("Горячие клавиши", body);
-    }
-
-    private JPanel hotkeyRow(HotkeyAction action) {
-        JPanel row = new JPanel(new BorderLayout(8, 0));
-        row.setAlignmentX(Component.LEFT_ALIGNMENT);
-        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
-        row.add(new JLabel(action.getLabel()), BorderLayout.CENTER);
-
-        JLabel comboLabel = new JLabel(settings.bindingFor(action).label());
-        comboLabel.setForeground(Palette.ACCENT);
-        comboLabel.setPreferredSize(new Dimension(90, 20));
-        comboLabel.setHorizontalAlignment(JLabel.CENTER);
-
-        JButton rebind = new JButton("Назначить…");
-        rebind.addActionListener(e -> {
-            KeyCombo combo = captureCombo();
-            if (combo != null) {
-                settings.setBinding(action, combo);
-                comboLabel.setText(combo.label());
-            }
-        });
-        JButton reset = new JButton("Сброс");
-        reset.addActionListener(e -> {
-            settings.resetBinding(action);
-            comboLabel.setText(settings.bindingFor(action).label());
-        });
-
-        JPanel east = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
-        east.add(comboLabel);
-        east.add(rebind);
-        east.add(reset);
-        row.add(east, BorderLayout.EAST);
-        return row;
-    }
-
-    /** Открывает модальное окошко, ждущее следующую клавишу или клик мышью
-     *  (с учётом текущих модификаторов Ctrl/Shift/Alt), и возвращает результат —
-     *  или null, если пользователь нажал «Отмена». Пресекается только кнопка
-     *  «Отмена»: сам Esc должен оставаться назначаемым (например, чтобы перенести
-     *  завершение цепочки на другую клавишу, если физическая Esc не работает). */
-    private KeyCombo captureCombo() {
-        JDialog dlg = new JDialog(this, "Новая комбинация", ModalityType.APPLICATION_MODAL);
-        KeyCombo[] result = new KeyCombo[1];
-
-        JLabel label = new JLabel("<html>Нажмите нужную клавишу (можно удерживать Ctrl/Shift/Alt)<br>"
-                + "или кликните нужной кнопкой мыши в этом окне.</html>");
-        label.setBorder(BorderFactory.createEmptyBorder(16, 16, 16, 16));
-
-        JPanel content = new JPanel(new BorderLayout());
-        content.setFocusable(true);
-        content.add(label, BorderLayout.CENTER);
-
-        JButton cancel = new JButton("Отмена");
-        cancel.addActionListener(e -> dlg.dispose());
-        JPanel south = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        south.add(cancel);
-        content.add(south, BorderLayout.SOUTH);
-
-        content.addKeyListener(new KeyAdapter() {
-            @Override
-            public void keyPressed(KeyEvent e) {
-                int kc = e.getKeyCode();
-                if (kc == KeyEvent.VK_SHIFT || kc == KeyEvent.VK_CONTROL || kc == KeyEvent.VK_ALT) {
-                    return; // модификатор сам по себе — не комбинация, ждём следующую клавишу
-                }
-                result[0] = KeyCombo.ofKey(kc, e.isControlDown(), e.isShiftDown(), e.isAltDown());
-                dlg.dispose();
-            }
-        });
-        content.addMouseListener(new MouseAdapter() {
-            @Override
-            public void mousePressed(MouseEvent e) {
-                result[0] = KeyCombo.ofMouse(e.getButton(), e.isControlDown(), e.isShiftDown(), e.isAltDown());
-                dlg.dispose();
-            }
-        });
-        dlg.addWindowListener(new WindowAdapter() {
-            @Override
-            public void windowOpened(WindowEvent e) {
-                content.requestFocusInWindow();
-            }
-        });
-
-        dlg.setContentPane(content);
-        dlg.setSize(380, 150);
-        dlg.setLocationRelativeTo(this);
-        dlg.setVisible(true);
-        return result[0];
-    }
-
     private JPanel colorRow(String title, JButton swatchBtn) {
         JPanel row = new JPanel(new java.awt.BorderLayout(8, 0));
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -404,10 +253,6 @@ public class PersonalizationDialog extends JDialog {
         accentSwatch.removeActionListener(accentListener);
         accentListener = e -> applyAccent();
         accentSwatch.addActionListener(accentListener);
-
-        previewWidgetCheck.setSelected(settings.activeProfile().isPreviewWidgetEnabled());
-        canvasSnapToCenterCheck.setSelected(settings.activeProfile().isCanvasSnapToCenter());
-        socketWiringCheck.setSelected(settings.activeProfile().isSocketWiringEnabled());
     }
 
     private java.awt.event.ActionListener phase1Listener;

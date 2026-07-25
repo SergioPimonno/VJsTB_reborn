@@ -136,7 +136,7 @@ public class ChainInteractionController implements CanvasPanel.Controller {
             cursorCol = clamp(cursorCol + dCol, 0, scr.getCols() - 1);
         }
         CabinetInstance cab = scr.cabinetAt(cursorRow, cursorCol);
-        if (cab != null && !activeIds.contains(cab.getId())) {
+        if (cab != null && !cab.isHidden() && !activeIds.contains(cab.getId())) {
             activeIds.add(cab.getId());
         }
         onChange.run();
@@ -173,6 +173,24 @@ public class ChainInteractionController implements CanvasPanel.Controller {
         if (cabId == null) {
             return;
         }
+        Screen scr = model.getCurrentScreen();
+        CabinetInstance cab = scr != null ? scr.cabinetById(cabId) : null;
+        if (cab == null && model.getCurrentScene() != null) {
+            // Кабинет может принадлежать ДРУГОМУ экрану сцены — сигнальная цепочка
+            // может физически продолжаться на смежный экран (клик пришёл из
+            // детального обзора "показать все экраны", см. SceneCanvasPanel).
+            for (Screen other : model.getCurrentScene().getScreens()) {
+                cab = other.cabinetById(cabId);
+                if (cab != null) {
+                    break;
+                }
+            }
+        }
+        // Скрытый ("удалённый") кабинет не должен становиться частью НОВОЙ
+        // цепочки — ни началом, ни продолжением уже строящейся.
+        if (cab == null || cab.isHidden()) {
+            return;
+        }
         if (!building) {
             // Клик по кабинету, когда ничего ещё не строится — начинаем новую
             // цепочку сразу для текущей выбранной фазы/порта, без отдельного
@@ -187,22 +205,6 @@ public class ChainInteractionController implements CanvasPanel.Controller {
             commitHandler = handler;
             activeIds.clear();
             building = true;
-        }
-        Screen scr = model.getCurrentScreen();
-        CabinetInstance cab = scr != null ? scr.cabinetById(cabId) : null;
-        if (cab == null && model.getCurrentScene() != null) {
-            // Кабинет может принадлежать ДРУГОМУ экрану сцены — сигнальная цепочка
-            // может физически продолжаться на смежный экран (клик пришёл из
-            // детального обзора "показать все экраны", см. SceneCanvasPanel).
-            for (Screen other : model.getCurrentScene().getScreens()) {
-                cab = other.cabinetById(cabId);
-                if (cab != null) {
-                    break;
-                }
-            }
-        }
-        if (cab == null) {
-            return;
         }
         if (!activeIds.contains(cabId)) {
             activeIds.add(cabId);

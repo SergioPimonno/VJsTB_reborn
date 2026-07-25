@@ -209,6 +209,29 @@ class ChainInteractionControllerTest {
     }
 
     @Test
+    void hiddenCabinetCannotStartOrJoinAChain(@TempDir Path dir) {
+        AppModel model = freshModelWithScreen(dir, 2, 2);
+        Screen scr = model.getCurrentScreen();
+        String a = scr.cabinetAt(0, 0).getId();
+        model.toggleCabinetHidden(a);
+
+        List<List<String>> committed = new ArrayList<>();
+        ChainInteractionController ctrl = new ChainInteractionController(model, () -> { });
+        ctrl.setStarter(cabId -> committed::add);
+
+        ctrl.cabinetClicked(a);
+        assertFalse(ctrl.isChainBuilding(), "Скрытый кабинет не должен автозапускать новую цепочку");
+        assertTrue(ctrl.activeChainCabIds().isEmpty());
+
+        // Скрытый кабинет также не должен добавляться в уже строящуюся цепочку.
+        String b = scr.cabinetAt(0, 1).getId();
+        ctrl.cabinetClicked(b);
+        assertTrue(ctrl.isChainBuilding());
+        ctrl.cabinetClicked(a);
+        assertEquals(List.of(b), ctrl.activeChainCabIds());
+    }
+
+    @Test
     void cursorClampsAtGridBounds(@TempDir Path dir) {
         AppModel model = freshModelWithScreen(dir, 2, 2);
         ChainInteractionController ctrl = new ChainInteractionController(model, () -> { });

@@ -1,6 +1,7 @@
 package com.vjstb.ledscheme.ui.stage;
 
 import com.vjstb.ledscheme.model.PowerChain;
+import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
@@ -283,11 +284,22 @@ public class PowerStagePanel extends JPanel {
             if (chains.isEmpty()) {
                 chainListPanel.add(UiKit.muted("Цепочек ещё нет"));
             }
+            boolean trackLoad = settings.activeProfile().isLoadTrackingEnabled();
+            Scene scene = model.getCurrentScene();
             for (PowerChain c : chains) {
                 boolean crossScreen = c.getCabinetInstanceIds().stream().anyMatch(id -> scr.cabinetById(id) == null);
                 String suffix = crossScreen ? " (продолжается на другом экране)" : "";
-                chainListPanel.add(chainRow("L" + c.getPhase() + " · " + c.getCabinetInstanceIds().size() + " каб." + suffix,
-                        Palette.phaseColor(c.getPhase()), () -> model.deletePowerChain(c.getId())));
+                // Текущая нагрузка цепочки показывается ВСЕГДА (это и есть итоговое число,
+                // с которым сравнивается ёмкость разъёма) — независимо от того, известен ли
+                // сам номинал разъёма (см. capacityKnown) и включён ли контроль перегрузки
+                // целиком; предупреждение/кнопка «Я знаю» — единственное, что зависит от
+                // настройки «Контроль электрической нагрузки».
+                AppModel.ChainLoadStatus status = model.powerChainLoadStatus(scene, c);
+                String label = "L" + c.getPhase() + " · " + c.getCabinetInstanceIds().size() + " каб." + suffix
+                        + " · " + UiKit.fmt(status.loadWatts()) + " Вт";
+                AppModel.ChainLoadStatus warnStatus = trackLoad ? status : null;
+                chainListPanel.add(chainRow(label, Palette.phaseColor(c.getPhase()), warnStatus,
+                        () -> model.acknowledgePowerChainOverload(scene, c), () -> model.deletePowerChain(c.getId())));
             }
         }
         UiKit.recapHeight(chainsSection);
@@ -342,19 +354,35 @@ public class PowerStagePanel extends JPanel {
         cornerPreviewHost.setVisible(settings.activeProfile().isPreviewWidgetEnabled() && !showAllScreens.isSelected());
     }
 
-    private javax.swing.JComponent chainRow(String label, java.awt.Color dot, Runnable onDelete) {
+    private javax.swing.JComponent chainRow(String label, java.awt.Color dot, AppModel.ChainLoadStatus status,
+                                             Runnable onAcknowledge, Runnable onDelete) {
         JPanel row = new JPanel(new BorderLayout(6, 0));
         row.setAlignmentX(LEFT_ALIGNMENT);
         row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
         JLabel dotLabel = new JLabel("●");
         dotLabel.setForeground(dot);
-        JLabel text = new JLabel(label);
+        boolean overloaded = status != null && status.overloaded();
+        JLabel text = new JLabel((overloaded ? "⚠ " : "") + label);
+        if (overloaded) {
+            text.setForeground(Palette.WARN);
+            text.setToolTipText("Перегрузка: " + UiKit.fmt(status.loadWatts()) + " Вт при допустимых "
+                    + UiKit.fmt(status.capacityWatts()) + " Вт на разъём кабинета");
+        }
+        JPanel east = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        if (overloaded && !status.acknowledged()) {
+            JButton ack = new JButton("Я знаю");
+            ack.setToolTipText("Подтвердить перегрузку — предупреждение и блокировка экспорта снимутся,"
+                    + " пока нагрузка не вырастет ещё больше");
+            ack.addActionListener(e -> onAcknowledge.run());
+            east.add(ack);
+        }
         JButton del = new JButton("✕");
         del.setMargin(new java.awt.Insets(0, 4, 0, 4));
         del.addActionListener(e -> onDelete.run());
+        east.add(del);
         row.add(dotLabel, BorderLayout.WEST);
         row.add(text, BorderLayout.CENTER);
-        row.add(del, BorderLayout.EAST);
+        row.add(east, BorderLayout.EAST);
         return row;
     }
 

@@ -131,8 +131,8 @@ public class MainFrame extends JFrame {
                 if (e.getID() != KeyEvent.KEY_PRESSED || !isActive()) {
                     return false;
                 }
-                // Действия ниже переназначаемы (см. PersonalizationDialog, «Горячие
-                // клавиши») — раньше были жёстко зашиты на конкретные коды клавиш,
+                // Действия ниже переназначаемы (см. HotkeysDialog) — раньше были
+                // жёстко зашиты на конкретные коды клавиш,
                 // из-за чего пользователь с нерабочей физической клавишей Esc не мог
                 // ничем её заменить и физически не мог завершить построение цепочки.
                 if (settings.bindingFor(HotkeyAction.UNDO).matchesKey(e)) {

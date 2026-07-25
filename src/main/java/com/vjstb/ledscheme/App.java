@@ -6,6 +6,7 @@ import com.vjstb.ledscheme.settings.SettingsManager;
 import com.vjstb.ledscheme.settings.SettingsStore;
 import com.vjstb.ledscheme.store.WorkspaceStore;
 import com.vjstb.ledscheme.ui.MainFrame;
+import com.vjstb.ledscheme.ui.OnboardingDialog;
 import com.vjstb.ledscheme.ui.Palette;
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
@@ -26,7 +27,11 @@ public class App {
                 AppModel model = new AppModel(store);
                 SettingsManager settings = new SettingsManager(new SettingsStore());
                 Palette.applyProfile(settings.activeProfile());
-                new MainFrame(model, settings).setVisible(true);
+                MainFrame frame = new MainFrame(model, settings);
+                frame.setVisible(true);
+                if (!settings.isOnboardingCompleted()) {
+                    new OnboardingDialog(frame, settings).setVisible(true);
+                }
             } catch (RuntimeException ex) {
                 JOptionPane.showMessageDialog(null,
                         "Не удалось запустить приложение: " + ex.getMessage(),

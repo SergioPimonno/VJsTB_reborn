@@ -21,6 +21,8 @@ public final class Palette {
     public static final Color BORDER = new Color(0x30363d);
     public static final Color TEXT = new Color(0xe6edf3);
     public static final Color MUTED = new Color(0x7d8590);
+    /** Предупреждение о перегрузке (Task #81/#87) — фиксированный цвет, не персонализируется. */
+    public static final Color WARN = new Color(0xf0883e);
 
     private static final Color DEFAULT_ACCENT = new Color(0x58a6ff);
     private static final Color DEFAULT_PHASE_NONE = new Color(0x1c2128);

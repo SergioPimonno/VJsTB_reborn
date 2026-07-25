@@ -38,11 +38,23 @@ import javax.swing.SpinnerNumberModel;
  */
 public class PowerConnectorsConfigDialog extends JDialog {
 
-    /** Абстракция над источником разъёмов — узел схемы или пресет библиотеки. */
+    /** Абстракция над источником разъёмов — узел схемы или пресет библиотеки.
+     *  getLoadDeratingPercent/setLoadDeratingPercent (Task #86/#87) значимы только
+     *  для узла схемы (запас — свойство конкретного силового блока, не пресета
+     *  библиотеки) — у пресета остаются заглушками по умолчанию. */
     public interface PowerConnectorsHost {
         List<CardPort> getConnectors();
-        void addConnector(String connectorType, PortDirection direction, int count);
+        CardPort addConnector(String connectorType, PortDirection direction, int count, int phaseCount,
+                               Double breakerAmps);
         void removeConnector(String portId);
+        default Double getLoadDeratingPercent() {
+            return null;
+        }
+        default void setLoadDeratingPercent(Double percent) {
+        }
+        default boolean supportsDerating() {
+            return false;
+        }
     }
 
     public static PowerConnectorsHost forNode(AppModel model, SchemaNode node) {
@@ -53,13 +65,29 @@ public class PowerConnectorsConfigDialog extends JDialog {
             }
 
             @Override
-            public void addConnector(String connectorType, PortDirection direction, int count) {
-                model.addPowerConnectorToNode(node, connectorType, direction, count);
+            public CardPort addConnector(String connectorType, PortDirection direction, int count, int phaseCount,
+                                          Double breakerAmps) {
+                return model.addPowerConnectorToNode(node, connectorType, direction, count, phaseCount, breakerAmps);
             }
 
             @Override
             public void removeConnector(String portId) {
                 model.removePowerConnectorFromNode(node, portId);
+            }
+
+            @Override
+            public Double getLoadDeratingPercent() {
+                return node.getLoadDeratingPercent();
+            }
+
+            @Override
+            public void setLoadDeratingPercent(Double percent) {
+                model.setSchemaNodeLoadDeratingPercent(node, percent);
+            }
+
+            @Override
+            public boolean supportsDerating() {
+                return true;
             }
         };
     }
@@ -72,8 +100,10 @@ public class PowerConnectorsConfigDialog extends JDialog {
             }
 
             @Override
-            public void addConnector(String connectorType, PortDirection direction, int count) {
-                model.addPowerConnectorToPreset(preset, connectorType, direction, count);
+            public CardPort addConnector(String connectorType, PortDirection direction, int count, int phaseCount,
+                                          Double breakerAmps) {
+                return model.addPowerConnectorToPreset(preset, connectorType, direction, count, phaseCount,
+                        breakerAmps);
             }
 
             @Override
@@ -93,6 +123,13 @@ public class PowerConnectorsConfigDialog extends JDialog {
             "Schuko", "IEC C13", "IEC C19", "Powerlock"});
     private final JComboBox<PortDirection> directionCombo = new JComboBox<>(PortDirection.values());
     private final JSpinner countSpinner = new JSpinner(new SpinnerNumberModel(1, 1, 64, 1));
+    /** Сколько фаз реально разведено на добавляемой группе разъёмов (Task #80) —
+     *  например, CEE 32A физически 3-фазный, но может быть заведён одной фазой. */
+    private final JSpinner phaseCountSpinner = new JSpinner(new SpinnerNumberModel(1, 1, 3, 1));
+    /** Номинал автомата, А — если ниже номинала самого разъёма (Task #86); пусто —
+     *  берётся номинал разъёма как есть. */
+    private final javax.swing.JTextField breakerField = new javax.swing.JTextField();
+    private javax.swing.JTextField deratingField;
 
     public PowerConnectorsConfigDialog(Window owner, String title, PowerConnectorsHost host) {
         super(owner, "Разъёмы питания — " + title, ModalityType.APPLICATION_MODAL);
@@ -109,8 +146,16 @@ public class PowerConnectorsConfigDialog extends JDialog {
                     boolean isSelected, boolean cellHasFocus) {
                 super.getListCellRendererComponent(l, value, index, isSelected, cellHasFocus);
                 if (value instanceof CardPort p) {
-                    setText(p.getCount() + "× " + escape(p.getConnectorType()) + " ("
-                            + (p.getDirection() == PortDirection.IN ? "вход" : "выход") + ")");
+                    StringBuilder sb = new StringBuilder();
+                    sb.append(p.getCount()).append("× ").append(escape(p.getConnectorType())).append(" (")
+                            .append(p.getDirection() == PortDirection.IN ? "вход" : "выход").append(')');
+                    if (p.getPhaseCount() > 1) {
+                        sb.append(", ").append(p.getPhaseCount()).append(" фазы");
+                    }
+                    if (p.getBreakerAmps() != null) {
+                        sb.append(", автомат ").append(UiKit.fmt(p.getBreakerAmps())).append('А');
+                    }
+                    setText(sb.toString());
                 }
                 return this;
             }
@@ -130,12 +175,33 @@ public class PowerConnectorsConfigDialog extends JDialog {
         form.add(directionCombo);
         form.add(new JLabel("Количество"));
         form.add(countSpinner);
+        form.add(new JLabel("Фаз разведено"));
+        form.add(phaseCountSpinner);
+        form.add(new JLabel("Автомат, А (необязательно)"));
+        form.add(breakerField);
         mid.add(form);
 
         JButton add = new JButton("+ Добавить разъём");
         add.addActionListener(e -> addConnector());
         mid.add(Box.createVerticalStrut(4));
         mid.add(add);
+
+        if (host.supportsDerating()) {
+            mid.add(Box.createVerticalStrut(8));
+            JPanel deratingRow = new JPanel(new BorderLayout(6, 0));
+            deratingRow.setBorder(BorderFactory.createTitledBorder("Запас нагрузки для этого блока"));
+            deratingField = new javax.swing.JTextField();
+            Double d = host.getLoadDeratingPercent();
+            deratingField.setText(d != null ? UiKit.fmt(d) : "");
+            JButton applyDerating = new JButton("Применить");
+            applyDerating.addActionListener(e -> applyDerating());
+            deratingRow.add(new JLabel("%, пусто — по умолчанию ("
+                    + UiKit.fmt(com.vjstb.ledscheme.service.PowerCalc.DEFAULT_DERATING_PERCENT) + "%): "),
+                    BorderLayout.WEST);
+            deratingRow.add(deratingField, BorderLayout.CENTER);
+            deratingRow.add(applyDerating, BorderLayout.EAST);
+            mid.add(deratingRow);
+        }
         content.add(mid, BorderLayout.CENTER);
 
         JPanel bottom = new JPanel(new BorderLayout());
@@ -164,10 +230,37 @@ public class PowerConnectorsConfigDialog extends JDialog {
             JOptionPane.showMessageDialog(this, "Укажите тип разъёма", "Проверка данных", JOptionPane.WARNING_MESSAGE);
             return;
         }
+        String breakerText = breakerField.getText().trim().replace(',', '.');
+        Double breakerAmps = null;
+        if (!breakerText.isEmpty()) {
+            try {
+                breakerAmps = Double.parseDouble(breakerText);
+            } catch (NumberFormatException ex) {
+                JOptionPane.showMessageDialog(this, "Автомат: введите число (А) или оставьте пустым",
+                        "Проверка данных", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+        }
         PortDirection dir = (PortDirection) directionCombo.getSelectedItem();
         int count = (Integer) countSpinner.getValue();
-        host.addConnector(connector, dir, count);
+        int phases = (Integer) phaseCountSpinner.getValue();
+        host.addConnector(connector, dir, count, phases, breakerAmps);
+        breakerField.setText("");
         refresh();
+    }
+
+    private void applyDerating() {
+        String text = deratingField.getText().trim().replace(',', '.');
+        if (text.isEmpty()) {
+            host.setLoadDeratingPercent(null);
+            return;
+        }
+        try {
+            host.setLoadDeratingPercent(Double.parseDouble(text));
+        } catch (NumberFormatException ex) {
+            JOptionPane.showMessageDialog(this, "Запас: введите число (%) или оставьте пустым для значения"
+                    + " по умолчанию", "Проверка данных", JOptionPane.WARNING_MESSAGE);
+        }
     }
 
     private void removeSelected() {

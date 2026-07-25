@@ -4,8 +4,8 @@ import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
 
 /**
- * Назначаемая пользователем горячая клавиша действия (см. PersonalizationDialog,
- * «Горячие клавиши») — клавиша клавиатуры ИЛИ кнопка мыши, плюс модификаторы
+ * Назначаемая пользователем горячая клавиша действия (см. ui.HotkeysDialog) —
+ * клавиша клавиатуры ИЛИ кнопка мыши, плюс модификаторы
  * Ctrl/Shift/Alt (например, Shift+ЛКМ). Ровно одно из keyCode/mouseButton задано.
  */
 public class KeyCombo {

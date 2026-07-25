@@ -18,6 +18,11 @@ public class SignalChain {
      *  основной (не бэкап) цепочке порта; null — резервный порт не назначен. */
     private Integer backupPortNumber;
     private List<String> cabinetInstanceIds = new ArrayList<>();
+    /** Нагрузка (пикселей), при которой инженер подтвердил перегрузку порта кнопкой
+     *  «Я знаю» (см. AppModel.acknowledgeSignalChainOverload) — null, если не
+     *  подтверждалась. Как и у {@link PowerChain#getAcknowledgedOverloadWatts()} —
+     *  подтверждение действует, пока текущая нагрузка не превысит это значение. */
+    private Double acknowledgedOverloadPixels;
 
     public SignalChain() {
     }
@@ -68,6 +73,14 @@ public class SignalChain {
         this.cabinetInstanceIds = cabinetInstanceIds;
     }
 
+    public Double getAcknowledgedOverloadPixels() {
+        return acknowledgedOverloadPixels;
+    }
+
+    public void setAcknowledgedOverloadPixels(Double acknowledgedOverloadPixels) {
+        this.acknowledgedOverloadPixels = acknowledgedOverloadPixels;
+    }
+
     public SignalChain copy() {
         SignalChain c = new SignalChain();
         c.id = id;
@@ -75,6 +88,7 @@ public class SignalChain {
         c.backup = backup;
         c.backupPortNumber = backupPortNumber;
         c.cabinetInstanceIds = new ArrayList<>(cabinetInstanceIds);
+        c.acknowledgedOverloadPixels = acknowledgedOverloadPixels;
         return c;
     }
 }

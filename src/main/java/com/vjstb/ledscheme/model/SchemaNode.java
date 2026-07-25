@@ -30,6 +30,12 @@ public class SchemaNode {
      *  (PowerCon/CEE/Schuko…) + направление + количество», т.к. силовое оборудование
      *  не имеет сменных видеокарт. */
     private List<CardPort> powerConnectors = new ArrayList<>();
+    /** Запас (%, 100 = без запаса) для проверки суммарной нагрузки этого силового
+     *  узла (Task #86/#87) — переопределяет {@link com.vjstb.ledscheme.service.PowerCalc#DEFAULT_DERATING_PERCENT}
+     *  для узлов с нетиповым режимом эксплуатации (например, проходной блок-разветвитель
+     *  без собственного запаса, в отличие от вводного щита). null — берётся значение
+     *  по умолчанию. */
+    private Double loadDeratingPercent;
 
     public SchemaNode() {
     }
@@ -131,6 +137,14 @@ public class SchemaNode {
         this.powerConnectors = powerConnectors;
     }
 
+    public Double getLoadDeratingPercent() {
+        return loadDeratingPercent;
+    }
+
+    public void setLoadDeratingPercent(Double loadDeratingPercent) {
+        this.loadDeratingPercent = loadDeratingPercent;
+    }
+
     public SchemaNode copy() {
         SchemaNode n = new SchemaNode();
         n.id = id;
@@ -150,6 +164,7 @@ public class SchemaNode {
         for (CardPort p : powerConnectors) {
             n.powerConnectors.add(p.copy());
         }
+        n.loadDeratingPercent = loadDeratingPercent;
         return n;
     }
 }

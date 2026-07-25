@@ -775,8 +775,33 @@ public class AppModel {
         }
         SchemaNode n = new SchemaNode(mode, type, label, x, y, screenRefId);
         currentScene.getSchemaNodes().add(n);
+        if (type == SchemaNodeType.SCREEN && screenRefId != null) {
+            // Экран мог быть расключен ДО того, как для него завели блок в общей
+            // схеме — тогда гнёзда нужно сразу подтянуть по факту уже существующих
+            // цепочек, а не ждать следующего изменения расключения (баг-репорт).
+            Screen scr = screenById(currentScene, screenRefId);
+            if (scr != null) {
+                if (mode == SchemaMode.POWER) {
+                    resyncPowerSockets(scr);
+                } else {
+                    resyncSignalSockets(scr);
+                }
+            }
+        }
         changed();
         return n;
+    }
+
+    private Screen screenById(Scene scene, String id) {
+        if (scene == null || id == null) {
+            return null;
+        }
+        for (Screen s : scene.getScreens()) {
+            if (s.getId().equals(id)) {
+                return s;
+            }
+        }
+        return null;
     }
 
     /** Перемещение узла (драг мышью) — вызывать один раз по отпусканию кнопки, не на каждый кадр. */
@@ -894,6 +919,19 @@ public class AppModel {
         changed();
     }
 
+    /** Точки излома маршрута связи (см. {@link com.vjstb.ledscheme.model.EdgeWaypoint}) —
+     *  пустой список сбрасывает её к прямой линии узел-узел (см. пункт «Выпрямить»
+     *  в контекстном меню связи схемы). */
+    public void setSchemaEdgeWaypoints(SchemaEdge edge, List<com.vjstb.ledscheme.model.EdgeWaypoint> waypoints) {
+        edge.setWaypoints(waypoints);
+        changed();
+    }
+
+    public void setSchemaEdgeDashed(SchemaEdge edge, boolean dashed) {
+        edge.setDashed(dashed);
+        changed();
+    }
+
     public void deleteSchemaEdge(SchemaEdge edge) {
         if (currentScene == null) {
             return;
@@ -929,7 +967,17 @@ public class AppModel {
     // ---- разъёмы питания узла (щиты/дистрибьюторы и т.п., схема ПИТАНИЯ) ----
 
     public CardPort addPowerConnectorToNode(SchemaNode node, String connectorType, PortDirection direction, int count) {
+        return addPowerConnectorToNode(node, connectorType, direction, count, 1, null);
+    }
+
+    /** Как выше, но с числом фаз и номиналом автомата (Task #80/#86) заданными сразу —
+     *  чтобы оба свойства попали в тот же changed()/автосохранение, что и сам разъём,
+     *  а не потерялись бы при мутации уже возвращённого объекта постфактум. */
+    public CardPort addPowerConnectorToNode(SchemaNode node, String connectorType, PortDirection direction,
+                                             int count, int phaseCount, Double breakerAmps) {
         CardPort port = new CardPort(connectorType, direction, count);
+        port.setPhaseCount(phaseCount);
+        port.setBreakerAmps(breakerAmps);
         node.getPowerConnectors().add(port);
         autoFitNodeToPorts(node);
         changed();
@@ -938,6 +986,13 @@ public class AppModel {
 
     public void removePowerConnectorFromNode(SchemaNode node, String portId) {
         node.getPowerConnectors().removeIf(p -> p.getId().equals(portId));
+        changed();
+    }
+
+    /** Запас (%) для проверки суммарной нагрузки этого силового узла (Task #86/#87) —
+     *  null сбрасывает на значение по умолчанию (см. PowerCalc.DEFAULT_DERATING_PERCENT). */
+    public void setSchemaNodeLoadDeratingPercent(SchemaNode node, Double percent) {
+        node.setLoadDeratingPercent(percent);
         changed();
     }
 
@@ -1005,8 +1060,18 @@ public class AppModel {
         changed();
     }
 
-    public CardPort addPowerConnectorToPreset(EquipmentPreset preset, String connectorType, PortDirection direction, int count) {
+    public CardPort addPowerConnectorToPreset(EquipmentPreset preset, String connectorType, PortDirection direction,
+                                               int count) {
+        return addPowerConnectorToPreset(preset, connectorType, direction, count, 1, null);
+    }
+
+    /** Как выше, но с числом фаз и номиналом автомата заданными сразу — см.
+     *  {@link #addPowerConnectorToNode(SchemaNode, String, PortDirection, int, int, Double)}. */
+    public CardPort addPowerConnectorToPreset(EquipmentPreset preset, String connectorType, PortDirection direction,
+                                               int count, int phaseCount, Double breakerAmps) {
         CardPort port = new CardPort(connectorType, direction, count);
+        port.setPhaseCount(phaseCount);
+        port.setBreakerAmps(breakerAmps);
         preset.getPowerConnectors().add(port);
         changed();
         return port;
@@ -1181,8 +1246,36 @@ public class AppModel {
             return;
         }
         pushUndo();
-        cab.setHidden(!cab.isHidden());
+        boolean nowHidden = !cab.isHidden();
+        cab.setHidden(nowHidden);
+        if (nowHidden) {
+            // Скрытый кабинет физически "убран" — он не должен оставаться прописанным
+            // ни в одной уже сохранённой цепочке (иначе она продолжает рисоваться и
+            // считаться так, будто кабинет всё ещё на месте, см. баг-репорт: "удалённый"
+            // кабинет оставался доступен в цепочках).
+            removeCabinetFromAllChains(cabId);
+            resyncPowerSockets(currentScreen);
+            resyncSignalSockets(currentScreen);
+        }
         changed();
+    }
+
+    /** Убирает id кабинета из ЛЮБОЙ силовой/сигнальной цепочки сцены, где он встречается
+     *  (не только на текущем экране — цепочка может продолжаться на другой); цепочка,
+     *  опустевшая после этого, удаляется целиком. */
+    private void removeCabinetFromAllChains(String cabId) {
+        Scene scene = sceneContaining(currentScreen);
+        if (scene == null) {
+            return;
+        }
+        for (PowerChain c : scene.getPowerChains()) {
+            c.getCabinetInstanceIds().remove(cabId);
+        }
+        scene.getPowerChains().removeIf(c -> c.getCabinetInstanceIds().isEmpty());
+        for (SignalChain c : scene.getSignalChains()) {
+            c.getCabinetInstanceIds().remove(cabId);
+        }
+        scene.getSignalChains().removeIf(c -> c.getCabinetInstanceIds().isEmpty());
     }
 
     /** Назначает конкретной ячейке отдельный тип кабинета (null — вернуть тип экрана по умолчанию). */
@@ -1199,6 +1292,18 @@ public class AppModel {
         }
         pushUndo();
         cab.setCabinetTypeId(cabinetTypeId);
+        // Форма по умолчанию (без ручного переопределения) и так автоматически
+        // следует за типом — см. эффективное разрешение формы в ShapeEditorPanel.
+        // Но если на этой ячейке РАНЬШЕ вручную выбрали конкретную форму (например
+        // "Треугольная"), а новый тип такую форму физически не может иметь — эта
+        // форма больше не входит в допустимые, и её нужно сбросить к умолчанию
+        // нового типа, а не оставлять невозможную комбинацию висеть (см. Task #79/v1.4).
+        if (cab.getShapeOverride() != null) {
+            CabinetType effective = cabinetTypeId != null ? workspace.cabinetTypeById(cabinetTypeId) : typeOf(currentScreen);
+            if (effective != null && !effective.getAllowedShapes().contains(cab.getShapeOverride())) {
+                cab.setShapeOverride(null);
+            }
+        }
         changed();
     }
 
@@ -1245,7 +1350,155 @@ public class AppModel {
         // принадлежит сцене целиком, и каждый экран сам решает, какую её часть
         // рисовать, по факту наличия своих кабинетов в списке.
         currentScene.getPowerChains().add(new PowerChain(phase, cabinetIds));
+        resyncPowerSockets(currentScreen);
         changed();
+    }
+
+    /** Имя авто-карты сигнальных вводов узла-экрана (см. resyncSignalSockets) —
+     *  отделена от карт, которые инженер добавляет вручную через «Комплектация
+     *  карт…», чтобы не путать одно с другим при редактировании. */
+    private static final String AUTO_SIGNAL_CARD_NAME = "Вводы сигнала";
+    /** Тип разъёма для авто-добавленного сигнального гнезда — типовой Ethernet-вход
+     *  большинства LED-контроллеров (см. Task #43); модель не хранит фактический тип
+     *  кабеля по порту, поэтому при другом типе (например, оптика) инженер поправит
+     *  гнездо вручную через «Комплектация карт…» этого узла. */
+    private static final String DEFAULT_SIGNAL_SOCKET_TYPE = "Cat6/RJ45";
+
+    private List<SchemaNode> schemaNodesForScreen(Scene scene, SchemaMode mode, String screenId) {
+        List<SchemaNode> result = new ArrayList<>();
+        if (scene == null) {
+            return result;
+        }
+        for (SchemaNode n : scene.getSchemaNodes()) {
+            if (n.getMode() == mode && n.getType() == SchemaNodeType.SCREEN && screenId.equals(n.getScreenRefId())) {
+                result.add(n);
+            }
+        }
+        return result;
+    }
+
+    /** Пересчитывает АВТО-гнёзда питания (см. {@link CardPort#isAutoTracked()}) блока
+     *  экрана в общей схеме заново, по факту ТЕКУЩИХ силовых цепочек, касающихся
+     *  этого экрана — сгруппированных по типу разъёма кабинетов каждой цепочки.
+     *  Полная пересборка, а не наращивание счётчика: пересоздание цепочки (удалить
+     *  и провести заново) не должно плодить гнёзда безлимитно (см. баг-репорт), а
+     *  добавление схемного блока для УЖЕ расключённого экрана должно сразу увидеть
+     *  его фактические гнёзда, а не только будущие изменения (тоже баг-репорт).
+     *  Вручную добавленные гнёзда (autoTracked=false) не трогаются. */
+    private void resyncPowerSockets(Screen screen) {
+        Scene scene = sceneContaining(screen);
+        if (scene == null) {
+            return;
+        }
+        java.util.Map<String, Integer> countsByType = new java.util.LinkedHashMap<>();
+        for (PowerChain c : powerChainsTouchingScreen(screen)) {
+            if (c.getCabinetInstanceIds().isEmpty()) {
+                continue;
+            }
+            String firstId = c.getCabinetInstanceIds().get(0);
+            CabinetInstance first = cabinetInScene(scene, firstId);
+            Screen ownerScreen = screenOfCabinet(scene, firstId);
+            if (first == null || ownerScreen == null) {
+                continue;
+            }
+            CabinetType effective = ScreenLogic.effectiveType(first, typeOf(ownerScreen), workspace);
+            if (effective == null) {
+                continue;
+            }
+            countsByType.merge(effective.getPowerConnectorType().getLabel(), 1, Integer::sum);
+        }
+        for (SchemaNode n : schemaNodesForScreen(scene, SchemaMode.POWER, screen.getId())) {
+            applyAutoTrackedCounts(n.getPowerConnectors(), countsByType);
+            autoFitNodeToPorts(n);
+        }
+    }
+
+    /** Как {@link #resyncPowerSockets}, но для сигнальных гнёзд узла-экрана — считает
+     *  число цепочек сигнала (обычных и резервных — каждая физическая линия), все
+     *  одного типового разъёма ({@link #DEFAULT_SIGNAL_SOCKET_TYPE}), хранит их в
+     *  отдельной авто-карте getCards() (см. {@link #AUTO_SIGNAL_CARD_NAME}), т.к. у
+     *  экрана нет отдельного списка "разъёмов сигнала" (в отличие от питания). */
+    private void resyncSignalSockets(Screen screen) {
+        Scene scene = sceneContaining(screen);
+        if (scene == null) {
+            return;
+        }
+        int count = 0;
+        for (SignalChain c : signalChainsTouchingScreen(screen)) {
+            if (!c.getCabinetInstanceIds().isEmpty()) {
+                count++;
+            }
+        }
+        java.util.Map<String, Integer> countsByType = count > 0
+                ? java.util.Map.of(DEFAULT_SIGNAL_SOCKET_TYPE, count) : java.util.Map.of();
+        for (SchemaNode n : schemaNodesForScreen(scene, SchemaMode.SIGNAL, screen.getId())) {
+            SchemaCard card = null;
+            for (SchemaCard c : n.getCards()) {
+                if (AUTO_SIGNAL_CARD_NAME.equals(c.getName())) {
+                    card = c;
+                    break;
+                }
+            }
+            if (card == null) {
+                if (count == 0) {
+                    continue;
+                }
+                card = new SchemaCard(AUTO_SIGNAL_CARD_NAME, new ArrayList<>());
+                n.getCards().add(card);
+            }
+            applyAutoTrackedCounts(card.getPorts(), countsByType);
+        }
+    }
+
+    /** Приводит АВТО-гнёзда (см. {@link CardPort#isAutoTracked()}) списка разъёмов
+     *  в точное соответствие с targetCountsByType (тип → количество, IN): убирает
+     *  авто-гнёзда типов, которых больше нет, обновляет count у оставшихся, добавляет
+     *  недостающие. Вручную добавленные гнёзда (autoTracked=false) не трогаются —
+     *  поэтому это безопасно вызывать многократно (полная пересборка, не сложение). */
+    private void applyAutoTrackedCounts(List<CardPort> connectors, java.util.Map<String, Integer> targetCountsByType) {
+        connectors.removeIf(p -> p.isAutoTracked() && p.getDirection() == PortDirection.IN
+                && !targetCountsByType.containsKey(p.getConnectorType()));
+        for (var entry : targetCountsByType.entrySet()) {
+            CardPort existing = null;
+            for (CardPort p : connectors) {
+                if (p.isAutoTracked() && p.getDirection() == PortDirection.IN && entry.getKey().equals(p.getConnectorType())) {
+                    existing = p;
+                    break;
+                }
+            }
+            if (existing != null) {
+                existing.setCount(entry.getValue());
+            } else {
+                CardPort p = new CardPort(entry.getKey(), PortDirection.IN, entry.getValue());
+                p.setAutoTracked(true);
+                connectors.add(p);
+            }
+        }
+    }
+
+    private CabinetInstance cabinetInScene(Scene scene, String id) {
+        if (scene == null) {
+            return null;
+        }
+        for (Screen s : scene.getScreens()) {
+            CabinetInstance c = s.cabinetById(id);
+            if (c != null) {
+                return c;
+            }
+        }
+        return null;
+    }
+
+    private Screen screenOfCabinet(Scene scene, String id) {
+        if (scene == null) {
+            return null;
+        }
+        for (Screen s : scene.getScreens()) {
+            if (s.cabinetById(id) != null) {
+                return s;
+            }
+        }
+        return null;
     }
 
     public void addSignalChain(Integer port, boolean backup, List<String> cabinetIds) {
@@ -1275,6 +1528,7 @@ public class AppModel {
         } else {
             currentScene.getSignalChains().add(new SignalChain(port, backup, cabinetIds));
         }
+        resyncSignalSockets(currentScreen);
         changed();
     }
 
@@ -1282,8 +1536,13 @@ public class AppModel {
         if (currentScene == null) {
             return;
         }
+        PowerChain chain = currentScene.getPowerChains().stream()
+                .filter(c -> c.getId().equals(chainId)).findFirst().orElse(null);
         pushUndo();
         currentScene.getPowerChains().removeIf(c -> c.getId().equals(chainId));
+        if (chain != null) {
+            resyncPowerSocketsForScreensOf(currentScene, chain.getCabinetInstanceIds());
+        }
         changed();
     }
 
@@ -1291,9 +1550,43 @@ public class AppModel {
         if (currentScene == null) {
             return;
         }
+        SignalChain chain = currentScene.getSignalChains().stream()
+                .filter(c -> c.getId().equals(chainId)).findFirst().orElse(null);
         pushUndo();
         currentScene.getSignalChains().removeIf(c -> c.getId().equals(chainId));
+        if (chain != null) {
+            resyncSignalSocketsForScreensOf(currentScene, chain.getCabinetInstanceIds());
+        }
         changed();
+    }
+
+    /** Пересчитывает авто-гнёзда питания всех экранов, которых касаются эти кабинеты
+     *  (цепочка может затрагивать несколько экранов сразу, см. Task #64/#68). */
+    private void resyncPowerSocketsForScreensOf(Scene scene, List<String> cabinetIds) {
+        java.util.Set<Screen> screens = new java.util.LinkedHashSet<>();
+        for (String id : cabinetIds) {
+            Screen s = screenOfCabinet(scene, id);
+            if (s != null) {
+                screens.add(s);
+            }
+        }
+        for (Screen s : screens) {
+            resyncPowerSockets(s);
+        }
+    }
+
+    /** Как {@link #resyncPowerSocketsForScreensOf}, но для сигнала. */
+    private void resyncSignalSocketsForScreensOf(Scene scene, List<String> cabinetIds) {
+        java.util.Set<Screen> screens = new java.util.LinkedHashSet<>();
+        for (String id : cabinetIds) {
+            Screen s = screenOfCabinet(scene, id);
+            if (s != null) {
+                screens.add(s);
+            }
+        }
+        for (Screen s : screens) {
+            resyncSignalSockets(s);
+        }
     }
 
     /** Разрывает цепочку питания в указанном месте (между кабинетами linkIndex и
@@ -1322,6 +1615,7 @@ public class AppModel {
         if (!second.isEmpty()) {
             currentScene.getPowerChains().add(new PowerChain(chain.getPhase(), second));
         }
+        resyncPowerSocketsForScreensOf(currentScene, ids);
         changed();
     }
 
@@ -1350,6 +1644,7 @@ public class AppModel {
         if (!second.isEmpty()) {
             currentScene.getSignalChains().add(new SignalChain(chain.getPortNumber(), chain.isBackup(), second));
         }
+        resyncSignalSocketsForScreensOf(currentScene, ids);
         changed();
     }
 
@@ -1538,6 +1833,172 @@ public class AppModel {
             }
         }
         return result;
+    }
+
+    /** Суммарная электрическая нагрузка цепочки питания, Вт — сумма мощности
+     *  ФАКТИЧЕСКОГО типа каждого кабинета цепочки (с учётом переопределения по
+     *  ячейке); кабинеты ищутся по всей ПЕРЕДАННОЙ сцене — цепочка может физически
+     *  продолжаться на другом экране (см. Task #64/#68). Сцена передаётся явно (не
+     *  берётся из currentScene), чтобы экспорт мог проверить нагрузку цепочек ЛЮБОЙ
+     *  сцены проекта, а не только той, что сейчас открыта в редакторе (Task #80/#81). */
+    public double powerChainLoadWatts(Scene scene, PowerChain chain) {
+        if (scene == null) {
+            return 0;
+        }
+        double total = 0;
+        for (String id : chain.getCabinetInstanceIds()) {
+            for (Screen s : scene.getScreens()) {
+                CabinetInstance c = s.cabinetById(id);
+                if (c != null) {
+                    CabinetType effective = ScreenLogic.effectiveType(c, typeOf(s), workspace);
+                    if (effective != null) {
+                        total += effective.getPowerConsumptionW();
+                    }
+                    break;
+                }
+            }
+        }
+        return total;
+    }
+
+    /** Номинал разъёма (А), ограничивающий цепочку питания — по типу разъёма ПЕРВОГО
+     *  кабинета цепочки (цепочка — один физический ввод, кабинеты в ней одного
+     *  типа разъёма на практике). 0, если цепочка пуста или тип не определён. */
+    public double powerChainConnectorAmps(Scene scene, PowerChain chain) {
+        if (scene == null || chain.getCabinetInstanceIds().isEmpty()) {
+            return 0;
+        }
+        String firstId = chain.getCabinetInstanceIds().get(0);
+        for (Screen s : scene.getScreens()) {
+            CabinetInstance c = s.cabinetById(firstId);
+            if (c != null) {
+                CabinetType effective = ScreenLogic.effectiveType(c, typeOf(s), workspace);
+                return PowerCalc.cabinetConnectorAmps(effective);
+            }
+        }
+        return 0;
+    }
+
+    /** Подтверждает перегрузку цепочки (кнопка «Я знаю», Task #81) — снимает
+     *  предупреждение/блокировку экспорта, пока нагрузка не вырастет ещё больше. */
+    public void acknowledgePowerChainOverload(Scene scene, PowerChain chain) {
+        chain.setAcknowledgedOverloadWatts(powerChainLoadWatts(scene, chain));
+        changed();
+    }
+
+    /** capacityKnown=false — тип разъёма кабинета не позволяет посчитать номинал
+     *  (см. PowerCalc.cabinetConnectorAmps), контроль для цепочки не проводится. */
+    public record ChainLoadStatus(double loadWatts, double capacityWatts, boolean capacityKnown,
+                                   boolean acknowledged) {
+        public boolean overloaded() {
+            return capacityKnown && loadWatts > capacityWatts;
+        }
+
+        public boolean blocksExport() {
+            return overloaded() && !acknowledged;
+        }
+    }
+
+    /** Статус нагрузки цепочки питания относительно ёмкости разъёма её кабинетов
+     *  (Task #80/#81) — используется и списком цепочек (цвет/значок), и экспортом
+     *  (блокировка при неподтверждённой перегрузке). */
+    public ChainLoadStatus powerChainLoadStatus(Scene scene, PowerChain chain) {
+        double load = powerChainLoadWatts(scene, chain);
+        double ampRating = powerChainConnectorAmps(scene, chain);
+        boolean capacityKnown = ampRating > 0;
+        double capacity = capacityKnown ? PowerCalc.capacityWatts(ampRating, PowerCalc.DEFAULT_DERATING_PERCENT) : 0;
+        boolean overloaded = capacityKnown && load > capacity;
+        boolean acknowledged = !overloaded || (chain.getAcknowledgedOverloadWatts() != null
+                && chain.getAcknowledgedOverloadWatts() >= load);
+        return new ChainLoadStatus(load, capacity, capacityKnown, acknowledged);
+    }
+
+    /** Суммарная сигнальная нагрузка цепочки, пикселей — сумма разрешения ФАКТИЧЕСКОГО
+     *  типа каждого кабинета цепочки (аналогично {@link #powerChainLoadWatts}). */
+    public double signalChainPixelLoad(Scene scene, SignalChain chain) {
+        if (scene == null) {
+            return 0;
+        }
+        double total = 0;
+        for (String id : chain.getCabinetInstanceIds()) {
+            for (Screen s : scene.getScreens()) {
+                CabinetInstance c = s.cabinetById(id);
+                if (c != null) {
+                    CabinetType effective = ScreenLogic.effectiveType(c, typeOf(s), workspace);
+                    if (effective != null) {
+                        total += (double) effective.getResolutionWidth() * effective.getResolutionHeight();
+                    }
+                    break;
+                }
+            }
+        }
+        return total;
+    }
+
+    /** Ёмкость (пикселей) порта контроллера, на который заведена цепочка — по формуле
+     *  NovaStar ({@link ControllerType#maxPixelsFor}) для пропускной способности порта
+     *  назначенного контроллера при герцовке экрана ПЕРВОГО кабинета цепочки и опорной
+     *  глубине цвета (см. Task #80 — модель не хранит битность контента по цепочке).
+     *  0, если порт не назначен цепочке или не принадлежит ни одному контроллеру сцены. */
+    public int signalChainPortCapacityPixels(Scene scene, SignalChain chain) {
+        if (scene == null || chain.getPortNumber() == null || chain.getCabinetInstanceIds().isEmpty()) {
+            return 0;
+        }
+        String firstId = chain.getCabinetInstanceIds().get(0);
+        Screen homeScreen = null;
+        for (Screen s : scene.getScreens()) {
+            if (s.cabinetById(firstId) != null) {
+                homeScreen = s;
+                break;
+            }
+        }
+        if (homeScreen == null) {
+            return 0;
+        }
+        ControllerInstance ci = controllerForPort(homeScreen, chain.getPortNumber());
+        if (ci == null) {
+            return 0;
+        }
+        ControllerType type = workspace.controllerTypeById(ci.getControllerTypeId());
+        if (type == null) {
+            return 0;
+        }
+        return ControllerType.maxPixelsFor(type.getPortBandwidthMbps(), homeScreen.getRefreshRateHz(),
+                ControllerType.REFERENCE_BIT_DEPTH);
+    }
+
+    /** Подтверждает перегрузку сигнальной цепочки (кнопка «Я знаю») — как
+     *  {@link #acknowledgePowerChainOverload}, но по пикселям вместо ватт. */
+    public void acknowledgeSignalChainOverload(Scene scene, SignalChain chain) {
+        chain.setAcknowledgedOverloadPixels(signalChainPixelLoad(scene, chain));
+        changed();
+    }
+
+    /** capacityKnown=false — цепочке не назначен порт, либо порт не принадлежит ни
+     *  одному контроллеру сцены (ручной signalPortCount без контроллеров) — контроль
+     *  для такой цепочки не проводится. */
+    public record SignalChainLoadStatus(double loadPixels, double capacityPixels, boolean capacityKnown,
+                                         boolean acknowledged) {
+        public boolean overloaded() {
+            return capacityKnown && loadPixels > capacityPixels;
+        }
+
+        public boolean blocksExport() {
+            return overloaded() && !acknowledged;
+        }
+    }
+
+    /** Статус нагрузки сигнальной цепочки относительно ёмкости назначенного порта
+     *  контроллера (Task v1.4) — используется и списком цепочек (цвет/значок), и
+     *  экспортом (блокировка при неподтверждённой перегрузке), как и для питания. */
+    public SignalChainLoadStatus signalChainLoadStatus(Scene scene, SignalChain chain) {
+        double load = signalChainPixelLoad(scene, chain);
+        int capacity = signalChainPortCapacityPixels(scene, chain);
+        boolean capacityKnown = capacity > 0;
+        boolean overloaded = capacityKnown && load > capacity;
+        boolean acknowledged = !overloaded || (chain.getAcknowledgedOverloadPixels() != null
+                && chain.getAcknowledgedOverloadPixels() >= load);
+        return new SignalChainLoadStatus(load, capacity, capacityKnown, acknowledged);
     }
 
     /** Как {@link #powerChainsTouchingScreen}, но для сигнала. */

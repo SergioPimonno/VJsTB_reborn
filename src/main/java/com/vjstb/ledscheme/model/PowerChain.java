@@ -13,6 +13,12 @@ public class PowerChain {
     private String id = UUID.randomUUID().toString();
     private int phase = 1;
     private List<String> cabinetInstanceIds = new ArrayList<>();
+    /** Нагрузка (Вт), при которой инженер подтвердил перегрузку кнопкой «Я знаю»
+     *  (Task #81) — null, если не подтверждалась. Предупреждение считается
+     *  подтверждённым, пока текущая нагрузка цепочки не ПРЕВЫСИТ это значение —
+     *  так добавление кабинетов в уже подтверждённую перегруженную цепочку снова
+     *  требует подтверждения, а простое пересохранение/переоткрытие проекта — нет. */
+    private Double acknowledgedOverloadWatts;
 
     public PowerChain() {
     }
@@ -46,11 +52,20 @@ public class PowerChain {
         this.cabinetInstanceIds = cabinetInstanceIds;
     }
 
+    public Double getAcknowledgedOverloadWatts() {
+        return acknowledgedOverloadWatts;
+    }
+
+    public void setAcknowledgedOverloadWatts(Double acknowledgedOverloadWatts) {
+        this.acknowledgedOverloadWatts = acknowledgedOverloadWatts;
+    }
+
     public PowerChain copy() {
         PowerChain c = new PowerChain();
         c.id = id;
         c.phase = phase;
         c.cabinetInstanceIds = new ArrayList<>(cabinetInstanceIds);
+        c.acknowledgedOverloadWatts = acknowledgedOverloadWatts;
         return c;
     }
 }

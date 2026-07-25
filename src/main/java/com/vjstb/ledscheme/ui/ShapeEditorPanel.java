@@ -227,7 +227,15 @@ public class ShapeEditorPanel extends JPanel {
         List<RadialMenu.Item> items = new ArrayList<>();
         items.add(RadialMenu.Item.leaf(cab.isHidden() ? "Восстановить ячейку" : "Скрыть ячейку",
                 Palette.MUTED, () -> model.toggleCabinetHidden(cabId)));
-        items.add(RadialMenu.Item.branch("Форма", Palette.BORDER, shapeSubmenu(cabId)));
+        // Пункт "Форма" виден только если у эффективного типа этого кабинета вообще
+        // есть выбор — если физически возможна только одна форма (обычный случай),
+        // пункт скрывается целиком: выбирать всё равно не из чего, а прежняя ЛЮБАЯ
+        // из 4 форм позволяла назначить кабинету форму, которой у него в реальности
+        // не бывает (см. Task #79/v1.4).
+        CabinetType effective = effectiveType(cab, scr);
+        if (effective != null && effective.getAllowedShapes().size() > 1) {
+            items.add(RadialMenu.Item.branch("Форма", Palette.BORDER, shapeSubmenu(cabId, effective)));
+        }
         items.add(RadialMenu.Item.branch("Тип", Palette.ACCENT, typeSubmenu(cabId, scr)));
 
         Point screenPt = e.getLocationOnScreen();
@@ -244,11 +252,13 @@ public class ShapeEditorPanel extends JPanel {
                 () -> SwingUtilities.invokeLater(() -> radialMenuActive = false));
     }
 
-    private List<RadialMenu.Item> shapeSubmenu(String cabId) {
+    private List<RadialMenu.Item> shapeSubmenu(String cabId, CabinetType effective) {
         List<RadialMenu.Item> items = new ArrayList<>();
         items.add(RadialMenu.Item.leaf("По умолчанию", Palette.PHASE_NONE,
                 () -> applyShape(cabId, null)));
-        for (CabinetShape shape : CabinetShape.values()) {
+        // Только формы, физически возможные для ЭТОГО типа кабинета (см. Task #79/v1.4) —
+        // раньше здесь были все 4 формы всегда, независимо от типа кабинета.
+        for (CabinetShape shape : effective.getAllowedShapes()) {
             items.add(RadialMenu.Item.leaf(shape.getLabel(), Palette.signalColor(shape.ordinal()),
                     () -> applyShape(cabId, shape)));
         }

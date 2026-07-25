@@ -41,6 +41,29 @@ public class UserProfile {
      *  «узел-узел» продолжает работать как раньше. */
     private boolean socketWiringEnabled = false;
 
+    /** "Защита от дурака" в общей схеме: если включено, соединение через гнёзда
+     *  разъёмов (см. socketWiringEnabled) запрещает связывать ВХОД со ВХОДОМ или
+     *  ВЫХОД с ВЫХОДОМ (сравнение {@link com.vjstb.ledscheme.model.CardPort#getDirection()}
+     *  на обоих концах) — такое соединение физически бессмысленно. Включено по
+     *  умолчанию — типичная ошибка новичка, защита не мешает опытному инженеру,
+     *  который всегда может выключить её здесь для нестандартного случая. */
+    private boolean foolProofWiringEnabled = true;
+
+    /** Как рисовать узел-ссылку на экран в общей схеме: false — обычный блок
+     *  (имя + краткая статистика, компактно, годится для больших схем со многими
+     *  экранами); true — уменьшенная схема расключения этого экрана (заливка
+     *  ячеек по цепочкам, путь подключения, панель контроллеров) — см. Task #83/v1.4.
+     *  Применяется и к живому редактору схемы, и к экспорту пакета документации. */
+    private boolean schemaScreensAsWiringDiagram = false;
+
+    /** Контроль электрической/сигнальной нагрузки (Task #80/#81/#86/#87): сравнение
+     *  тока цепочки/суммарной нагрузки силового узла схемы с ёмкостью разъёма/автомата,
+     *  предупреждения в списке цепочек и на схеме, блокировка экспорта при
+     *  неподтверждённой перегрузке. Включено по умолчанию; инженер выключает здесь
+     *  целиком для нестандартного случая, который расчёт не покрывает (см. GuideDialog),
+     *  и дальше считает нагрузку сам. */
+    private boolean loadTrackingEnabled = true;
+
     /** Переназначенные горячие клавиши, по id {@link HotkeyAction}. Действие, для
      *  которого здесь нет записи, использует {@link HotkeyAction#getDefaultCombo()}. */
     private Map<String, KeyCombo> keyBindings = new LinkedHashMap<>();
@@ -144,6 +167,30 @@ public class UserProfile {
         this.socketWiringEnabled = socketWiringEnabled;
     }
 
+    public boolean isFoolProofWiringEnabled() {
+        return foolProofWiringEnabled;
+    }
+
+    public void setFoolProofWiringEnabled(boolean foolProofWiringEnabled) {
+        this.foolProofWiringEnabled = foolProofWiringEnabled;
+    }
+
+    public boolean isSchemaScreensAsWiringDiagram() {
+        return schemaScreensAsWiringDiagram;
+    }
+
+    public void setSchemaScreensAsWiringDiagram(boolean schemaScreensAsWiringDiagram) {
+        this.schemaScreensAsWiringDiagram = schemaScreensAsWiringDiagram;
+    }
+
+    public boolean isLoadTrackingEnabled() {
+        return loadTrackingEnabled;
+    }
+
+    public void setLoadTrackingEnabled(boolean loadTrackingEnabled) {
+        this.loadTrackingEnabled = loadTrackingEnabled;
+    }
+
     public Map<String, KeyCombo> getKeyBindings() {
         return keyBindings;
     }
@@ -173,6 +220,9 @@ public class UserProfile {
         p.previewWidgetEnabled = previewWidgetEnabled;
         p.canvasSnapToCenter = canvasSnapToCenter;
         p.socketWiringEnabled = socketWiringEnabled;
+        p.foolProofWiringEnabled = foolProofWiringEnabled;
+        p.schemaScreensAsWiringDiagram = schemaScreensAsWiringDiagram;
+        p.loadTrackingEnabled = loadTrackingEnabled;
         p.keyBindings = new LinkedHashMap<>();
         for (Map.Entry<String, KeyCombo> en : keyBindings.entrySet()) {
             p.keyBindings.put(en.getKey(), en.getValue().copy());

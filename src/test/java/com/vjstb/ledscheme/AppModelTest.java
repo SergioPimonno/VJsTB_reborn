@@ -15,6 +15,7 @@ import com.vjstb.ledscheme.model.ContentCanvas;
 import com.vjstb.ledscheme.model.ControllerInstance;
 import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.PortDirection;
+import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.Project;
 import com.vjstb.ledscheme.model.SchemaCard;
 import com.vjstb.ledscheme.model.SchemaEdge;
@@ -95,6 +96,238 @@ class AppModelTest {
         model.undo();
         assertEquals(0, model.getCurrentScene().getPowerChains().size());
         assertFalse(model.canUndo());
+    }
+
+    @Test
+    void powerChainLoadWattsSumsEffectiveCabinetPower(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType()); // 150 Вт/каб.
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("E", type.getId(), 2, 3, 0, 0);
+        model.selectScreen(screen);
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).limit(3).toList();
+        model.addPowerChain(1, ids);
+        PowerChain chain = scene.getPowerChains().get(0);
+
+        assertEquals(450.0, model.powerChainLoadWatts(scene, chain), 0.001);
+    }
+
+    @Test
+    void powerChainOverloadDetectedAgainstCustomConnectorRating(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = sampleType(); // 150 Вт/каб.
+        type.setPowerConnectorType(com.vjstb.ledscheme.model.PowerConnectorType.OTHER);
+        type.setCustomConnectorAmpRating(0.5); // ёмкость ~102 Вт при запасе по умолчанию — один кабинет уже перегрузка
+        type = model.addCabinetType(type);
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("E", type.getId(), 1, 1, 0, 0);
+        model.selectScreen(screen);
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+        model.addPowerChain(1, ids);
+        PowerChain chain = scene.getPowerChains().get(0);
+
+        AppModel.ChainLoadStatus status = model.powerChainLoadStatus(scene, chain);
+        assertTrue(status.capacityKnown());
+        assertTrue(status.overloaded());
+        assertTrue(status.blocksExport(), "Неподтверждённая перегрузка должна блокировать экспорт");
+
+        model.acknowledgePowerChainOverload(scene, chain);
+        AppModel.ChainLoadStatus afterAck = model.powerChainLoadStatus(scene, chain);
+        assertTrue(afterAck.overloaded());
+        assertFalse(afterAck.blocksExport(), "После «Я знаю» экспорт не должен блокироваться при той же нагрузке");
+    }
+
+    @Test
+    void powerChainAcknowledgementResetsWhenLoadGrowsFurther(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = sampleType();
+        type.setPowerConnectorType(com.vjstb.ledscheme.model.PowerConnectorType.OTHER);
+        type.setCustomConnectorAmpRating(0.5);
+        type = model.addCabinetType(type);
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("E", type.getId(), 1, 2, 0, 0);
+        model.selectScreen(screen);
+
+        List<String> allIds = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+        model.addPowerChain(1, List.of(allIds.get(0)));
+        PowerChain chain = scene.getPowerChains().get(0);
+        model.acknowledgePowerChainOverload(scene, chain);
+        assertFalse(model.powerChainLoadStatus(scene, chain).blocksExport());
+
+        // Добавили в цепочку ещё один кабинет — нагрузка выросла сверх подтверждённой,
+        // предупреждение должно вернуться автоматически.
+        chain.getCabinetInstanceIds().add(allIds.get(1));
+        assertTrue(model.powerChainLoadStatus(scene, chain).blocksExport(),
+                "Рост нагрузки сверх подтверждённой должен снова заблокировать экспорт");
+    }
+
+    @Test
+    void startingPowerChainAutoAddsConnectorSocketToScreenSchemaNode(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = sampleType();
+        type.setPowerConnectorType(com.vjstb.ledscheme.model.PowerConnectorType.POWERCON);
+        type = model.addCabinetType(type);
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("E", type.getId(), 1, 4, 0, 0);
+        model.selectScreen(screen);
+        SchemaNode screenNode = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SCREEN, "E", 0, 0, screen.getId());
+
+        List<String> firstHalf = screen.getCabinets().stream().map(CabinetInstance::getId).limit(2).toList();
+        model.addPowerChain(1, firstHalf);
+        assertEquals(1, screenNode.getPowerConnectors().size());
+        assertEquals("PowerCon", screenNode.getPowerConnectors().get(0).getConnectorType());
+        assertEquals(1, screenNode.getPowerConnectors().get(0).getCount());
+
+        List<String> secondHalf = screen.getCabinets().stream().map(CabinetInstance::getId).skip(2).toList();
+        model.addPowerChain(2, secondHalf);
+        assertEquals(1, screenNode.getPowerConnectors().size(), "Второй ввод того же типа должен увеличить count, а не создать вторую группу");
+        assertEquals(2, screenNode.getPowerConnectors().get(0).getCount());
+    }
+
+    @Test
+    void startingSignalChainAndBackupBothAddSocketsToScreenSchemaNode(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("E", type.getId(), 1, 4, 0, 0);
+        model.selectScreen(screen);
+        SchemaNode screenNode = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SCREEN, "E", 0, 0, screen.getId());
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+        model.addSignalChain(1, false, ids);
+        SchemaCard card = screenNode.getCards().stream().filter(c -> "Вводы сигнала".equals(c.getName()))
+                .findFirst().orElse(null);
+        assertNotNull(card);
+        assertEquals(1, card.getPorts().get(0).getCount());
+
+        model.addSignalChain(2, true, ids); // резервный порт — тоже физическая линия
+        assertEquals(2, card.getPorts().get(0).getCount(), "Резервный порт тоже должен увеличить счётчик гнёзд");
+    }
+
+    @Test
+    void addingScreenSchemaNodeAfterWiringBackfillsExistingSockets(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = sampleType();
+        type.setPowerConnectorType(com.vjstb.ledscheme.model.PowerConnectorType.TRUECON);
+        type = model.addCabinetType(type);
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("E", type.getId(), 1, 4, 0, 0);
+        model.selectScreen(screen);
+
+        // Расключаем экран ДО того, как для него появится блок в общей схеме.
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+        model.addPowerChain(1, ids);
+
+        SchemaNode screenNode = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SCREEN, "E", 0, 0, screen.getId());
+        assertEquals(1, screenNode.getPowerConnectors().size(),
+                "Блок, добавленный ПОСЛЕ расключения, должен сразу увидеть уже существующую цепочку");
+        assertEquals("TRUEcon", screenNode.getPowerConnectors().get(0).getConnectorType());
+        assertEquals(1, screenNode.getPowerConnectors().get(0).getCount());
+    }
+
+    @Test
+    void rewiringChainDoesNotAccumulateSocketCountUnboundedly(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("E", type.getId(), 1, 4, 0, 0);
+        model.selectScreen(screen);
+        SchemaNode screenNode = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SCREEN, "E", 0, 0, screen.getId());
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+        for (int i = 0; i < 3; i++) {
+            model.addPowerChain(1, ids);
+            String chainId = scene.getPowerChains().get(0).getId();
+            model.deletePowerChain(chainId);
+        }
+        assertTrue(screenNode.getPowerConnectors().isEmpty(),
+                "После удаления всех цепочек авто-гнёзда должны исчезнуть, а не накопиться");
+
+        model.addPowerChain(1, ids);
+        assertEquals(1, screenNode.getPowerConnectors().size());
+        assertEquals(1, screenNode.getPowerConnectors().get(0).getCount(),
+                "Пересборка цепочки не должна плодить гнёзда — count должен отражать РЕАЛЬНОЕ текущее число вводов");
+    }
+
+    @Test
+    void manuallyAddedSocketSurvivesAutoResync(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("E", type.getId(), 1, 4, 0, 0);
+        model.selectScreen(screen);
+        SchemaNode screenNode = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SCREEN, "E", 0, 0, screen.getId());
+
+        // Инженер вручную добавляет гнездо, не связанное с авто-отслеживанием.
+        model.addPowerConnectorToNode(screenNode, "Резервный ввод", com.vjstb.ledscheme.model.PortDirection.IN, 1);
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+        model.addPowerChain(1, ids);
+
+        assertEquals(2, screenNode.getPowerConnectors().size(),
+                "Пересчёт авто-гнёзд не должен затрагивать вручную добавленное гнездо");
+        assertTrue(screenNode.getPowerConnectors().stream()
+                .anyMatch(p -> "Резервный ввод".equals(p.getConnectorType())));
+    }
+
+    @Test
+    void hidingCabinetRemovesItFromPowerAndSignalChains(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 1, 4, 0, 0);
+        model.selectScreen(screen);
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+        model.addPowerChain(1, ids);
+        model.addSignalChain(1, false, ids); // порт 1
+
+        String middleId = ids.get(1);
+        model.toggleCabinetHidden(middleId);
+
+        PowerChain pc = model.getCurrentScene().getPowerChains().get(0);
+        assertFalse(pc.getCabinetInstanceIds().contains(middleId),
+                "Скрытый кабинет не должен оставаться прописанным в силовой цепочке");
+        SignalChain sc = model.getCurrentScene().getSignalChains().get(0);
+        assertFalse(sc.getCabinetInstanceIds().contains(middleId),
+                "Скрытый кабинет не должен оставаться прописанным в сигнальной цепочке");
+    }
+
+    @Test
+    void hidingEveryCabinetOfAChainRemovesTheWholeChain(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 1, 2, 0, 0);
+        model.selectScreen(screen);
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+        model.addPowerChain(1, ids);
+        for (String id : ids) {
+            model.toggleCabinetHidden(id);
+        }
+        assertEquals(0, model.getCurrentScene().getPowerChains().size(),
+                "Цепочка, опустевшая после скрытия всех её кабинетов, должна удаляться целиком");
     }
 
     @Test
@@ -275,6 +508,53 @@ class AppModelTest {
         // undo возвращает исходный тип ячейки
         model.undo();
         assertNull(screen.cabinetById(firstId).getCabinetTypeId());
+    }
+
+    @Test
+    void cabinetTypeAllowedShapesDefaultsToItsOwnShape() {
+        // Старые файлы проектов (и просто типы без явно заданных allowedShapes)
+        // должны трактоваться как "только их собственная форма" — без этого все
+        // старые типы кабинетов внезапно позволяли бы назначать ЛЮБУЮ форму.
+        CabinetType t = new CabinetType();
+        t.setShape(com.vjstb.ledscheme.model.CabinetShape.TRIANGLE);
+        assertEquals(java.util.Set.of(com.vjstb.ledscheme.model.CabinetShape.TRIANGLE), t.getAllowedShapes());
+
+        t.setAllowedShapes(java.util.Set.of(com.vjstb.ledscheme.model.CabinetShape.TRIANGLE,
+                com.vjstb.ledscheme.model.CabinetShape.ROUND));
+        assertEquals(2, t.getAllowedShapes().size());
+    }
+
+    @Test
+    void changingCabinetTypeClearsShapeOverrideNoLongerAllowed(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType rectOnly = model.addCabinetType(sampleType()); // allowedShapes -> {RECTANGLE} по умолчанию
+        CabinetType roundCapable = new CabinetType();
+        roundCapable.setName("Round-capable");
+        roundCapable.setWidthMm(500);
+        roundCapable.setHeightMm(500);
+        roundCapable.setResolutionWidth(128);
+        roundCapable.setResolutionHeight(128);
+        roundCapable.setShape(com.vjstb.ledscheme.model.CabinetShape.ROUND);
+        roundCapable.setAllowedShapes(java.util.Set.of(com.vjstb.ledscheme.model.CabinetShape.ROUND,
+                com.vjstb.ledscheme.model.CabinetShape.TRIANGLE));
+        model.addCabinetType(roundCapable);
+
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", rectOnly.getId(), 1, 2, 0, 0);
+        model.selectScreen(screen);
+        String cabId = screen.getCabinets().get(0).getId();
+
+        // Переключаем ячейку на "круглый" тип и вручную ставим "Треугольная" — валидно для этого типа.
+        model.setCabinetTypeOverride(cabId, roundCapable.getId());
+        model.setCabinetShapeOverride(cabId, com.vjstb.ledscheme.model.CabinetShape.TRIANGLE);
+        assertEquals(com.vjstb.ledscheme.model.CabinetShape.TRIANGLE, screen.cabinetById(cabId).getShapeOverride());
+
+        // Возврат к типу экрана по умолчанию (RECTANGLE-only) делает "Треугольная"
+        // невозможной для этой ячейки — переопределение должно сброситься само,
+        // а не остаться висеть недопустимой комбинацией.
+        model.setCabinetTypeOverride(cabId, null);
+        assertNull(screen.cabinetById(cabId).getShapeOverride());
     }
 
     @Test

@@ -2,10 +2,12 @@ package com.vjstb.ledscheme.ui;
 
 import com.formdev.flatlaf.FlatDarkLaf;
 import com.formdev.flatlaf.FlatLightLaf;
+import com.vjstb.ledscheme.AppInfo;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.settings.SettingsManager;
 import java.awt.Desktop;
 import java.io.File;
+import java.net.URI;
 import javax.swing.ButtonGroup;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
@@ -21,30 +23,52 @@ import javax.swing.filechooser.FileNameExtensionFilter;
 /** Верхнее меню: настройки, инструменты, персонализация, справка. */
 public class MainMenuBar extends JMenuBar {
 
-    private PersonalizationDialog personalizationDialog;
+    private PersonalizationDialog colorsDialog;
+    private PreferencesDialog preferencesDialog;
+    private HotkeysDialog hotkeysDialog;
 
     public MainMenuBar(JFrame owner, AppModel model, SettingsManager settings, Runnable onShowShortcuts) {
-        add(buildSettingsMenu(model));
+        add(buildSettingsMenu(owner, settings));
         add(buildToolsMenu(owner, model));
         add(buildPersonalizationMenu(owner, settings));
         add(buildHelpMenu(onShowShortcuts));
     }
 
-    private JMenu buildSettingsMenu(AppModel model) {
+    private JMenu buildSettingsMenu(JFrame owner, SettingsManager settings) {
         JMenu menu = new JMenu("Настройки");
-        JMenuItem openDataFolder = new JMenuItem("Открыть папку с данными…");
-        openDataFolder.addActionListener(e -> {
-            File file = model.getStore().getWorkspaceFile().getParentFile();
-            try {
-                if (Desktop.isDesktopSupported() && file != null) {
-                    Desktop.getDesktop().open(file);
-                }
-            } catch (Exception ignored) {
-                // не критично
-            }
-        });
-        menu.add(openDataFolder);
+
+        JMenuItem reportBug = new JMenuItem("Сообщить о баге…");
+        reportBug.addActionListener(e -> openUrl(owner, AppInfo.NEW_ISSUE_URL));
+        menu.add(reportBug);
+
+        JMenuItem onboarding = new JMenuItem("Показать приветствие снова…");
+        onboarding.addActionListener(e -> new OnboardingDialog(owner, settings).setVisible(true));
+        menu.add(onboarding);
+
+        JMenuItem update = new JMenuItem("Обновить версию…");
+        update.addActionListener(e -> com.vjstb.ledscheme.ui.UpdateDialog.show(owner));
+        menu.add(update);
+
+        menu.addSeparator();
+        JMenuItem version = new JMenuItem("Версия: " + AppInfo.VERSION);
+        version.setEnabled(false);
+        menu.add(version);
+        JMenuItem author = new JMenuItem("Автор: " + AppInfo.AUTHOR);
+        author.setEnabled(false);
+        menu.add(author);
+
         return menu;
+    }
+
+    private void openUrl(JFrame owner, String url) {
+        try {
+            if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
+                Desktop.getDesktop().browse(new URI(url));
+            }
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(owner, "Не удалось открыть ссылку:\n" + url, "Ошибка",
+                    JOptionPane.ERROR_MESSAGE);
+        }
     }
 
     private JMenu buildToolsMenu(JFrame owner, AppModel model) {
@@ -84,6 +108,10 @@ public class MainMenuBar extends JMenuBar {
         return menu;
     }
 
+    /** Три раздела персонализации — каждый в своём независимом окошке (цвета/профили,
+     *  предпочтения, горячие клавиши), а не в одном большом диалоге со всеми
+     *  разделами сразу — можно держать открытыми одновременно, каждое запоминает
+     *  и переиспользует свой экземпляр окна (как раньше был единственный диалог). */
     private JMenu buildPersonalizationMenu(JFrame owner, SettingsManager settings) {
         JMenu menu = new JMenu("Персонализация");
         ButtonGroup group = new ButtonGroup();
@@ -100,13 +128,34 @@ public class MainMenuBar extends JMenuBar {
         menu.addSeparator();
         JMenuItem colors = new JMenuItem("Цвета и профили…");
         colors.addActionListener(e -> {
-            if (personalizationDialog == null) {
-                personalizationDialog = new PersonalizationDialog(owner, settings);
+            if (colorsDialog == null) {
+                colorsDialog = new PersonalizationDialog(owner, settings);
             }
-            personalizationDialog.setVisible(true);
-            personalizationDialog.toFront();
+            colorsDialog.setVisible(true);
+            colorsDialog.toFront();
         });
         menu.add(colors);
+
+        JMenuItem preferences = new JMenuItem("Предпочтения…");
+        preferences.addActionListener(e -> {
+            if (preferencesDialog == null) {
+                preferencesDialog = new PreferencesDialog(owner, settings);
+            }
+            preferencesDialog.setVisible(true);
+            preferencesDialog.toFront();
+        });
+        menu.add(preferences);
+
+        JMenuItem hotkeys = new JMenuItem("Горячие клавиши…");
+        hotkeys.addActionListener(e -> {
+            if (hotkeysDialog == null) {
+                hotkeysDialog = new HotkeysDialog(owner, settings);
+            }
+            hotkeysDialog.setVisible(true);
+            hotkeysDialog.toFront();
+        });
+        menu.add(hotkeys);
+
         return menu;
     }
 
@@ -125,7 +174,8 @@ public class MainMenuBar extends JMenuBar {
         shortcuts.addActionListener(e -> onShowShortcuts.run());
         JMenuItem about = new JMenuItem("О программе");
         about.addActionListener(e -> JOptionPane.showMessageDialog(null,
-                "LED Scheme Designer\nv1.1\n\nПроектирование схем коммутации LED-экранов и видеосопровождения.",
+                "LED Scheme Designer\nв" + AppInfo.VERSION + "\nАвтор: " + AppInfo.AUTHOR
+                        + "\n\nПроектирование схем коммутации LED-экранов и видеосопровождения.",
                 "О программе", JOptionPane.INFORMATION_MESSAGE));
         menu.add(shortcuts);
         menu.add(about);

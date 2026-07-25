@@ -106,6 +106,21 @@ public class SettingsManager {
         persist();
     }
 
+    public void setFoolProofWiringEnabled(boolean enabled) {
+        activeProfile().setFoolProofWiringEnabled(enabled);
+        persist();
+    }
+
+    public void setSchemaScreensAsWiringDiagram(boolean enabled) {
+        activeProfile().setSchemaScreensAsWiringDiagram(enabled);
+        persist();
+    }
+
+    public void setLoadTrackingEnabled(boolean enabled) {
+        activeProfile().setLoadTrackingEnabled(enabled);
+        persist();
+    }
+
     public KeyCombo bindingFor(HotkeyAction action) {
         return activeProfile().bindingFor(action);
     }
@@ -117,6 +132,15 @@ public class SettingsManager {
 
     public void resetBinding(HotkeyAction action) {
         activeProfile().getKeyBindings().remove(action.getId());
+        persist();
+    }
+
+    public boolean isOnboardingCompleted() {
+        return settings.isOnboardingCompleted();
+    }
+
+    public void setOnboardingCompleted(boolean completed) {
+        settings.setOnboardingCompleted(completed);
         persist();
     }
 
