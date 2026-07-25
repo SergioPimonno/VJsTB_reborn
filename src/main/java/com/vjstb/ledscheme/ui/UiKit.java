@@ -19,6 +19,27 @@ public final class UiKit {
     private UiKit() {
     }
 
+    /** Привязывает Delete/Backspace на компоненте к действию — списки/панели с
+     *  кнопкой «✕»/«Удалить» получают тот же эффект по горячей клавише, пока сам
+     *  компонент в фокусе (WHEN_FOCUSED — не перехватывает клавишу нигде за
+     *  пределами этого конкретного списка/панели, поэтому не конфликтует с другими
+     *  хоткеями на Delete, например TOGGLE_HIDDEN в редакторе кабинетов). action
+     *  сам решает, есть ли сейчас что удалять (например, ничего не делает, если
+     *  в списке нет выделения) — вызывается безусловно по нажатию клавиши. */
+    public static void bindDeleteKey(JComponent comp, Runnable action) {
+        javax.swing.InputMap im = comp.getInputMap(JComponent.WHEN_FOCUSED);
+        javax.swing.ActionMap am = comp.getActionMap();
+        Object key = "ledScheme.delete";
+        im.put(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_DELETE, 0), key);
+        im.put(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_BACK_SPACE, 0), key);
+        am.put(key, new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                action.run();
+            }
+        });
+    }
+
     public static JPanel vbox() {
         JPanel p = new JPanel();
         p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));

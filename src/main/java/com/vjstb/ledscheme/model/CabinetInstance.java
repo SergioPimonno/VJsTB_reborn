@@ -19,6 +19,12 @@ public class CabinetInstance {
     private String cabinetTypeId;
     /** Форма ЭТОЙ ячейки, если отличается от формы эффективного типа кабинета (null = форма типа). */
     private CabinetShape shapeOverride;
+    /** Угол непрямоугольной формы ЭТОЙ ячейки, если отличается от угла эффективного
+     *  типа кабинета (null = угол типа, см. CabinetType.getRotationDeg) — Task #92/v1.5:
+     *  угол правится не только на уровне типа в библиотеке, но и точечно по ячейке
+     *  через радиальное меню (0°/90°/180°/270°/"другое"), не требуя заводить отдельный
+     *  тип кабинета только ради другого угла. */
+    private Integer rotationOverride;
 
     public CabinetInstance() {
     }
@@ -96,6 +102,14 @@ public class CabinetInstance {
         this.shapeOverride = shapeOverride;
     }
 
+    public Integer getRotationOverride() {
+        return rotationOverride;
+    }
+
+    public void setRotationOverride(Integer rotationOverride) {
+        this.rotationOverride = rotationOverride;
+    }
+
     public CabinetInstance copy() {
         CabinetInstance c = new CabinetInstance();
         c.id = id;
@@ -105,6 +119,7 @@ public class CabinetInstance {
         c.phase = phase;
         c.cabinetTypeId = cabinetTypeId;
         c.shapeOverride = shapeOverride;
+        c.rotationOverride = rotationOverride;
         return c;
     }
 }

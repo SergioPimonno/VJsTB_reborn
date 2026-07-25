@@ -289,6 +289,29 @@ class AppModelTest {
     }
 
     @Test
+    void cableTypeLibraryCrudAndDedup(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        com.vjstb.ledscheme.model.CableType c1 = model.addCableType(SchemaMode.POWER, "CEE 32A → 6×PowerCon");
+        assertEquals(1, model.getCableTypes().size());
+        assertEquals(1, model.cableTypesForMode(SchemaMode.POWER).size());
+        assertEquals(0, model.cableTypesForMode(SchemaMode.SIGNAL).size());
+
+        // Повторное сохранение той же подписи (без учёта регистра) для того же
+        // режима не должно создавать дубликат — возвращает существующий кабель.
+        com.vjstb.ledscheme.model.CableType c2 = model.addCableType(SchemaMode.POWER, "cee 32a → 6×powercon");
+        assertEquals(c1.getId(), c2.getId());
+        assertEquals(1, model.getCableTypes().size());
+
+        model.addCableType(SchemaMode.SIGNAL, "Мой оптический кабель");
+        assertEquals(2, model.getCableTypes().size());
+        assertEquals(1, model.cableTypesForMode(SchemaMode.SIGNAL).size());
+
+        model.deleteCableType(c1);
+        assertEquals(1, model.getCableTypes().size());
+        assertEquals(0, model.cableTypesForMode(SchemaMode.POWER).size());
+    }
+
+    @Test
     void hidingCabinetRemovesItFromPowerAndSignalChains(@TempDir Path dir) {
         AppModel model = freshModel(dir);
         CabinetType type = model.addCabinetType(sampleType());
@@ -555,6 +578,72 @@ class AppModelTest {
         // а не остаться висеть недопустимой комбинацией.
         model.setCabinetTypeOverride(cabId, null);
         assertNull(screen.cabinetById(cabId).getShapeOverride());
+    }
+
+    @Test
+    void cabinetRotationOverrideRoundTrips(@TempDir Path dir) {
+        // Task #92/v1.5: угол непрямоугольной формы правится точечно по ячейке
+        // (радиальное меню "Угол" в ShapeEditorPanel), не только на уровне типа.
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 1, 1, 0, 0);
+        model.selectScreen(screen);
+        String cabId = screen.getCabinets().get(0).getId();
+
+        assertNull(screen.cabinetById(cabId).getRotationOverride());
+        model.setCabinetRotationOverride(cabId, 270);
+        assertEquals(270, screen.cabinetById(cabId).getRotationOverride());
+        model.setCabinetRotationOverride(cabId, null);
+        assertNull(screen.cabinetById(cabId).getRotationOverride());
+    }
+
+    @Test
+    void updateCabinetTypePreservesAllFieldsIncludingPowerConnectorType(@TempDir Path dir) {
+        // Task #94/v1.5: баг-репорт — при редактировании УЖЕ СОЗДАННОГО пресета
+        // кабинета выбор разъёма питания (и угол/допустимые формы/номинал "Другой")
+        // не сохранялся. Причина — AppModel.updateCabinetType копировал поля вручную
+        // по отдельному списку, забывшему про несколько полей, добавленных позже.
+        // Воспроизводим ровно тот же путь, что и CabinetTypeDialog: existing.copy(),
+        // правим копию, отдаём её в updateCabinetType — ВСЕ поля должны примениться.
+        AppModel model = freshModel(dir);
+        CabinetType original = model.addCabinetType(sampleType());
+
+        CabinetType edited = original.copy();
+        edited.setPowerConnectorType(com.vjstb.ledscheme.model.PowerConnectorType.TRUECON);
+        edited.setShape(com.vjstb.ledscheme.model.CabinetShape.TRIANGLE);
+        edited.setAllowedShapes(java.util.Set.of(com.vjstb.ledscheme.model.CabinetShape.TRIANGLE,
+                com.vjstb.ledscheme.model.CabinetShape.RECTANGLE));
+        edited.setRotationDeg(270);
+        edited.setCustomConnectorAmpRating(20.0);
+
+        model.updateCabinetType(edited);
+
+        CabinetType stored = model.getWorkspace().cabinetTypeById(original.getId());
+        assertEquals(com.vjstb.ledscheme.model.PowerConnectorType.TRUECON, stored.getPowerConnectorType());
+        assertEquals(com.vjstb.ledscheme.model.CabinetShape.TRIANGLE, stored.getShape());
+        assertEquals(2, stored.getAllowedShapes().size());
+        assertEquals(270.0, stored.getRotationDeg());
+        assertEquals(20.0, stored.getCustomConnectorAmpRating());
+    }
+
+    @Test
+    void updateControllerTypePreservesLoopPort(@TempDir Path dir) {
+        // Тот же класс бага, что и выше, но для библиотеки контроллеров: флажок
+        // "Есть Loop-порт" терялся при редактировании (AppModel.updateControllerType
+        // не копировал loopPort обратно в хранимый объект).
+        AppModel model = freshModel(dir);
+        com.vjstb.ledscheme.model.ControllerType original = new com.vjstb.ledscheme.model.ControllerType();
+        original.setName("MCTRL4K");
+        model.addControllerType(original);
+
+        com.vjstb.ledscheme.model.ControllerType edited = original.copy();
+        edited.setLoopPort(true);
+        model.updateControllerType(edited);
+
+        com.vjstb.ledscheme.model.ControllerType stored = model.getWorkspace().controllerTypeById(original.getId());
+        assertTrue(stored.isLoopPort());
     }
 
     @Test

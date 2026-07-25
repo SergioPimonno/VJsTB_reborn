@@ -168,6 +168,7 @@ public class SchemaPanel extends JPanel {
         body.add(selectionHint);
         JButton delSelected = new JButton("Удалить выбранное");
         delSelected.addActionListener(e -> canvas.deleteSelected());
+        UiKit.bindDeleteKey(canvas, canvas::deleteSelected);
         body.add(UiKit.vgap());
         body.add(delSelected);
 

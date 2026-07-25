@@ -1,6 +1,7 @@
 package com.vjstb.ledscheme.ui.stage;
 
 import com.vjstb.ledscheme.model.CabinetType;
+import com.vjstb.ledscheme.model.CableType;
 import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.EquipmentPreset;
 import com.vjstb.ledscheme.model.SchemaCard;
@@ -63,6 +64,10 @@ public class LibrariesStagePanel extends JPanel {
     private final JList<SchemaCard> signalCardList = new JList<>(signalCardModel);
     private final JScrollPane signalCardScroll = new JScrollPane(signalCardList);
 
+    private final DefaultListModel<CableType> cableModel = new DefaultListModel<>();
+    private final JList<CableType> cableList = new JList<>(cableModel);
+    private final JScrollPane cableScroll = new JScrollPane(cableList);
+
     public LibrariesStagePanel(AppModel model) {
         this.model = model;
         setLayout(new BorderLayout());
@@ -77,6 +82,8 @@ public class LibrariesStagePanel extends JPanel {
                 powerPresetList, powerPresetScroll));
         body.add(UiKit.vgap(10));
         body.add(buildSignalEquipmentSection());
+        body.add(UiKit.vgap(10));
+        body.add(buildCableLibrary());
         body.add(javax.swing.Box.createVerticalGlue());
 
         JScrollPane scroll = new JScrollPane(body);
@@ -84,7 +91,7 @@ public class LibrariesStagePanel extends JPanel {
         scroll.getVerticalScrollBar().setUnitIncrement(16);
         add(scroll, BorderLayout.CENTER);
 
-        for (JScrollPane sp : new JScrollPane[]{libScroll, ctrlLibScroll, powerPresetScroll}) {
+        for (JScrollPane sp : new JScrollPane[]{libScroll, ctrlLibScroll, powerPresetScroll, cableScroll}) {
             sp.setMinimumSize(new Dimension(200, 80));
         }
 
@@ -101,6 +108,7 @@ public class LibrariesStagePanel extends JPanel {
                 UiKit.fmt(ct.getWidthMm()) + "×" + UiKit.fmt(ct.getHeightMm()) + "мм · "
                         + ct.getResolutionWidth() + "×" + ct.getResolutionHeight() + "px · "
                         + UiKit.fmt(ct.getPowerConsumptionW()) + "Вт · " + UiKit.fmt(ct.getWeightKg()) + "кг"));
+        libScroll.setPreferredSize(new Dimension(520, 160));
         body.add(libScroll);
 
         JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
@@ -116,11 +124,13 @@ public class LibrariesStagePanel extends JPanel {
             CabinetType ct = new CabinetTypeDialog(topWindow(), sel).showDialog();
             if (ct != null) tryRun(() -> model.updateCabinetType(ct));
         });
-        JButton del = new JButton("Удалить");
-        del.addActionListener(e -> {
+        Runnable deleteSelectedCabinetType = () -> {
             CabinetType sel = libList.getSelectedValue();
             if (sel != null && confirm("Удалить кабинет из библиотеки?")) tryRun(() -> model.deleteCabinetType(sel.getId()));
-        });
+        };
+        JButton del = new JButton("Удалить");
+        del.addActionListener(e -> deleteSelectedCabinetType.run());
+        UiKit.bindDeleteKey(libList, deleteSelectedCabinetType);
         crud.add(add);
         crud.add(edit);
         crud.add(del);
@@ -152,7 +162,7 @@ public class LibrariesStagePanel extends JPanel {
                                         + (ct.inputPortTypesSummary().isEmpty() ? "" : " (" + ct.inputPortTypesSummary() + ")")
                                 : "")
                         + (ct.isLoopPort() ? " · Loop" : "")));
-        ctrlLibScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, 160));
+        ctrlLibScroll.setPreferredSize(new Dimension(560, 160));
         body.add(ctrlLibScroll);
 
         JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
@@ -176,13 +186,15 @@ public class LibrariesStagePanel extends JPanel {
                     CardsConfigDialog.forController(model, sel));
             dlg.setVisible(true);
         });
-        JButton del = new JButton("Удалить");
-        del.addActionListener(e -> {
+        Runnable deleteSelectedControllerType = () -> {
             ControllerType sel = ctrlLibList.getSelectedValue();
             if (sel != null && confirm("Удалить контроллер из библиотеки?")) {
                 tryRun(() -> model.deleteControllerType(sel.getId()));
             }
-        });
+        };
+        JButton del = new JButton("Удалить");
+        del.addActionListener(e -> deleteSelectedControllerType.run());
+        UiKit.bindDeleteKey(ctrlLibList, deleteSelectedControllerType);
         crud.add(add);
         crud.add(edit);
         crud.add(cardsBtn);
@@ -206,7 +218,7 @@ public class LibrariesStagePanel extends JPanel {
                         + (mode == SchemaMode.POWER
                                 ? "разъёмов: " + p.getPowerConnectors().size()
                                 : "карт: " + p.getCards().size())));
-        presetScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, 160));
+        presetScroll.setPreferredSize(new Dimension(420, 160));
         body.add(presetScroll);
 
         JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
@@ -229,7 +241,7 @@ public class LibrariesStagePanel extends JPanel {
             String dlgTitle = sel.getName().isEmpty() ? sel.getCategory().getLabel() : sel.getName();
             if (mode == SchemaMode.POWER) {
                 PowerConnectorsConfigDialog dlg = new PowerConnectorsConfigDialog(topWindow(), dlgTitle,
-                        PowerConnectorsConfigDialog.forPreset(model, sel));
+                        PowerConnectorsConfigDialog.forPreset(model, sel), model);
                 dlg.setVisible(true);
             } else {
                 CardsConfigDialog dlg = new CardsConfigDialog(topWindow(), dlgTitle,
@@ -237,13 +249,15 @@ public class LibrariesStagePanel extends JPanel {
                 dlg.setVisible(true);
             }
         });
-        JButton del = new JButton("Удалить");
-        del.addActionListener(e -> {
+        Runnable deleteSelectedPreset = () -> {
             EquipmentPreset sel = presetList.getSelectedValue();
             if (sel != null && confirm("Удалить пресет «" + sel.getName() + "» из библиотеки?")) {
                 tryRun(() -> model.deleteEquipmentPreset(sel));
             }
-        });
+        };
+        JButton del = new JButton("Удалить");
+        del.addActionListener(e -> deleteSelectedPreset.run());
+        UiKit.bindDeleteKey(presetList, deleteSelectedPreset);
         crud.add(add);
         crud.add(edit);
         crud.add(cardsBtn);
@@ -254,6 +268,45 @@ public class LibrariesStagePanel extends JPanel {
                 + (mode == SchemaMode.POWER ? "питания" : "сигнала")
                 + " (категория узла подставляет сначала пресеты этой категории, затем — свой текст).</html>"));
         return (JPanel) UiKit.section(title, body);
+    }
+
+    // ---- библиотека кабелей/переходников (WireLabelDialog/PowerConnectorsConfigDialog) ----
+
+    private JPanel buildCableLibrary() {
+        JPanel body = UiKit.vbox();
+        cableList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        cableList.setCellRenderer(new NamedRenderer<CableType>(
+                c -> (c.getMode() == SchemaMode.POWER ? "[Питание] " : "[Сигнал] ") + c.getLabel(), c -> ""));
+        cableScroll.setPreferredSize(new Dimension(380, 160));
+        body.add(cableScroll);
+
+        JPanel addRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
+        JButton add = new JButton("+ Добавить кабель…");
+        add.addActionListener(e -> {
+            com.vjstb.ledscheme.ui.CableTypeDialog dlg = new com.vjstb.ledscheme.ui.CableTypeDialog(topWindow());
+            String label = dlg.showDialog();
+            if (label != null) {
+                tryRun(() -> model.addCableType(dlg.getMode(), label));
+            }
+        });
+        Runnable deleteSelectedCable = () -> {
+            CableType sel = cableList.getSelectedValue();
+            if (sel != null && confirm("Удалить кабель «" + sel.getLabel() + "» из библиотеки?")) {
+                model.deleteCableType(sel);
+            }
+        };
+        JButton del = new JButton("Удалить");
+        del.addActionListener(e -> deleteSelectedCable.run());
+        UiKit.bindDeleteKey(cableList, deleteSelectedCable);
+        addRow.add(add);
+        addRow.add(del);
+        body.add(addRow);
+        body.add(UiKit.vgap(4));
+        body.add(UiKit.muted("Кабели/переходники (например, комбинированные вроде «CEE 16A → TrueCON»): "
+                + "выберите разъём и исполнение («папа»/«мама») на каждом конце — подпись соберётся "
+                + "автоматически. Также предлагаются вдобавок к встроенным при подписи связи схемы и при "
+                + "заведении разъёмов распределения, откуда их можно сохранить кнопкой «В библиотеку кабелей»."));
+        return (JPanel) UiKit.section("Кабели", body);
     }
 
     // ---- оборудование сигнала: слева тип оборудования, справа его карты-шаблоны ----
@@ -287,13 +340,15 @@ public class LibrariesStagePanel extends JPanel {
                 tryRun(() -> model.updateEquipmentPreset(sel, SchemaMode.SIGNAL, r.category(), r.name(), r.description()));
             }
         });
-        JButton del = new JButton("Удалить");
-        del.addActionListener(e -> {
+        Runnable deleteSelectedSignalPreset = () -> {
             EquipmentPreset sel = signalPresetList.getSelectedValue();
             if (sel != null && confirm("Удалить тип оборудования «" + sel.getName() + "» из библиотеки?")) {
                 tryRun(() -> model.deleteEquipmentPreset(sel));
             }
-        });
+        };
+        JButton del = new JButton("Удалить");
+        del.addActionListener(e -> deleteSelectedSignalPreset.run());
+        UiKit.bindDeleteKey(signalPresetList, deleteSelectedSignalPreset);
         leftCrud.add(add);
         leftCrud.add(edit);
         leftCrud.add(del);
@@ -320,15 +375,17 @@ public class LibrariesStagePanel extends JPanel {
                     CardsConfigDialog.forPreset(model, sel));
             dlg.setVisible(true);
         });
-        JButton cardDel = new JButton("Удалить карту");
-        cardDel.addActionListener(e -> {
+        Runnable deleteSelectedSignalCard = () -> {
             EquipmentPreset sel = signalPresetList.getSelectedValue();
             SchemaCard card = signalCardList.getSelectedValue();
             if (sel == null || card == null) return;
             if (confirm("Удалить карту-шаблон «" + card.getName() + "»?")) {
                 tryRun(() -> model.removeCardFromPreset(sel, card.getId()));
             }
-        });
+        };
+        JButton cardDel = new JButton("Удалить карту");
+        cardDel.addActionListener(e -> deleteSelectedSignalCard.run());
+        UiKit.bindDeleteKey(signalCardList, deleteSelectedSignalCard);
         rightCrud.add(cardAdd);
         rightCrud.add(cardDel);
         right.add(rightCrud);
@@ -346,6 +403,13 @@ public class LibrariesStagePanel extends JPanel {
         split.setResizeWeight(0.45);
         split.setBorder(BorderFactory.createEmptyBorder());
         split.setContinuousLayout(true);
+        // JSplitPane сам по себе безграничен по ширине (как и большинство JComponent),
+        // поэтому в BoxLayout секции (на всю ширину этапа, без своей колонки-обёртки
+        // фиксированной ширины) он растягивался на всё окно и раздавал лишнюю ширину
+        // ОБЕИМ половинам по resizeWeight — даже после того, как сами списки внутри
+        // получили ограничение по ширине (см. ListSizing.fit(..., true) выше). Явный
+        // предел здесь — тот же класс бага, что и с самими списками (Task #95/v1.5).
+        split.setMaximumSize(new Dimension(620, Integer.MAX_VALUE));
 
         JPanel body = UiKit.vbox();
         body.add(split);
@@ -360,7 +424,7 @@ public class LibrariesStagePanel extends JPanel {
         EquipmentPreset sel = signalPresetList.getSelectedValue();
         List<SchemaCard> cards = sel == null ? List.of() : sel.getCards();
         syncList(signalCardModel, cards);
-        ListSizing.fit(signalCardList, signalCardScroll, 2, 6);
+        ListSizing.fit(signalCardList, signalCardScroll, 2, 6, true);
     }
 
     private void exportLibrary() {
@@ -388,20 +452,23 @@ public class LibrariesStagePanel extends JPanel {
 
     private void refresh() {
         syncList(libModel, model.getCabinetTypes());
-        ListSizing.fit(libList, libScroll, 2, 8);
+        ListSizing.fit(libList, libScroll, 2, 8, true);
         syncList(ctrlLibModel, model.getWorkspace().getControllerTypes());
-        ListSizing.fit(ctrlLibList, ctrlLibScroll, 2, 6);
+        ListSizing.fit(ctrlLibList, ctrlLibScroll, 2, 6, true);
         syncList(powerPresetModel, presetsForMode(SchemaMode.POWER));
-        ListSizing.fit(powerPresetList, powerPresetScroll, 2, 6);
+        ListSizing.fit(powerPresetList, powerPresetScroll, 2, 6, true);
 
         EquipmentPreset selSignalPreset = signalPresetList.getSelectedValue();
         List<EquipmentPreset> signalPresets = presetsForMode(SchemaMode.SIGNAL);
         syncList(signalPresetModel, signalPresets);
-        ListSizing.fit(signalPresetList, signalPresetScroll, 2, 6);
+        ListSizing.fit(signalPresetList, signalPresetScroll, 2, 6, true);
         if (selSignalPreset != null && signalPresets.contains(selSignalPreset)) {
             signalPresetList.setSelectedValue(selSignalPreset, false);
         }
         refreshSignalCards();
+
+        syncList(cableModel, model.getCableTypes());
+        ListSizing.fit(cableList, cableScroll, 2, 6, true);
     }
 
     private List<EquipmentPreset> presetsForMode(SchemaMode mode) {

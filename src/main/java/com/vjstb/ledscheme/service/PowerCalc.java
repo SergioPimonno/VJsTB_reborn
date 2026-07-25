@@ -2,6 +2,7 @@ package com.vjstb.ledscheme.service;
 
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.PowerConnectorType;
+import com.vjstb.ledscheme.model.SchemaNodeType;
 import java.util.Locale;
 
 /**
@@ -27,7 +28,21 @@ public final class PowerCalc {
      *  на 100% индивидуально — см. SchemaNode.getLoadDeratingPercent(). */
     public static final double DEFAULT_DERATING_PERCENT = 75.0 / 81.0 * 100.0;
 
+    /** Запас по умолчанию ПРОХОДНЫХ блоков (тип узла DISTRO, «Распределение») —
+     *  их нагружают на 100% номинала, в отличие от вводного источника/щита (SOURCE),
+     *  для которого действует общий {@link #DEFAULT_DERATING_PERCENT}. Инженер может
+     *  переопределить это для конкретного узла вручную (см. SchemaNode.getLoadDeratingPercent) —
+     *  и то, и другое значение здесь — только автоматика ПО УМОЛЧАНИЮ. */
+    public static final double DISTRO_DEFAULT_DERATING_PERCENT = 100.0;
+
     private PowerCalc() {
+    }
+
+    /** Запас (%) по умолчанию для узла данного типа — без учёта ручного
+     *  переопределения (см. SchemaNode.getLoadDeratingPercent, которое всегда в
+     *  приоритете там, где задано). */
+    public static double defaultDeratingPercentFor(SchemaNodeType type) {
+        return type == SchemaNodeType.DISTRO ? DISTRO_DEFAULT_DERATING_PERCENT : DEFAULT_DERATING_PERCENT;
     }
 
     /** Ток (А), который тянет нагрузка watts по однофазной линии 220В, cosφ=1. */

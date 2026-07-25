@@ -317,7 +317,8 @@ public class CanvasPanel extends JPanel {
                     g2.drawRect(x + 1, y + 1, cw - 2, ch - 2);
                 }
             }
-            SchemeRenderer.drawChain(g2, scr, active, c, true, cw, ch, PADDING, PADDING);
+            SchemeRenderer.drawChain(g2, scr, active, c, true, cw, ch, PADDING, PADDING,
+                    model.typeOf(scr), model.getWorkspace());
 
             int cr = controller.cursorRow();
             int cc = controller.cursorCol();

@@ -69,32 +69,27 @@ public final class SchemeRenderer {
         boolean showLabels = cellH >= 16 && cellW >= 16;
         Font labelFont = showLabels ? g2.getFont().deriveFont(Font.PLAIN, Math.max(9f, cellH * 0.14f)) : null;
         for (CabinetInstance cab : scr.getCabinets()) {
+            // Деактивированная (скрытая) ячейка — по определению "не считается, не
+            // рисуется, не участвует в цепочках" (см. CabinetInstance.isHidden) —
+            // раньше её контур всё равно рисовался (пустой прямоугольник без формы/
+            // подписи), что визуально оставляло в сетке "экраны прописи" физически
+            // не существующие кабинеты (Task #93/v1.5).
+            if (cab.isHidden()) {
+                continue;
+            }
             int x = offX + cab.getColIndex() * cellW;
             int y = offY + cab.getRowIndex() * cellH;
-            Color fill = power ? Palette.phaseColor(cab.getPhase()) : Palette.PHASE_NONE;
-            g2.setColor(cab.isHidden() ? blend(fill, Palette.BG, 0.82f) : fill);
 
-           // g2.fillRect(x, y, cellW, cellH);
+            CabinetType effective = effectiveTypeOf(cab, type, workspace);
+            CabinetShape shape = cab.getShapeOverride() != null ? cab.getShapeOverride()
+                    : (effective != null ? effective.getShape() : null);
+            double rotationDeg = effectiveRotationDeg(cab, effective);
+
             g2.setColor(Palette.BORDER);
-            g2.drawRect(x, y, cellW, cellH);
-
-            if (!cab.isHidden()) {
-                CabinetType effective = type;
-                if (workspace != null && cab.getCabinetTypeId() != null) {
-                    CabinetType override = workspace.cabinetTypeById(cab.getCabinetTypeId());
-                    if (override != null) {
-                        effective = override;
-                    }
-                }
-                CabinetShape shape = cab.getShapeOverride() != null ? cab.getShapeOverride()
-                        : (effective != null ? effective.getShape() : null);
-                if (shape != null && shape != CabinetShape.RECTANGLE) {
-                    drawShapeMarker(g2, x, y, cellW, cellH, shape);
-                }
-            }
+            outlineCabinetShape(g2, x, y, cellW, cellH, shape, rotationDeg);
 
             if (showLabels) {
-                g2.setColor(cab.isHidden() ? Palette.MUTED : new Color(0xc0, 0xc8, 0xd0));
+                g2.setColor(new Color(0xc0, 0xc8, 0xd0));
                 g2.setFont(labelFont);
                 g2.drawString(cab.getDisplayRow() + "," + cab.getDisplayCol(), x + 4, y + labelFont.getSize() + 2);
             }
@@ -106,13 +101,13 @@ public final class SchemeRenderer {
                 // (в отличие от сигнала с резервным портом на другом конце), поэтому
                 // дублировать фазу на последнем кабинете незачем.
                 drawChain(g2, scr, chain.getCabinetInstanceIds(), Palette.phaseColor(chain.getPhase()),
-                        false, cellW, cellH, offX, offY, "L" + chain.getPhase(), null);
+                        false, cellW, cellH, offX, offY, type, workspace, "L" + chain.getPhase(), null);
             }
         } else {
             for (int i = 0; i < signalChains.size(); i++) {
                 SignalChain chain = signalChains.get(i);
                 drawChain(g2, scr, chain.getCabinetInstanceIds(), Palette.signalColor(i),
-                        false, cellW, cellH, offX, offY, signalChainLabel(scr, chain, workspace),
+                        false, cellW, cellH, offX, offY, type, workspace, signalChainLabel(scr, chain, workspace),
                         signalChainEndLabel(scr, chain, workspace));
             }
         }
@@ -168,13 +163,17 @@ public final class SchemeRenderer {
             int x = offX + cab.getColIndex() * cellW;
             int y = offY + cab.getRowIndex() * cellH;
             ChainMembership m = byCab.get(cab.getId());
+            CabinetType effective = effectiveTypeOf(cab, type, workspace);
+            CabinetShape shape = cab.getShapeOverride() != null ? cab.getShapeOverride()
+                    : (effective != null ? effective.getShape() : null);
+            double rotationDeg = effectiveRotationDeg(cab, effective);
+
             g2.setColor(m != null ? m.color() : Palette.PANEL);
-            g2.fillRect(x, y, cellW, cellH);
+            fillCabinetShape(g2, x, y, cellW, cellH, shape, rotationDeg);
             g2.setColor(Palette.BORDER);
-            g2.drawRect(x, y, cellW, cellH);
+            outlineCabinetShape(g2, x, y, cellW, cellH, shape, rotationDeg);
 
             if (m != null && showLabels) {
-                CabinetType effective = effectiveTypeOf(cab, type, workspace);
                 List<String> lines = new ArrayList<>();
                 lines.add(power ? "L" + m.phase() : portLabel(scr, workspace, m.port() != null ? m.port() : 0));
                 lines.add("#" + m.seq());
@@ -182,9 +181,19 @@ public final class SchemeRenderer {
                     lines.add(power ? trim(effective.getPowerConsumptionW()) + "Вт"
                             : effective.getResolutionWidth() + "×" + effective.getResolutionHeight());
                 }
-                g2.setFont(labelFont);
-                g2.setColor(Color.BLACK);
-                java.awt.FontMetrics fm = g2.getFontMetrics();
+                // Непрямоугольная ячейка закрашена не целиком (треугольник/круг —
+                // часть прямоугольника ячейки остаётся фоном) — текст на фиксированной
+                // позиции у верхнего левого угла может оказаться в НЕзакрашенной
+                // части (например, вырезанный угол треугольника при 270°), выглядя
+                // подписью "в воздухе" поверх пустоты. Обрезаем по контуру формы —
+                // для прямоугольника это НИКАК не меняет результат (тот же
+                // прямоугольник), для остальных форм подпись, не попавшая внутрь
+                // формы, просто не рисуется, а не наезжает на пустой фон.
+                Graphics2D gc = (Graphics2D) g2.create();
+                gc.clip(cabinetShapeOutline(x, y, cellW, cellH, shape, rotationDeg));
+                gc.setFont(labelFont);
+                gc.setColor(Color.BLACK);
+                java.awt.FontMetrics fm = gc.getFontMetrics();
                 int lineH = fm.getHeight();
                 int ty = y + lineH;
                 int maxTextW = cellW - 6;
@@ -192,9 +201,10 @@ public final class SchemeRenderer {
                     if (ty > y + cellH - 2) {
                         break;
                     }
-                    g2.drawString(clipToWidth(g2, line, maxTextW), x + 3, ty);
+                    gc.drawString(clipToWidth(gc, line, maxTextW), x + 3, ty);
                     ty += lineH;
                 }
+                gc.dispose();
             }
         }
 
@@ -205,18 +215,32 @@ public final class SchemeRenderer {
         // рисовать подписи независимо, как раньше, означало, что вторая просто
         // затирала первую в том же самом месте — теперь обе подписи одной плашкой.
         Map<String, List<String>> startLabelsByCabinet = new LinkedHashMap<>();
+        // Резервный порт (Task #32/#48): назначается ОДНИМ полем на цепочке
+        // (backupPortNumber) — обычно физически это тот же ряд кабинетов, дальний
+        // конец которого дополнительно заведён в резервный порт (loop-through), а не
+        // отдельная цепочка с собственными кабинетами. Показывается на ПОСЛЕДНЕМ
+        // кабинете цепочки — так же, как уже показывалось в интерактивном paintScheme
+        // (см. signalChainEndLabel), только раньше этого не было в этом, "богатом",
+        // виде схемы вовсе.
+        Map<String, List<String>> endLabelsByCabinet = new LinkedHashMap<>();
         if (power) {
             for (PowerChain chain : powerChains) {
-                drawChainWithDots(g2, scr, chain.getCabinetInstanceIds(), cellW, cellH, offX, offY, false);
+                drawChainWithDots(g2, scr, chain.getCabinetInstanceIds(), cellW, cellH, offX, offY, type, workspace, false);
                 addStartLabel(startLabelsByCabinet, chain.getCabinetInstanceIds(), "L" + chain.getPhase());
             }
         } else {
             for (SignalChain chain : signalChains) {
-                drawChainWithDots(g2, scr, chain.getCabinetInstanceIds(), cellW, cellH, offX, offY, chain.isBackup());
+                drawChainWithDots(g2, scr, chain.getCabinetInstanceIds(), cellW, cellH, offX, offY, type, workspace,
+                        chain.isBackup());
                 if (chain.getPortNumber() != null) {
                     String lbl = portLabel(scr, workspace, chain.getPortNumber());
                     addStartLabel(startLabelsByCabinet, chain.getCabinetInstanceIds(),
                             chain.isBackup() ? "рез:" + lbl : lbl);
+                }
+                if (chain.getBackupPortNumber() != null && !chain.getCabinetInstanceIds().isEmpty()) {
+                    String endLbl = "рез:" + portLabel(scr, workspace, chain.getBackupPortNumber());
+                    List<String> ids = chain.getCabinetInstanceIds();
+                    endLabelsByCabinet.computeIfAbsent(ids.get(ids.size() - 1), k -> new ArrayList<>()).add(endLbl);
                 }
             }
         }
@@ -225,7 +249,13 @@ public final class SchemeRenderer {
             for (var entry : startLabelsByCabinet.entrySet()) {
                 CabinetInstance cab = scr.cabinetById(entry.getKey());
                 if (cab != null) {
-                    drawStartLabelBadge(g2, cab, cellW, cellH, offX, offY, entry.getValue());
+                    drawStartLabelBadge(g2, cab, cellW, cellH, offX, offY, entry.getValue(), false);
+                }
+            }
+            for (var entry : endLabelsByCabinet.entrySet()) {
+                CabinetInstance cab = scr.cabinetById(entry.getKey());
+                if (cab != null) {
+                    drawStartLabelBadge(g2, cab, cellW, cellH, offX, offY, entry.getValue(), true);
                 }
             }
         }
@@ -239,11 +269,14 @@ public final class SchemeRenderer {
     }
 
     /** Плашка с одной или несколькими подписями (основная цепочка + резерв(ы), если
-     *  начинаются на том же кабинете) в углу ПЕРВОЙ ячейки цепочки — независимо от
-     *  showLabels (тот отключается для мелких ячеек, но видеть, где начинается КАКАЯ
-     *  линия, нужно всегда, пока ячейка вообще различима). */
+     *  начинаются на том же кабинете) в углу ячейки — независимо от showLabels (тот
+     *  отключается для мелких ячеек, но видеть, где начинается/заканчивается КАКАЯ
+     *  линия, нужно всегда, пока ячейка вообще различима). bottomRight — рисовать в
+     *  правом нижнем углу вместо левого верхнего (для подписи резервного порта на
+     *  ПОСЛЕДНЕМ кабинете цепочки — не должна перекрывать подпись начала другой
+     *  цепочки, если та начинается в этой же ячейке). */
     private static void drawStartLabelBadge(Graphics2D g2, CabinetInstance cab, int cellW, int cellH,
-                                             int offX, int offY, List<String> lines) {
+                                             int offX, int offY, List<String> lines, boolean bottomRight) {
         int minCell = Math.min(cellW, cellH);
         int x = offX + cab.getColIndex() * cellW;
         int y = offY + cab.getRowIndex() * cellH;
@@ -258,8 +291,8 @@ public final class SchemeRenderer {
         int tw = Math.min(cellW - 2, maxTextW + pad * 2);
         int lineH = fm.getHeight();
         int th = lineH * lines.size();
-        int bx = x + 1;
-        int by = y + 1;
+        int bx = bottomRight ? x + cellW - tw - 1 : x + 1;
+        int by = bottomRight ? y + cellH - th - 1 : y + 1;
         g2.setColor(new Color(0, 0, 0, 190));
         g2.fillRoundRect(bx, by, tw, th, 4, 4);
         g2.setColor(Color.WHITE);
@@ -280,6 +313,48 @@ public final class SchemeRenderer {
             }
         }
         return defaultType;
+    }
+
+    /** Фактический угол непрямоугольной формы конкретной ячейки (Task #92/v1.5):
+     *  переопределение по ячейке (CabinetInstance.rotationOverride), если задано,
+     *  иначе угол эффективного типа кабинета. */
+    public static double effectiveRotationDeg(CabinetInstance cab, CabinetType effectiveType) {
+        if (cab.getRotationOverride() != null) {
+            return cab.getRotationOverride();
+        }
+        return effectiveType != null ? effectiveType.getRotationDeg() : 0;
+    }
+
+    /** Точка привязки линии/точки коммутации в ячейке кабинета (Task #93/v1.5) —
+     *  для непрямоугольной формы это НЕ геометрический центр прямоугольника ячейки
+     *  (который может попасть в незакрашенный вырезанный угол — например, у
+     *  треугольника при некоторых поворотах центр прямоугольника лежит СНАРУЖИ
+     *  самого треугольника), а центр тяжести самой фигуры (для треугольника —
+     *  среднее трёх вершин). Для прямоугольника/круга/угловой формы — как и раньше,
+     *  геометрический центр ячейки (эти формы симметричны относительно него). */
+    public static java.awt.Point cabinetConnectionAnchor(int x, int y, int w, int h, CabinetShape shape,
+                                                           double rotationDeg) {
+        if (shape == CabinetShape.TRIANGLE) {
+            java.awt.Polygon p = trianglePolygon(x, y, w, h, rotationDeg);
+            int cx = (p.xpoints[0] + p.xpoints[1] + p.xpoints[2]) / 3;
+            int cy = (p.ypoints[0] + p.ypoints[1] + p.ypoints[2]) / 3;
+            return new java.awt.Point(cx, cy);
+        }
+        return new java.awt.Point(x + w / 2, y + h / 2);
+    }
+
+    /** Точка привязки коммутации КОНКРЕТНОГО кабинета в системе координат сетки
+     *  экрана — собирает координаты ячейки + её фактическую форму/угол и делегирует
+     *  {@link #cabinetConnectionAnchor}. */
+    private static java.awt.Point anchorFor(CabinetInstance cab, int offX, int offY, int cellW, int cellH,
+                                             CabinetType type, Workspace workspace) {
+        int x = offX + cab.getColIndex() * cellW;
+        int y = offY + cab.getRowIndex() * cellH;
+        CabinetType effective = effectiveTypeOf(cab, type, workspace);
+        CabinetShape shape = cab.getShapeOverride() != null ? cab.getShapeOverride()
+                : (effective != null ? effective.getShape() : null);
+        double rotationDeg = effectiveRotationDeg(cab, effective);
+        return cabinetConnectionAnchor(x, y, cellW, cellH, shape, rotationDeg);
     }
 
     /** Обрезает строку по ширине (с "…"), чтобы не наезжала на соседние ячейки при
@@ -306,7 +381,8 @@ public final class SchemeRenderer {
      *  визуального различия основной и резервный путь были бы неотличимы, рисуясь
      *  друг поверх друга в одних и тех же точках. */
     private static void drawChainWithDots(Graphics2D g2, Screen scr, List<String> ids,
-                                           int cellW, int cellH, int offX, int offY, boolean dashed) {
+                                           int cellW, int cellH, int offX, int offY,
+                                           CabinetType type, Workspace workspace, boolean dashed) {
         int minCell = Math.min(cellW, cellH);
         float strokeWidth = (float) Math.max(0.8, Math.min(2.5, minCell * 0.08));
         g2.setStroke(dashed
@@ -328,13 +404,11 @@ public final class SchemeRenderer {
             if (a == null || b == null) {
                 continue;
             }
-            int ax = offX + a.getColIndex() * cellW + cellW / 2;
-            int ay = offY + a.getRowIndex() * cellH + cellH / 2;
-            int bx = offX + b.getColIndex() * cellW + cellW / 2;
-            int by = offY + b.getRowIndex() * cellH + cellH / 2;
-            g2.drawLine(ax, ay, bx, by);
+            java.awt.Point pa = anchorFor(a, offX, offY, cellW, cellH, type, workspace);
+            java.awt.Point pb = anchorFor(b, offX, offY, cellW, cellH, type, workspace);
+            g2.drawLine(pa.x, pa.y, pb.x, pb.y);
             if (showArrowHeads) {
-                drawArrowHead(g2, ax, ay, bx, by, lineColor, arrowSize);
+                drawArrowHead(g2, pa.x, pa.y, pb.x, pb.y, lineColor, arrowSize);
             }
         }
         if (minCell >= 18) {
@@ -344,11 +418,10 @@ public final class SchemeRenderer {
                 if (c == null) {
                     continue;
                 }
-                int cx = offX + c.getColIndex() * cellW + cellW / 2;
-                int cy = offY + c.getRowIndex() * cellH + cellH / 2;
-                g2.fillOval(cx - dotR, cy - dotR, dotR * 2, dotR * 2);
+                java.awt.Point pc = anchorFor(c, offX, offY, cellW, cellH, type, workspace);
+                g2.fillOval(pc.x - dotR, pc.y - dotR, dotR * 2, dotR * 2);
                 g2.setColor(Color.BLACK);
-                g2.drawOval(cx - dotR, cy - dotR, dotR * 2, dotR * 2);
+                g2.drawOval(pc.x - dotR, pc.y - dotR, dotR * 2, dotR * 2);
                 g2.setColor(Color.WHITE);
             }
         }
@@ -441,8 +514,8 @@ public final class SchemeRenderer {
      *  цепочки — ей рисовать метку рано, у неё пока нет фиксированного порта/фазы
      *  «на бумаге»). */
     public static void drawChain(Graphics2D g2, Screen scr, List<String> ids, Color color, boolean dashed,
-                                 int cellW, int cellH, int offX, int offY) {
-        drawChain(g2, scr, ids, color, dashed, cellW, cellH, offX, offY, null);
+                                 int cellW, int cellH, int offX, int offY, CabinetType type, Workspace workspace) {
+        drawChain(g2, scr, ids, color, dashed, cellW, cellH, offX, offY, type, workspace, null);
     }
 
     /** То же самое, плюс опознавательный кружок с меткой (фаза L1/L2/L3 для питания;
@@ -453,16 +526,21 @@ public final class SchemeRenderer {
      *  обзор сцены целиком) — иначе при сильном зум-ауте стрелка/линия крупнее
      *  самой ячейки и цепочка визуально накладывается на соседние кабинеты/подписи. */
     public static void drawChain(Graphics2D g2, Screen scr, List<String> ids, Color color, boolean dashed,
-                                 int cellW, int cellH, int offX, int offY, String label) {
-        drawChain(g2, scr, ids, color, dashed, cellW, cellH, offX, offY, label, label);
+                                 int cellW, int cellH, int offX, int offY, CabinetType type, Workspace workspace,
+                                 String label) {
+        drawChain(g2, scr, ids, color, dashed, cellW, cellH, offX, offY, type, workspace, label, label);
     }
 
     /** То же самое, но с РАЗНЫМИ метками начала и конца — нужно для сигнальной
      *  цепочки с назначенным резервным портом: первый кабинет подписан основным
      *  портом, последний — резервным (это конец, куда физически приходит резерв),
-     *  а не дублирует основной. */
+     *  а не дублирует основной. type/workspace — чтобы правильно определить точку
+     *  привязки линии для непрямоугольных кабинетов (см. cabinetConnectionAnchor,
+     *  Task #93/v1.5) — центр ГЕОМЕТРИЧЕСКОЙ ячейки для треугольника мог попасть в
+     *  незакрашенный вырезанный угол, линия визуально проходила "мимо" фигуры. */
     public static void drawChain(Graphics2D g2, Screen scr, List<String> ids, Color color, boolean dashed,
-                                 int cellW, int cellH, int offX, int offY, String startLabel, String endLabel) {
+                                 int cellW, int cellH, int offX, int offY, CabinetType type, Workspace workspace,
+                                 String startLabel, String endLabel) {
         int minCell = Math.min(cellW, cellH);
         float strokeWidth = (float) Math.max(0.8, Math.min(2.5, minCell * 0.08));
         g2.setStroke(dashed
@@ -477,13 +555,11 @@ public final class SchemeRenderer {
             if (a == null || b == null) {
                 continue;
             }
-            int ax = offX + a.getColIndex() * cellW + cellW / 2;
-            int ay = offY + a.getRowIndex() * cellH + cellH / 2;
-            int bx = offX + b.getColIndex() * cellW + cellW / 2;
-            int by = offY + b.getRowIndex() * cellH + cellH / 2;
-            g2.drawLine(ax, ay, bx, by);
+            java.awt.Point pa = anchorFor(a, offX, offY, cellW, cellH, type, workspace);
+            java.awt.Point pb = anchorFor(b, offX, offY, cellW, cellH, type, workspace);
+            g2.drawLine(pa.x, pa.y, pb.x, pb.y);
             if (showArrowHeads) {
-                drawArrowHead(g2, ax, ay, bx, by, color, arrowSize);
+                drawArrowHead(g2, pa.x, pa.y, pb.x, pb.y, color, arrowSize);
             }
         }
         g2.setStroke(new BasicStroke(1f));
@@ -564,6 +640,86 @@ public final class SchemeRenderer {
                 break;
         }
         g2.setColor(prev);
+    }
+
+    /** Заполняет ячейку кабинета РЕАЛЬНОЙ физической формой (Task #91/v1.5) вместо
+     *  всегда прямоугольника с декоративной меткой в углу: RECTANGLE — вся ячейка
+     *  (уже вычисляется пропорционально физическим width/height, см. cellSize —
+     *  прямоугольный кабинет и так рисуется с его настоящим соотношением сторон);
+     *  TRIANGLE — настоящий прямоугольный треугольник (см. {@link #trianglePolygon});
+     *  ROUND — вписанный эллипс. CORNER без изменений — форма "вырезанного угла" не
+     *  уточнена пользователем, остаётся только декоративной меткой (см. ShapeEditorPanel/
+     *  drawShapeMarker), полигон для неё не строится. null — как RECTANGLE (тип/форма
+     *  неизвестны). */
+    static void fillCabinetShape(Graphics2D g2, int x, int y, int w, int h, CabinetShape shape, double rotationDeg) {
+        if (shape == CabinetShape.TRIANGLE) {
+            g2.fillPolygon(trianglePolygon(x, y, w, h, rotationDeg));
+        } else if (shape == CabinetShape.ROUND) {
+            g2.fillOval(x, y, w, h);
+        } else {
+            g2.fillRect(x, y, w, h);
+        }
+    }
+
+    /** Контур ячейки кабинета той же формой, что и {@link #fillCabinetShape}. */
+    static void outlineCabinetShape(Graphics2D g2, int x, int y, int w, int h, CabinetShape shape, double rotationDeg) {
+        if (shape == CabinetShape.TRIANGLE) {
+            g2.drawPolygon(trianglePolygon(x, y, w, h, rotationDeg));
+        } else if (shape == CabinetShape.ROUND) {
+            g2.drawOval(x, y, w, h);
+        } else {
+            g2.drawRect(x, y, w, h);
+        }
+    }
+
+    /** {@link java.awt.Shape} той же формы — для обрезки (clip) содержимого ячейки
+     *  (например, подписи), чтобы оно не попадало в НЕзакрашенную часть ячейки у
+     *  непрямоугольных форм (см. использование в paintWiringDiagram). */
+    private static java.awt.Shape cabinetShapeOutline(int x, int y, int w, int h, CabinetShape shape,
+                                                        double rotationDeg) {
+        if (shape == CabinetShape.TRIANGLE) {
+            return trianglePolygon(x, y, w, h, rotationDeg);
+        } else if (shape == CabinetShape.ROUND) {
+            return new java.awt.geom.Ellipse2D.Float(x, y, w, h);
+        } else {
+            return new java.awt.Rectangle(x, y, w, h);
+        }
+    }
+
+    /** Прямоугольный треугольник, вписанный в ячейку (x,y,w,h) — прямой угол стоит
+     *  в одном из 4 углов ячейки по rotationDeg (см. CabinetType.getRotationDeg):
+     *  0° — левый нижний, далее по часовой стрелке (90° — левый верхний, 180° —
+     *  правый верхний, 270° — правый нижний). Угол округляется до ближайших 90° —
+     *  физическая ориентация треугольного LED-кабинета в реальной инсталляции
+     *  осмысленна только с шагом в четверть оборота (иное означало бы кабинет,
+     *  висящий не по одной из 4 сторон своей ячейки). Вершины треугольника — это
+     *  всегда 3 ИЗ 4 УГЛОВ САМОЙ ЯЧЕЙКИ (не геометрический поворот полигона), что
+     *  сохраняет соотношение сторон ячейки даже для непрямоугольного (например,
+     *  портретного) кабинета — геометрический поворот полигона на 90° исказил бы
+     *  форму, поменяв местами эффективные ширину/высоту. */
+    public static java.awt.Polygon trianglePolygon(int x, int y, int w, int h, double rotationDeg) {
+        int quadrant = Math.floorMod(Math.round(rotationDeg / 90.0), 4);
+        int[] xs;
+        int[] ys;
+        switch (quadrant) {
+            case 1 -> { // 90°: прямой угол — левый верхний (омитим правый нижний)
+                xs = new int[]{x, x + w, x};
+                ys = new int[]{y + h, y, y};
+            }
+            case 2 -> { // 180°: прямой угол — правый верхний (омитим левый нижний)
+                xs = new int[]{x, x + w, x + w};
+                ys = new int[]{y, y, y + h};
+            }
+            case 3 -> { // 270°: прямой угол — правый нижний (омитим левый верхний)
+                xs = new int[]{x + w, x, x + w};
+                ys = new int[]{y, y + h, y + h};
+            }
+            default -> { // 0°: прямой угол — левый нижний (омитим правый верхний)
+                xs = new int[]{x, x + w, x};
+                ys = new int[]{y, y + h, y + h};
+            }
+        }
+        return new java.awt.Polygon(xs, ys, 3);
     }
 
     /** Треугольная стрелка на середине отрезка a->b, указывающая направление цепочки. */
@@ -655,13 +811,6 @@ public final class SchemeRenderer {
         } finally {
             writer.dispose();
         }
-    }
-
-    private static Color blend(Color a, Color b, float t) {
-        return new Color(
-                Math.round(a.getRed() * (1 - t) + b.getRed() * t),
-                Math.round(a.getGreen() * (1 - t) + b.getGreen() * t),
-                Math.round(a.getBlue() * (1 - t) + b.getBlue() * t));
     }
 
     private static String trim(double v) {

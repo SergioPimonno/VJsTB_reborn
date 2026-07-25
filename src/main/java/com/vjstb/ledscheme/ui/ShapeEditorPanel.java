@@ -236,6 +236,13 @@ public class ShapeEditorPanel extends JPanel {
         if (effective != null && effective.getAllowedShapes().size() > 1) {
             items.add(RadialMenu.Item.branch("Форма", Palette.BORDER, shapeSubmenu(cabId, effective)));
         }
+        // "Угол" — только если ФАКТИЧЕСКАЯ форма ячейки (с учётом переопределения)
+        // вообще непрямоугольная: прямоугольнику ориентировать нечего (Task #92/v1.5).
+        CabinetShape effectiveShape = cab.getShapeOverride() != null ? cab.getShapeOverride()
+                : (effective != null ? effective.getShape() : null);
+        if (effectiveShape != null && effectiveShape != CabinetShape.RECTANGLE) {
+            items.add(RadialMenu.Item.branch("Угол", Palette.ACCENT, rotationSubmenu(cabId, cab)));
+        }
         items.add(RadialMenu.Item.branch("Тип", Palette.ACCENT, typeSubmenu(cabId, scr)));
 
         Point screenPt = e.getLocationOnScreen();
@@ -263,6 +270,42 @@ public class ShapeEditorPanel extends JPanel {
                     () -> applyShape(cabId, shape)));
         }
         return items;
+    }
+
+    /** 5 пунктов (Task #92/v1.5): "По умолчанию" (снять переопределение — угол типа
+     *  кабинета из библиотеки), 4 стандартных угла с шагом в четверть оборота, и
+     *  "Другое…" — свободный ввод произвольного угла (например, 45° для нестандартной
+     *  инсталляции), не ограниченный четырьмя пресетами. */
+    private List<RadialMenu.Item> rotationSubmenu(String cabId, CabinetInstance cab) {
+        List<RadialMenu.Item> items = new ArrayList<>();
+        items.add(RadialMenu.Item.leaf("По умолчанию", Palette.PHASE_NONE,
+                () -> applyRotation(cabId, null)));
+        for (int deg : new int[]{0, 90, 180, 270}) {
+            items.add(RadialMenu.Item.leaf(deg + "°", Palette.signalColor(deg / 90),
+                    () -> applyRotation(cabId, deg)));
+        }
+        items.add(RadialMenu.Item.leaf("Другое…", Palette.MUTED, () -> promptCustomRotation(cabId, cab)));
+        return items;
+    }
+
+    private void promptCustomRotation(String cabId, CabinetInstance cab) {
+        Integer current = cab.getRotationOverride();
+        String initial = current != null ? String.valueOf(current) : "0";
+        String input = JOptionPane.showInputDialog(this, "Угол, градусы (0° — прямой угол слева-снизу,"
+                + " далее по часовой стрелке):", initial);
+        if (input == null) {
+            return;
+        }
+        try {
+            int deg = (int) Math.round(Double.parseDouble(input.trim().replace(',', '.')));
+            applyRotation(cabId, deg);
+        } catch (NumberFormatException ex) {
+            JOptionPane.showMessageDialog(this, "Введите число", "Проверка данных", JOptionPane.WARNING_MESSAGE);
+        }
+    }
+
+    private void applyRotation(String cabId, Integer rotationDeg) {
+        model.setCabinetRotationOverride(cabId, rotationDeg);
     }
 
     private List<RadialMenu.Item> typeSubmenu(String cabId, Screen scr) {
@@ -339,13 +382,18 @@ public class ShapeEditorPanel extends JPanel {
                     : (c.isHidden() ? Palette.BORDER : Palette.MUTED));
             g2.drawRect(x + 1, y + 1, cell - 2, cell - 2);
 
-            if (!c.isHidden() && c.getShapeOverride() != null && c.getShapeOverride() != CabinetShape.RECTANGLE) {
-                // Тот же маркер, что и в общей схеме (SchemeRenderer.drawShapeMarker) —
-                // раньше здесь рисовался один и тот же треугольник для ЛЮБОЙ формы,
-                // из-за чего смена формы на угловую/круглую визуально ничем не
-                // отличалась от треугольной (баг, из-за которого казалось, что смена
-                // формы вообще не отображается).
-                SchemeRenderer.drawShapeMarker(g2, x + 1, y + 1, cell - 2, cell - 2, c.getShapeOverride());
+            if (!c.isHidden()) {
+                CabinetType effective = effectiveType(c, scr);
+                CabinetShape shape = c.getShapeOverride() != null ? c.getShapeOverride()
+                        : (effective != null ? effective.getShape() : null);
+                if (shape != null && shape != CabinetShape.RECTANGLE) {
+                    // Настоящий контур формы (а не декоративная метка в углу, Task
+                    // #91/#92/v1.5) — так угол, только что выставленный через
+                    // радиальное меню "Угол", сразу виден в этом же окне.
+                    double rotationDeg = SchemeRenderer.effectiveRotationDeg(c, effective);
+                    g2.setColor(Palette.TEXT);
+                    SchemeRenderer.outlineCabinetShape(g2, x + 1, y + 1, cell - 2, cell - 2, shape, rotationDeg);
+                }
             }
         }
         g2.dispose();

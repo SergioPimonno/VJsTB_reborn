@@ -2,6 +2,7 @@ package com.vjstb.ledscheme.service;
 
 import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
+import com.vjstb.ledscheme.model.CableType;
 import com.vjstb.ledscheme.model.CanvasPlacement;
 import com.vjstb.ledscheme.model.CardPort;
 import com.vjstb.ledscheme.model.ContentCanvas;
@@ -193,17 +194,7 @@ public class AppModel {
         if (existing == null) {
             throw new IllegalArgumentException("Кабинет не найден в библиотеке");
         }
-        existing.setName(edited.getName());
-        existing.setWidthMm(edited.getWidthMm());
-        existing.setHeightMm(edited.getHeightMm());
-        existing.setDepthMm(edited.getDepthMm());
-        existing.setResolutionWidth(edited.getResolutionWidth());
-        existing.setResolutionHeight(edited.getResolutionHeight());
-        existing.setPowerConsumptionW(edited.getPowerConsumptionW());
-        existing.setWeightKg(edited.getWeightKg());
-        existing.setShape(edited.getShape());
-        existing.setPowerConnectorsNeeded(edited.getPowerConnectorsNeeded());
-        existing.setSignalConnectorsNeeded(edited.getSignalConnectorsNeeded());
+        existing.applyEditedValues(edited);
         changed();
     }
 
@@ -259,17 +250,7 @@ public class AppModel {
     }
 
     private void updateCabinetTypeNoFire(CabinetType existing, CabinetType edited) {
-        existing.setName(edited.getName());
-        existing.setWidthMm(edited.getWidthMm());
-        existing.setHeightMm(edited.getHeightMm());
-        existing.setDepthMm(edited.getDepthMm());
-        existing.setResolutionWidth(edited.getResolutionWidth());
-        existing.setResolutionHeight(edited.getResolutionHeight());
-        existing.setPowerConsumptionW(edited.getPowerConsumptionW());
-        existing.setWeightKg(edited.getWeightKg());
-        existing.setShape(edited.getShape());
-        existing.setPowerConnectorsNeeded(edited.getPowerConnectorsNeeded());
-        existing.setSignalConnectorsNeeded(edited.getSignalConnectorsNeeded());
+        existing.applyEditedValues(edited);
     }
 
     public void exportLibrary(File file) {
@@ -291,11 +272,7 @@ public class AppModel {
         if (existing == null) {
             throw new IllegalArgumentException("Контроллер не найден в библиотеке");
         }
-        existing.setName(edited.getName());
-        existing.setVendor(edited.getVendor());
-        existing.setPortCount(edited.getPortCount());
-        existing.setPortBandwidthMbps(edited.getPortBandwidthMbps());
-        existing.setInputPortCount(edited.getInputPortCount());
+        existing.applyEditedValues(edited);
         changed();
     }
 
@@ -1048,6 +1025,56 @@ public class AppModel {
         changed();
     }
 
+    // ---- библиотека кабелей/переходников (WireLabelDialog/PowerConnectorsConfigDialog) ----
+
+    public List<CableType> getCableTypes() {
+        return workspace.getCableTypes();
+    }
+
+    public List<CableType> cableTypesForMode(SchemaMode mode) {
+        List<CableType> result = new ArrayList<>();
+        for (CableType c : workspace.getCableTypes()) {
+            if (c.getMode() == mode) {
+                result.add(c);
+            }
+        }
+        return result;
+    }
+
+    /** Добавляет кабель в библиотеку, если такой подписи для этого режима ещё нет
+     *  (без исключения — просто ничего не делает повторно, вызывается и из "Сохранить
+     *  как кабель" в диалогах, где случайное повторное сохранение не должно мешать). */
+    public CableType addCableType(SchemaMode mode, String label) {
+        String trimmed = label == null ? "" : label.trim();
+        if (trimmed.isEmpty()) {
+            throw new IllegalArgumentException("Укажите подпись кабеля");
+        }
+        for (CableType c : workspace.getCableTypes()) {
+            if (c.getMode() == mode && c.getLabel().equalsIgnoreCase(trimmed)) {
+                return c;
+            }
+        }
+        CableType cable = new CableType(mode, trimmed);
+        workspace.getCableTypes().add(cable);
+        changed();
+        return cable;
+    }
+
+    public void updateCableType(CableType cable, SchemaMode mode, String label) {
+        String trimmed = label == null ? "" : label.trim();
+        if (trimmed.isEmpty()) {
+            throw new IllegalArgumentException("Укажите подпись кабеля");
+        }
+        cable.setMode(mode);
+        cable.setLabel(trimmed);
+        changed();
+    }
+
+    public void deleteCableType(CableType cable) {
+        workspace.getCableTypes().remove(cable);
+        changed();
+    }
+
     public SchemaCard addCardToPreset(EquipmentPreset preset, String name, List<CardPort> ports) {
         SchemaCard card = new SchemaCard(name, ports);
         preset.getCards().add(card);
@@ -1318,6 +1345,21 @@ public class AppModel {
         }
         pushUndo();
         cab.setShapeOverride(shape);
+        changed();
+    }
+
+    /** Назначает конкретной ячейке отдельный угол непрямоугольной формы (Task #92/v1.5;
+     *  null — вернуть угол эффективного типа кабинета, см. CabinetType.getRotationDeg). */
+    public void setCabinetRotationOverride(String cabId, Integer rotationDeg) {
+        if (currentScreen == null) {
+            return;
+        }
+        CabinetInstance cab = currentScreen.cabinetById(cabId);
+        if (cab == null) {
+            return;
+        }
+        pushUndo();
+        cab.setRotationOverride(rotationDeg);
         changed();
     }
 

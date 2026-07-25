@@ -181,11 +181,13 @@ public class SetupStagePanel extends JPanel {
             String name = newProjectField.getText().trim();
             if (!name.isEmpty()) { model.selectProject(model.addProject(name)); newProjectField.setText(""); }
         });
-        JButton del = new JButton("✕");
-        del.addActionListener(e -> {
+        Runnable deleteSelectedProject = () -> {
             Project p = projList.getSelectedValue();
             if (p != null && confirm("Удалить проект со всеми сценами и экранами?")) model.deleteProject(p);
-        });
+        };
+        JButton del = new JButton("✕");
+        del.addActionListener(e -> deleteSelectedProject.run());
+        UiKit.bindDeleteKey(projList, deleteSelectedProject);
         addRow.add(newProjectField, BorderLayout.CENTER);
         JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
         btns.add(add);
@@ -217,11 +219,13 @@ public class SetupStagePanel extends JPanel {
             String name = newSceneField.getText().trim();
             if (!name.isEmpty()) { model.selectScene(model.addScene(name)); newSceneField.setText(""); }
         });
-        JButton del = new JButton("✕");
-        del.addActionListener(e -> {
+        Runnable deleteSelectedScene = () -> {
             Scene s = sceneList.getSelectedValue();
             if (s != null && confirm("Удалить сцену со всеми экранами?")) model.deleteScene(s);
-        });
+        };
+        JButton del = new JButton("✕");
+        del.addActionListener(e -> deleteSelectedScene.run());
+        UiKit.bindDeleteKey(sceneList, deleteSelectedScene);
         addRow.add(newSceneField, BorderLayout.CENTER);
         JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
         btns.add(add);
@@ -246,10 +250,24 @@ public class SetupStagePanel extends JPanel {
         screenScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
         body.add(screenScroll);
 
+        // "✕" рядом со списком — как у сцен выше (buildScenes) — не заставляет
+        // прокручивать вниз до «Параметры экрана», где тоже есть «Удалить экран»
+        // (оставлен как есть — оба места работают с ТЕКУЩИМ выбранным экраном).
+        JPanel screenBtnRow = new JPanel(new BorderLayout(4, 0));
         JButton add = new JButton("+ Добавить экран");
         add.addActionListener(e -> addScreen());
+        Runnable deleteSelectedScreen = () -> {
+            Screen s = screenList.getSelectedValue();
+            if (s != null && confirm("Удалить экран «" + s.getName() + "»?")) model.deleteScreen(s);
+        };
+        JButton delScreen = new JButton("✕");
+        delScreen.setToolTipText("Удалить выбранный экран");
+        delScreen.addActionListener(e -> deleteSelectedScreen.run());
+        UiKit.bindDeleteKey(screenList, deleteSelectedScreen);
+        screenBtnRow.add(add, BorderLayout.CENTER);
+        screenBtnRow.add(delScreen, BorderLayout.EAST);
         body.add(UiKit.vgap());
-        body.add(add);
+        body.add(screenBtnRow);
 
         JButton arrange = new JButton("Расставить экраны без наложения");
         arrange.setToolTipText("Перестроит X/Y всех экранов сцены в ряд, чтобы они не перекрывались на «Визуализации»");

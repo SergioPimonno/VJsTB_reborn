@@ -90,12 +90,14 @@ public class AssembleCardsDialog extends JDialog {
         JButton removeBtn = new JButton("Удалить");
         up.addActionListener(e -> moveSelected(-1));
         down.addActionListener(e -> moveSelected(1));
-        removeBtn.addActionListener(e -> {
+        Runnable removeSelectedAssembled = () -> {
             int idx = assembledList.getSelectedIndex();
             if (idx >= 0) {
                 assembledModel.remove(idx);
             }
-        });
+        };
+        removeBtn.addActionListener(e -> removeSelectedAssembled.run());
+        UiKit.bindDeleteKey(assembledList, removeSelectedAssembled);
         leftButtons.add(up);
         leftButtons.add(down);
         leftButtons.add(removeBtn);

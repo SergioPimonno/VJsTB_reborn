@@ -129,6 +129,20 @@ public class SchemaCanvasPanel extends JPanel {
                 }
                 SchemaNode hit = nodeAt(e.getPoint());
                 if (interaction == Interaction.CONNECT) {
+                    // Чип подписи связи ("+ подпись"/уже назначенная подпись) должен
+                    // открывать редактор подписи независимо от текущего инструмента
+                    // (баг-репорт: назначение подписи работало только в режиме
+                    // "Перемещение", т.к. этот CONNECT-блок всегда завершался return
+                    // раньше, чем управление доходило до проверки чипа ниже,
+                    // применявшейся только в ветке MOVE — см. Task #95/v1.5).
+                    SchemaEdge chipHitConnect = edgeLabelChipAt(e.getPoint());
+                    if (chipHitConnect != null) {
+                        selectedNode = null;
+                        selectedEdge = chipHitConnect;
+                        repaint();
+                        editEdgeLabel(chipHitConnect);
+                        return;
+                    }
                     boolean socketMode = settings.activeProfile().isSocketWiringEnabled();
                     SocketHit socketHit = socketMode ? socketAt(e.getPoint()) : null;
                     if (socketHit != null) {
@@ -440,7 +454,14 @@ public class SchemaCanvasPanel extends JPanel {
     }
 
     /** Концы связи (ax,ay,bx,by) со сдвигом перпендикулярно линии, если у пары узлов
-     *  несколько связей — иначе они рисовались бы друг поверх друга. */
+     *  несколько связей — иначе они рисовались бы друг поверх друга. Гнездо разъёма
+     *  (если связь заведена через конкретный CardPort — см. socketPosition) даёт
+     *  ТОЧНЫЙ якорь линии; для конца БЕЗ гнезда (узел без разъёмов вовсе — например
+     *  узел-ссылка на экран, либо связь узел-узел без выбора конкретного разъёма)
+     *  линия больше не бьёт в геометрический центр блока (что выглядело так, будто
+     *  линия "протыкает" блок насквозь), а обрезается по границе прямоугольника —
+     *  точке излома на пересечении луча "центр → противоположный конец связи (или
+     *  первая/последняя точка излома пользователя)" с рамкой узла. */
     private double[] endpointsFor(SchemaEdge edge) {
         SchemaNode a = nodeById(edge.getFromNodeId());
         SchemaNode b = nodeById(edge.getToNodeId());
@@ -449,10 +470,32 @@ public class SchemaCanvasPanel extends JPanel {
         }
         Point aSocket = socketPosition(a, edge.getFromPortId());
         Point bSocket = socketPosition(b, edge.getToPortId());
-        double ax = aSocket != null ? aSocket.x : a.getX() + a.getWidth() / 2.0;
-        double ay = aSocket != null ? aSocket.y : a.getY() + a.getHeight() / 2.0;
-        double bx = bSocket != null ? bSocket.x : b.getX() + b.getWidth() / 2.0;
-        double by = bSocket != null ? bSocket.y : b.getY() + b.getHeight() / 2.0;
+        List<com.vjstb.ledscheme.model.EdgeWaypoint> wps = edge.getWaypoints();
+
+        double[] aCenter = {a.getX() + a.getWidth() / 2.0, a.getY() + a.getHeight() / 2.0};
+        double[] bCenter = {b.getX() + b.getWidth() / 2.0, b.getY() + b.getHeight() / 2.0};
+        double[] aAim = !wps.isEmpty() ? new double[]{wps.get(0).getX(), wps.get(0).getY()}
+                : (bSocket != null ? new double[]{bSocket.x, bSocket.y} : bCenter);
+        double[] bAim = !wps.isEmpty() ? new double[]{wps.get(wps.size() - 1).getX(), wps.get(wps.size() - 1).getY()}
+                : (aSocket != null ? new double[]{aSocket.x, aSocket.y} : aCenter);
+
+        double ax, ay, bx, by;
+        if (aSocket != null) {
+            ax = aSocket.x;
+            ay = aSocket.y;
+        } else {
+            double[] p = clipToBorder(a, aCenter, aAim);
+            ax = p[0];
+            ay = p[1];
+        }
+        if (bSocket != null) {
+            bx = bSocket.x;
+            by = bSocket.y;
+        } else {
+            double[] p = clipToBorder(b, bCenter, bAim);
+            bx = p[0];
+            by = p[1];
+        }
         int[] slot = edgeSlot(edge);
         int idx = slot[0], total = slot[1];
         if (total > 1) {
@@ -468,6 +511,26 @@ public class SchemaCanvasPanel extends JPanel {
             }
         }
         return new double[]{ax, ay, bx, by};
+    }
+
+    /** Точка пересечения луча "center → toward" с рамкой прямоугольника узла —
+     *  используется вместо голого центра для конца связи БЕЗ конкретного гнезда
+     *  (см. endpointsFor), чтобы линия визуально начиналась/заканчивалась строго на
+     *  границе блока, а не била в его геометрический центр. Стандартный приём
+     *  пересечения луча из центра прямоугольника с его границей: минимальный
+     *  масштаб, на котором луч достигает вертикальной ИЛИ горизонтальной стороны. */
+    private static double[] clipToBorder(SchemaNode node, double[] center, double[] toward) {
+        double halfW = node.getWidth() / 2.0;
+        double halfH = node.getHeight() / 2.0;
+        double dx = toward[0] - center[0];
+        double dy = toward[1] - center[1];
+        if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6) {
+            return center;
+        }
+        double scaleX = Math.abs(dx) > 1e-6 ? halfW / Math.abs(dx) : Double.POSITIVE_INFINITY;
+        double scaleY = Math.abs(dy) > 1e-6 ? halfH / Math.abs(dy) : Double.POSITIVE_INFINITY;
+        double scale = Math.min(scaleX, scaleY);
+        return new double[]{center[0] + dx * scale, center[1] + dy * scale};
     }
 
     /** Полный маршрут связи в экранных координатах: начало, все точки излома по
@@ -639,14 +702,16 @@ public class SchemaCanvasPanel extends JPanel {
             }
         }
         // Узел-ссылка на реальный экран не имеет гнёзд (CardPort) вовсе — раньше
-        // связи, ведущие к экрану, вообще не проверялись на лимит числа линий.
-        // "N вводных" экрана — это фактическое число независимых силовых цепочек,
-        // уже расключённых на кабинетах экрана (Питание → расключение), а значит и
+        // связи, ведущие к экрану, вообще не проверялись на лимит числа линий (для
+        // сигнала — совсем никак, для питания — см. screenChainCapacity). "N
+        // вводных"/"N цепочек" экрана — это фактическое число независимых линий
+        // (силовых цепочек, либо цепочек сигнала СЧИТАЯ backup — см.
+        // screenChainCapacity), уже расключённых на кабинетах экрана, а значит и
         // максимум того, сколько отдельных линий схема вправе подвести к этому
         // экрану суммарно от всех источников (см. также screenUsedCount ниже).
         for (String nodeId : new String[]{edge.getFromNodeId(), edge.getToNodeId()}) {
             SchemaNode node = nodeById(nodeId);
-            Integer capacity = node != null ? screenPowerCapacity(node) : null;
+            Integer capacity = node != null ? screenChainCapacity(node) : null;
             if (capacity == null) {
                 continue;
             }
@@ -654,12 +719,19 @@ public class SchemaCanvasPanel extends JPanel {
             int rem = Math.max(1, capacity - used);
             if (maxCount == null || rem < maxCount) {
                 maxCount = rem;
+                String unit = mode == SchemaMode.POWER ? "вводных" : "цепочек (мейн+резерв)";
                 maxCountReason = node.getLabel() + ": свободно " + Math.max(0, capacity - used)
-                        + " из " + capacity + " вводных";
+                        + " из " + capacity + " " + unit;
             }
         }
-        WireLabelDialog dlg = new WireLabelDialog(SwingUtilities.getWindowAncestor(this), mode, edge,
-                connectorHintsFor(edge), lockedType, maxCount, maxCountReason);
+        // Гнездо распределения промаркировано только "голым" номиналом кабеля (см.
+        // PowerConnectorsConfigDialog) без адаптера — WireLabelDialog сам предложит
+        // и голый номинал, и переходник(и) под тип разъёма кабинета экрана на другом
+        // конце связи (см. connectorHints/lockedOptionsFor), а не молча подменит
+        // значение без права выбора.
+        Set<PowerConnectorType> hints = connectorHintsFor(edge);
+        WireLabelDialog dlg = new WireLabelDialog(SwingUtilities.getWindowAncestor(this), model, mode, edge,
+                hints, lockedType, maxCount, maxCountReason);
         dlg.setVisible(true);
         if (!dlg.isConfirmed()) {
             return;
@@ -720,23 +792,32 @@ public class SchemaCanvasPanel extends JPanel {
         return Set.of();
     }
 
-    /** Для узла-ссылки на экран (SchemaNodeType.SCREEN) в схеме ПИТАНИЯ — сколько
-     *  всего независимых силовых линий может физически прийти в этот узел: то же
-     *  число, что показано в подписи узла как "N вводных" (фактическое число
-     *  силовых цепочек, уже расключённых на кабинетах экрана в «Расключение
-     *  экрана» → Питание) — пользователь явно указал, что это одно и то же число.
-     *  null — понятие неприменимо (не экран, не питание, экран не найден). */
-    private Integer screenPowerCapacity(SchemaNode node) {
-        if (mode != SchemaMode.POWER || node.getType() != SchemaNodeType.SCREEN || node.getScreenRefId() == null) {
+    /** Для узла-ссылки на экран (SchemaNodeType.SCREEN) — сколько всего независимых
+     *  линий (питания или сигнала, смотря по текущему режиму схемы) может физически
+     *  прийти в этот узел: то же число, что фактически расключено на кабинетах
+     *  экрана в «Расключение экрана» — для питания это силовые цепочки, для
+     *  сигнала — цепочки контроллера, ОСНОВНЫЕ и РЕЗЕРВНЫЕ вместе (backup-цепочка —
+     *  такая же реальная линия коммутации, ограничивающая число входов экрана, как
+     *  и основная — раньше связь схемы сигнала, ведущая к экрану, вообще не
+     *  проверялась на этот лимит). null — понятие неприменимо (не экран, экран не
+     *  найден). */
+    private Integer screenChainCapacity(SchemaNode node) {
+        if (node.getType() != SchemaNodeType.SCREEN || node.getScreenRefId() == null) {
             return null;
         }
         Screen scr = screenById(node.getScreenRefId());
-        return scr == null ? null : model.powerChainsTouchingScreen(scr).size();
+        if (scr == null) {
+            return null;
+        }
+        return switch (mode) {
+            case POWER -> model.powerChainsTouchingScreen(scr).size();
+            case SIGNAL -> model.signalChainsTouchingScreen(scr).size();
+        };
     }
 
     /** Сколько линий уже подведено к узлу-экрану ДРУГИМИ связями схемы (кроме
      *  exclude) — суммарно от всех источников, а не по одному конкретному гнезду,
-     *  т.к. у узла-экрана нет отдельных гнёзд (см. screenPowerCapacity). */
+     *  т.к. у узла-экрана нет отдельных гнёзд (см. screenChainCapacity). */
     private int screenUsedCount(String nodeId, SchemaEdge exclude) {
         int used = 0;
         for (SchemaEdge e2 : edges()) {
@@ -909,7 +990,7 @@ public class SchemaCanvasPanel extends JPanel {
                         ? node.getType().getLabel() : node.getLabel();
                 PowerConnectorsConfigDialog dlg = new PowerConnectorsConfigDialog(
                         SwingUtilities.getWindowAncestor(this), title,
-                        PowerConnectorsConfigDialog.forNode(model, node));
+                        PowerConnectorsConfigDialog.forNode(model, node), model);
                 dlg.setVisible(true);
                 onChanged.run();
                 repaint();
@@ -1114,8 +1195,16 @@ public class SchemaCanvasPanel extends JPanel {
             SchemaNode pending = nodeById(connectPendingId);
             if (pending != null) {
                 Point socket = socketPosition(pending, connectPendingPortId);
-                int px = socket != null ? socket.x : (int) (pending.getX() + pending.getWidth() / 2.0);
-                int py = socket != null ? socket.y : (int) (pending.getY() + pending.getHeight() / 2.0);
+                int px, py;
+                if (socket != null) {
+                    px = socket.x;
+                    py = socket.y;
+                } else {
+                    double[] center = {pending.getX() + pending.getWidth() / 2.0, pending.getY() + pending.getHeight() / 2.0};
+                    double[] clipped = clipToBorder(pending, center, new double[]{lastMouse.x, lastMouse.y});
+                    px = (int) clipped[0];
+                    py = (int) clipped[1];
+                }
                 g2.setColor(Palette.ACCENT);
                 g2.setStroke(new BasicStroke(1.5f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 0,
                         new float[]{5, 4}, 0));

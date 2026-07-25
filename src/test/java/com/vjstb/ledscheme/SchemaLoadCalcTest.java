@@ -51,14 +51,38 @@ class SchemaLoadCalcTest {
         Screen screen = model.addScreen("E", type.getId(), 6, 5, 0, 0);
 
         SchemaNode screenNode = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SCREEN, "E", 0, 0, screen.getId());
-        SchemaNode distro = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "Щит", 0, 200, null);
+        // SOURCE ("Источник/щит"), а не DISTRO — у DISTRO запас по умолчанию теперь
+        // 100% (см. тест distroTypeDefaultsToFullCapacityWithNoDerating ниже), этот
+        // тест специально проверяет ОБЩИЙ запас по умолчанию (~92.6%).
+        SchemaNode source = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SOURCE, "Щит", 0, 200, null);
         // 16А × 220В × ~92.6% запаса по умолчанию ≈ 3260 Вт ёмкости одной фазы
-        model.addPowerConnectorToNode(distro, "CEE 16A", PortDirection.IN, 1, 1, null);
-        model.addSchemaEdge(SchemaMode.POWER, distro.getId(), screenNode.getId(), "CEE 16A → щит");
+        model.addPowerConnectorToNode(source, "CEE 16A", PortDirection.IN, 1, 1, null);
+        model.addSchemaEdge(SchemaMode.POWER, source.getId(), screenNode.getId(), "CEE 16A → щит");
+
+        SchemaLoadCalc.NodeLoad load = SchemaLoadCalc.evaluate(source, scene, model);
+        assertTrue(load.capacityKnown());
+        assertTrue(load.overloaded(), "4500 Вт нагрузки не должно помещаться в ~3260 Вт ёмкости одной фазы CEE 16A");
+    }
+
+    @Test
+    void distroTypeDefaultsToFullCapacityWithNoDerating(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = sampleType(model); // 150 Вт/каб.
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        // 4×5 = 20 каб. × 150 = 3000 Вт — превышает ~92.6% (3260 Вт для CEE 16A), но
+        // не превышает 100% (3520 Вт) — различает, какой из двух дефолтов реально применился.
+        Screen screen = model.addScreen("E", type.getId(), 4, 5, 0, 0);
+        SchemaNode screenNode = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SCREEN, "E", 0, 0, screen.getId());
+        SchemaNode distro = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "Проходная", 0, 200, null);
+        model.addPowerConnectorToNode(distro, "CEE 16A", PortDirection.IN, 1, 1, null); // без ручного переопределения запаса
+        model.addSchemaEdge(SchemaMode.POWER, distro.getId(), screenNode.getId(), "CEE 16A → проходная");
 
         SchemaLoadCalc.NodeLoad load = SchemaLoadCalc.evaluate(distro, scene, model);
         assertTrue(load.capacityKnown());
-        assertTrue(load.overloaded(), "4500 Вт нагрузки не должно помещаться в ~3260 Вт ёмкости одной фазы CEE 16A");
+        assertFalse(load.overloaded(),
+                "Проходная (DISTRO) должна по умолчанию считаться на 100% (3520 Вт), а не ~92.6% (3260 Вт)");
     }
 
     @Test

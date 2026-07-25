@@ -190,16 +190,28 @@ public class ControllerType {
     public ControllerType copy() {
         ControllerType c = new ControllerType();
         c.id = id;
-        c.name = name;
-        c.vendor = vendor;
-        c.portCount = portCount;
-        c.portBandwidthMbps = portBandwidthMbps;
-        c.inputPortCount = inputPortCount;
-        c.loopPort = loopPort;
-        c.cards = new ArrayList<>();
-        for (SchemaCard card : cards) {
-            c.cards.add(card.copy());
-        }
+        c.applyEditedValues(this);
         return c;
+    }
+
+    /** Копирует ВСЕ редактируемые поля (кроме id) из other — единственная точка,
+     *  которую нужно обновлять при появлении нового поля; используется и в
+     *  {@link #copy()}, и в AppModel.updateControllerType для переноса изменений из
+     *  отдельной (detached) копии, которую строит ControllerTypeDialog, обратно в
+     *  реально хранимый в библиотеке объект. Раньше AppModel копировал поля вручную
+     *  по отдельному списку, забывшему про loopPort — флажок "Есть Loop-порт" тихо
+     *  терялся при редактировании уже созданного контроллера (тот же класс бага,
+     *  что и с CabinetType.powerConnectorType — см. Task #94/v1.5). */
+    public void applyEditedValues(ControllerType other) {
+        this.name = other.name;
+        this.vendor = other.vendor;
+        this.portCount = other.portCount;
+        this.portBandwidthMbps = other.portBandwidthMbps;
+        this.inputPortCount = other.inputPortCount;
+        this.loopPort = other.loopPort;
+        this.cards = new ArrayList<>();
+        for (SchemaCard card : other.cards) {
+            this.cards.add(card.copy());
+        }
     }
 }

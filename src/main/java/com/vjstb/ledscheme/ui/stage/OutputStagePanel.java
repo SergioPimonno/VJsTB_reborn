@@ -272,7 +272,10 @@ public class OutputStagePanel extends JPanel {
                 // Схема сцены ЦЕЛИКОМ (все экраны сразу, как «Показать все экраны
                 // сцены») — если цепочка проходит через пару экранов, по отдельным
                 // схемам экранов этого не видно вовсе, только по этой общей схеме.
-                if (!scene.getScreens().isEmpty()) {
+                // При ОДНОМ экране в сцене эта схема буквально дублирует его же
+                // отдельную схему (межэкранных цепочек физически быть не может) —
+                // не генерируем лишний файл.
+                if (scene.getScreens().size() > 1) {
                     for (boolean power : new boolean[]{true, false}) {
                         SceneCanvasPanel overview = new SceneCanvasPanel(model);
                         overview.setDetailMode(true, power, false);

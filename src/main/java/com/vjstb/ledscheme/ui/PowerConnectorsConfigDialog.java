@@ -55,6 +55,11 @@ public class PowerConnectorsConfigDialog extends JDialog {
         default boolean supportsDerating() {
             return false;
         }
+        /** Запас (%) по умолчанию для ЭТОГО конкретного узла (зависит от типа узла —
+         *  см. PowerCalc.defaultDeratingPercentFor), пока явно не переопределён. */
+        default double defaultDeratingPercent() {
+            return com.vjstb.ledscheme.service.PowerCalc.DEFAULT_DERATING_PERCENT;
+        }
     }
 
     public static PowerConnectorsHost forNode(AppModel model, SchemaNode node) {
@@ -89,6 +94,11 @@ public class PowerConnectorsConfigDialog extends JDialog {
             public boolean supportsDerating() {
                 return true;
             }
+
+            @Override
+            public double defaultDeratingPercent() {
+                return com.vjstb.ledscheme.service.PowerCalc.defaultDeratingPercentFor(node.getType());
+            }
         };
     }
 
@@ -118,9 +128,7 @@ public class PowerConnectorsConfigDialog extends JDialog {
     private final JList<CardPort> list = new JList<>(listModel);
     private final JLabel totalsLabel = new JLabel();
 
-    private final JComboBox<String> connectorCombo = new JComboBox<>(new String[]{
-            "PowerCon TRUE1", "PowerCon 20A", "CEE 16A", "CEE 32A", "CEE 63A", "CEE 125A",
-            "Schuko", "IEC C13", "IEC C19", "Powerlock"});
+    private final JComboBox<String> connectorCombo = new JComboBox<>();
     private final JComboBox<PortDirection> directionCombo = new JComboBox<>(PortDirection.values());
     private final JSpinner countSpinner = new JSpinner(new SpinnerNumberModel(1, 1, 64, 1));
     /** Сколько фаз реально разведено на добавляемой группе разъёмов (Task #80) —
@@ -130,10 +138,25 @@ public class PowerConnectorsConfigDialog extends JDialog {
      *  берётся номинал разъёма как есть. */
     private final javax.swing.JTextField breakerField = new javax.swing.JTextField();
     private javax.swing.JTextField deratingField;
+    private final AppModel model;
 
-    public PowerConnectorsConfigDialog(Window owner, String title, PowerConnectorsHost host) {
+    public PowerConnectorsConfigDialog(Window owner, String title, PowerConnectorsHost host, AppModel model) {
         super(owner, "Разъёмы питания — " + title, ModalityType.APPLICATION_MODAL);
         this.host = host;
+        this.model = model;
+        // Кабели пользовательской библиотеки (см. AppModel.cableTypesForMode) —
+        // добавляются в конец встроенного списка типов, чтобы сохранённый ранее
+        // кастомный переходник (например «CEE 32A → 6×PowerCon») сразу предлагался
+        // при заведении нового разъёма распределения.
+        java.util.LinkedHashSet<String> types = new java.util.LinkedHashSet<>(java.util.List.of(
+                "PowerCon TRUE1", "PowerCon 20A", "CEE 16A", "CEE 32A", "CEE 63A", "CEE 125A",
+                "Schuko", "IEC C13", "IEC C19", "Powerlock"));
+        if (model != null) {
+            for (com.vjstb.ledscheme.model.CableType c : model.cableTypesForMode(com.vjstb.ledscheme.model.SchemaMode.POWER)) {
+                types.add(c.getLabel());
+            }
+        }
+        connectorCombo.setModel(new javax.swing.DefaultComboBoxModel<>(types.toArray(new String[0])));
         connectorCombo.setEditable(true);
 
         JPanel content = new JPanel(new BorderLayout(8, 8));
@@ -181,10 +204,18 @@ public class PowerConnectorsConfigDialog extends JDialog {
         form.add(breakerField);
         mid.add(form);
 
+        JPanel addRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         JButton add = new JButton("+ Добавить разъём");
         add.addActionListener(e -> addConnector());
+        addRow.add(add);
+        JButton saveToLibrary = new JButton("💾 В библиотеку кабелей");
+        saveToLibrary.setToolTipText("Сохранить текущий тип разъёма как кабель библиотеки — будет предложен"
+                + " в списке в следующий раз");
+        saveToLibrary.setEnabled(model != null);
+        saveToLibrary.addActionListener(e -> saveCurrentTypeToLibrary());
+        addRow.add(saveToLibrary);
         mid.add(Box.createVerticalStrut(4));
-        mid.add(add);
+        mid.add(addRow);
 
         if (host.supportsDerating()) {
             mid.add(Box.createVerticalStrut(8));
@@ -195,8 +226,8 @@ public class PowerConnectorsConfigDialog extends JDialog {
             deratingField.setText(d != null ? UiKit.fmt(d) : "");
             JButton applyDerating = new JButton("Применить");
             applyDerating.addActionListener(e -> applyDerating());
-            deratingRow.add(new JLabel("%, пусто — по умолчанию ("
-                    + UiKit.fmt(com.vjstb.ledscheme.service.PowerCalc.DEFAULT_DERATING_PERCENT) + "%): "),
+            deratingRow.add(new JLabel("%, пусто — по умолчанию для этого типа узла ("
+                    + UiKit.fmt(host.defaultDeratingPercent()) + "%): "),
                     BorderLayout.WEST);
             deratingRow.add(deratingField, BorderLayout.CENTER);
             deratingRow.add(applyDerating, BorderLayout.EAST);
@@ -211,6 +242,7 @@ public class PowerConnectorsConfigDialog extends JDialog {
         JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
         JButton remove = new JButton("Удалить выбранный разъём");
         remove.addActionListener(e -> removeSelected());
+        UiKit.bindDeleteKey(list, this::removeSelected);
         JButton close = new JButton("Закрыть");
         close.addActionListener(e -> dispose());
         btns.add(remove);
@@ -247,6 +279,21 @@ public class PowerConnectorsConfigDialog extends JDialog {
         host.addConnector(connector, dir, count, phases, breakerAmps);
         breakerField.setText("");
         refresh();
+    }
+
+    private void saveCurrentTypeToLibrary() {
+        if (model == null) {
+            return;
+        }
+        CableTypeDialog dlg = new CableTypeDialog(
+                javax.swing.SwingUtilities.getWindowAncestor(this), com.vjstb.ledscheme.model.SchemaMode.POWER);
+        String label = dlg.showDialog();
+        if (label == null) {
+            return;
+        }
+        model.addCableType(dlg.getMode(), label);
+        JOptionPane.showMessageDialog(this, "Сохранено в библиотеку кабелей: " + label, "Библиотека кабелей",
+                JOptionPane.INFORMATION_MESSAGE);
     }
 
     private void applyDerating() {

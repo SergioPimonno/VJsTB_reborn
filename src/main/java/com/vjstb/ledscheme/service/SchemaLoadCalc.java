@@ -45,8 +45,12 @@ public final class SchemaLoadCalc {
                 continue;
             }
             double effectiveA = p.getBreakerAmps() != null ? Math.min(ratingA, p.getBreakerAmps()) : ratingA;
+            // Ручное переопределение узла — в приоритете; иначе запас по умолчанию
+            // зависит от типа узла: проходные блоки (DISTRO, «Распределение») грузят
+            // на 100%, вводной источник/щит (SOURCE) и остальные — на ~92.6% (см.
+            // PowerCalc.defaultDeratingPercentFor).
             double derating = node.getLoadDeratingPercent() != null
-                    ? node.getLoadDeratingPercent() : PowerCalc.DEFAULT_DERATING_PERCENT;
+                    ? node.getLoadDeratingPercent() : PowerCalc.defaultDeratingPercentFor(node.getType());
             int phases = Math.max(1, p.getPhaseCount());
             capacity += p.getCount() * phases * PowerCalc.capacityWatts(effectiveA, derating);
             any = true;

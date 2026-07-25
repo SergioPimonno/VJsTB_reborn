@@ -25,9 +25,12 @@ import java.util.List;
 public final class VersionManifest {
 
     /** Сырой текстовый файл в репозитории — публикуется вручную при выпуске
-     *  релиза (сам этот класс его не пишет, только читает). */
+     *  релиза (сам этот класс его не пишет, только читает). Ветка по умолчанию в
+     *  этом репозитории — master (не main, как изначально ошибочно было записано
+     *  здесь — из-за этого сервер отвечал 404, и список версий не загружался,
+     *  см. баг-репорт, Task #95/v1.5). */
     public static final String MANIFEST_URL =
-            "https://raw.githubusercontent.com/SergioPimonno/VJsTB_reborn/main/versions.txt";
+            "https://raw.githubusercontent.com/SergioPimonno/VJsTB_reborn/master/versions.txt";
 
     public record Entry(String version, String releaseTag, boolean available, String notes) {
         @Override

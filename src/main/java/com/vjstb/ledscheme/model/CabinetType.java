@@ -37,6 +37,13 @@ public class CabinetType {
      *  файлы проектов, сохранённые до появления этого поля) трактуется как "только
      *  shape" — см. {@link #getAllowedShapes()}, поэтому явной миграции не требуется. */
     private Set<CabinetShape> allowedShapes = new LinkedHashSet<>();
+    /** Угол поворота НЕпрямоугольной формы (треугольной/угловой), градусы — задаёт,
+     *  в каком углу ячейки стоит прямой угол треугольника (или вырезанный угол
+     *  угловой формы): 0° — левый нижний, далее по часовой стрелке (90° — левый
+     *  верхний, 180° — правый верхний, 270° — правый нижний), см. Task #91/v1.5,
+     *  SchemeRenderer.cabinetShapePolygon. Не используется для RECTANGLE/ROUND
+     *  (там нет углового ориентира) — поле хранится всё равно для простоты. */
+    private double rotationDeg = 0;
     /** Тип разъёма ввода питания — сужает список доступных силовых кабелей при
      *  подписи связи в общей схеме питания, если узел ссылается на экран этого типа. */
     private PowerConnectorType powerConnectorType = PowerConnectorType.OTHER;
@@ -146,6 +153,14 @@ public class CabinetType {
         this.allowedShapes = allowedShapes == null ? new LinkedHashSet<>() : new LinkedHashSet<>(allowedShapes);
     }
 
+    public double getRotationDeg() {
+        return rotationDeg;
+    }
+
+    public void setRotationDeg(double rotationDeg) {
+        this.rotationDeg = rotationDeg;
+    }
+
     public PowerConnectorType getPowerConnectorType() {
         return powerConnectorType;
     }
@@ -181,20 +196,38 @@ public class CabinetType {
     public CabinetType copy() {
         CabinetType c = new CabinetType();
         c.id = id;
-        c.name = name;
-        c.widthMm = widthMm;
-        c.heightMm = heightMm;
-        c.depthMm = depthMm;
-        c.resolutionWidth = resolutionWidth;
-        c.resolutionHeight = resolutionHeight;
-        c.powerConsumptionW = powerConsumptionW;
-        c.weightKg = weightKg;
-        c.shape = shape;
-        c.allowedShapes = new LinkedHashSet<>(allowedShapes);
-        c.powerConnectorType = powerConnectorType;
-        c.powerConnectorsNeeded = powerConnectorsNeeded;
-        c.signalConnectorsNeeded = signalConnectorsNeeded;
-        c.customConnectorAmpRating = customConnectorAmpRating;
+        c.applyEditedValues(this);
         return c;
+    }
+
+    /** Копирует ВСЕ редактируемые поля (кроме id) из other — единственная точка,
+     *  которую нужно обновлять, если появится новое поле; используется и в
+     *  {@link #copy()}, и в AppModel.updateCabinetType/updateCabinetTypeNoFire для
+     *  переноса изменений из отдельной (detached) копии, которую строит
+     *  CabinetTypeDialog, обратно в реально хранимый в библиотеке объект. Раньше
+     *  AppModel копировал поля вручную по отдельному списку, который со временем
+     *  разошёлся с реальным набором полей — например, тип разъёма питания
+     *  (powerConnectorType), угол (rotationDeg) и допустимые формы (allowedShapes)
+     *  тихо терялись при редактировании уже созданного пресета (баг-репорт,
+     *  Task #94/v1.5). Единая точка копирования устраняет весь этот класс багов, а
+     *  не просто чинит текущий список пропущенных полей — важно и для будущей
+     *  синхронизации библиотек с сервером (v2.0), где то же самое "применить
+     *  изменения из внешней копии" понадобится снова. */
+    public void applyEditedValues(CabinetType other) {
+        this.name = other.name;
+        this.widthMm = other.widthMm;
+        this.heightMm = other.heightMm;
+        this.depthMm = other.depthMm;
+        this.resolutionWidth = other.resolutionWidth;
+        this.resolutionHeight = other.resolutionHeight;
+        this.powerConsumptionW = other.powerConsumptionW;
+        this.weightKg = other.weightKg;
+        this.shape = other.shape;
+        this.allowedShapes = new LinkedHashSet<>(other.allowedShapes);
+        this.rotationDeg = other.rotationDeg;
+        this.powerConnectorType = other.powerConnectorType;
+        this.powerConnectorsNeeded = other.powerConnectorsNeeded;
+        this.signalConnectorsNeeded = other.signalConnectorsNeeded;
+        this.customConnectorAmpRating = other.customConnectorAmpRating;
     }
 }

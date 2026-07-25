@@ -187,6 +187,7 @@ public class CardsConfigDialog extends JDialog {
         mid.add(pendingScroll);
         JButton removePort = new JButton("Убрать выбранную группу");
         removePort.addActionListener(e -> removePendingPort());
+        UiKit.bindDeleteKey(pendingList, this::removePendingPort);
         mid.add(Box.createVerticalStrut(4));
         mid.add(removePort);
 
@@ -211,6 +212,7 @@ public class CardsConfigDialog extends JDialog {
         JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
         JButton remove = new JButton("Удалить выбранную карту");
         remove.addActionListener(e -> removeSelected());
+        UiKit.bindDeleteKey(list, this::removeSelected);
         JButton close = new JButton("Закрыть");
         close.addActionListener(e -> dispose());
         btns.add(remove);

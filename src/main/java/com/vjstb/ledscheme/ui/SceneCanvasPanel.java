@@ -507,7 +507,7 @@ public class SceneCanvasPanel extends JPanel {
      *  отрисован детально (см. screenBoxes в paint()). */
     private record CabinetLoc(Screen screen, int cx, int cy) { }
 
-    private static CabinetLoc locateCabinet(Scene scene, java.util.Map<String, int[]> screenBoxes, String cabId) {
+    private CabinetLoc locateCabinet(Scene scene, java.util.Map<String, int[]> screenBoxes, String cabId) {
         for (Screen s : scene.getScreens()) {
             CabinetInstance cab = s.cabinetById(cabId);
             if (cab == null) {
@@ -517,9 +517,22 @@ public class SceneCanvasPanel extends JPanel {
             if (box == null) {
                 return null;
             }
-            int cx = box[0] + cab.getColIndex() * box[2] + box[2] / 2;
-            int cy = box[1] + cab.getRowIndex() * box[3] + box[3] / 2;
-            return new CabinetLoc(s, cx, cy);
+            int x = box[0] + cab.getColIndex() * box[2];
+            int y = box[1] + cab.getRowIndex() * box[3];
+            // Точка привязки моста между экранами — тот же принцип, что и внутри
+            // одного экрана (см. SchemeRenderer.cabinetConnectionAnchor, Task #93/v1.5):
+            // для непрямоугольного кабинета не геометрический центр ячейки, а центр
+            // тяжести самой фигуры.
+            CabinetType effective = cab.getCabinetTypeId() != null
+                    ? model.getWorkspace().cabinetTypeById(cab.getCabinetTypeId()) : null;
+            if (effective == null) {
+                effective = model.typeOf(s);
+            }
+            com.vjstb.ledscheme.model.CabinetShape shape = cab.getShapeOverride() != null ? cab.getShapeOverride()
+                    : (effective != null ? effective.getShape() : null);
+            double rotationDeg = SchemeRenderer.effectiveRotationDeg(cab, effective);
+            java.awt.Point p = SchemeRenderer.cabinetConnectionAnchor(x, y, box[2], box[3], shape, rotationDeg);
+            return new CabinetLoc(s, p.x, p.y);
         }
         return null;
     }

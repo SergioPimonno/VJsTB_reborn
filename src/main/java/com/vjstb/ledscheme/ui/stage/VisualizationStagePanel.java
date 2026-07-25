@@ -10,6 +10,7 @@ import com.vjstb.ledscheme.ui.ContextBar;
 import com.vjstb.ledscheme.ui.OutputPaths;
 import com.vjstb.ledscheme.ui.Palette;
 import com.vjstb.ledscheme.ui.PixelGridRenderer;
+import com.vjstb.ledscheme.ui.ResolumePresetExporter;
 import com.vjstb.ledscheme.ui.UiKit;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
@@ -210,9 +211,18 @@ public class VisualizationStagePanel extends JPanel {
         body.add(exportResolume);
         body.add(UiKit.vgap(6));
         body.add(UiKit.muted(
-                "<html>Каждый пресет — отдельная кнопка, не входит в общий пакет документации"
-                        + " (этап «Вывод»). Сейчас: Resolume (PNG канвасов как Advanced Output).<br>"
-                        + "Novastar/After Effects — планируются так же, отдельными кнопками.</html>"));
+                "<html>XML «Screen Setup» (Advanced Output) — по одному файлу на канвас текущей сцены, готов"
+                        + " к прямому импорту в Resolume. Маска НЕ генерируется этой кнопкой.</html>"));
+
+        body.add(UiKit.vgap(10));
+        JButton exportAfterEffects = new JButton("Экспорт под After Effects… (скоро)");
+        exportAfterEffects.setEnabled(false);
+        exportAfterEffects.setToolTipText("Появится после получения образца формата от пользователя");
+        body.add(exportAfterEffects);
+        body.add(UiKit.vgap(6));
+        body.add(UiKit.muted(
+                "<html>Заготовлено, но пока неактивно — пришлите образец проекта/скрипта After Effects,"
+                        + " и кнопка будет доделана и включена.</html>"));
         body.add(javax.swing.Box.createVerticalGlue());
 
         return body;
@@ -308,9 +318,15 @@ public class VisualizationStagePanel extends JPanel {
         showMaskPreviewDialog("Предпросмотр масок (экраны + канвасы)", images);
     }
 
-    /** Отдельная кнопка-пресет (не входит в общий пакет): PNG каждого канваса ТЕКУЩЕЙ
-     *  сцены в его собственном разрешении — готово к импорту как Advanced Output в
-     *  Resolume. Тоже сначала показывает предпросмотр, а не пишет файлы сразу. */
+    /** Отдельная кнопка-пресет (не входит в общий пакет и НЕ генерирует маску —
+     *  вместо этого пишет XML "Screen Setup" (Advanced Output), который Resolume
+     *  умеет импортировать напрямую: один &lt;Screen&gt; на канвас, один
+     *  &lt;Slice&gt; ("слой", имя = имя экрана) на каждый размещённый в канвасе
+     *  экран, координаты — пиксельные границы экрана в системе координат канваса
+     *  (см. {@link ResolumePresetExporter}, разобран по образцу реального файла,
+     *  присланного пользователем). Пишет по одному .xml на каждый канвас ТЕКУЩЕЙ
+     *  сцены сразу в выбранную папку — файл текстовый, показывать превью-миниатюру
+     *  как для масок не имеет смысла. */
     private void exportResolumePreset() {
         Scene scene = model.getCurrentScene();
         if (scene == null) {
@@ -322,19 +338,40 @@ public class VisualizationStagePanel extends JPanel {
                     JOptionPane.WARNING_MESSAGE);
             return;
         }
-        List<NamedImage> images = new ArrayList<>();
+        File folder = resolveFolder();
+        if (folder == null) {
+            JOptionPane.showMessageDialog(this, "Не удалось определить папку сохранения — выберите её вручную",
+                    "Нет папки", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        folder.mkdirs();
+        int count = 0;
         try {
             for (ContentCanvas c : scene.getCanvases()) {
-                BufferedImage img = PixelGridRenderer.renderCanvasMask(c, model);
-                String fname = "Resolume_" + OutputPaths.sanitize(scene.getName()) + "_" + OutputPaths.sanitize(c.getName()) + ".png";
-                images.add(new NamedImage(fname, img));
+                String xml = ResolumePresetExporter.buildXml(c, scene, model);
+                String fname = "Resolume_" + OutputPaths.sanitize(scene.getName()) + "_"
+                        + OutputPaths.sanitize(c.getName()) + ".xml";
+                java.nio.file.Files.writeString(new File(folder, fname).toPath(), xml,
+                        java.nio.charset.StandardCharsets.UTF_8);
+                count++;
             }
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(this, "Ошибка формирования пресета: " + ex.getMessage(), "Ошибка",
                     JOptionPane.ERROR_MESSAGE);
             return;
         }
-        showMaskPreviewDialog("Предпросмотр пресета Resolume", images);
+        int answer = JOptionPane.showConfirmDialog(this,
+                "Готово.\nФайлов Resolume Screen Setup сохранено: " + count + "\n\nОткрыть папку?",
+                "Пресет Resolume сформирован", JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE);
+        if (answer == JOptionPane.YES_OPTION) {
+            try {
+                if (java.awt.Desktop.isDesktopSupported()) {
+                    java.awt.Desktop.getDesktop().open(folder);
+                }
+            } catch (Exception ignored) {
+                // не критично
+            }
+        }
     }
 
     /** Модальный диалог предпросмотра: миниатюры всех изображений, которые БУДУТ

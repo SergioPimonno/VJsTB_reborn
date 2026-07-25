@@ -15,6 +15,9 @@ public class Workspace {
     /** Библиотека пресетов оборудования (медиасерверы/видеопроцессоры/конвертеры и т.д.)
      *  для быстрой вставки узлов общей схемы. */
     private List<EquipmentPreset> equipmentPresets = new ArrayList<>();
+    /** Библиотека пользовательских кабелей/переходников (например «CEE 16A →
+     *  TrueCON») — дополняет встроенные пресеты в WireLabelDialog/PowerConnectorsConfigDialog. */
+    private List<CableType> cableTypes = new ArrayList<>();
     private List<Project> projects = new ArrayList<>();
 
     public List<CabinetType> getCabinetTypes() {
@@ -39,6 +42,14 @@ public class Workspace {
 
     public void setEquipmentPresets(List<EquipmentPreset> equipmentPresets) {
         this.equipmentPresets = equipmentPresets;
+    }
+
+    public List<CableType> getCableTypes() {
+        return cableTypes;
+    }
+
+    public void setCableTypes(List<CableType> cableTypes) {
+        this.cableTypes = cableTypes;
     }
 
     public List<Project> getProjects() {
