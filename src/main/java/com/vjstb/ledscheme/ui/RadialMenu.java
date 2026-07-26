@@ -43,22 +43,32 @@ public final class RadialMenu {
         final Color color;
         final Runnable action;
         final List<Item> children;
+        final javax.swing.Icon icon;
 
-        private Item(String label, Color color, Runnable action, List<Item> children) {
+        private Item(String label, Color color, Runnable action, List<Item> children, javax.swing.Icon icon) {
             this.label = label;
             this.color = color;
             this.action = action;
             this.children = children;
+            this.icon = icon;
         }
 
         /** Пункт-лист: выбор сразу выполняет action и закрывает меню. */
         public static Item leaf(String label, Color color, Runnable action) {
-            return new Item(label, color, action, null);
+            return new Item(label, color, action, null, null);
+        }
+
+        /** Пункт-лист с картинкой-пиктограммой вместо однотонного кружка-«свотча» —
+         *  для случаев, когда сам цвет ничего не объясняет (например, 8 шаблонов
+         *  серпантина «Быстрого подключения», см. ChainPatternIcon): текстовая
+         *  подпись одна не даёт быстро понять маршрут, нужна картинка как в NovaLCT. */
+        public static Item leaf(String label, javax.swing.Icon icon, Runnable action) {
+            return new Item(label, null, action, null, icon);
         }
 
         /** Пункт-ветка: выбор открывает следующее кольцо с children вместо действия. */
         public static Item branch(String label, Color color, List<Item> children) {
-            return new Item(label, color, null, children);
+            return new Item(label, color, null, children, null);
         }
 
         boolean isBranch() {
@@ -207,6 +217,13 @@ public final class RadialMenu {
         int computeWindowSize() {
             int n = items.size();
             ringRadius = Math.max(58, 11 * n);
+            boolean hasIcon = items.stream().anyMatch(it -> it.icon != null);
+            if (hasIcon) {
+                // картинки-пиктограммы (см. Item.leaf(label, Icon, action)) заметно
+                // шире плоского кружка-«свотча» — без увеличения радиуса кольца
+                // соседние пункты накладываются друг на друга при большом n.
+                ringRadius = Math.max(ringRadius, 95);
+            }
             labelRadius = ringRadius + 42;
 
             FontMetrics fm = getFontMetrics(labelFont());
@@ -271,15 +288,27 @@ public final class RadialMenu {
                 double sy = -Math.cos(theta);
                 boolean isHover = i == hover;
                 Item item = items.get(i);
-                Color swatch = item.color != null ? item.color : Palette.MUTED;
 
                 int swX = cx + (int) Math.round(sx * ringRadius);
                 int swY = cy + (int) Math.round(sy * ringRadius);
-                g2.setColor(swatch);
-                g2.fillOval(swX - SWATCH_R, swY - SWATCH_R, SWATCH_R * 2, SWATCH_R * 2);
-                g2.setColor(isHover ? Color.WHITE : Palette.BORDER);
-                g2.setStroke(new java.awt.BasicStroke(isHover ? 2.5f : 1f));
-                g2.drawOval(swX - SWATCH_R, swY - SWATCH_R, SWATCH_R * 2, SWATCH_R * 2);
+                if (item.icon != null) {
+                    int iw = item.icon.getIconWidth();
+                    int ih = item.icon.getIconHeight();
+                    int bw = iw + 10, bh = ih + 10;
+                    g2.setColor(translucent ? new Color(13, 17, 23, 235) : Palette.PANEL);
+                    g2.fillRoundRect(swX - bw / 2, swY - bh / 2, bw, bh, 8, 8);
+                    g2.setColor(isHover ? Color.WHITE : Palette.BORDER);
+                    g2.setStroke(new java.awt.BasicStroke(isHover ? 2.5f : 1f));
+                    g2.drawRoundRect(swX - bw / 2, swY - bh / 2, bw, bh, 8, 8);
+                    item.icon.paintIcon(this, g2, swX - iw / 2, swY - ih / 2);
+                } else {
+                    Color swatch = item.color != null ? item.color : Palette.MUTED;
+                    g2.setColor(swatch);
+                    g2.fillOval(swX - SWATCH_R, swY - SWATCH_R, SWATCH_R * 2, SWATCH_R * 2);
+                    g2.setColor(isHover ? Color.WHITE : Palette.BORDER);
+                    g2.setStroke(new java.awt.BasicStroke(isHover ? 2.5f : 1f));
+                    g2.drawOval(swX - SWATCH_R, swY - SWATCH_R, SWATCH_R * 2, SWATCH_R * 2);
+                }
 
                 String label = shorten(displayLabel(item), MAX_LABEL_CHARS);
                 int labelW = fm.stringWidth(label);

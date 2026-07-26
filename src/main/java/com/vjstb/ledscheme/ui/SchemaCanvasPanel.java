@@ -307,8 +307,23 @@ public class SchemaCanvasPanel extends JPanel {
                 } else if (draggingWaypointEdge != null) {
                     com.vjstb.ledscheme.model.EdgeWaypoint w =
                             draggingWaypointEdge.getWaypoints().get(draggingWaypointIndex);
-                    w.setX(mp.x);
-                    w.setY(mp.y);
+                    double candidateX = mp.x;
+                    double candidateY = mp.y;
+                    // Shift во время перетаскивания точки излома провода — привязка к
+                    // краям/центрам узлов и к другим точкам излома (см. Task с уточнением:
+                    // привязки нужны именно узлам ПРОВОДОВ, а не блокам оборудования —
+                    // те двигаются свободно и без Shift, как раньше).
+                    if (e.isShiftDown()) {
+                        double[] snapped = snapWaypointPosition(draggingWaypointEdge, draggingWaypointIndex,
+                                candidateX, candidateY);
+                        candidateX = snapped[0];
+                        candidateY = snapped[1];
+                    } else {
+                        snapGuideX = null;
+                        snapGuideY = null;
+                    }
+                    w.setX(candidateX);
+                    w.setY(candidateY);
                     repaint();
                 } else if (dragNode != null) {
                     double candidateX = mp.x - dragOffX;
@@ -545,6 +560,60 @@ public class SchemaCanvasPanel extends JPanel {
                         snappedY = candidateY + (oy - yc);
                         snapGuideY = oy;
                     }
+                }
+            }
+        }
+        return new double[]{snappedX, snappedY};
+    }
+
+    /** Привязка перетаскиваемой точки излома провода (Shift во время перетаскивания —
+     *  см. mouseDragged) к краю/центру узла ЛИБО к другой точке излома (в т.ч. на
+     *  другом проводе) — так соседние провода можно выровнять в прямые линии, как в
+     *  yEd. В отличие от snapPosition (для блоков оборудования) сравнивается ОДНА
+     *  точка, а не три кандидата на измерение, — у точки излома нет ширины/высоты. */
+    private double[] snapWaypointPosition(SchemaEdge movingEdge, int movingIndex,
+                                           double candidateX, double candidateY) {
+        snapGuideX = null;
+        snapGuideY = null;
+        double bestDx = SNAP_THRESHOLD, bestDy = SNAP_THRESHOLD;
+        double snappedX = candidateX, snappedY = candidateY;
+        for (SchemaNode other : nodes()) {
+            double ow = other.getWidth(), oh = other.getHeight();
+            for (double ox : new double[]{other.getX(), other.getX() + ow / 2, other.getX() + ow}) {
+                double d = Math.abs(candidateX - ox);
+                if (d < bestDx) {
+                    bestDx = d;
+                    snappedX = ox;
+                    snapGuideX = ox;
+                }
+            }
+            for (double oy : new double[]{other.getY(), other.getY() + oh / 2, other.getY() + oh}) {
+                double d = Math.abs(candidateY - oy);
+                if (d < bestDy) {
+                    bestDy = d;
+                    snappedY = oy;
+                    snapGuideY = oy;
+                }
+            }
+        }
+        for (SchemaEdge edge : edges()) {
+            List<com.vjstb.ledscheme.model.EdgeWaypoint> wps = edge.getWaypoints();
+            for (int i = 0; i < wps.size(); i++) {
+                if (edge == movingEdge && i == movingIndex) {
+                    continue;
+                }
+                com.vjstb.ledscheme.model.EdgeWaypoint wp = wps.get(i);
+                double dx = Math.abs(candidateX - wp.getX());
+                if (dx < bestDx) {
+                    bestDx = dx;
+                    snappedX = wp.getX();
+                    snapGuideX = wp.getX();
+                }
+                double dy = Math.abs(candidateY - wp.getY());
+                if (dy < bestDy) {
+                    bestDy = dy;
+                    snappedY = wp.getY();
+                    snapGuideY = wp.getY();
                 }
             }
         }

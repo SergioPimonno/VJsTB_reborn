@@ -290,7 +290,7 @@ public class SignalStagePanel extends JPanel {
         }
         java.util.List<RadialMenu.Item> items = new java.util.ArrayList<>();
         for (ChainPatterns.Pattern pattern : ChainPatterns.Pattern.values()) {
-            items.add(RadialMenu.Item.leaf(pattern.getLabel(), Palette.ACCENT, () -> {
+            items.add(RadialMenu.Item.leaf(pattern.getLabel(), new com.vjstb.ledscheme.ui.ChainPatternIcon(pattern), () -> {
                 java.util.List<String> ids = ChainPatterns.orderedIds(scr, rowStart, rowEnd, colStart, colEnd,
                         pattern, cabId -> !model.isCabinetWiredForSignal(cabId));
                 String error = chainCtrl.buildAndCommit(ids);
