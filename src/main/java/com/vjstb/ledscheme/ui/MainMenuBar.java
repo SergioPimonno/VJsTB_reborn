@@ -81,11 +81,9 @@ public class MainMenuBar extends JMenuBar {
         });
         menu.add(exportImportLib);
 
-        JMenuItem importNovaLct = new JMenuItem("Импорт из NovaLCT (.scr)… [заготовка]");
-        importNovaLct.setToolTipText("Разбирает файл прописи NovaLCT и показывает найденные экраны/карты/порты."
-                + " Пока только просмотр — создание экранов и цепочек по нему ещё не реализовано.");
-        importNovaLct.addActionListener(e -> NovaLctImportDialog.showImportFlow(owner));
-        menu.add(importNovaLct);
+        // Импорт из NovaLCT (.scr) временно отключён из меню — формат разобран лишь
+        // частично (см. NovaLctScrParser/NovaLctImportDialog), доработка в следующих
+        // версиях. Классы намеренно оставлены нетронутыми для продолжения работы.
 
         return menu;
     }

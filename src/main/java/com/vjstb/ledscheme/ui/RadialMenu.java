@@ -226,13 +226,21 @@ public final class RadialMenu {
             }
             labelRadius = ringRadius + 42;
 
+            // Пункты-картинки не рисуют подпись-чип (см. paintComponent) — им запас
+            // нужен только под саму пиктограмму у кольца, а не у внешнего радиуса
+            // подписей, иначе окно оставалось бы неоправданно большим с пустым краем.
             FontMetrics fm = getFontMetrics(labelFont());
             int maxChipHalf = 0;
+            int maxIconHalf = 0;
             for (Item it : items) {
-                int w = fm.stringWidth(shorten(displayLabel(it), MAX_LABEL_CHARS)) + 16;
-                maxChipHalf = Math.max(maxChipHalf, w / 2);
+                if (it.icon != null) {
+                    maxIconHalf = Math.max(maxIconHalf, Math.max(it.icon.getIconWidth(), it.icon.getIconHeight()) / 2 + 8);
+                } else {
+                    int w = fm.stringWidth(shorten(displayLabel(it), MAX_LABEL_CHARS)) + 16;
+                    maxChipHalf = Math.max(maxChipHalf, w / 2);
+                }
             }
-            pieRadius = ringRadius + 26;
+            pieRadius = ringRadius + Math.max(26, maxIconHalf);
             int size = 2 * (labelRadius + maxChipHalf) + 24;
             return Math.max(size, 2 * pieRadius + 80);
         }
@@ -310,27 +318,33 @@ public final class RadialMenu {
                     g2.drawOval(swX - SWATCH_R, swY - SWATCH_R, SWATCH_R * 2, SWATCH_R * 2);
                 }
 
-                String label = shorten(displayLabel(item), MAX_LABEL_CHARS);
-                int labelW = fm.stringWidth(label);
-                int chipX = cx + (int) Math.round(sx * labelRadius);
-                int chipY = cy + (int) Math.round(sy * labelRadius);
-                int chipW = labelW + 16;
-                int chipH = fm.getHeight() + 6;
+                // Пункты-картинки (см. Item.leaf(label, Icon, action)) сознательно БЕЗ
+                // текстовой подписи-чипа рядом — самой пиктограммы достаточно, подпись
+                // рядом с ней только загромождала бы плотное кольцо из 8 пунктов.
+                if (item.icon == null) {
+                    String label = shorten(displayLabel(item), MAX_LABEL_CHARS);
+                    int labelW = fm.stringWidth(label);
+                    int chipX = cx + (int) Math.round(sx * labelRadius);
+                    int chipY = cy + (int) Math.round(sy * labelRadius);
+                    int chipW = labelW + 16;
+                    int chipH = fm.getHeight() + 6;
 
-                g2.setColor(isHover ? Palette.ACCENT : new Color(0x0d, 0x11, 0x17, 235));
-                g2.fillRoundRect(chipX - chipW / 2, chipY - chipH / 2, chipW, chipH, 10, 10);
-                g2.setColor(isHover ? Palette.ACCENT.darker() : Palette.BORDER);
-                g2.setStroke(new java.awt.BasicStroke(1f));
-                g2.drawRoundRect(chipX - chipW / 2, chipY - chipH / 2, chipW, chipH, 10, 10);
+                    g2.setColor(isHover ? Palette.ACCENT : new Color(0x0d, 0x11, 0x17, 235));
+                    g2.fillRoundRect(chipX - chipW / 2, chipY - chipH / 2, chipW, chipH, 10, 10);
+                    g2.setColor(isHover ? Palette.ACCENT.darker() : Palette.BORDER);
+                    g2.setStroke(new java.awt.BasicStroke(1f));
+                    g2.drawRoundRect(chipX - chipW / 2, chipY - chipH / 2, chipW, chipH, 10, 10);
 
-                // текст всегда контрастный (белый) независимо от подложки/наведения
-                g2.setColor(Color.WHITE);
-                g2.drawString(label, chipX - labelW / 2, chipY + fm.getAscent() / 2 - 1);
+                    // текст всегда контрастный (белый) независимо от подложки/наведения
+                    g2.setColor(Color.WHITE);
+                    g2.drawString(label, chipX - labelW / 2, chipY + fm.getAscent() / 2 - 1);
+                }
             }
 
             // мёртвая зона в центре — вместо пустого кольца показывает ПОЛНУЮ (без сокращения)
             // подпись наведённого пункта, чтобы усечённый текст в чипе всегда можно было проверить
-            if (hover >= 0) {
+            // (для пунктов-картинок подписи нет вовсе — см. выше, поэтому и здесь её не показываем)
+            if (hover >= 0 && items.get(hover).icon == null) {
                 String full = displayLabel(items.get(hover));
                 Font bold = labelFont().deriveFont(Font.BOLD, 11f);
                 g2.setFont(bold);
