@@ -948,6 +948,12 @@ public class AppModel {
         changed();
     }
 
+    /** null — сбросить на стандартный цвет режима схемы (см. SchemaCanvasPanel.edgeColor). */
+    public void setSchemaEdgeColor(SchemaEdge edge, Integer rgb) {
+        edge.setColor(rgb);
+        changed();
+    }
+
     public void deleteSchemaEdge(SchemaEdge edge) {
         if (currentScene == null) {
             return;
@@ -1641,7 +1647,7 @@ public class AppModel {
      *  большинства LED-контроллеров (см. Task #43); модель не хранит фактический тип
      *  кабеля по порту, поэтому при другом типе (например, оптика) инженер поправит
      *  гнездо вручную через «Комплектация карт…» этого узла. */
-    private static final String DEFAULT_SIGNAL_SOCKET_TYPE = "Cat6/RJ45";
+    private static final String DEFAULT_SIGNAL_SOCKET_TYPE = "Ethernet";
 
     private List<SchemaNode> schemaNodesForScreen(Scene scene, SchemaMode mode, String screenId) {
         List<SchemaNode> result = new ArrayList<>();

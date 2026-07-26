@@ -37,6 +37,10 @@ public class SchemaEdge {
     /** Пунктирная линия связи вместо сплошной — визуальное отличие (например, для
      *  обходного/резервного/мониторингового пути, как в референсном PDF). */
     private boolean dashed;
+    /** Пользовательский цвет линии (RGB, см. Color.getRGB()) — null означает
+     *  «стандартный цвет по режиму схемы» (см. SchemaCanvasPanel); отдельная связь
+     *  сигнала может получить свой цвет для читаемости плотной схемы. */
+    private Integer color;
 
     public SchemaEdge() {
     }
@@ -144,6 +148,14 @@ public class SchemaEdge {
         this.dashed = dashed;
     }
 
+    public Integer getColor() {
+        return color;
+    }
+
+    public void setColor(Integer color) {
+        this.color = color;
+    }
+
     /** true, если подпись задана структурированно (N×тип) — только такие связи
      *  попадают в автоматическую спецификацию коммутации на этапе «Вывод». */
     public boolean hasStructuredWire() {
@@ -183,6 +195,7 @@ public class SchemaEdge {
             e.waypoints.add(w.copy());
         }
         e.dashed = dashed;
+        e.color = color;
         return e;
     }
 }

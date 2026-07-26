@@ -132,7 +132,7 @@ public class CardsConfigDialog extends JDialog {
     private final JTextField nameField = new JTextField();
     private final javax.swing.JComboBox<String> connectorCombo = new javax.swing.JComboBox<>(
             new String[]{"HDMI 2.1", "HDMI 2.0", "DisplayPort 1.4", "DisplayPort 1.2", "SDI", "DVI",
-                    "Fiber", "Cat6/RJ45", "USB-C", "Генлок"});
+                    "Fiber", "Ethernet", "USB-C", "Thunderbolt", "Генлок"});
     private final javax.swing.JComboBox<PortDirection> directionCombo = new javax.swing.JComboBox<>(PortDirection.values());
     private final JSpinner countSpinner = new JSpinner(new SpinnerNumberModel(1, 1, 64, 1));
 

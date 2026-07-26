@@ -37,7 +37,8 @@ public class CableTypeDialog extends JDialog {
             "PowerCon TRUE1", "PowerCon 20A", "TRUEcon", "IEC C13", "IEC C19", "Powerlock"
     };
     private static final String[] SIGNAL_CONNECTOR_PRESETS = {
-            "SDI", "HDMI", "DisplayPort", "DVI", "Fiber", "Cat6/RJ45", "Genlock (SDI)", "XLR", "BNC"
+            "SDI", "HDMI", "DisplayPort", "DVI", "Fiber", "Ethernet", "Genlock (SDI)", "XLR", "BNC",
+            "USB-C", "Thunderbolt"
     };
 
     private static final ConnectorGender OUTPUT_END_GENDER = ConnectorGender.FEMALE;

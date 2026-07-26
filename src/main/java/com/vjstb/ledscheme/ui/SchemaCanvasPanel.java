@@ -52,6 +52,11 @@ public class SchemaCanvasPanel extends JPanel {
     private static final int RESIZE_HANDLE = 14;
     private static final double MIN_NODE_W = 110;
     private static final double MIN_NODE_H = 44;
+    private static final double MIN_SCALE = 0.3;
+    private static final double MAX_SCALE = 2.5;
+    /** Порог привязки (в модельных, т.е. немасштабированных, пикселях) при
+     *  Shift-перетаскивании узла к краю/центру другого узла — см. snapPosition. */
+    private static final double SNAP_THRESHOLD = 8;
 
     private final AppModel model;
     private final SchemaMode mode;
@@ -77,8 +82,22 @@ public class SchemaCanvasPanel extends JPanel {
     private SocketHit hoveredSocket;
     private Point lastMouse;
 
+    /** Масштаб отрисовки схемы — 1.0 = как раньше (не было вовсе); Ctrl+колесо
+     *  меняет его (см. mouseWheelMoved), применяется как Graphics2D.scale в paint(). */
+    private double scale = 1.0;
+    /** Активные направляющие линии привязки (Shift-перетаскивание, см.
+     *  snapPosition) — модельные координаты; null — сейчас не привязано ни к чему
+     *  по этой оси. Рисуются в paint() и сбрасываются при отпускании/без Shift. */
+    private Double snapGuideX;
+    private Double snapGuideY;
+
     private SchemaNode selectedNode;
     private SchemaEdge selectedEdge;
+
+    /** Прямоугольник значка "⚠" (в экранных координатах) для каждого перегруженного
+     *  узла на ПОСЛЕДНЕЙ отрисовке — используется только для наведения мыши
+     *  (getToolTipText), пересчитывается заново в каждом paintComponent. */
+    private final java.util.Map<SchemaNode, java.awt.Rectangle> overloadIconRects = new java.util.HashMap<>();
 
     /** Разъём + название карты, из которой он взят, + id САМОЙ карты (для сигнальных
      *  cards — у power-разъёмов группировки по картам нет, тогда groupName/cardId ==
@@ -115,6 +134,10 @@ public class SchemaCanvasPanel extends JPanel {
         // Переключатель "экран блоком/схемой" в Персонализации должен сразу
         // отразиться на уже открытой схеме, не только при следующем открытии панели.
         settings.addListener(this::repaint);
+        // Непустое значение включает механизм подсказок Swing вообще — сам текст
+        // подставляется динамически через переопределённый getToolTipText(MouseEvent)
+        // ниже (наведение на конкретный значок "⚠" перегрузки узла).
+        setToolTipText("");
 
         MouseAdapter mouse = new MouseAdapter() {
             @Override
@@ -127,7 +150,8 @@ public class SchemaCanvasPanel extends JPanel {
                 if (!SwingUtilities.isLeftMouseButton(e)) {
                     return;
                 }
-                SchemaNode hit = nodeAt(e.getPoint());
+                Point mp = toModel(e.getPoint());
+                SchemaNode hit = nodeAt(mp);
                 if (interaction == Interaction.CONNECT) {
                     // Чип подписи связи ("+ подпись"/уже назначенная подпись) должен
                     // открывать редактор подписи независимо от текущего инструмента
@@ -135,7 +159,7 @@ public class SchemaCanvasPanel extends JPanel {
                     // "Перемещение", т.к. этот CONNECT-блок всегда завершался return
                     // раньше, чем управление доходило до проверки чипа ниже,
                     // применявшейся только в ветке MOVE — см. Task #95/v1.5).
-                    SchemaEdge chipHitConnect = edgeLabelChipAt(e.getPoint());
+                    SchemaEdge chipHitConnect = edgeLabelChipAt(mp);
                     if (chipHitConnect != null) {
                         selectedNode = null;
                         selectedEdge = chipHitConnect;
@@ -144,7 +168,7 @@ public class SchemaCanvasPanel extends JPanel {
                         return;
                     }
                     boolean socketMode = settings.activeProfile().isSocketWiringEnabled();
-                    SocketHit socketHit = socketMode ? socketAt(e.getPoint()) : null;
+                    SocketHit socketHit = socketMode ? socketAt(mp) : null;
                     if (socketHit != null) {
                         if (connectPendingId == null) {
                             connectPendingId = socketHit.node().getId();
@@ -200,7 +224,7 @@ public class SchemaCanvasPanel extends JPanel {
                     repaint();
                     return;
                 }
-                SchemaNode resizeHit = resizeHandleAt(e.getPoint());
+                SchemaNode resizeHit = resizeHandleAt(mp);
                 if (resizeHit != null) {
                     selectedNode = resizeHit;
                     selectedEdge = null;
@@ -208,7 +232,7 @@ public class SchemaCanvasPanel extends JPanel {
                     repaint();
                     return;
                 }
-                WaypointHit wpHit = waypointAt(e.getPoint());
+                WaypointHit wpHit = waypointAt(mp);
                 if (wpHit != null) {
                     selectedEdge = wpHit.edge();
                     selectedNode = null;
@@ -221,12 +245,12 @@ public class SchemaCanvasPanel extends JPanel {
                     selectedNode = hit;
                     selectedEdge = null;
                     dragNode = hit;
-                    dragOffX = e.getX() - hit.getX();
-                    dragOffY = e.getY() - hit.getY();
+                    dragOffX = mp.x - hit.getX();
+                    dragOffY = mp.y - hit.getY();
                     repaint();
                     return;
                 }
-                SchemaEdge chipHit = edgeLabelChipAt(e.getPoint());
+                SchemaEdge chipHit = edgeLabelChipAt(mp);
                 if (chipHit != null) {
                     selectedNode = null;
                     selectedEdge = chipHit;
@@ -235,41 +259,55 @@ public class SchemaCanvasPanel extends JPanel {
                     return;
                 }
                 selectedNode = null;
-                selectedEdge = edgeAt(e.getPoint());
+                selectedEdge = edgeAt(mp);
                 repaint();
             }
 
             @Override
             public void mouseDragged(MouseEvent e) {
+                Point mp = toModel(e.getPoint());
                 if (resizeNode != null) {
-                    resizeNode.setWidth(Math.max(MIN_NODE_W, e.getX() - resizeNode.getX()));
-                    resizeNode.setHeight(Math.max(MIN_NODE_H, e.getY() - resizeNode.getY()));
+                    resizeNode.setWidth(Math.max(MIN_NODE_W, mp.x - resizeNode.getX()));
+                    resizeNode.setHeight(Math.max(MIN_NODE_H, mp.y - resizeNode.getY()));
                     revalidate();
                     repaint();
                 } else if (draggingWaypointEdge != null) {
                     com.vjstb.ledscheme.model.EdgeWaypoint w =
                             draggingWaypointEdge.getWaypoints().get(draggingWaypointIndex);
-                    w.setX(e.getX());
-                    w.setY(e.getY());
+                    w.setX(mp.x);
+                    w.setY(mp.y);
                     repaint();
                 } else if (dragNode != null) {
-                    dragNode.setX(Math.max(0, e.getX() - dragOffX));
-                    dragNode.setY(Math.max(0, e.getY() - dragOffY));
+                    double candidateX = mp.x - dragOffX;
+                    double candidateY = mp.y - dragOffY;
+                    // Shift во время перетаскивания — привязка к краям/центрам других
+                    // узлов (как в yEd): без Shift положение свободное, как раньше.
+                    if (e.isShiftDown()) {
+                        double[] snapped = snapPosition(dragNode, candidateX, candidateY);
+                        candidateX = snapped[0];
+                        candidateY = snapped[1];
+                    } else {
+                        snapGuideX = null;
+                        snapGuideY = null;
+                    }
+                    dragNode.setX(Math.max(0, candidateX));
+                    dragNode.setY(Math.max(0, candidateY));
                     revalidate();
                     repaint();
                 } else if (interaction == Interaction.CONNECT && connectPendingId != null) {
-                    lastMouse = e.getPoint();
+                    lastMouse = mp;
                     repaint();
                 }
             }
 
             @Override
             public void mouseMoved(MouseEvent e) {
+                Point mp = toModel(e.getPoint());
                 if (interaction == Interaction.CONNECT) {
                     if (connectPendingId != null) {
-                        lastMouse = e.getPoint();
+                        lastMouse = mp;
                     }
-                    SocketHit hover = settings.activeProfile().isSocketWiringEnabled() ? socketAt(e.getPoint()) : null;
+                    SocketHit hover = settings.activeProfile().isSocketWiringEnabled() ? socketAt(mp) : null;
                     if (!java.util.Objects.equals(hover, hoveredSocket)) {
                         hoveredSocket = hover;
                         setCursor(Cursor.getPredefinedCursor(
@@ -277,7 +315,7 @@ public class SchemaCanvasPanel extends JPanel {
                     }
                     repaint();
                 } else if (interaction == Interaction.MOVE) {
-                    boolean overHandle = resizeHandleAt(e.getPoint()) != null;
+                    boolean overHandle = resizeHandleAt(mp) != null;
                     setCursor(Cursor.getPredefinedCursor(
                             overHandle ? Cursor.SE_RESIZE_CURSOR : Cursor.DEFAULT_CURSOR));
                 }
@@ -299,12 +337,16 @@ public class SchemaCanvasPanel extends JPanel {
                     dragNode = null;
                     onChanged.run();
                 }
+                snapGuideX = null;
+                snapGuideY = null;
+                repaint();
             }
 
             @Override
             public void mouseClicked(MouseEvent e) {
                 if (e.getClickCount() == 2 && SwingUtilities.isLeftMouseButton(e)) {
-                    SchemaNode hit = nodeAt(e.getPoint());
+                    Point mp = toModel(e.getPoint());
+                    SchemaNode hit = nodeAt(mp);
                     if (hit != null && hit.getType() == SchemaNodeType.SCREEN && hit.getScreenRefId() != null
                             && onScreenActivated != null) {
                         Screen scr = screenById(hit.getScreenRefId());
@@ -318,17 +360,43 @@ public class SchemaCanvasPanel extends JPanel {
                     // кликнули (см. Task #85/v1.4). Работает только в режиме
                     // «Перемещение» — в режиме «Соединение» двойной клик там же ничего
                     // особого не значит, но лучше не путать с логикой соединения гнёзд.
-                    if (hit == null && interaction == Interaction.MOVE && edgeLabelChipAt(e.getPoint()) == null) {
-                        SchemaEdge edgeHit = edgeAt(e.getPoint());
+                    if (hit == null && interaction == Interaction.MOVE && edgeLabelChipAt(mp) == null) {
+                        SchemaEdge edgeHit = edgeAt(mp);
                         if (edgeHit != null) {
-                            insertWaypoint(edgeHit, e.getPoint());
+                            insertWaypoint(edgeHit, mp);
                         }
+                    }
+                }
+            }
+
+            /** Ctrl+колесо — масштаб схемы (нет способа приблизить/отдалить схему
+             *  сейчас вовсе); обычное колесо/Shift+колесо не трогаем — это стандартная
+             *  прокрутка JScrollPane, вокруг которого построен холст, и должна
+             *  продолжать работать как раньше. */
+            @Override
+            public void mouseWheelMoved(java.awt.event.MouseWheelEvent e) {
+                if (e.isControlDown()) {
+                    double delta = -e.getPreciseWheelRotation() * 0.1;
+                    double newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale + delta));
+                    if (newScale != scale) {
+                        scale = newScale;
+                        revalidate();
+                        repaint();
+                    }
+                } else {
+                    javax.swing.JScrollPane sp = (javax.swing.JScrollPane)
+                            SwingUtilities.getAncestorOfClass(javax.swing.JScrollPane.class, SchemaCanvasPanel.this);
+                    if (sp != null) {
+                        javax.swing.JScrollBar bar = e.isShiftDown() ? sp.getHorizontalScrollBar()
+                                : sp.getVerticalScrollBar();
+                        bar.setValue(bar.getValue() + e.getUnitsToScroll() * bar.getUnitIncrement());
                     }
                 }
             }
         };
         addMouseListener(mouse);
         addMouseMotionListener(mouse);
+        addMouseWheelListener(mouse);
     }
 
     public void setOnChanged(Runnable onChanged) {
@@ -390,6 +458,58 @@ public class SchemaCanvasPanel extends JPanel {
 
     private List<SchemaEdge> edges() {
         return model.schemaEdgesForCurrentScene(mode);
+    }
+
+    /** Экранная точка мыши → координата в модельном (немасштабированном)
+     *  пространстве, где хранятся координаты узлов/точек излома — все хит-тесты и
+     *  запись позиций работают в этом пространстве независимо от текущего scale. */
+    private Point toModel(Point screenPt) {
+        return new Point((int) Math.round(screenPt.x / scale), (int) Math.round(screenPt.y / scale));
+    }
+
+    /** Привязка перетаскиваемого узла к краю/центру другого узла сцены (Shift во
+     *  время перетаскивания — см. mouseDragged), как в yEd Graph Editor: кандидатные
+     *  координаты (левый край/центр/правый край по X, верх/центр/низ по Y)
+     *  сравниваются с такими же координатами остальных узлов, и если расстояние
+     *  меньше SNAP_THRESHOLD — позиция подтягивается ровно к линии другого узла.
+     *  Побочный эффект — выставляет snapGuideX/snapGuideY для отрисовки направляющей. */
+    private double[] snapPosition(SchemaNode moving, double candidateX, double candidateY) {
+        snapGuideX = null;
+        snapGuideY = null;
+        double w = moving.getWidth(), h = moving.getHeight();
+        double[] xCandidates = {candidateX, candidateX + w / 2, candidateX + w};
+        double[] yCandidates = {candidateY, candidateY + h / 2, candidateY + h};
+        double bestDx = SNAP_THRESHOLD, bestDy = SNAP_THRESHOLD;
+        double snappedX = candidateX, snappedY = candidateY;
+        for (SchemaNode other : nodes()) {
+            if (other == moving) {
+                continue;
+            }
+            double ow = other.getWidth(), oh = other.getHeight();
+            double[] oxs = {other.getX(), other.getX() + ow / 2, other.getX() + ow};
+            double[] oys = {other.getY(), other.getY() + oh / 2, other.getY() + oh};
+            for (double ox : oxs) {
+                for (double xc : xCandidates) {
+                    double d = Math.abs(xc - ox);
+                    if (d < bestDx) {
+                        bestDx = d;
+                        snappedX = candidateX + (ox - xc);
+                        snapGuideX = ox;
+                    }
+                }
+            }
+            for (double oy : oys) {
+                for (double yc : yCandidates) {
+                    double d = Math.abs(yc - oy);
+                    if (d < bestDy) {
+                        bestDy = d;
+                        snappedY = candidateY + (oy - yc);
+                        snapGuideY = oy;
+                    }
+                }
+            }
+        }
+        return new double[]{snappedX, snappedY};
     }
 
     private SchemaNode nodeAt(Point p) {
@@ -731,7 +851,7 @@ public class SchemaCanvasPanel extends JPanel {
         // значение без права выбора.
         Set<PowerConnectorType> hints = connectorHintsFor(edge);
         WireLabelDialog dlg = new WireLabelDialog(SwingUtilities.getWindowAncestor(this), model, mode, edge,
-                hints, lockedType, maxCount, maxCountReason);
+                hints, lockedType, maxCount, maxCountReason, settings.activeProfile().isFoolProofWiringEnabled());
         dlg.setVisible(true);
         if (!dlg.isConfirmed()) {
             return;
@@ -811,7 +931,23 @@ public class SchemaCanvasPanel extends JPanel {
         }
         return switch (mode) {
             case POWER -> model.powerChainsTouchingScreen(scr).size();
-            case SIGNAL -> model.signalChainsTouchingScreen(scr).size();
+            case SIGNAL -> {
+                // Резервный ПОРТ (chain.getBackupPortNumber()) — это loop-through на
+                // том же ряду кабинетов основной цепочки, а не отдельный объект
+                // SignalChain (в отличие от отдельной backup-цепочки, которая уже
+                // считается сама по себе) — физически это ВТОРОЙ кабель до экрана,
+                // который .size() ниже не видит вообще. Раньше это означало, что
+                // экран с одной цепочкой + резервным портом на ней показывал
+                // ёмкость "1", хотя по факту уже разведено 2 отдельных кабеля.
+                List<SignalChain> chains = model.signalChainsTouchingScreen(scr);
+                int backupPorts = 0;
+                for (SignalChain c : chains) {
+                    if (c.getBackupPortNumber() != null) {
+                        backupPorts++;
+                    }
+                }
+                yield chains.size() + backupPorts;
+            }
         };
     }
 
@@ -920,7 +1056,8 @@ public class SchemaCanvasPanel extends JPanel {
     }
 
     private void handleRightClick(MouseEvent e) {
-        SchemaNode hitNode = nodeAt(e.getPoint());
+        Point mp = toModel(e.getPoint());
+        SchemaNode hitNode = nodeAt(mp);
         if (hitNode != null) {
             selectedNode = hitNode;
             selectedEdge = null;
@@ -932,12 +1069,12 @@ public class SchemaCanvasPanel extends JPanel {
         // поэтому этот хит-тест что-то находит, только если ПКМ пришёлся по излому связи,
         // которая уже была выделена левым кликом — в этом случае показываем отдельное
         // меню одной точки, а не общее меню связи.
-        WaypointHit wpHit = waypointAt(e.getPoint());
+        WaypointHit wpHit = waypointAt(mp);
         if (wpHit != null) {
             showWaypointMenu(wpHit.edge(), wpHit.index(), e.getX(), e.getY());
             return;
         }
-        SchemaEdge hitEdge = edgeAt(e.getPoint());
+        SchemaEdge hitEdge = edgeAt(mp);
         if (hitEdge != null) {
             selectedEdge = hitEdge;
             selectedNode = null;
@@ -1045,6 +1182,27 @@ public class SchemaCanvasPanel extends JPanel {
         });
         menu.add(dashedItem);
 
+        javax.swing.JMenuItem colorItem = new javax.swing.JMenuItem("Цвет линии…");
+        colorItem.addActionListener(ev -> {
+            Color initial = edge.getColor() != null ? new Color(edge.getColor()) : Palette.MUTED;
+            Color chosen = javax.swing.JColorChooser.showDialog(this, "Цвет линии связи", initial);
+            if (chosen != null) {
+                model.setSchemaEdgeColor(edge, chosen.getRGB());
+                onChanged.run();
+                repaint();
+            }
+        });
+        menu.add(colorItem);
+        if (edge.getColor() != null) {
+            javax.swing.JMenuItem resetColor = new javax.swing.JMenuItem("Сбросить цвет линии");
+            resetColor.addActionListener(ev -> {
+                model.setSchemaEdgeColor(edge, null);
+                onChanged.run();
+                repaint();
+            });
+            menu.add(resetColor);
+        }
+
         javax.swing.JMenuItem straighten = new javax.swing.JMenuItem("Выпрямить");
         straighten.setEnabled(!edge.getWaypoints().isEmpty());
         straighten.addActionListener(ev -> {
@@ -1079,6 +1237,38 @@ public class SchemaCanvasPanel extends JPanel {
         menu.show(this, x, y);
     }
 
+    /** Подсказка при наведении на значок "⚠" перегруженного узла (Task #102) —
+     *  раньше пользователю приходилось открывать «Разъёмы питания…», чтобы понять,
+     *  чем именно вызвано предупреждение; теперь достаточно навести курсор. */
+    @Override
+    public String getToolTipText(MouseEvent e) {
+        // overloadIconRects хранит координаты в МОДЕЛЬНОМ пространстве (как и все
+        // остальные хит-тесты) — курсор нужно перевести через текущий scale, иначе
+        // подсказка перестаёт совпадать со значком при отличном от 1.0 масштабе.
+        Point mp = toModel(e.getPoint());
+        for (var entry : overloadIconRects.entrySet()) {
+            if (entry.getValue().contains(mp)) {
+                SchemaNode n = entry.getKey();
+                Scene loadScene = model.getCurrentScene();
+                if (loadScene == null) {
+                    return null;
+                }
+                com.vjstb.ledscheme.service.SchemaLoadCalc.NodeLoad load =
+                        com.vjstb.ledscheme.service.SchemaLoadCalc.evaluate(n, loadScene, model);
+                return "<html>Перегрузка узла «" + escapeHtml(n.getLabel() != null && !n.getLabel().isEmpty()
+                        ? n.getLabel() : n.getType().getLabel()) + "»<br>"
+                        + "Нагрузка через исходящие связи: " + UiKit.fmt(load.loadWatts()) + " Вт<br>"
+                        + "Ёмкость входных разъёмов: " + UiKit.fmt(load.capacityWatts()) + " Вт<br>"
+                        + "Подтвердить/изменить запас — «Разъёмы питания…» этого узла.</html>";
+            }
+        }
+        return null;
+    }
+
+    private static String escapeHtml(String s) {
+        return s == null ? "" : s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
     @Override
     public Dimension getPreferredSize() {
         double maxX = 800, maxY = 500;
@@ -1086,14 +1276,42 @@ public class SchemaCanvasPanel extends JPanel {
             maxX = Math.max(maxX, n.getX() + n.getWidth() + MARGIN);
             maxY = Math.max(maxY, n.getY() + n.getHeight() + MARGIN);
         }
-        return new Dimension((int) maxX, (int) maxY);
+        return new Dimension((int) Math.round(maxX * scale), (int) Math.round(maxY * scale));
     }
 
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
         Graphics2D g2 = (Graphics2D) g.create();
-        paint(g2, getWidth(), getHeight(), settings.activeProfile().isSchemaScreensAsWiringDiagram());
+        // Масштаб — только для ИНТЕРАКТИВНОГО вида (Ctrl+колесо, см. mouseWheelMoved);
+        // renderImage (экспорт пакета документации) вызывает paint(...) напрямую в
+        // обход этого метода и всегда рендерит в полном/логическом масштабе 1:1,
+        // независимо от того, что сейчас видно на экране у инженера.
+        g2.scale(scale, scale);
+        int logicalW = (int) Math.ceil(getWidth() / scale);
+        int logicalH = (int) Math.ceil(getHeight() / scale);
+        paint(g2, logicalW, logicalH, settings.activeProfile().isSchemaScreensAsWiringDiagram());
+        drawSnapGuides(g2, logicalW, logicalH);
+        g2.dispose();
+    }
+
+    /** Направляющие линии привязки (Shift-перетаскивание, см. snapPosition) — яркая
+     *  пунктирная линия через всю видимую область, как в yEd Graph Editor, показывает
+     *  С ЧЕМ ИМЕННО сейчас выровнен перетаскиваемый узел. */
+    private void drawSnapGuides(Graphics2D g2, int width, int height) {
+        if (snapGuideX == null && snapGuideY == null) {
+            return;
+        }
+        g2.setColor(Color.MAGENTA);
+        g2.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 0, new float[]{4, 4}, 0));
+        if (snapGuideX != null) {
+            int x = (int) Math.round(snapGuideX);
+            g2.drawLine(x, 0, x, height);
+        }
+        if (snapGuideY != null) {
+            int y = (int) Math.round(snapGuideY);
+            g2.drawLine(0, y, width, y);
+        }
     }
 
     /** Рендерит схему в изображение заданного размера — не зависит от реального
@@ -1141,7 +1359,8 @@ public class SchemaCanvasPanel extends JPanel {
                 continue;
             }
             boolean selected = edge == selectedEdge;
-            g2.setColor(selected ? Palette.ACCENT : Palette.MUTED);
+            Color customColor = edge.getColor() != null ? new Color(edge.getColor()) : null;
+            g2.setColor(selected ? Palette.ACCENT : customColor != null ? customColor : Palette.MUTED);
             float strokeWidth = selected ? 3f : 2f;
             // Пунктир — переключатель "Пунктиром" в контекстном меню связи (Task #85/v1.4),
             // например для обходного/резервного/мониторингового пути, как в референсном PDF.
@@ -1214,6 +1433,7 @@ public class SchemaCanvasPanel extends JPanel {
 
         Font titleFont = getFont().deriveFont(Font.BOLD, 12f);
         Font metaFont = getFont().deriveFont(10f);
+        overloadIconRects.clear();
         for (SchemaNode n : ns) {
             boolean selected = n == selectedNode;
             boolean pending = n.getId().equals(connectPendingId);
@@ -1267,7 +1487,12 @@ public class SchemaCanvasPanel extends JPanel {
             if (overloaded) {
                 g2.setColor(Palette.WARN);
                 g2.setFont(titleFont);
-                g2.drawString("⚠", (int) n.getX() + nw - 20, (int) n.getY() + 16);
+                int iconX = (int) n.getX() + nw - 20;
+                int iconY = (int) n.getY() + 16;
+                g2.drawString("⚠", iconX, iconY);
+                // Небольшой запас вокруг символа — попадание курсором в сам глиф
+                // (не только в его базовую линию) для подсказки ниже.
+                overloadIconRects.put(n, new java.awt.Rectangle(iconX - 2, iconY - 14, 20, 18));
             }
 
             // Уголок изменения размера — маленький треугольник в правом нижнем углу,
@@ -1322,7 +1547,7 @@ public class SchemaCanvasPanel extends JPanel {
                 + (controllerBackups > 0 ? " · резерв контроллера: " + controllerBackups : "");
     }
 
-    /** Краткая сводка ВХОДНЫХ гнёзд узла-экрана вида «2×PowerCon, 1×Cat6/RJ45» —
+    /** Краткая сводка ВХОДНЫХ гнёзд узла-экрана вида «2×PowerCon, 1×Ethernet» —
      *  показывает автоматически отслеженные гнёзда (см. AppModel.addPowerChain/
      *  addSignalChain) прямо в блоке экрана, без переключения на подробную схему
      *  расключения. */

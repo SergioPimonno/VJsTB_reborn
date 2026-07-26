@@ -40,7 +40,7 @@ public class WireLabelDialog extends JDialog {
             "CEE 125A", "CEE 63A", "CEE 32A", "CEE 16A", "Schuko", "Переходник CEE-Schuko", "ВВГ 5х6"
     };
     private static final String[] SIGNAL_PRESETS = {
-            "SDI", "HDMI", "DisplayPort", "DVI", "Fiber", "Cat6/RJ45", "Genlock (SDI)", "XLR"
+            "SDI", "HDMI", "DisplayPort", "DVI", "Fiber", "Ethernet", "Genlock (SDI)", "XLR", "USB-C", "Thunderbolt"
     };
 
     private final AppModel model;
@@ -65,7 +65,7 @@ public class WireLabelDialog extends JDialog {
      *  тип не определён или не применимо (например, режим «Сигнал») — список не сужается. */
     public WireLabelDialog(Window owner, AppModel model, SchemaMode mode, SchemaEdge edge,
                             Set<PowerConnectorType> connectorHints) {
-        this(owner, model, mode, edge, connectorHints, null, null, null);
+        this(owner, model, mode, edge, connectorHints, null, null, null, true);
     }
 
     /** lockedConnectorType — если связь заведена через конкретные гнёзда разъёмов
@@ -80,15 +80,21 @@ public class WireLabelDialog extends JDialog {
      *  (обычная связь узел-узел). maxCountReason — какой из ДВУХ концов связи сейчас
      *  определяет этот предел (лимит — минимум из обоих гнёзд, см. Task #70): без
      *  этого уточнения кажется багом, если у одного узла разъёмов явно больше, чем
-     *  показанный максимум — на самом деле лимитирует ДРУГОЙ конец связи. */
+     *  показанный максимум — на самом деле лимитирует ДРУГОЙ конец связи.
+     *  enforceCap — жёстко ограничивать спиннер числом maxCount (обычное поведение,
+     *  часть «Защиты от дурака»): при выключенной защите инженер может знать про
+     *  особый случай (например, физически смонтированный лишний резервный кабель),
+     *  который расчёт не учитывает — тогда ограничение снимается целиком (до 999),
+     *  а не просто ослабляется, иначе оно бы просто перепрыгнуло к другому пределу
+     *  без реальной возможности переопределить как считает нужным сам инженер. */
     public WireLabelDialog(Window owner, AppModel model, SchemaMode mode, SchemaEdge edge,
                             Set<PowerConnectorType> connectorHints, String lockedConnectorType, Integer maxCount,
-                            String maxCountReason) {
+                            String maxCountReason, boolean enforceCap) {
         super(owner, "Подпись связи (коммутация)", ModalityType.APPLICATION_MODAL);
         this.model = model;
         this.mode = mode;
 
-        int spinnerMax = maxCount != null ? maxCount : 999;
+        int spinnerMax = enforceCap && maxCount != null ? maxCount : 999;
         countSpinner.setModel(new SpinnerNumberModel(1, 1, spinnerMax, 1));
         MathFields.enableExpressions(countSpinner);
 
@@ -142,7 +148,8 @@ public class WireLabelDialog extends JDialog {
 
         if (maxCount != null) {
             String text = "Максимум линий на этом гнезде: " + maxCount
-                    + (maxCountReason != null ? " (ограничивает: " + maxCountReason + ")" : "");
+                    + (maxCountReason != null ? " (ограничивает: " + maxCountReason + ")" : "")
+                    + (enforceCap ? "" : " — защита от дурака выключена, ограничение не применяется");
             JLabel capHint = new JLabel("<html>" + text + "</html>");
             capHint.setForeground(Palette.MUTED);
             form.add(new JLabel());

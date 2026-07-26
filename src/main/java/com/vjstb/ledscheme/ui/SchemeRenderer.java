@@ -214,7 +214,7 @@ public final class SchemeRenderer {
         // кабель на тот же ряд панелей), т.е. у обеих один и тот же первый кабинет;
         // рисовать подписи независимо, как раньше, означало, что вторая просто
         // затирала первую в том же самом месте — теперь обе подписи одной плашкой.
-        Map<String, List<String>> startLabelsByCabinet = new LinkedHashMap<>();
+        Map<String, List<LabelLine>> startLabelsByCabinet = new LinkedHashMap<>();
         // Резервный порт (Task #32/#48): назначается ОДНИМ полем на цепочке
         // (backupPortNumber) — обычно физически это тот же ряд кабинетов, дальний
         // конец которого дополнительно заведён в резервный порт (loop-through), а не
@@ -222,11 +222,11 @@ public final class SchemeRenderer {
         // кабинете цепочки — так же, как уже показывалось в интерактивном paintScheme
         // (см. signalChainEndLabel), только раньше этого не было в этом, "богатом",
         // виде схемы вовсе.
-        Map<String, List<String>> endLabelsByCabinet = new LinkedHashMap<>();
+        Map<String, List<LabelLine>> endLabelsByCabinet = new LinkedHashMap<>();
         if (power) {
             for (PowerChain chain : powerChains) {
                 drawChainWithDots(g2, scr, chain.getCabinetInstanceIds(), cellW, cellH, offX, offY, type, workspace, false);
-                addStartLabel(startLabelsByCabinet, chain.getCabinetInstanceIds(), "L" + chain.getPhase());
+                addStartLabel(startLabelsByCabinet, chain.getCabinetInstanceIds(), new LabelLine("L" + chain.getPhase(), false));
             }
         } else {
             for (SignalChain chain : signalChains) {
@@ -234,13 +234,18 @@ public final class SchemeRenderer {
                         chain.isBackup());
                 if (chain.getPortNumber() != null) {
                     String lbl = portLabel(scr, workspace, chain.getPortNumber());
+                    // Раньше резервная цепочка получала префикс "рез:" — на мелких
+                    // ячейках плашки бейджа он не помещался и обрезался до нечитаемого
+                    // "pe...". Различаем резерв ЦВЕТОМ текста (см. drawStartLabelBadge),
+                    // а не текстом, который всё равно негде показать целиком.
                     addStartLabel(startLabelsByCabinet, chain.getCabinetInstanceIds(),
-                            chain.isBackup() ? "рез:" + lbl : lbl);
+                            new LabelLine(lbl, chain.isBackup()));
                 }
                 if (chain.getBackupPortNumber() != null && !chain.getCabinetInstanceIds().isEmpty()) {
-                    String endLbl = "рез:" + portLabel(scr, workspace, chain.getBackupPortNumber());
+                    String endLbl = portLabel(scr, workspace, chain.getBackupPortNumber());
                     List<String> ids = chain.getCabinetInstanceIds();
-                    endLabelsByCabinet.computeIfAbsent(ids.get(ids.size() - 1), k -> new ArrayList<>()).add(endLbl);
+                    endLabelsByCabinet.computeIfAbsent(ids.get(ids.size() - 1), k -> new ArrayList<>())
+                            .add(new LabelLine(endLbl, true));
                 }
             }
         }
@@ -261,7 +266,14 @@ public final class SchemeRenderer {
         }
     }
 
-    private static void addStartLabel(Map<String, List<String>> byCabinet, List<String> chainIds, String label) {
+    /** Одна строка плашки-подписи: текст + признак «это резервный порт/цепочка» —
+     *  раньше резерв отмечался префиксом "рез:" в самом тексте, но на мелких ячейках
+     *  плашка обрезала его до нечитаемого "pe...". Различаем резерв ЦВЕТОМ строки
+     *  (см. drawStartLabelBadge) вместо текста, которому всё равно негде поместиться. */
+    private record LabelLine(String text, boolean backup) {
+    }
+
+    private static void addStartLabel(Map<String, List<LabelLine>> byCabinet, List<String> chainIds, LabelLine label) {
         if (chainIds.isEmpty()) {
             return;
         }
@@ -276,7 +288,7 @@ public final class SchemeRenderer {
      *  ПОСЛЕДНЕМ кабинете цепочки — не должна перекрывать подпись начала другой
      *  цепочки, если та начинается в этой же ячейке). */
     private static void drawStartLabelBadge(Graphics2D g2, CabinetInstance cab, int cellW, int cellH,
-                                             int offX, int offY, List<String> lines, boolean bottomRight) {
+                                             int offX, int offY, List<LabelLine> lines, boolean bottomRight) {
         int minCell = Math.min(cellW, cellH);
         int x = offX + cab.getColIndex() * cellW;
         int y = offY + cab.getRowIndex() * cellH;
@@ -285,8 +297,8 @@ public final class SchemeRenderer {
         java.awt.FontMetrics fm = g2.getFontMetrics();
         int pad = 2;
         int maxTextW = 0;
-        for (String line : lines) {
-            maxTextW = Math.max(maxTextW, fm.stringWidth(line));
+        for (LabelLine line : lines) {
+            maxTextW = Math.max(maxTextW, fm.stringWidth(line.text()));
         }
         int tw = Math.min(cellW - 2, maxTextW + pad * 2);
         int lineH = fm.getHeight();
@@ -295,10 +307,10 @@ public final class SchemeRenderer {
         int by = bottomRight ? y + cellH - th - 1 : y + 1;
         g2.setColor(new Color(0, 0, 0, 190));
         g2.fillRoundRect(bx, by, tw, th, 4, 4);
-        g2.setColor(Color.WHITE);
         int ty = by + fm.getAscent();
-        for (String line : lines) {
-            g2.drawString(clipToWidth(g2, line, tw - pad * 2), bx + pad, ty);
+        for (LabelLine line : lines) {
+            g2.setColor(line.backup() ? Color.ORANGE : Color.WHITE);
+            g2.drawString(clipToWidth(g2, line.text(), tw - pad * 2), bx + pad, ty);
             ty += lineH;
         }
     }
