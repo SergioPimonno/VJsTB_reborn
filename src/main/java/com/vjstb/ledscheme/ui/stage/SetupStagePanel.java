@@ -8,6 +8,7 @@ import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.SceneStats;
 import com.vjstb.ledscheme.ui.CabinetTypeRenderer;
 import com.vjstb.ledscheme.ui.ListSizing;
+import com.vjstb.ledscheme.ui.MathFields;
 import com.vjstb.ledscheme.ui.NamedRenderer;
 import com.vjstb.ledscheme.ui.Palette;
 import com.vjstb.ledscheme.ui.ShapeEditorPanel;
@@ -241,7 +242,10 @@ public class SetupStagePanel extends JPanel {
     private JPanel buildScreens() {
         JPanel body = UiKit.vbox();
         screenList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        screenList.setCellRenderer(new NamedRenderer<Screen>(Screen::getName, s -> s.getCols() + "×" + s.getRows()));
+        screenList.setCellRenderer(new NamedRenderer<Screen>(Screen::getName, s -> {
+            CabinetType ct = model.typeOf(s);
+            return s.getCols() + "×" + s.getRows() + (ct != null ? " · " + ct.getName() : "");
+        }));
         screenList.addListSelectionListener(e -> {
             if (refreshing || e.getValueIsAdjusting()) return;
             Screen s = screenList.getSelectedValue();
@@ -326,6 +330,7 @@ public class SetupStagePanel extends JPanel {
 
         body.add(UiKit.vgap(10));
         body.add(UiKit.formRow("Точек подвеса", pRiggingPoints));
+        MathFields.enableExpressions(pRiggingPoints);
         body.add(UiKit.vgap());
         body.add(UiKit.formRow("Заметки по подвесу", pRiggingNotes));
         body.add(UiKit.vgap());
@@ -382,8 +387,10 @@ public class SetupStagePanel extends JPanel {
         body.add(UiKit.formRow("Кабинет", pType));
         body.add(UiKit.vgap());
         body.add(UiKit.formRow("Колонны", pCols));
+        MathFields.enableExpressions(pCols);
         body.add(UiKit.vgap());
         body.add(UiKit.formRow("Строки", pRows));
+        MathFields.enableExpressions(pRows);
 
         body.add(UiKit.vgap(10));
         body.add(UiKit.formRow("X (мм)", pX));
@@ -628,10 +635,7 @@ public class SetupStagePanel extends JPanel {
     }
 
     private static double parseDouble(String s) {
-        try {
-            return Double.parseDouble(s.trim().replace(',', '.'));
-        } catch (NumberFormatException e) {
-            return 0;
-        }
+        Double v = com.vjstb.ledscheme.ui.MathExpr.tryEval(s);
+        return v != null ? v : 0;
     }
 }

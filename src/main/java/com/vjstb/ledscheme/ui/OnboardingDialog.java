@@ -3,12 +3,14 @@ package com.vjstb.ledscheme.ui;
 import com.formdev.flatlaf.FlatDarkLaf;
 import com.formdev.flatlaf.FlatLightLaf;
 import com.vjstb.ledscheme.AppInfo;
+import com.vjstb.ledscheme.settings.ContentSection;
 import com.vjstb.ledscheme.settings.SettingsManager;
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
 import java.awt.Component;
 import java.awt.FlowLayout;
 import java.awt.Window;
+import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
@@ -30,26 +32,54 @@ import javax.swing.UIManager;
  */
 public class OnboardingDialog extends JDialog {
 
+    private static final String CONTENT_KEY = "onboarding";
     private static final String[] STEPS = {"welcome", "theme", "personalization"};
+
+    /** Только шаги «welcome» и «personalization» — текст (заголовок+тело), полностью
+     *  переписываемый через ContentEditorDialog. Шаг «theme» с переключателями темы
+     *  оформления остаётся функциональным/не редактируемым как текст. */
+    private static final List<ContentSection> DEFAULT_SECTIONS = List.of(
+            new ContentSection("LED Scheme Designer v" + AppInfo.VERSION,
+                    "Приложение для проектирования схем коммутации LED-экранов и видеосопровождения: "
+                    + "проекты → сцены → экраны → LED cabinets, библиотека оборудования, схемы расключения "
+                    + "питания и сигнала."
+                    + "<br><br>Этот короткий тур поможет настроить пару вещей перед началом работы — его можно "
+                    + "пропустить и открыть заново в любой момент через «Настройки → Показать приветствие снова…»."),
+            new ContentSection("Остальная персонализация",
+                    "В верхнем меню «Персонализация» — три независимых окна:"
+                    + "<br>· <b>Цвета и профили</b> — цвета фаз питания/сигнальных цепочек, несколько именованных "
+                    + "профилей персонализации."
+                    + "<br>· <b>Предпочтения</b> — поведенческие переключатели (мини-превью сцены, привязка "
+                    + "перетаскивания, коммутация через гнёзда, «защита от дурака», контроль электрической нагрузки "
+                    + "и другие)."
+                    + "<br>· <b>Горячие клавиши</b> — переназначение любых сочетаний клавиш/мыши под себя."
+                    + "<br><br>В «Настройки» — ссылка на баг-трекер и информация о версии."
+                    + "<br><br>Подробное руководство по работе со схемами, цепочками и картами — в «Справка → "
+                    + "Горячие клавиши» и на панели инструментов каждого этапа."));
 
     private final CardLayout cards = new CardLayout();
     private final JPanel cardsPanel = new JPanel(cards);
     private final JButton back = new JButton("Назад");
     private final JButton next = new JButton("Далее");
     private final JButton finish = new JButton("Готово");
+    private final SettingsManager settings;
+    private JPanel welcomePanel;
+    private JPanel personalizationPanel;
     private int step = 0;
 
     public OnboardingDialog(Window owner, SettingsManager settings) {
         super(owner, "Добро пожаловать", ModalityType.APPLICATION_MODAL);
+        this.settings = settings;
 
-        cardsPanel.add(buildWelcomeStep(), STEPS[0]);
+        rebuildTextSteps();
         cardsPanel.add(buildThemeStep(owner), STEPS[1]);
-        cardsPanel.add(buildPersonalizationStep(), STEPS[2]);
 
         JPanel content = new JPanel(new BorderLayout());
         content.add(cardsPanel, BorderLayout.CENTER);
 
         JPanel nav = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 8));
+        JButton editText = new JButton("✎ Редактировать текст");
+        editText.addActionListener(e -> openEditor());
         JButton skip = new JButton("Пропустить");
         skip.addActionListener(e -> {
             settings.setOnboardingCompleted(true);
@@ -61,6 +91,7 @@ public class OnboardingDialog extends JDialog {
             settings.setOnboardingCompleted(true);
             dispose();
         });
+        nav.add(editText);
         nav.add(skip);
         nav.add(back);
         nav.add(next);
@@ -71,6 +102,41 @@ public class OnboardingDialog extends JDialog {
         setSize(480, 360);
         setLocationRelativeTo(owner);
         goTo(0);
+    }
+
+    private List<ContentSection> sections() {
+        List<ContentSection> custom = settings.getCustomContent(CONTENT_KEY);
+        return custom != null && custom.size() == DEFAULT_SECTIONS.size() ? custom : DEFAULT_SECTIONS;
+    }
+
+    /** Пересобирает ТОЛЬКО текстовые шаги (welcome/personalization) — «theme» с
+     *  переключателями темы строится один раз в конструкторе и не трогается при
+     *  редактировании текста. CardLayout.add с уже занятым именем не убирает
+     *  СТАРЫЙ компонент из контейнера сам — убираем его явно, иначе он остаётся
+     *  осиротевшим потомком cardsPanel при каждом повторном редактировании. */
+    private void rebuildTextSteps() {
+        List<ContentSection> s = sections();
+        if (welcomePanel != null) {
+            cardsPanel.remove(welcomePanel);
+        }
+        welcomePanel = step(s.get(0).getTitle(), s.get(0).getBodyHtml());
+        cardsPanel.add(welcomePanel, STEPS[0]);
+
+        if (personalizationPanel != null) {
+            cardsPanel.remove(personalizationPanel);
+        }
+        personalizationPanel = step(s.get(1).getTitle(), s.get(1).getBodyHtml());
+        cardsPanel.add(personalizationPanel, STEPS[2]);
+    }
+
+    private void openEditor() {
+        ContentEditorDialog dlg = new ContentEditorDialog(this, "Редактировать текст приветствия", sections(),
+                DEFAULT_SECTIONS, saved -> {
+                    settings.setCustomContent(CONTENT_KEY, saved);
+                    rebuildTextSteps();
+                    cards.show(cardsPanel, STEPS[step]);
+                });
+        dlg.setVisible(true);
     }
 
     private void goTo(int newStep) {
@@ -95,15 +161,6 @@ public class OnboardingDialog extends JDialog {
         body.setAlignmentX(Component.LEFT_ALIGNMENT);
         p.add(body);
         return p;
-    }
-
-    private JPanel buildWelcomeStep() {
-        return step("LED Scheme Designer v" + AppInfo.VERSION,
-                "Приложение для проектирования схем коммутации LED-экранов и видеосопровождения: "
-                        + "проекты → сцены → экраны → LED cabinets, библиотека оборудования, схемы расключения "
-                        + "питания и сигнала."
-                        + "<br><br>Этот короткий тур поможет настроить пару вещей перед началом работы — его можно "
-                        + "пропустить и открыть заново в любой момент через «Настройки → Показать приветствие снова…».");
     }
 
     private JPanel buildThemeStep(Window owner) {
@@ -138,16 +195,4 @@ public class OnboardingDialog extends JDialog {
         }
     }
 
-    private JPanel buildPersonalizationStep() {
-        return step("Остальная персонализация", "В верхнем меню «Персонализация» — три независимых окна:"
-                + "<br>· <b>Цвета и профили</b> — цвета фаз питания/сигнальных цепочек, несколько именованных "
-                + "профилей персонализации."
-                + "<br>· <b>Предпочтения</b> — поведенческие переключатели (мини-превью сцены, привязка "
-                + "перетаскивания, коммутация через гнёзда, «защита от дурака», контроль электрической нагрузки "
-                + "и другие)."
-                + "<br>· <b>Горячие клавиши</b> — переназначение любых сочетаний клавиш/мыши под себя."
-                + "<br><br>В «Настройки» — ссылка на баг-трекер и информация о версии."
-                + "<br><br>Подробное руководство по работе со схемами, цепочками и картами — в «Справка → "
-                + "Горячие клавиши» и на панели инструментов каждого этапа.");
-    }
 }

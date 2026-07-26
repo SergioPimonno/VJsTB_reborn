@@ -78,7 +78,7 @@ public class MainFrame extends JFrame {
         javax.swing.JButton guideBtn = new javax.swing.JButton("📖 Руководство");
         guideBtn.setToolTipText("Как пользоваться: построение цепочек, контроллеры/порты, радиальное меню,"
                 + " коммутация через гнёзда, библиотека карт");
-        guideBtn.addActionListener(e -> new GuideDialog(this).setVisible(true));
+        guideBtn.addActionListener(e -> new GuideDialog(this, settings).setVisible(true));
         toolRow.add(undoButton);
         toolRow.add(guideBtn);
         toolRow.add(shortcutsBtn);

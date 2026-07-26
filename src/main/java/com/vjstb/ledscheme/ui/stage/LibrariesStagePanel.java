@@ -65,6 +65,20 @@ public class LibrariesStagePanel extends JPanel {
     private final JList<CableType> cableList = new JList<>(cableModel);
     private final JScrollPane cableScroll = new JScrollPane(cableList);
 
+    private javax.swing.JComponent exportImportSection;
+    private javax.swing.JComponent cabinetsSection;
+    private javax.swing.JComponent controllersSection;
+    private javax.swing.JComponent powerPresetsSection;
+    private javax.swing.JComponent signalEquipmentSection;
+    private javax.swing.JComponent cableSection;
+
+    /** Ширина содержимого этапа (окно минус вертикальный скроллбар минус паддинг
+     *  body) — пересчитывается живьём при ресайзе (см. конструктор), а не
+     *  фиксируется один раз при первой сборке, иначе список либо "утекает" за
+     *  край при узком окне, либо оставляет пустое место при широком (Task #100 —
+     *  повторный баг-репорт после промежуточного фикса с жёстким capWidth=720). */
+    private int contentWidth = 700;
+
     public LibrariesStagePanel(AppModel model) {
         this.model = model;
         setLayout(new BorderLayout());
@@ -73,27 +87,21 @@ public class LibrariesStagePanel extends JPanel {
         body.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
         // Секции (UiKit.section) сами по себе НАМЕРЕННО безграничны по ширине
         // (см. UiKit.recapHeight — фиксирует только высоту), чтобы заголовок с
-        // рамкой красиво тянулся во всю ширину этапа. Но после того как списки
-        // внутри перестали растягиваться (см. ListSizing.fit(..., true)), это
-        // обернулось ДРУГИМ видом той же жалобы: компактный список внутри —
-        // и большая пустая серая область справа ВНУТРИ рамки секции. Ограничиваем
-        // ширину самой рамки секции здесь же, а не меняем общее поведение
-        // UiKit.section (которым пользуются и другие этапы) — баг-репорт со
-        // скриншотом собранного релиза, Task #100/v1.4.1.
-        javax.swing.JComponent exportImportSection = (javax.swing.JComponent) UiKit.section(
+        // рамкой красиво тянулся во всю ширину этапа — оставляем как есть, но
+        // ЖИВЬЁМ ограничиваем эту ширину реальной шириной вьюпорта этапа (за
+        // вычетом вертикального скроллбара, который сам JViewport уже не считает
+        // своей шириной) через applyContentWidth ниже, а не один раз фиксированным
+        // числом при сборке — иначе при широком окне остаётся пустое место, а при
+        // узком содержимое вылезает за край (Task #100, повторный баг-репорт).
+        exportImportSection = (javax.swing.JComponent) UiKit.section(
                 "Экспорт / импорт библиотек",
                 new com.vjstb.ledscheme.ui.LibraryExportImportPanel(model));
-        javax.swing.JComponent cabinetsSection = buildLibrary();
-        javax.swing.JComponent controllersSection = buildControllerLibrary();
-        javax.swing.JComponent powerPresetsSection = buildEquipmentPresetSection(SchemaMode.POWER,
+        cabinetsSection = buildLibrary();
+        controllersSection = buildControllerLibrary();
+        powerPresetsSection = buildEquipmentPresetSection(SchemaMode.POWER,
                 "Оборудование питания (пресеты для схемы)", powerPresetList, powerPresetScroll);
-        javax.swing.JComponent signalEquipmentSection = buildSignalEquipmentSection();
-        javax.swing.JComponent cableSection = buildCableLibrary();
-        for (javax.swing.JComponent section : new javax.swing.JComponent[]{
-                exportImportSection, cabinetsSection, controllersSection, powerPresetsSection,
-                signalEquipmentSection, cableSection}) {
-            capSectionWidth(section, 720);
-        }
+        signalEquipmentSection = buildSignalEquipmentSection();
+        cableSection = buildCableLibrary();
         body.add(exportImportSection);
         body.add(UiKit.vgap(10));
         body.add(cabinetsSection);
@@ -116,15 +124,51 @@ public class LibrariesStagePanel extends JPanel {
             sp.setMinimumSize(new Dimension(200, 80));
         }
 
+        // scroll.getViewport().getWidth() УЖЕ не включает ширину вертикального
+        // скроллбара (она "снаружи" вьюпорта) — не нужно вычитать её вручную.
+        scroll.getViewport().addComponentListener(new java.awt.event.ComponentAdapter() {
+            @Override
+            public void componentResized(java.awt.event.ComponentEvent e) {
+                applyContentWidth(scroll.getViewport().getWidth());
+            }
+        });
+
         model.addListener(this::refresh);
         refresh();
     }
 
-    /** Ограничивает МАКСИМАЛЬНУЮ ширину секции (см. комментарий в конструкторе) —
-     *  высоту, которую уже зафиксировал UiKit.recapHeight, не трогаем. */
-    private static void capSectionWidth(javax.swing.JComponent section, int maxWidth) {
-        Dimension current = section.getMaximumSize();
-        section.setMaximumSize(new Dimension(maxWidth, current.height));
+    /** Пересчитывает ширину секций и вложенных списков под реальную ширину
+     *  вьюпорта этапа — вызывается и живьём при ресайзе окна, и из refresh()
+     *  (последним известным значением), чтобы обновление данных не сбрасывало
+     *  подстроенную ширину обратно на дефолт. */
+    private void applyContentWidth(int viewportWidth) {
+        if (viewportWidth <= 0) {
+            return;
+        }
+        contentWidth = Math.max(320, viewportWidth - 20 /* паддинг body */);
+        if (exportImportSection != null) {
+            // Статичное содержимое (без списков) — высота не меняется, capSectionWidth
+            // здесь просто переустанавливает предыдущую высоту с новой шириной.
+            Dimension current = exportImportSection.getMaximumSize();
+            exportImportSection.setMaximumSize(new Dimension(contentWidth, current.height));
+            exportImportSection.revalidate();
+        }
+        refresh();
+    }
+
+    private int listWidth() {
+        // Заголовок секции + её внутренние отступы (см. UiKit.sectionPanel) съедают
+        // часть ширины — запас, чтобы список не вылезал за рамку секции и не получал
+        // свой собственный горизонтальный скроллбар из-за пары лишних пикселей.
+        return Math.max(200, contentWidth - 60);
+    }
+
+    /** Пересчитывает МАКСИМАЛЬНУЮ ширину (см. applyContentWidth) И высоту секции по
+     *  ЖИВОМУ preferredSize (не setPreferredSize — тот бы заморозил значение и
+     *  сломал пересчёт при следующем изменении числа строк списка внутри) — для
+     *  секций со списком, чьё содержимое (число строк) меняется после сборки. */
+    private void recapSection(javax.swing.JComponent section) {
+        section.setMaximumSize(new Dimension(contentWidth, section.getPreferredSize().height));
     }
 
     // ---- библиотека кабинетов ----
@@ -136,7 +180,6 @@ public class LibrariesStagePanel extends JPanel {
                 UiKit.fmt(ct.getWidthMm()) + "×" + UiKit.fmt(ct.getHeightMm()) + "мм · "
                         + ct.getResolutionWidth() + "×" + ct.getResolutionHeight() + "px · "
                         + UiKit.fmt(ct.getPowerConsumptionW()) + "Вт · " + UiKit.fmt(ct.getWeightKg()) + "кг"));
-        libScroll.setPreferredSize(new Dimension(520, 160));
         body.add(libScroll);
 
         JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
@@ -163,7 +206,7 @@ public class LibrariesStagePanel extends JPanel {
         crud.add(edit);
         crud.add(del);
         body.add(crud);
-        return (JPanel) UiKit.section("Библиотека кабинетов", body);
+        return (JPanel) UiKit.dynamicSection("Библиотека кабинетов", body);
     }
 
     // ---- библиотека контроллеров (аналог SmartLCT) ----
@@ -181,7 +224,6 @@ public class LibrariesStagePanel extends JPanel {
                                         + (ct.inputPortTypesSummary().isEmpty() ? "" : " (" + ct.inputPortTypesSummary() + ")")
                                 : "")
                         + (ct.isLoopPort() ? " · Loop" : "")));
-        ctrlLibScroll.setPreferredSize(new Dimension(560, 160));
         body.add(ctrlLibScroll);
 
         JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
@@ -222,7 +264,7 @@ public class LibrariesStagePanel extends JPanel {
         body.add(UiKit.vgap(6));
         body.add(UiKit.muted("<html>Для модульных контроллеров (например, Novastar H-серии) задайте карты"
                 + " вывода вместо ручного числа портов — «Вых. портов» выше тогда считается по картам.</html>"));
-        return (JPanel) UiKit.section("Библиотека контроллеров", body);
+        return (JPanel) UiKit.dynamicSection("Библиотека контроллеров", body);
     }
 
     // ---- пресеты оборудования (для схемы питания/сигнала) ----
@@ -237,7 +279,6 @@ public class LibrariesStagePanel extends JPanel {
                         + (mode == SchemaMode.POWER
                                 ? "разъёмов: " + p.getPowerConnectors().size()
                                 : "карт: " + p.getCards().size())));
-        presetScroll.setPreferredSize(new Dimension(420, 160));
         body.add(presetScroll);
 
         JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
@@ -286,7 +327,7 @@ public class LibrariesStagePanel extends JPanel {
         body.add(UiKit.muted("<html>Пресеты доступны при добавлении узла в общей схеме "
                 + (mode == SchemaMode.POWER ? "питания" : "сигнала")
                 + " (категория узла подставляет сначала пресеты этой категории, затем — свой текст).</html>"));
-        return (JPanel) UiKit.section(title, body);
+        return (JPanel) UiKit.dynamicSection(title, body);
     }
 
     // ---- библиотека кабелей/переходников (WireLabelDialog/PowerConnectorsConfigDialog) ----
@@ -296,7 +337,6 @@ public class LibrariesStagePanel extends JPanel {
         cableList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         cableList.setCellRenderer(new NamedRenderer<CableType>(
                 c -> (c.getMode() == SchemaMode.POWER ? "[Питание] " : "[Сигнал] ") + c.getLabel(), c -> ""));
-        cableScroll.setPreferredSize(new Dimension(380, 160));
         body.add(cableScroll);
 
         JPanel addRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
@@ -325,7 +365,7 @@ public class LibrariesStagePanel extends JPanel {
                 + "выберите разъём и исполнение («папа»/«мама») на каждом конце — подпись соберётся "
                 + "автоматически. Также предлагаются вдобавок к встроенным при подписи связи схемы и при "
                 + "заведении разъёмов распределения, откуда их можно сохранить кнопкой «В библиотеку кабелей»."));
-        return (JPanel) UiKit.section("Кабели", body);
+        return (JPanel) UiKit.dynamicSection("Кабели", body);
     }
 
     // ---- оборудование сигнала: слева тип оборудования, справа его карты-шаблоны ----
@@ -336,7 +376,6 @@ public class LibrariesStagePanel extends JPanel {
                 p -> p.getName() + " (" + p.getCategory().getLabel() + ")",
                 p -> (p.getDescription() == null || p.getDescription().isEmpty() ? "" : p.getDescription() + " · ")
                         + "карт: " + p.getCards().size()));
-        signalPresetScroll.setPreferredSize(new Dimension(260, 220));
         signalPresetScroll.setMinimumSize(new Dimension(180, 120));
 
         JPanel left = UiKit.vbox();
@@ -375,7 +414,6 @@ public class LibrariesStagePanel extends JPanel {
 
         signalCardList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         signalCardList.setCellRenderer(new NamedRenderer<SchemaCard>(SchemaCard::getName, SchemaCard::portsSummary));
-        signalCardScroll.setPreferredSize(new Dimension(300, 220));
         signalCardScroll.setMinimumSize(new Dimension(200, 120));
 
         JPanel right = UiKit.vbox();
@@ -422,13 +460,10 @@ public class LibrariesStagePanel extends JPanel {
         split.setResizeWeight(0.45);
         split.setBorder(BorderFactory.createEmptyBorder());
         split.setContinuousLayout(true);
-        // JSplitPane сам по себе безграничен по ширине (как и большинство JComponent),
-        // поэтому в BoxLayout секции (на всю ширину этапа, без своей колонки-обёртки
-        // фиксированной ширины) он растягивался на всё окно и раздавал лишнюю ширину
-        // ОБЕИМ половинам по resizeWeight — даже после того, как сами списки внутри
-        // получили ограничение по ширине (см. ListSizing.fit(..., true) выше). Явный
-        // предел здесь — тот же класс бага, что и с самими списками (Task #95/v1.5).
-        split.setMaximumSize(new Dimension(620, Integer.MAX_VALUE));
+        // Раньше здесь был отдельный жёсткий предел ширины (Task #95/v1.5) — больше
+        // не нужен: ширина уже ограничена на уровне секции (см. applyContentWidth),
+        // а BorderLayout/BoxLayout сами передают эту фактическую ширину вниз до
+        // split, не требуя дублирующего предела здесь же.
 
         JPanel body = UiKit.vbox();
         body.add(split);
@@ -436,35 +471,45 @@ public class LibrariesStagePanel extends JPanel {
         body.add(UiKit.muted("<html>Пресеты доступны при добавлении узла в общей схеме сигнала (категория"
                 + " узла подставляет сначала пресеты этой категории, затем — свой текст). При добавлении узла"
                 + " можно задать, сколько экземпляров каждой карты реально стоит в устройстве.</html>"));
-        return (JPanel) UiKit.section("Оборудование сигнала (пресеты для схемы)", body);
+        return (JPanel) UiKit.dynamicSection("Оборудование сигнала (пресеты для схемы)", body);
     }
 
     private void refreshSignalCards() {
         EquipmentPreset sel = signalPresetList.getSelectedValue();
         List<SchemaCard> cards = sel == null ? List.of() : sel.getCards();
         syncList(signalCardModel, cards);
-        ListSizing.fit(signalCardList, signalCardScroll, 2, 6, true);
+        // Внутри JSplitPane — ширина уже ограничена половиной split (см.
+        // применение contentWidth к секции в applyContentWidth), список сам
+        // растягивается на выделенную ему половину (capWidth=false), а не на
+        // отдельно заданную ширину.
+        ListSizing.fit(signalCardList, signalCardScroll, 2, 6, false);
     }
 
     private void refresh() {
+        int w = listWidth();
         syncList(libModel, model.getCabinetTypes());
-        ListSizing.fit(libList, libScroll, 2, 8, true);
+        ListSizing.fit(libList, libScroll, 2, 8, w);
+        recapSection(cabinetsSection);
         syncList(ctrlLibModel, model.getWorkspace().getControllerTypes());
-        ListSizing.fit(ctrlLibList, ctrlLibScroll, 2, 6, true);
+        ListSizing.fit(ctrlLibList, ctrlLibScroll, 2, 6, w);
+        recapSection(controllersSection);
         syncList(powerPresetModel, presetsForMode(SchemaMode.POWER));
-        ListSizing.fit(powerPresetList, powerPresetScroll, 2, 6, true);
+        ListSizing.fit(powerPresetList, powerPresetScroll, 2, 6, w);
+        recapSection(powerPresetsSection);
 
         EquipmentPreset selSignalPreset = signalPresetList.getSelectedValue();
         List<EquipmentPreset> signalPresets = presetsForMode(SchemaMode.SIGNAL);
         syncList(signalPresetModel, signalPresets);
-        ListSizing.fit(signalPresetList, signalPresetScroll, 2, 6, true);
+        ListSizing.fit(signalPresetList, signalPresetScroll, 2, 6, false);
         if (selSignalPreset != null && signalPresets.contains(selSignalPreset)) {
             signalPresetList.setSelectedValue(selSignalPreset, false);
         }
         refreshSignalCards();
+        recapSection(signalEquipmentSection);
 
         syncList(cableModel, model.getCableTypes());
-        ListSizing.fit(cableList, cableScroll, 2, 6, true);
+        ListSizing.fit(cableList, cableScroll, 2, 6, w);
+        recapSection(cableSection);
     }
 
     private List<EquipmentPreset> presetsForMode(SchemaMode mode) {

@@ -46,6 +46,10 @@ public class PowerConnectorsConfigDialog extends JDialog {
         List<CardPort> getConnectors();
         CardPort addConnector(String connectorType, PortDirection direction, int count, int phaseCount,
                                Double breakerAmps);
+        /** Правит уже существующий разъём НА МЕСТЕ (сохраняя id) — иначе провод схемы,
+         *  уже подключённый к нему, потерял бы соединение при remove+add. */
+        void updateConnector(String portId, String connectorType, PortDirection direction, int count,
+                              int phaseCount, Double breakerAmps);
         void removeConnector(String portId);
         default Double getLoadDeratingPercent() {
             return null;
@@ -73,6 +77,13 @@ public class PowerConnectorsConfigDialog extends JDialog {
             public CardPort addConnector(String connectorType, PortDirection direction, int count, int phaseCount,
                                           Double breakerAmps) {
                 return model.addPowerConnectorToNode(node, connectorType, direction, count, phaseCount, breakerAmps);
+            }
+
+            @Override
+            public void updateConnector(String portId, String connectorType, PortDirection direction, int count,
+                                         int phaseCount, Double breakerAmps) {
+                model.updatePowerConnectorOnNode(node, portId, connectorType, direction, count, phaseCount,
+                        breakerAmps);
             }
 
             @Override
@@ -117,6 +128,13 @@ public class PowerConnectorsConfigDialog extends JDialog {
             }
 
             @Override
+            public void updateConnector(String portId, String connectorType, PortDirection direction, int count,
+                                         int phaseCount, Double breakerAmps) {
+                model.updatePowerConnectorOnPreset(preset, portId, connectorType, direction, count, phaseCount,
+                        breakerAmps);
+            }
+
+            @Override
             public void removeConnector(String portId) {
                 model.removePowerConnectorFromPreset(preset, portId);
             }
@@ -132,13 +150,22 @@ public class PowerConnectorsConfigDialog extends JDialog {
     private final JComboBox<PortDirection> directionCombo = new JComboBox<>(PortDirection.values());
     private final JSpinner countSpinner = new JSpinner(new SpinnerNumberModel(1, 1, 64, 1));
     /** Сколько фаз реально разведено на добавляемой группе разъёмов (Task #80) —
-     *  например, CEE 32A физически 3-фазный, но может быть заведён одной фазой. */
-    private final JSpinner phaseCountSpinner = new JSpinner(new SpinnerNumberModel(1, 1, 3, 1));
+     *  физически имеет смысл только 1 или 3 (однофазный/трёхфазный разъём), поэтому
+     *  вместо произвольного спиннера — выпадающий список из этих двух вариантов и
+     *  «Иное…» для редкого случая (запрашивает число отдельным диалогом). */
+    private final JComboBox<String> phaseCombo = new JComboBox<>(new String[]{"1", "3", "Иное…"});
+    private int customPhaseCount = 2;
+    private boolean suppressPhaseComboEvents;
     /** Номинал автомата, А — если ниже номинала самого разъёма (Task #86); пусто —
      *  берётся номинал разъёма как есть. */
     private final javax.swing.JTextField breakerField = new javax.swing.JTextField();
     private javax.swing.JTextField deratingField;
     private final AppModel model;
+    /** id разъёма, редактируемого сейчас (см. editSelected/addOrSaveConnector) —
+     *  null означает обычный режим «добавить новый». */
+    private String editingPortId;
+    private JButton addOrSaveButton;
+    private JButton editButton;
 
     public PowerConnectorsConfigDialog(Window owner, String title, PowerConnectorsHost host, AppModel model) {
         super(owner, "Разъёмы питания — " + title, ModalityType.APPLICATION_MODAL);
@@ -190,6 +217,8 @@ public class PowerConnectorsConfigDialog extends JDialog {
         JPanel mid = new JPanel();
         mid.setLayout(new BoxLayout(mid, BoxLayout.Y_AXIS));
 
+        phaseCombo.addActionListener(e -> onPhaseComboChanged());
+
         JPanel form = new JPanel(new GridLayout(0, 2, 6, 4));
         form.setBorder(BorderFactory.createTitledBorder("Добавить разъём"));
         form.add(new JLabel("Тип разъёма"));
@@ -198,22 +227,20 @@ public class PowerConnectorsConfigDialog extends JDialog {
         form.add(directionCombo);
         form.add(new JLabel("Количество"));
         form.add(countSpinner);
+        MathFields.enableExpressions(countSpinner);
         form.add(new JLabel("Фаз разведено"));
-        form.add(phaseCountSpinner);
+        form.add(phaseCombo);
         form.add(new JLabel("Автомат, А (необязательно)"));
         form.add(breakerField);
         mid.add(form);
 
         JPanel addRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        JButton add = new JButton("+ Добавить разъём");
-        add.addActionListener(e -> addConnector());
-        addRow.add(add);
-        JButton saveToLibrary = new JButton("💾 В библиотеку кабелей");
-        saveToLibrary.setToolTipText("Сохранить текущий тип разъёма как кабель библиотеки — будет предложен"
-                + " в списке в следующий раз");
-        saveToLibrary.setEnabled(model != null);
-        saveToLibrary.addActionListener(e -> saveCurrentTypeToLibrary());
-        addRow.add(saveToLibrary);
+        addOrSaveButton = new JButton("+ Добавить разъём");
+        addOrSaveButton.addActionListener(e -> addOrSaveConnector());
+        addRow.add(addOrSaveButton);
+        editButton = new JButton("✎ Редактировать выбранный разъём");
+        editButton.addActionListener(e -> toggleEditSelected());
+        addRow.add(editButton);
         mid.add(Box.createVerticalStrut(4));
         mid.add(addRow);
 
@@ -256,7 +283,91 @@ public class PowerConnectorsConfigDialog extends JDialog {
         setLocationRelativeTo(owner);
     }
 
-    private void addConnector() {
+    private void onPhaseComboChanged() {
+        if (suppressPhaseComboEvents) {
+            return;
+        }
+        if ("Иное…".equals(phaseCombo.getSelectedItem())) {
+            String input = JOptionPane.showInputDialog(this, "Число фаз:", customPhaseCount);
+            if (input == null) {
+                // Отмена — возвращаем предыдущий выбор, а не оставляем "Иное…" без числа.
+                setPhaseCountField(customPhaseCount == 1 || customPhaseCount == 3 ? customPhaseCount : 1);
+                return;
+            }
+            try {
+                int n = Integer.parseInt(input.trim());
+                if (n < 1) {
+                    throw new NumberFormatException();
+                }
+                customPhaseCount = n;
+            } catch (NumberFormatException ex) {
+                JOptionPane.showMessageDialog(this, "Введите целое число фаз (не меньше 1)",
+                        "Проверка данных", JOptionPane.WARNING_MESSAGE);
+                setPhaseCountField(1);
+            }
+        }
+    }
+
+    private int selectedPhaseCount() {
+        Object sel = phaseCombo.getSelectedItem();
+        if ("1".equals(sel)) {
+            return 1;
+        }
+        if ("3".equals(sel)) {
+            return 3;
+        }
+        return customPhaseCount;
+    }
+
+    private void setPhaseCountField(int phases) {
+        suppressPhaseComboEvents = true;
+        try {
+            if (phases == 1) {
+                phaseCombo.setSelectedItem("1");
+            } else if (phases == 3) {
+                phaseCombo.setSelectedItem("3");
+            } else {
+                customPhaseCount = phases;
+                phaseCombo.setSelectedItem("Иное…");
+            }
+        } finally {
+            suppressPhaseComboEvents = false;
+        }
+    }
+
+    /** ЛКМ по кнопке «Редактировать…»: первый клик загружает выбранный разъём в
+     *  форму и переключает форму/кнопки в режим редактирования; повторный клик по
+     *  той же (теперь «Отменить…») кнопке отменяет редактирование без сохранения. */
+    private void toggleEditSelected() {
+        if (editingPortId != null) {
+            cancelEdit();
+            return;
+        }
+        CardPort sel = list.getSelectedValue();
+        if (sel == null) {
+            JOptionPane.showMessageDialog(this, "Сначала выберите разъём в списке выше",
+                    "Редактирование", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        editingPortId = sel.getId();
+        connectorCombo.getEditor().setItem(sel.getConnectorType());
+        directionCombo.setSelectedItem(sel.getDirection());
+        countSpinner.setValue(sel.getCount());
+        setPhaseCountField(sel.getPhaseCount());
+        breakerField.setText(sel.getBreakerAmps() != null ? UiKit.fmt(sel.getBreakerAmps()) : "");
+        addOrSaveButton.setText("💾 Сохранить изменения");
+        editButton.setText("✖ Отменить редактирование");
+    }
+
+    private void cancelEdit() {
+        editingPortId = null;
+        connectorCombo.getEditor().setItem("");
+        breakerField.setText("");
+        addOrSaveButton.setText("+ Добавить разъём");
+        editButton.setText("✎ Редактировать выбранный разъём");
+    }
+
+    private void addOrSaveConnector() {
         String connector = String.valueOf(connectorCombo.getEditor().getItem()).trim();
         if (connector.isEmpty()) {
             JOptionPane.showMessageDialog(this, "Укажите тип разъёма", "Проверка данных", JOptionPane.WARNING_MESSAGE);
@@ -275,25 +386,21 @@ public class PowerConnectorsConfigDialog extends JDialog {
         }
         PortDirection dir = (PortDirection) directionCombo.getSelectedItem();
         int count = (Integer) countSpinner.getValue();
-        int phases = (Integer) phaseCountSpinner.getValue();
-        host.addConnector(connector, dir, count, phases, breakerAmps);
-        breakerField.setText("");
+        int phases = selectedPhaseCount();
+        if (editingPortId != null) {
+            String portId = editingPortId;
+            try {
+                host.updateConnector(portId, connector, dir, count, phases, breakerAmps);
+            } catch (RuntimeException ex) {
+                JOptionPane.showMessageDialog(this, ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            cancelEdit();
+        } else {
+            host.addConnector(connector, dir, count, phases, breakerAmps);
+            breakerField.setText("");
+        }
         refresh();
-    }
-
-    private void saveCurrentTypeToLibrary() {
-        if (model == null) {
-            return;
-        }
-        CableTypeDialog dlg = new CableTypeDialog(
-                javax.swing.SwingUtilities.getWindowAncestor(this), com.vjstb.ledscheme.model.SchemaMode.POWER);
-        String label = dlg.showDialog();
-        if (label == null) {
-            return;
-        }
-        model.addCableType(dlg.getMode(), label);
-        JOptionPane.showMessageDialog(this, "Сохранено в библиотеку кабелей: " + label, "Библиотека кабелей",
-                JOptionPane.INFORMATION_MESSAGE);
     }
 
     private void applyDerating() {

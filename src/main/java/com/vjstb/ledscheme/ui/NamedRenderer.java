@@ -24,9 +24,18 @@ public class NamedRenderer<T> extends DefaultListCellRenderer {
         if (value != null) {
             T item = (T) value;
             String metaText = meta != null ? meta.apply(item) : "";
-            setText("<html><b>" + escape(title.apply(item)) + "</b>"
+            // Без ограничения ширины длинная строка-пояснение (например, у контроллера
+            // со сводкой по картам/вх.портам) рендерится ОДНОЙ строкой на всю её
+            // естественную ширину — если список уже эту ширину не даёт, JScrollPane
+            // получает СВОЙ горизонтальный скроллбар вместо переноса текста на
+            // следующую строку (баг-репорт: список "уезжал" вбок вместо адаптации
+            // под окно). list.getWidth() ещё 0 до первой раскладки — тогда не
+            // ограничиваем, всё равно перерисуется после неё.
+            int w = list.getWidth();
+            String widthStyle = w > 60 ? " style='width:" + (w - 36) + "px'" : "";
+            setText("<html><body" + widthStyle + "><b>" + escape(title.apply(item)) + "</b>"
                     + (metaText.isEmpty() ? "" : "<br><span style='font-size:9px;color:#7d8590;'>" + escape(metaText) + "</span>")
-                    + "</html>");
+                    + "</body></html>");
         }
         return this;
     }

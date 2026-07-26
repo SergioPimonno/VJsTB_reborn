@@ -58,8 +58,10 @@ public class NewScreenDialog extends JDialog {
         form.add(typeField);
         form.add(new JLabel("Колонны"));
         form.add(colsField);
+        MathFields.enableExpressions(colsField);
         form.add(new JLabel("Строки"));
         form.add(rowsField);
+        MathFields.enableExpressions(rowsField);
         form.add(new JLabel("X (мм)"));
         form.add(xField);
         form.add(new JLabel("Y (мм)"));
@@ -107,9 +109,9 @@ public class NewScreenDialog extends JDialog {
 
     private double parseDouble(String s, String field) {
         try {
-            return Double.parseDouble(s.trim().replace(',', '.'));
+            return MathExpr.eval(s);
         } catch (NumberFormatException e) {
-            throw new IllegalArgumentException(field + ": введите число");
+            throw new IllegalArgumentException(field + ": введите число или выражение");
         }
     }
 

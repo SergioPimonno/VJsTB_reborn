@@ -177,7 +177,7 @@ public class ControllerTypeDialog extends JDialog {
 
     private double parseNonNeg(String s, String field) {
         try {
-            double v = Double.parseDouble(s.trim().replace(',', '.'));
+            double v = MathExpr.eval(s);
             if (v < 0) {
                 throw new IllegalArgumentException(field + ": значение не может быть отрицательным");
             }

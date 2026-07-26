@@ -90,6 +90,7 @@ public class SignalStagePanel extends JPanel {
     private javax.swing.JComponent controllersSection;
     private final JLabel portCountLabel = new JLabel(" ");
 
+    private final JLabel statCabinetType = new JLabel("—");
     private final JLabel statRes = new JLabel("—");
     private final JLabel statSize = new JLabel("—");
     private final JLabel statCount = new JLabel("—");
@@ -455,6 +456,7 @@ public class SignalStagePanel extends JPanel {
         body.add(chainsSection);
 
         JPanel statsBody = UiKit.vbox();
+        statsBody.add(statRow("Тип кабинета", statCabinetType));
         statsBody.add(statRow("Разрешение", statRes));
         statsBody.add(statRow("Физический размер", statSize));
         statsBody.add(statRow("Кабинетов", statCount));
@@ -547,6 +549,7 @@ public class SignalStagePanel extends JPanel {
             // картины, показываем сумму по всем экранам сцены (Task #71).
             java.util.List<Screen> screens = model.getCurrentScene().getScreens();
             ScreenStats s = ScreenLogic.aggregateStats(screens, model::typeOf, model.getWorkspace());
+            statCabinetType.setText(cabinetTypeSummary(screens));
             statRes.setText(screens.size() + " экран(ов)");
             statSize.setText("—");
             statCount.setText(String.valueOf(s.activeCabinetCount()));
@@ -554,12 +557,15 @@ public class SignalStagePanel extends JPanel {
             statWeight.setText(UiKit.fmt(s.totalWeightKg()) + " кг");
         } else if (has) {
             ScreenStats s = ScreenLogic.stats(scr, model.typeOf(scr), model.getWorkspace());
+            com.vjstb.ledscheme.model.CabinetType ct = model.typeOf(scr);
+            statCabinetType.setText(ct != null ? ct.getName() : "—");
             statRes.setText(s.resolutionWidthPx() + " × " + s.resolutionHeightPx() + " px");
             statSize.setText(UiKit.fmt(s.physicalWidthMm()) + " × " + UiKit.fmt(s.physicalHeightMm()) + " мм");
             statCount.setText(String.valueOf(s.activeCabinetCount()));
             statPower.setText(UiKit.fmt(s.totalPowerW()) + " Вт");
             statWeight.setText(UiKit.fmt(s.totalWeightKg()) + " кг");
         } else {
+            statCabinetType.setText("—");
             statRes.setText("—");
             statSize.setText("—");
             statCount.setText("—");
@@ -686,5 +692,20 @@ public class SignalStagePanel extends JPanel {
         row.add(value, BorderLayout.CENTER);
         row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
         return row;
+    }
+
+    /** Тип кабинета для показанного набора экранов — единое название, если у всех
+     *  один и тот же тип, иначе краткая сводка «разные (N)» (см. Task #101 —
+     *  показывать тип кабинета экрана прямо в статистике для удобства). */
+    private String cabinetTypeSummary(java.util.List<Screen> screens) {
+        java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+        for (Screen s : screens) {
+            com.vjstb.ledscheme.model.CabinetType t = model.typeOf(s);
+            names.add(t != null ? t.getName() : "?");
+        }
+        if (names.isEmpty()) {
+            return "—";
+        }
+        return names.size() == 1 ? names.iterator().next() : "разные (" + names.size() + ")";
     }
 }

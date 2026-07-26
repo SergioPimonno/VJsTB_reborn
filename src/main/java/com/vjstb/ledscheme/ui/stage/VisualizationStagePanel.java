@@ -118,8 +118,10 @@ public class VisualizationStagePanel extends JPanel {
         newForm.add(nameField);
         newForm.add(new JLabel("Ширина, px"));
         newForm.add(wSpin);
+        com.vjstb.ledscheme.ui.MathFields.enableExpressions(wSpin);
         newForm.add(new JLabel("Высота, px"));
         newForm.add(hSpin);
+        com.vjstb.ledscheme.ui.MathFields.enableExpressions(hSpin);
         JButton addCanvasBtn = new JButton("+ Новый канвас");
         addCanvasBtn.addActionListener(e -> {
             try {

@@ -90,6 +90,7 @@ public class WireLabelDialog extends JDialog {
 
         int spinnerMax = maxCount != null ? maxCount : 999;
         countSpinner.setModel(new SpinnerNumberModel(1, 1, spinnerMax, 1));
+        MathFields.enableExpressions(countSpinner);
 
         List<String> libraryLabels = model != null ? model.cableTypesForMode(mode).stream()
                 .map(CableType::getLabel).toList() : List.of();
@@ -361,15 +362,7 @@ public class WireLabelDialog extends JDialog {
     }
 
     private Double parseLengthOrNull() {
-        String s = lengthField.getText().trim().replace(',', '.');
-        if (s.isEmpty()) {
-            return null;
-        }
-        try {
-            return Double.parseDouble(s);
-        } catch (NumberFormatException ex) {
-            return null;
-        }
+        return MathExpr.tryEval(lengthField.getText());
     }
 
     private void onOk() {

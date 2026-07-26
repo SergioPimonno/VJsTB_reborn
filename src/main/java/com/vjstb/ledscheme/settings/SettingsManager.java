@@ -135,6 +135,21 @@ public class SettingsManager {
         persist();
     }
 
+    /** null — раздел не переписывался, показывать встроенный текст по умолчанию. */
+    public List<ContentSection> getCustomContent(String key) {
+        return settings.getCustomContent().get(key);
+    }
+
+    public void setCustomContent(String key, List<ContentSection> sections) {
+        settings.getCustomContent().put(key, sections);
+        persist();
+    }
+
+    public void resetCustomContent(String key) {
+        settings.getCustomContent().remove(key);
+        persist();
+    }
+
     public boolean isOnboardingCompleted() {
         return settings.isOnboardingCompleted();
     }

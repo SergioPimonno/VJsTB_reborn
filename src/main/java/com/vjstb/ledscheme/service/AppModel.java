@@ -289,6 +289,19 @@ public class AppModel {
         changed();
     }
 
+    /** Правит уже существующую карту НА МЕСТЕ (сохраняя id карты) — см.
+     *  {@link #updatePowerConnectorOnNode} про ту же причину (не терять ссылки
+     *  на неё, если такие появятся). */
+    public void updateCardOnController(ControllerType ct, String cardId, String name, List<CardPort> ports) {
+        SchemaCard card = ct.getCards().stream().filter(c -> c.getId().equals(cardId)).findFirst().orElse(null);
+        if (card == null) {
+            throw new IllegalArgumentException("Карта не найдена");
+        }
+        card.setName(name);
+        card.setPorts(ports);
+        changed();
+    }
+
     public void deleteControllerType(String id) {
         if (isControllerTypeInUse(id)) {
             throw new IllegalStateException("Контроллер назначен экрану и не может быть удалён из библиотеки");
@@ -967,6 +980,19 @@ public class AppModel {
         changed();
     }
 
+    /** Правит уже существующую карту узла НА МЕСТЕ (сохраняя id карты) — см.
+     *  {@link #updateCardOnController}. */
+    public void updateCardOnNode(SchemaNode node, String cardId, String name, List<CardPort> ports) {
+        SchemaCard card = node.getCards().stream().filter(c -> c.getId().equals(cardId)).findFirst().orElse(null);
+        if (card == null) {
+            throw new IllegalArgumentException("Карта не найдена");
+        }
+        card.setName(name);
+        card.setPorts(ports);
+        autoFitNodeToPorts(node);
+        changed();
+    }
+
     // ---- разъёмы питания узла (щиты/дистрибьюторы и т.п., схема ПИТАНИЯ) ----
 
     public CardPort addPowerConnectorToNode(SchemaNode node, String connectorType, PortDirection direction, int count) {
@@ -989,6 +1015,26 @@ public class AppModel {
 
     public void removePowerConnectorFromNode(SchemaNode node, String portId) {
         node.getPowerConnectors().removeIf(p -> p.getId().equals(portId));
+        changed();
+    }
+
+    /** Правит уже существующий разъём НА МЕСТЕ (сохраняя id), а не удаляет и
+     *  добавляет заново — иначе провод схемы, уже подключённый к этому разъёму
+     *  (SchemaEdge.fromPortId/toPortId ссылается на CardPort.id), потерял бы
+     *  соединение при простом remove+add под капотом «редактирования». */
+    public void updatePowerConnectorOnNode(SchemaNode node, String portId, String connectorType,
+                                            PortDirection direction, int count, int phaseCount, Double breakerAmps) {
+        CardPort port = node.getPowerConnectors().stream().filter(p -> p.getId().equals(portId))
+                .findFirst().orElse(null);
+        if (port == null) {
+            throw new IllegalArgumentException("Разъём не найден");
+        }
+        port.setConnectorType(connectorType);
+        port.setDirection(direction);
+        port.setCount(count);
+        port.setPhaseCount(phaseCount);
+        port.setBreakerAmps(breakerAmps);
+        autoFitNodeToPorts(node);
         changed();
     }
 
@@ -1248,6 +1294,18 @@ public class AppModel {
         changed();
     }
 
+    /** Правит уже существующую карту пресета НА МЕСТЕ (сохраняя id карты) — см.
+     *  {@link #updateCardOnController}. */
+    public void updateCardOnPreset(EquipmentPreset preset, String cardId, String name, List<CardPort> ports) {
+        SchemaCard card = preset.getCards().stream().filter(c -> c.getId().equals(cardId)).findFirst().orElse(null);
+        if (card == null) {
+            throw new IllegalArgumentException("Карта не найдена");
+        }
+        card.setName(name);
+        card.setPorts(ports);
+        changed();
+    }
+
     public CardPort addPowerConnectorToPreset(EquipmentPreset preset, String connectorType, PortDirection direction,
                                                int count) {
         return addPowerConnectorToPreset(preset, connectorType, direction, count, 1, null);
@@ -1263,6 +1321,24 @@ public class AppModel {
         preset.getPowerConnectors().add(port);
         changed();
         return port;
+    }
+
+    /** Правит уже существующий разъём пресета НА МЕСТЕ (сохраняя id) — см.
+     *  {@link #updatePowerConnectorOnNode}. */
+    public void updatePowerConnectorOnPreset(EquipmentPreset preset, String portId, String connectorType,
+                                              PortDirection direction, int count, int phaseCount,
+                                              Double breakerAmps) {
+        CardPort port = preset.getPowerConnectors().stream().filter(p -> p.getId().equals(portId))
+                .findFirst().orElse(null);
+        if (port == null) {
+            throw new IllegalArgumentException("Разъём не найден");
+        }
+        port.setConnectorType(connectorType);
+        port.setDirection(direction);
+        port.setCount(count);
+        port.setPhaseCount(phaseCount);
+        port.setBreakerAmps(breakerAmps);
+        changed();
     }
 
     public void removePowerConnectorFromPreset(EquipmentPreset preset, String portId) {

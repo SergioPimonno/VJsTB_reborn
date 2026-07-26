@@ -45,6 +45,10 @@ public class CardsConfigDialog extends JDialog {
     public interface CardsHost {
         List<SchemaCard> getCards();
         void addCard(String name, List<CardPort> ports);
+        /** Правит уже существующую карту НА МЕСТЕ (сохраняя id) — не удалять и
+         *  добавлять заново, иначе провод схемы, подключённый к порту этой карты,
+         *  потерял бы соединение (см. PowerConnectorsConfigDialog.updateConnector). */
+        void updateCard(String cardId, String name, List<CardPort> ports);
         void removeCard(String cardId);
     }
 
@@ -58,6 +62,11 @@ public class CardsConfigDialog extends JDialog {
             @Override
             public void addCard(String name, List<CardPort> ports) {
                 model.addCardToNode(node, name, ports);
+            }
+
+            @Override
+            public void updateCard(String cardId, String name, List<CardPort> ports) {
+                model.updateCardOnNode(node, cardId, name, ports);
             }
 
             @Override
@@ -80,6 +89,11 @@ public class CardsConfigDialog extends JDialog {
             }
 
             @Override
+            public void updateCard(String cardId, String name, List<CardPort> ports) {
+                model.updateCardOnController(controllerType, cardId, name, ports);
+            }
+
+            @Override
             public void removeCard(String cardId) {
                 model.removeCardFromController(controllerType, cardId);
             }
@@ -96,6 +110,11 @@ public class CardsConfigDialog extends JDialog {
             @Override
             public void addCard(String name, List<CardPort> ports) {
                 model.addCardToPreset(preset, name, ports);
+            }
+
+            @Override
+            public void updateCard(String cardId, String name, List<CardPort> ports) {
+                model.updateCardOnPreset(preset, cardId, name, ports);
             }
 
             @Override
@@ -121,6 +140,12 @@ public class CardsConfigDialog extends JDialog {
     private final List<CardPort> pendingPorts = new ArrayList<>();
     private final DefaultListModel<CardPort> pendingModel = new DefaultListModel<>();
     private final JList<CardPort> pendingList = new JList<>(pendingModel);
+
+    /** id карты, редактируемой сейчас (см. toggleEditSelected/addCard) — null
+     *  означает обычный режим «набрать и сохранить новую карту». */
+    private String editingCardId;
+    private JButton saveButton;
+    private JButton editButton;
 
     public CardsConfigDialog(Window owner, AppModel model, SchemaNode node) {
         this(owner, labelOf(node), forNode(model, node));
@@ -161,6 +186,7 @@ public class CardsConfigDialog extends JDialog {
         portForm.add(directionCombo);
         portForm.add(new JLabel("Количество"));
         portForm.add(countSpinner);
+        MathFields.enableExpressions(countSpinner);
         mid.add(portForm);
 
         JButton addPort = new JButton("+ Добавить группу разъёмов");
@@ -199,10 +225,10 @@ public class CardsConfigDialog extends JDialog {
         mid.add(Box.createVerticalStrut(6));
         mid.add(nameForm);
 
-        JButton add = new JButton("+ Сохранить карту");
-        add.addActionListener(e -> addCard());
+        saveButton = new JButton("+ Сохранить карту");
+        saveButton.addActionListener(e -> addCard());
         mid.add(Box.createVerticalStrut(4));
-        mid.add(add);
+        mid.add(saveButton);
         content.add(mid, BorderLayout.CENTER);
 
         JPanel bottom = new JPanel(new BorderLayout());
@@ -210,11 +236,14 @@ public class CardsConfigDialog extends JDialog {
         bottom.add(totalsLabel, BorderLayout.WEST);
 
         JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        editButton = new JButton("✎ Редактировать выбранную карту");
+        editButton.addActionListener(e -> toggleEditSelected());
         JButton remove = new JButton("Удалить выбранную карту");
         remove.addActionListener(e -> removeSelected());
         UiKit.bindDeleteKey(list, this::removeSelected);
         JButton close = new JButton("Закрыть");
         close.addActionListener(e -> dispose());
+        btns.add(editButton);
         btns.add(remove);
         btns.add(close);
         bottom.add(btns, BorderLayout.EAST);
@@ -265,11 +294,57 @@ public class CardsConfigDialog extends JDialog {
                     JOptionPane.WARNING_MESSAGE);
             return;
         }
-        host.addCard(name, new ArrayList<>(pendingPorts));
-        nameField.setText("");
+        if (editingCardId != null) {
+            String cardId = editingCardId;
+            try {
+                host.updateCard(cardId, name, new ArrayList<>(pendingPorts));
+            } catch (RuntimeException ex) {
+                JOptionPane.showMessageDialog(this, ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            cancelEdit();
+        } else {
+            host.addCard(name, new ArrayList<>(pendingPorts));
+            nameField.setText("");
+        }
         pendingPorts.clear();
         refreshPending();
         refresh();
+    }
+
+    /** ЛКМ по кнопке «Редактировать…»: первый клик загружает выбранную карту (её
+     *  название и группы разъёмов — КОПИЯМИ, сохраняя id каждой группы, если её не
+     *  уберут из списка ниже) в форму набора карты; повторный клик по той же
+     *  (теперь «Отменить…») кнопке отменяет редактирование без сохранения. */
+    private void toggleEditSelected() {
+        if (editingCardId != null) {
+            cancelEdit();
+            return;
+        }
+        SchemaCard sel = list.getSelectedValue();
+        if (sel == null) {
+            JOptionPane.showMessageDialog(this, "Сначала выберите карту в списке выше",
+                    "Редактирование", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        editingCardId = sel.getId();
+        nameField.setText(sel.getName());
+        pendingPorts.clear();
+        for (CardPort p : sel.getPorts()) {
+            pendingPorts.add(p.copy());
+        }
+        refreshPending();
+        saveButton.setText("💾 Сохранить изменения карты");
+        editButton.setText("✖ Отменить редактирование");
+    }
+
+    private void cancelEdit() {
+        editingCardId = null;
+        nameField.setText("");
+        pendingPorts.clear();
+        refreshPending();
+        saveButton.setText("+ Сохранить карту");
+        editButton.setText("✎ Редактировать выбранную карту");
     }
 
     private void removeSelected() {

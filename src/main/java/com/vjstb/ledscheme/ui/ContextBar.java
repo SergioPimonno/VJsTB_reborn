@@ -35,7 +35,10 @@ public class ContextBar extends JPanel {
 
         projectCombo.setRenderer(new NamedRenderer<Project>(Project::getName, null));
         sceneCombo.setRenderer(new NamedRenderer<Scene>(Scene::getName, null));
-        screenCombo.setRenderer(new NamedRenderer<Screen>(Screen::getName, s -> s.getCols() + "×" + s.getRows()));
+        screenCombo.setRenderer(new NamedRenderer<Screen>(Screen::getName, s -> {
+            com.vjstb.ledscheme.model.CabinetType ct = model.typeOf(s);
+            return s.getCols() + "×" + s.getRows() + (ct != null ? " · " + ct.getName() : "");
+        }));
 
         add(new JLabel("Проект:"));
         add(projectCombo);

@@ -39,6 +39,23 @@ public final class ListSizing {
         scroll.revalidate();
     }
 
+    /** capWidth=true с ЗАДАННОЙ шириной вместо ширины по факту текущего содержимого —
+     *  для панелей, которые сами отслеживают доступную ширину окна (за вычетом
+     *  вертикального скроллбара) и пересчитывают её при ресайзе живьём, а не один
+     *  раз при первой сборке (см. LibrariesStagePanel — баг-репорт: списки были
+     *  зафиксированы на жёстких пиксельных значениях, из-за чего длинный текст
+     *  элемента вылезал за ширину и получал СВОЙ горизонтальный скроллбар, а сама
+     *  панель не подстраивалась под реальную ширину окна). */
+    public static void fit(JList<?> list, JScrollPane scroll, int minRows, int maxRows, int width) {
+        int count = Math.max(list.getModel().getSize(), minRows);
+        int rows = Math.min(count, maxRows);
+        int rowH = estimateRowHeight(list);
+        int h = rows * rowH + 6;
+        scroll.setPreferredSize(new Dimension(width, h));
+        scroll.setMaximumSize(new Dimension(width, h));
+        scroll.revalidate();
+    }
+
     private static int estimateRowHeight(JList<?> list) {
         // рендерер списка рисует двухстрочный HTML (заголовок + мелкая мета-строка)
         int base = list.getFontMetrics(list.getFont()).getHeight();
