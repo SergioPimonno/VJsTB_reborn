@@ -69,23 +69,39 @@ public final class ChainPatterns {
         if (scr == null || pattern == null) {
             return result;
         }
+        for (int[] cell : orderedCells(rowEnd - rowStart + 1, colEnd - colStart + 1, pattern)) {
+            addIfAvailable(scr, rowStart + cell[0], colStart + cell[1], result, available);
+        }
+        return result;
+    }
+
+    /** Та же серпантинная последовательность, что и {@link #orderedIds}, но для
+     *  абстрактной сетки rows×cols без привязки к реальному экрану — используется
+     *  для превью-пиктограммы шаблона в радиальном меню (см. ChainPatternIcon), где
+     *  нужен сам порядок обхода ячеек, а не список id кабинетов. Каждая запись —
+     *  {row, col}, 0-based, относительно левого верхнего угла области. */
+    public static List<int[]> orderedCells(int rows, int cols, Pattern pattern) {
+        List<int[]> result = new ArrayList<>();
+        if (pattern == null || rows <= 0 || cols <= 0) {
+            return result;
+        }
         boolean startBottom = pattern.startBottom();
         boolean startRight = pattern.startRight();
         if (pattern.horizontalPrimary()) {
-            List<Integer> rows = range(rowStart, rowEnd, startBottom);
+            List<Integer> rowOrder = range(0, rows - 1, startBottom);
             boolean flip = startRight;
-            for (int row : rows) {
-                for (int col : range(colStart, colEnd, flip)) {
-                    addIfAvailable(scr, row, col, result, available);
+            for (int row : rowOrder) {
+                for (int col : range(0, cols - 1, flip)) {
+                    result.add(new int[]{row, col});
                 }
                 flip = !flip;
             }
         } else {
-            List<Integer> cols = range(colStart, colEnd, startRight);
+            List<Integer> colOrder = range(0, cols - 1, startRight);
             boolean flip = startBottom;
-            for (int col : cols) {
-                for (int row : range(rowStart, rowEnd, flip)) {
-                    addIfAvailable(scr, row, col, result, available);
+            for (int col : colOrder) {
+                for (int row : range(0, rows - 1, flip)) {
+                    result.add(new int[]{row, col});
                 }
                 flip = !flip;
             }

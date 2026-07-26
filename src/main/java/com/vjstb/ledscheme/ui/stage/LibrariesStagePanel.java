@@ -65,6 +65,11 @@ public class LibrariesStagePanel extends JPanel {
     private final JList<CableType> cableList = new JList<>(cableModel);
     private final JScrollPane cableScroll = new JScrollPane(cableList);
 
+    private NamedRenderer<CabinetType> libRenderer;
+    private NamedRenderer<ControllerType> ctrlLibRenderer;
+    private NamedRenderer<EquipmentPreset> powerPresetRenderer;
+    private NamedRenderer<CableType> cableRenderer;
+
     private javax.swing.JComponent exportImportSection;
     private javax.swing.JComponent cabinetsSection;
     private javax.swing.JComponent controllersSection;
@@ -176,10 +181,11 @@ public class LibrariesStagePanel extends JPanel {
     private JPanel buildLibrary() {
         JPanel body = UiKit.vbox();
         libList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        libList.setCellRenderer(new NamedRenderer<CabinetType>(CabinetType::getName, ct ->
+        libRenderer = new NamedRenderer<CabinetType>(CabinetType::getName, ct ->
                 UiKit.fmt(ct.getWidthMm()) + "×" + UiKit.fmt(ct.getHeightMm()) + "мм · "
                         + ct.getResolutionWidth() + "×" + ct.getResolutionHeight() + "px · "
-                        + UiKit.fmt(ct.getPowerConsumptionW()) + "Вт · " + UiKit.fmt(ct.getWeightKg()) + "кг"));
+                        + UiKit.fmt(ct.getPowerConsumptionW()) + "Вт · " + UiKit.fmt(ct.getWeightKg()) + "кг");
+        libList.setCellRenderer(libRenderer);
         body.add(libScroll);
 
         JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
@@ -214,7 +220,7 @@ public class LibrariesStagePanel extends JPanel {
     private JPanel buildControllerLibrary() {
         JPanel body = UiKit.vbox();
         ctrlLibList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        ctrlLibList.setCellRenderer(new NamedRenderer<ControllerType>(
+        ctrlLibRenderer = new NamedRenderer<ControllerType>(
                 ct -> ct.getName() + (ct.getVendor().isEmpty() ? "" : " (" + ct.getVendor() + ")"),
                 ct -> ct.effectivePortCount() + " вых. портов" + (ct.getCards().isEmpty() ? "" : " (по картам)")
                         + " · " + UiKit.fmt(ct.getPortBandwidthMbps()) + " Мбит/с"
@@ -223,7 +229,8 @@ public class LibrariesStagePanel extends JPanel {
                                 ? " · вх. портов: " + ct.effectiveInputPortCount()
                                         + (ct.inputPortTypesSummary().isEmpty() ? "" : " (" + ct.inputPortTypesSummary() + ")")
                                 : "")
-                        + (ct.isLoopPort() ? " · Loop" : "")));
+                        + (ct.isLoopPort() ? " · Loop" : ""));
+        ctrlLibList.setCellRenderer(ctrlLibRenderer);
         body.add(ctrlLibScroll);
 
         JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
@@ -273,12 +280,16 @@ public class LibrariesStagePanel extends JPanel {
                                                 JScrollPane presetScroll) {
         JPanel body = UiKit.vbox();
         presetList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        presetList.setCellRenderer(new NamedRenderer<EquipmentPreset>(
+        NamedRenderer<EquipmentPreset> renderer = new NamedRenderer<EquipmentPreset>(
                 p -> p.getName() + " (" + p.getCategory().getLabel() + ")",
                 p -> (p.getDescription() == null || p.getDescription().isEmpty() ? "" : p.getDescription() + " · ")
                         + (mode == SchemaMode.POWER
                                 ? "разъёмов: " + p.getPowerConnectors().size()
-                                : "карт: " + p.getCards().size())));
+                                : "карт: " + p.getCards().size()));
+        presetList.setCellRenderer(renderer);
+        if (mode == SchemaMode.POWER) {
+            powerPresetRenderer = renderer;
+        }
         body.add(presetScroll);
 
         JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
@@ -335,8 +346,9 @@ public class LibrariesStagePanel extends JPanel {
     private JPanel buildCableLibrary() {
         JPanel body = UiKit.vbox();
         cableList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        cableList.setCellRenderer(new NamedRenderer<CableType>(
-                c -> (c.getMode() == SchemaMode.POWER ? "[Питание] " : "[Сигнал] ") + c.getLabel(), c -> ""));
+        cableRenderer = new NamedRenderer<CableType>(
+                c -> (c.getMode() == SchemaMode.POWER ? "[Питание] " : "[Сигнал] ") + c.getLabel(), c -> "");
+        cableList.setCellRenderer(cableRenderer);
         body.add(cableScroll);
 
         JPanel addRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
@@ -487,12 +499,15 @@ public class LibrariesStagePanel extends JPanel {
 
     private void refresh() {
         int w = listWidth();
+        libRenderer.setFixedWidth(w);
         syncList(libModel, model.getCabinetTypes());
         ListSizing.fit(libList, libScroll, 2, 8, w);
         recapSection(cabinetsSection);
+        ctrlLibRenderer.setFixedWidth(w);
         syncList(ctrlLibModel, model.getWorkspace().getControllerTypes());
         ListSizing.fit(ctrlLibList, ctrlLibScroll, 2, 6, w);
         recapSection(controllersSection);
+        powerPresetRenderer.setFixedWidth(w);
         syncList(powerPresetModel, presetsForMode(SchemaMode.POWER));
         ListSizing.fit(powerPresetList, powerPresetScroll, 2, 6, w);
         recapSection(powerPresetsSection);
@@ -507,6 +522,7 @@ public class LibrariesStagePanel extends JPanel {
         refreshSignalCards();
         recapSection(signalEquipmentSection);
 
+        cableRenderer.setFixedWidth(w);
         syncList(cableModel, model.getCableTypes());
         ListSizing.fit(cableList, cableScroll, 2, 6, w);
         recapSection(cableSection);

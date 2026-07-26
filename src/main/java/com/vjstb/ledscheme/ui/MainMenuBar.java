@@ -79,8 +79,14 @@ public class MainMenuBar extends JMenuBar {
             dlg.setLocationRelativeTo(owner);
             dlg.setVisible(true);
         });
-
         menu.add(exportImportLib);
+
+        JMenuItem importNovaLct = new JMenuItem("Импорт из NovaLCT (.scr)… [заготовка]");
+        importNovaLct.setToolTipText("Разбирает файл прописи NovaLCT и показывает найденные экраны/карты/порты."
+                + " Пока только просмотр — создание экранов и цепочек по нему ещё не реализовано.");
+        importNovaLct.addActionListener(e -> NovaLctImportDialog.showImportFlow(owner));
+        menu.add(importNovaLct);
+
         return menu;
     }
 
