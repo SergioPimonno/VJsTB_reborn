@@ -77,6 +77,35 @@ public class ChainInteractionController implements CanvasPanel.Controller {
         onChange.run();
     }
 
+    /** Строит и сразу сохраняет цепочку из ГОТОВОГО списка кабинетов одним
+     *  действием («Быстрое подключение» — см. CanvasPanel.QuickConnectListener/
+     *  ChainPatterns) — как последовательные клики по каждому кабинету списка, но
+     *  без пользовательского ввода. Завершает (сохраняет) цепочку, которая
+     *  строилась до этого, если такая была. Возвращает текст ошибки, если
+     *  построить нельзя (например, для первого кабинета сейчас не выбрана
+     *  фаза/порт, либо он уже занят другой цепочкой) — иначе null (успех). */
+    public String buildAndCommit(List<String> cabinetIds) {
+        if (cabinetIds == null || cabinetIds.isEmpty()) {
+            return "В выбранной области нет доступных (не скрытых и ещё не занятых) кабинетов";
+        }
+        finish();
+        if (starter == null) {
+            return "Не выбрана цель для новой цепочки";
+        }
+        Consumer<List<String>> handler = starter.startChainFor(cabinetIds.get(0));
+        if (handler == null) {
+            return "Нельзя начать цепочку с первого кабинета области — он уже занят другой цепочкой,"
+                    + " либо не выбрана фаза/порт";
+        }
+        try {
+            handler.accept(new ArrayList<>(cabinetIds));
+        } catch (RuntimeException ex) {
+            return ex.getMessage();
+        }
+        onChange.run();
+        return null;
+    }
+
     /** Esc: завершить построение, сохранив цепочку, если в ней есть кабинеты. */
     public void finish() {
         if (!building) {

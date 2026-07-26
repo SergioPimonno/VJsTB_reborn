@@ -42,6 +42,14 @@ public class CanvasPanel extends JPanel {
         void removeFromActive(String cabId);
     }
 
+    /** Область кабинетов, выделенная протяжкой в режиме «Быстрое подключение»
+     *  (см. setQuickConnectMode) — вызывающая панель (Power/Signal) должна
+     *  показать выбор шаблона (см. ChainPatterns.Pattern) в точке (screenX, screenY)
+     *  и применить его к диапазону [rowStart..rowEnd] x [colStart..colEnd]. */
+    public interface QuickConnectListener {
+        void onRegionSelected(int rowStart, int rowEnd, int colStart, int colEnd, int screenX, int screenY);
+    }
+
     private static final int PADDING = 30;
     private static final int BASE = 84;
 
@@ -49,6 +57,10 @@ public class CanvasPanel extends JPanel {
     private final Controller controller;
     private double zoom = 1.0;
     private String lastDragCabId;
+    private boolean quickConnectMode;
+    private QuickConnectListener quickConnectListener;
+    private Point marqueeStart;
+    private Point marqueeEnd;
 
     public CanvasPanel(AppModel model, Controller controller) {
         this.model = model;
@@ -60,6 +72,14 @@ public class CanvasPanel extends JPanel {
             @Override
             public void mousePressed(MouseEvent e) {
                 requestFocusInWindow();
+                if (quickConnectMode) {
+                    if (SwingUtilities.isLeftMouseButton(e)) {
+                        marqueeStart = e.getPoint();
+                        marqueeEnd = e.getPoint();
+                        repaint();
+                    }
+                    return;
+                }
                 if (SwingUtilities.isRightMouseButton(e)) {
                     handleRightClick(e);
                     return;
@@ -73,12 +93,33 @@ public class CanvasPanel extends JPanel {
 
             @Override
             public void mouseReleased(MouseEvent e) {
+                if (quickConnectMode) {
+                    if (marqueeStart != null && marqueeEnd != null) {
+                        int[] region = regionFromMarquee();
+                        java.awt.Point screenPt = e.getLocationOnScreen();
+                        marqueeStart = null;
+                        marqueeEnd = null;
+                        repaint();
+                        if (region != null && quickConnectListener != null) {
+                            quickConnectListener.onRegionSelected(region[0], region[1], region[2], region[3],
+                                    screenPt.x, screenPt.y);
+                        }
+                    }
+                    return;
+                }
                 lastDragCabId = null;
             }
 
             @Override
             public void mouseDragged(MouseEvent e) {
                 if (!SwingUtilities.isLeftMouseButton(e)) {
+                    return;
+                }
+                if (quickConnectMode) {
+                    if (marqueeStart != null) {
+                        marqueeEnd = e.getPoint();
+                        repaint();
+                    }
                     return;
                 }
                 CabinetInstance cab = cabinetAt(e.getPoint());
@@ -115,6 +156,45 @@ public class CanvasPanel extends JPanel {
         zoom = 1.0;
         revalidate();
         repaint();
+    }
+
+    /** Режим «Быстрое подключение» (см. QuickConnectListener) — протяжка ЛКМ
+     *  выделяет прямоугольную область вместо клика-по-кабинету/построения цепочки;
+     *  выключение на середине протяжки просто сбрасывает недостроенное выделение. */
+    public void setQuickConnectMode(boolean enabled) {
+        this.quickConnectMode = enabled;
+        marqueeStart = null;
+        marqueeEnd = null;
+        repaint();
+    }
+
+    public boolean isQuickConnectMode() {
+        return quickConnectMode;
+    }
+
+    public void setQuickConnectListener(QuickConnectListener listener) {
+        this.quickConnectListener = listener;
+    }
+
+    /** Диапазон [rowStart, rowEnd, colStart, colEnd] (включительно, обрезан по
+     *  факту размера экрана), накрытый прямоугольником marqueeStart..marqueeEnd —
+     *  null, если экран не выбран. */
+    private int[] regionFromMarquee() {
+        Screen scr = model.getCurrentScreen();
+        if (scr == null) {
+            return null;
+        }
+        int cw = cabW();
+        int ch = cabH();
+        int c0 = clamp((Math.min(marqueeStart.x, marqueeEnd.x) - PADDING) / cw, 0, scr.getCols() - 1);
+        int c1 = clamp((Math.max(marqueeStart.x, marqueeEnd.x) - PADDING) / cw, 0, scr.getCols() - 1);
+        int r0 = clamp((Math.min(marqueeStart.y, marqueeEnd.y) - PADDING) / ch, 0, scr.getRows() - 1);
+        int r1 = clamp((Math.max(marqueeStart.y, marqueeEnd.y) - PADDING) / ch, 0, scr.getRows() - 1);
+        return new int[]{r0, r1, c0, c1};
+    }
+
+    private static int clamp(int v, int min, int max) {
+        return Math.max(min, Math.min(max, v));
     }
 
     /** ПКМ во время построения цепочки — убирает кабинет под курсором из
@@ -329,6 +409,19 @@ public class CanvasPanel extends JPanel {
                 g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, new float[]{4, 3}, 0));
                 g2.drawRect(x + 3, y + 3, cw - 6, ch - 6);
             }
+        }
+
+        // Прямоугольник выделения области в режиме «Быстрое подключение» — рисуется
+        // ПОВЕРХ схемы, независимо от isChainBuilding (эти два режима не пересекаются).
+        if (marqueeStart != null && marqueeEnd != null) {
+            g2.setColor(Palette.ACCENT);
+            g2.setStroke(new BasicStroke(1.5f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 0,
+                    new float[]{6, 4}, 0));
+            int x = Math.min(marqueeStart.x, marqueeEnd.x);
+            int y = Math.min(marqueeStart.y, marqueeEnd.y);
+            int w = Math.abs(marqueeEnd.x - marqueeStart.x);
+            int h = Math.abs(marqueeEnd.y - marqueeStart.y);
+            g2.drawRect(x, y, w, h);
         }
 
         g2.dispose();

@@ -10,9 +10,11 @@ import com.vjstb.ledscheme.service.ScreenLogic;
 import com.vjstb.ledscheme.service.ScreenStats;
 import com.vjstb.ledscheme.ui.CanvasPanel;
 import com.vjstb.ledscheme.ui.ChainInteractionController;
+import com.vjstb.ledscheme.ui.ChainPatterns;
 import com.vjstb.ledscheme.ui.ContextBar;
 import com.vjstb.ledscheme.ui.Palette;
 import com.vjstb.ledscheme.ui.PortPickerPanel;
+import com.vjstb.ledscheme.ui.RadialMenu;
 import com.vjstb.ledscheme.ui.SceneCanvasPanel;
 import com.vjstb.ledscheme.ui.SchemaPanel;
 import com.vjstb.ledscheme.ui.UiKit;
@@ -60,6 +62,7 @@ public class SignalStagePanel extends JPanel {
     private final JToggleButton chainViewBtn = new JToggleButton("Расключение экрана", true);
     private final JToggleButton schemaViewBtn = new JToggleButton("Общая схема сигнала");
     private final JCheckBox showAllScreens = new JCheckBox("Показать все экраны сцены");
+    private final JToggleButton quickConnectBtn = new JToggleButton("⚡ Быстрое подключение");
     private final SceneCanvasPanel sceneOverview;
     private final JScrollPane canvasScroll;
     private final com.vjstb.ledscheme.settings.SettingsManager settings;
@@ -124,6 +127,11 @@ public class SignalStagePanel extends JPanel {
                 JOptionPane.showMessageDialog(this, msg, "Не удалось завершить цепочку",
                         JOptionPane.ERROR_MESSAGE));
         this.canvas = new CanvasPanel(model, chainCtrl);
+        // «Быстрое подключение» (как в NovaLCT) — протяжка выделяет прямоугольную
+        // область кабинетов, радиальное меню выбирает шаблон серпантина, скрытые и
+        // уже занятые кабинеты области просто выпадают из последовательности.
+        this.canvas.setQuickConnectListener((rowStart, rowEnd, colStart, colEnd, screenX, screenY) ->
+                showQuickConnectMenu(rowStart, rowEnd, colStart, colEnd, screenX, screenY));
         this.portPicker = new PortPickerPanel(model, new PortPickerPanel.PortListener() {
             @Override
             public void onPortSelected(int port) {
@@ -250,10 +258,14 @@ public class SignalStagePanel extends JPanel {
         viewGroup.add(schemaViewBtn);
         chainViewBtn.addActionListener(e -> viewCards.show(viewContainer, VIEW_CHAIN));
         schemaViewBtn.addActionListener(e -> viewCards.show(viewContainer, VIEW_SCHEMA));
+        quickConnectBtn.setToolTipText("Протяжка ЛКМ по холсту выделяет область — радиальное меню предложит"
+                + " шаблон серпантина для быстрой прописки (как в NovaLCT)");
+        quickConnectBtn.addActionListener(e -> canvas.setQuickConnectMode(quickConnectBtn.isSelected()));
         JPanel toggleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
         toggleRow.add(chainViewBtn);
         toggleRow.add(schemaViewBtn);
         toggleRow.add(showAllScreens);
+        toggleRow.add(quickConnectBtn);
 
         JPanel top = new JPanel(new BorderLayout());
         top.add(new ContextBar(model, true), BorderLayout.NORTH);
@@ -266,6 +278,28 @@ public class SignalStagePanel extends JPanel {
         model.addListener(this::refresh);
         refresh();
         updateCornerPreviewVisibility();
+    }
+
+    /** Радиальное меню из 8 шаблонов серпантина (NovaLCT-style «Быстрая прописка») —
+     *  выбор шаблона строит и сразу сохраняет цепочку для ТЕКУЩЕГО выбранного порта
+     *  по всем не скрытым и ещё не занятым (для сигнала) кабинетам выделенной области. */
+    private void showQuickConnectMenu(int rowStart, int rowEnd, int colStart, int colEnd, int screenX, int screenY) {
+        Screen scr = model.getCurrentScreen();
+        if (scr == null) {
+            return;
+        }
+        java.util.List<RadialMenu.Item> items = new java.util.ArrayList<>();
+        for (ChainPatterns.Pattern pattern : ChainPatterns.Pattern.values()) {
+            items.add(RadialMenu.Item.leaf(pattern.getLabel(), Palette.ACCENT, () -> {
+                java.util.List<String> ids = ChainPatterns.orderedIds(scr, rowStart, rowEnd, colStart, colEnd,
+                        pattern, cabId -> !model.isCabinetWiredForSignal(cabId));
+                String error = chainCtrl.buildAndCommit(ids);
+                if (error != null) {
+                    JOptionPane.showMessageDialog(this, error, "Быстрое подключение", JOptionPane.ERROR_MESSAGE);
+                }
+            }));
+        }
+        RadialMenu.show(canvas, screenX, screenY, items);
     }
 
     public ChainInteractionController chainController() {

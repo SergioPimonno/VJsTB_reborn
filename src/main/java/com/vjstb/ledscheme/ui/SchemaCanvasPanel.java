@@ -91,6 +91,11 @@ public class SchemaCanvasPanel extends JPanel {
     private Double snapGuideX;
     private Double snapGuideY;
 
+    /** Зажатая СКМ — перемещение вьюпорта охватывающего JScrollPane (см.
+     *  mousePressed/mouseDragged/mouseReleased ниже); null — сейчас не тащим. */
+    private Point panStartScreen;
+    private Point panStartViewPosition;
+
     private SchemaNode selectedNode;
     private SchemaEdge selectedEdge;
 
@@ -143,6 +148,18 @@ public class SchemaCanvasPanel extends JPanel {
             @Override
             public void mousePressed(MouseEvent e) {
                 requestFocusInWindow();
+                if (SwingUtilities.isMiddleMouseButton(e)) {
+                    // Зажатая СКМ — перемещение по схеме без слайдеров (по просьбе
+                    // пользователя, привычно из графических/CAD-редакторов).
+                    javax.swing.JScrollPane sp = (javax.swing.JScrollPane)
+                            SwingUtilities.getAncestorOfClass(javax.swing.JScrollPane.class, SchemaCanvasPanel.this);
+                    if (sp != null) {
+                        panStartScreen = e.getLocationOnScreen();
+                        panStartViewPosition = sp.getViewport().getViewPosition();
+                        setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR));
+                    }
+                    return;
+                }
                 if (SwingUtilities.isRightMouseButton(e)) {
                     handleRightClick(e);
                     return;
@@ -265,6 +282,22 @@ public class SchemaCanvasPanel extends JPanel {
 
             @Override
             public void mouseDragged(MouseEvent e) {
+                if (panStartScreen != null) {
+                    javax.swing.JScrollPane sp = (javax.swing.JScrollPane)
+                            SwingUtilities.getAncestorOfClass(javax.swing.JScrollPane.class, SchemaCanvasPanel.this);
+                    if (sp != null) {
+                        Point now = e.getLocationOnScreen();
+                        int dx = now.x - panStartScreen.x;
+                        int dy = now.y - panStartScreen.y;
+                        int maxX = Math.max(0, getWidth() - sp.getViewport().getWidth());
+                        int maxY = Math.max(0, getHeight() - sp.getViewport().getHeight());
+                        Point newPos = new Point(
+                                Math.max(0, Math.min(maxX, panStartViewPosition.x - dx)),
+                                Math.max(0, Math.min(maxY, panStartViewPosition.y - dy)));
+                        sp.getViewport().setViewPosition(newPos);
+                    }
+                    return;
+                }
                 Point mp = toModel(e.getPoint());
                 if (resizeNode != null) {
                     resizeNode.setWidth(Math.max(MIN_NODE_W, mp.x - resizeNode.getX()));
@@ -323,6 +356,12 @@ public class SchemaCanvasPanel extends JPanel {
 
             @Override
             public void mouseReleased(MouseEvent e) {
+                if (panStartScreen != null) {
+                    panStartScreen = null;
+                    panStartViewPosition = null;
+                    setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
+                    return;
+                }
                 if (resizeNode != null) {
                     model.resizeSchemaNode(resizeNode, resizeNode.getWidth(), resizeNode.getHeight());
                     resizeNode = null;
