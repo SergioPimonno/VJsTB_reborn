@@ -32,6 +32,13 @@ public class EquipmentPreset {
      *  вместо пустого, чтобы не собирать одну и ту же типовую комплектацию
      *  заново на каждый узел. Пусто — старое поведение (пустой старт). */
     private List<String> defaultCardTemplateIds = new ArrayList<>();
+    /** Название пользовательской подкатегории (только когда category == CUSTOM) —
+     *  см. AppModel.customEquipmentCategories/AdminDialog: категории — фиксированный
+     *  Java-enum (используется в логике схемы, менять список произвольно небезопасно),
+     *  а эта подкатегория — админ-редактируемый список ИМЁН под общим "Прочее
+     *  оборудование", реальный способ добавлять новые категории без правки кода.
+     *  Пусто — обычное "Прочее оборудование" без уточнения. */
+    private String customCategoryLabel = "";
 
     public EquipmentPreset() {
     }
@@ -107,6 +114,25 @@ public class EquipmentPreset {
         this.defaultCardTemplateIds = defaultCardTemplateIds;
     }
 
+    public String getCustomCategoryLabel() {
+        return customCategoryLabel;
+    }
+
+    public void setCustomCategoryLabel(String customCategoryLabel) {
+        this.customCategoryLabel = customCategoryLabel == null ? "" : customCategoryLabel;
+    }
+
+    /** Подпись категории для отображения — подкатегория (если задана и category ==
+     *  CUSTOM), иначе обычная подпись типа узла. Единая точка, которой должны
+     *  пользоваться и дерево библиотеки, и подбор пресетов в общей схеме, вместо
+     *  прямого category.getLabel() — иначе подкатегория нигде бы не была видна. */
+    public String categoryDisplayLabel() {
+        if (category == SchemaNodeType.CUSTOM && !customCategoryLabel.isEmpty()) {
+            return customCategoryLabel;
+        }
+        return category.getLabel();
+    }
+
     public EquipmentPreset copy() {
         EquipmentPreset p = new EquipmentPreset();
         p.id = id;
@@ -123,6 +149,7 @@ public class EquipmentPreset {
             p.powerConnectors.add(cp.copy());
         }
         p.defaultCardTemplateIds = new ArrayList<>(defaultCardTemplateIds);
+        p.customCategoryLabel = customCategoryLabel;
         return p;
     }
 }

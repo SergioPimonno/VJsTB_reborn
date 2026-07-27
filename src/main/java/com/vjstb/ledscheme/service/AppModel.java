@@ -1298,6 +1298,60 @@ public class AppModel {
         store.exportList(workspace.getInterfaceTypes(), file);
     }
 
+    // ---- админ-редактируемые подкатегории оборудования (см. AdminDialog) ----
+
+    public List<String> getCustomEquipmentCategories() {
+        return workspace.getCustomEquipmentCategories();
+    }
+
+    /** Добавляет новую подкатегорию, если такой (без учёта регистра) ещё нет —
+     *  вызывается и из AdminDialog явно, и автоматически из EquipmentPresetDialog,
+     *  если инженер вписал новое название прямо там, не заходя в админку. */
+    public void addCustomEquipmentCategory(String name) {
+        String trimmed = name == null ? "" : name.trim();
+        if (trimmed.isEmpty()) {
+            return;
+        }
+        for (String c : workspace.getCustomEquipmentCategories()) {
+            if (c.equalsIgnoreCase(trimmed)) {
+                return;
+            }
+        }
+        workspace.getCustomEquipmentCategories().add(trimmed);
+        changed();
+    }
+
+    /** Переименовывает подкатегорию и обновляет ссылки на неё во всех пресетах —
+     *  иначе уже сохранённые пресеты остались бы со старым (несуществующим в
+     *  списке) названием, невидимым в дереве категорий библиотеки. */
+    public void renameCustomEquipmentCategory(String oldName, String newName) {
+        String trimmed = newName == null ? "" : newName.trim();
+        if (trimmed.isEmpty()) {
+            throw new IllegalArgumentException("Укажите название подкатегории");
+        }
+        List<String> categories = workspace.getCustomEquipmentCategories();
+        int idx = categories.indexOf(oldName);
+        if (idx < 0) {
+            throw new IllegalArgumentException("Подкатегория не найдена");
+        }
+        categories.set(idx, trimmed);
+        for (EquipmentPreset p : workspace.getEquipmentPresets()) {
+            if (oldName.equals(p.getCustomCategoryLabel())) {
+                p.setCustomCategoryLabel(trimmed);
+            }
+        }
+        changed();
+    }
+
+    /** Удаляет подкатегорию из списка — пресеты, ссылавшиеся на неё, НЕ трогаются
+     *  (остаются с этим же customCategoryLabel как "осиротевшим" текстом, снова
+     *  видимым просто под общим "Прочее оборудование", раз его больше нет в
+     *  списке — данные не теряются, просто перестают группироваться отдельно). */
+    public void deleteCustomEquipmentCategory(String name) {
+        workspace.getCustomEquipmentCategories().remove(name);
+        changed();
+    }
+
     // ---- экспорт/импорт ВСЕХ библиотек разом ----
 
     public void exportAllLibraries(File file) {
