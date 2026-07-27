@@ -37,7 +37,7 @@ public final class SchemaLoadCalc {
         double capacity = 0;
         boolean any = false;
         for (CardPort p : node.getPowerConnectors()) {
-            if (p.getDirection() != PortDirection.IN) {
+            if (p.getDirection() == PortDirection.OUT) {
                 continue;
             }
             Double ratingA = PowerCalc.connectorLabelAmps(p.getConnectorType());

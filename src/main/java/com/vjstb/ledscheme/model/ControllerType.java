@@ -151,7 +151,7 @@ public class ControllerType {
         StringBuilder sb = new StringBuilder();
         for (SchemaCard c : cards) {
             for (CardPort p : c.getPorts()) {
-                if (p.getDirection() != PortDirection.IN) {
+                if (p.getDirection() == PortDirection.OUT) {
                     continue;
                 }
                 if (sb.length() > 0) {

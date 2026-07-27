@@ -1141,14 +1141,21 @@ public class SchemaCanvasPanel extends JPanel {
     /** "Защита от дурака" (см. Personalization) — при создании НОВОЙ связи через
      *  гнёзда запрещает соединять ВХОД со ВХОДОМ или ВЫХОД с ВЫХОДОМ, если у обоих
      *  гнёзд направление вообще определено (сравнение по {@link CardPort#getDirection()}).
-     *  Ничего не проверяет, если настройка выключена или хотя бы одно из гнёзд не
-     *  найдено (обычная связь узел-узел без привязки к конкретному гнезду). */
+     *  Двунаправленное гнездо ({@link PortDirection#IN_OUT} — например, SDI loop-through)
+     *  совместимо с чем угодно (может сыграть роль недостающей стороны), поэтому
+     *  запрет срабатывает, только если ОБА гнезда СТРОГО одного однонаправленного
+     *  направления. Ничего не проверяет, если настройка выключена или хотя бы одно
+     *  из гнёзд не найдено (обычная связь узел-узел без привязки к конкретному гнезду). */
     private String directionError(CardPort fromPort, CardPort toPort) {
         if (!settings.activeProfile().isFoolProofWiringEnabled() || fromPort == null || toPort == null) {
             return null;
         }
-        if (fromPort.getDirection() == toPort.getDirection()) {
-            String dir = fromPort.getDirection() == PortDirection.IN ? "входа" : "выхода";
+        PortDirection fd = fromPort.getDirection();
+        PortDirection td = toPort.getDirection();
+        boolean bothIn = fd == PortDirection.IN && td == PortDirection.IN;
+        boolean bothOut = fd == PortDirection.OUT && td == PortDirection.OUT;
+        if (bothIn || bothOut) {
+            String dir = bothIn ? "входа" : "выхода";
             return "Нельзя соединить два " + dir + " напрямую — проверьте направление гнёзд"
                     + " (можно отключить в Персонализации: «Защита от дурака»)";
         }
@@ -1768,10 +1775,23 @@ public class SchemaCanvasPanel extends JPanel {
             if (rowY > maxY) {
                 break;
             }
-            boolean isIn = entry.port().getDirection() == PortDirection.IN;
-            int dotX = isIn ? x + 6 : x + w - CONNECTOR_DOT_D - 6;
             int dotY = rowY - CONNECTOR_DOT_D;
-            rects.add(new SocketRect(entry, isIn, dotX, dotY));
+            PortDirection dir = entry.port().getDirection();
+            if (dir == PortDirection.IN_OUT) {
+                // Двунаправленное гнездо (например, SDI Loop In/Out) — физически ОДИН
+                // разъём, но т.к. вход рисуется слева, а выход справа (как в патч-
+                // панели), для наглядности он получает ТОЧКУ С ОБЕИХ СТОРОН строки;
+                // это одна и та же группа CardPort (общий id и count), доступное
+                // количество НЕ удваивается — обе точки лишь два способа щёлкнуть/
+                // подвести линию к одному и тому же гнезду (см. socketAt/socketPosition,
+                // которые ищут совпадение по CardPort.getId(), а не по стороне).
+                rects.add(new SocketRect(entry, true, x + 6, dotY));
+                rects.add(new SocketRect(entry, false, x + w - CONNECTOR_DOT_D - 6, dotY));
+            } else {
+                boolean isIn = dir == PortDirection.IN;
+                int dotX = isIn ? x + 6 : x + w - CONNECTOR_DOT_D - 6;
+                rects.add(new SocketRect(entry, isIn, dotX, dotY));
+            }
             rowY += CONNECTOR_ROW_H;
         }
         return rects;
@@ -1818,8 +1838,12 @@ public class SchemaCanvasPanel extends JPanel {
             int textX = r.isIn() ? r.dotX() + CONNECTOR_DOT_D + 4 : r.dotX() - 4 - fm.stringWidth(clipped);
             g2.drawString(clipped, textX, r.dotY() + CONNECTOR_DOT_D);
         }
-        if (rects.size() < ports.size()) {
-            int remaining = ports.size() - rects.size();
+        // Считаем по числу РАЗЛИЧНЫХ гнёзд (PortEntry), а не по числу точек — у
+        // двунаправленного гнезда (IN_OUT) одна запись превращается в ДВЕ точки
+        // (см. computeSocketRects), иначе подсчёт "+N ещё" был бы заниженным.
+        long renderedEntries = rects.stream().map(SocketRect::entry).distinct().count();
+        if (renderedEntries < ports.size()) {
+            int remaining = ports.size() - (int) renderedEntries;
             int hintY = rects.isEmpty() ? y + 34 : rects.get(rects.size() - 1).dotY() + CONNECTOR_DOT_D + CONNECTOR_ROW_H;
             g2.setColor(new Color(0, 0, 0, 150));
             g2.drawString("+" + remaining + " ещё…", x + 10, hintY);
@@ -1935,6 +1959,7 @@ public class SchemaCanvasPanel extends JPanel {
             case SERVER -> new Color(0xd2a8ff);
             case CONTROLLER -> new Color(0x76e3ea);
             case SCREEN -> new Color(0x56d364);
+            case MONITOR -> new Color(0xff9bce);
             default -> new Color(0xc0c8d0);
         };
     }

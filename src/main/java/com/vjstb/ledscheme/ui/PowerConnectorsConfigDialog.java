@@ -198,7 +198,7 @@ public class PowerConnectorsConfigDialog extends JDialog {
                 if (value instanceof CardPort p) {
                     StringBuilder sb = new StringBuilder();
                     sb.append(p.getCount()).append("× ").append(escape(p.getConnectorType())).append(" (")
-                            .append(p.getDirection() == PortDirection.IN ? "вход" : "выход").append(')');
+                            .append(p.getDirection().getLabel().toLowerCase()).append(')');
                     if (p.getPhaseCount() > 1) {
                         sb.append(", ").append(p.getPhaseCount()).append(" фазы");
                     }
@@ -430,9 +430,10 @@ public class PowerConnectorsConfigDialog extends JDialog {
         int totalIn = 0, totalOut = 0;
         for (CardPort p : host.getConnectors()) {
             listModel.addElement(p);
-            if (p.getDirection() == PortDirection.IN) {
+            if (p.getDirection() != PortDirection.OUT) {
                 totalIn += p.getCount();
-            } else {
+            }
+            if (p.getDirection() != PortDirection.IN) {
                 totalOut += p.getCount();
             }
         }

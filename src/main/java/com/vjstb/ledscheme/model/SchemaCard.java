@@ -52,11 +52,15 @@ public class SchemaCard {
         this.ports = ports;
     }
 
+    /** Двунаправленное гнездо (IN_OUT, например SDI Loop In/Out) считается и
+     *  входом, и выходом одновременно — оно физически предоставляет обе роли,
+     *  а не половину каждой (значит НЕ делится пополам между totalInputs/
+     *  totalOutputs, а входит в обе суммы целиком). */
     @com.fasterxml.jackson.annotation.JsonIgnore
     public int totalInputs() {
         int sum = 0;
         for (CardPort p : ports) {
-            if (p.getDirection() == PortDirection.IN) {
+            if (p.getDirection() != PortDirection.OUT) {
                 sum += p.getCount();
             }
         }
@@ -67,7 +71,7 @@ public class SchemaCard {
     public int totalOutputs() {
         int sum = 0;
         for (CardPort p : ports) {
-            if (p.getDirection() == PortDirection.OUT) {
+            if (p.getDirection() != PortDirection.IN) {
                 sum += p.getCount();
             }
         }
@@ -83,7 +87,8 @@ public class SchemaCard {
                 sb.append(", ");
             }
             sb.append(p.getCount()).append('×').append(p.getConnectorType())
-                    .append(' ').append(p.getDirection() == PortDirection.IN ? "IN" : "OUT");
+                    .append(' ').append(p.getDirection() == PortDirection.IN ? "IN"
+                            : p.getDirection() == PortDirection.OUT ? "OUT" : "IN/OUT");
         }
         return sb.toString();
     }
