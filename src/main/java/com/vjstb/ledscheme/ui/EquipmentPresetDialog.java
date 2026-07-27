@@ -31,6 +31,15 @@ public class EquipmentPresetDialog extends JDialog {
     private Result result;
 
     public EquipmentPresetDialog(Window owner, EquipmentPreset existing) {
+        this(owner, existing, null);
+    }
+
+    /** initialCategory — категория, выбранная по умолчанию для НОВОГО пресета
+     *  (existing == null), например текущая подсвеченная категория в дереве
+     *  библиотеки — без этого «Добавить» в категории Y всегда предлагал бы
+     *  первую по счёту категорию (SOURCE) вместо ожидаемой Y. Игнорируется при
+     *  редактировании существующего пресета (тогда категория берётся из него). */
+    public EquipmentPresetDialog(Window owner, EquipmentPreset existing, SchemaNodeType initialCategory) {
         super(owner, existing == null ? "Новый пресет оборудования" : "Редактирование пресета",
                 ModalityType.APPLICATION_MODAL);
 
@@ -59,6 +68,8 @@ public class EquipmentPresetDialog extends JDialog {
             categoryField.setSelectedItem(existing.getCategory());
             nameField.setText(existing.getName());
             descriptionField.setText(existing.getDescription());
+        } else if (initialCategory != null) {
+            categoryField.setSelectedItem(initialCategory);
         }
 
         JButton ok = new JButton("Сохранить");

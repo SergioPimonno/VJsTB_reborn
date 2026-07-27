@@ -51,9 +51,24 @@ public class LibrariesStagePanel extends JPanel {
     private final JList<ControllerType> ctrlLibList = new JList<>(ctrlLibModel);
     private final JScrollPane ctrlLibScroll = new JScrollPane(ctrlLibList);
 
+    /** Категории пресетов оборудования — все значения SchemaNodeType, кроме SCREEN
+     *  (тот зарезервирован под узел-ссылку на экран схемы, не под оборудование). */
+    private static final SchemaNodeType[] EQUIPMENT_CATEGORIES = {
+            SchemaNodeType.SOURCE, SchemaNodeType.DISTRO, SchemaNodeType.CONVERTER,
+            SchemaNodeType.SERVER, SchemaNodeType.CONTROLLER, SchemaNodeType.MONITOR, SchemaNodeType.CUSTOM
+    };
+
+    private final DefaultListModel<SchemaNodeType> powerCategoryModel = new DefaultListModel<>();
+    private final JList<SchemaNodeType> powerCategoryList = new JList<>(powerCategoryModel);
+    private final JScrollPane powerCategoryScroll = new JScrollPane(powerCategoryList);
+
     private final DefaultListModel<EquipmentPreset> powerPresetModel = new DefaultListModel<>();
     private final JList<EquipmentPreset> powerPresetList = new JList<>(powerPresetModel);
     private final JScrollPane powerPresetScroll = new JScrollPane(powerPresetList);
+
+    private final DefaultListModel<SchemaNodeType> signalCategoryModel = new DefaultListModel<>();
+    private final JList<SchemaNodeType> signalCategoryList = new JList<>(signalCategoryModel);
+    private final JScrollPane signalCategoryScroll = new JScrollPane(signalCategoryList);
 
     private final DefaultListModel<EquipmentPreset> signalPresetModel = new DefaultListModel<>();
     private final JList<EquipmentPreset> signalPresetList = new JList<>(signalPresetModel);
@@ -106,7 +121,8 @@ public class LibrariesStagePanel extends JPanel {
         cabinetsSection = buildLibrary();
         controllersSection = buildControllerLibrary();
         powerPresetsSection = buildEquipmentPresetSection(SchemaMode.POWER,
-                "Оборудование питания (пресеты для схемы)", powerPresetList, powerPresetScroll);
+                "Оборудование питания (пресеты для схемы)", powerPresetList, powerPresetScroll,
+                powerCategoryList, powerCategoryScroll);
         signalEquipmentSection = buildSignalEquipmentSection();
         cableSection = buildCableLibrary();
         body.add(exportImportSection);
@@ -211,9 +227,9 @@ public class LibrariesStagePanel extends JPanel {
      *  "оффсет окошка библиотеки кабинетов", повторный). BorderLayout не
      *  занимается таким "дележом" — CENTER/SOUTH всегда получают 100% ширины
      *  родителя, поэтому переносим сюда всю "поперечную" геометрию целиком. */
-    private static JPanel listSectionBody(JScrollPane scroll, java.awt.Component... southParts) {
+    private static JPanel listSectionBody(java.awt.Component center, java.awt.Component... southParts) {
         JPanel body = new JPanel(new BorderLayout(0, 6));
-        body.add(scroll, BorderLayout.CENTER);
+        body.add(center, BorderLayout.CENTER);
         JPanel south = UiKit.vbox();
         for (java.awt.Component c : southParts) {
             south.add(c);
@@ -316,24 +332,60 @@ public class LibrariesStagePanel extends JPanel {
 
     // ---- пресеты оборудования (для схемы питания/сигнала) ----
 
+    /** Общий рендерер категории (SchemaNodeType) — подпись через getLabel(), а не
+     *  toString умолчальный DefaultListCellRenderer (значение и так уже toString==
+     *  getLabel по факту, но явный рендерер защищает от расхождения, если это
+     *  когда-то изменится, и переиспользуется для питания и сигнала одинаково). */
+    @SuppressWarnings("rawtypes")
+    private static javax.swing.ListCellRenderer categoryRenderer() {
+        return new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public java.awt.Component getListCellRendererComponent(JList<?> list, Object value, int index,
+                    boolean isSelected, boolean cellHasFocus) {
+                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                if (value instanceof SchemaNodeType t) {
+                    setText(t.getLabel());
+                }
+                return this;
+            }
+        };
+    }
+
+    /** Категория, выделенная сейчас в дереве библиотеки — первая по списку, если
+     *  выделения ещё нет (первая сборка) вместо неопределённого "ничего не показывать". */
+    private static SchemaNodeType selectedOrFirstCategory(JList<SchemaNodeType> categoryList) {
+        SchemaNodeType sel = categoryList.getSelectedValue();
+        return sel != null ? sel : EQUIPMENT_CATEGORIES[0];
+    }
+
+    // ---- пресеты оборудования питания: категории | пресеты этой категории ----
+
     private JPanel buildEquipmentPresetSection(SchemaMode mode, String title, JList<EquipmentPreset> presetList,
-                                                JScrollPane presetScroll) {
+                                                JScrollPane presetScroll, JList<SchemaNodeType> categoryList,
+                                                JScrollPane categoryScroll) {
+        categoryList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        categoryList.setCellRenderer(categoryRenderer());
+        for (SchemaNodeType t : EQUIPMENT_CATEGORIES) {
+            ((DefaultListModel<SchemaNodeType>) categoryList.getModel()).addElement(t);
+        }
+        categoryList.setSelectedIndex(0);
+        categoryScroll.setMinimumSize(new Dimension(160, 120));
+
         presetList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         NamedRenderer<EquipmentPreset> renderer = new NamedRenderer<EquipmentPreset>(
-                p -> p.getName() + " (" + p.getCategory().getLabel() + ")",
+                EquipmentPreset::getName,
                 p -> (p.getDescription() == null || p.getDescription().isEmpty() ? "" : p.getDescription() + " · ")
                         + (mode == SchemaMode.POWER
                                 ? "разъёмов: " + p.getPowerConnectors().size()
                                 : "карт: " + p.getCards().size()));
         presetList.setCellRenderer(renderer);
-        if (mode == SchemaMode.POWER) {
-            powerPresetRenderer = renderer;
-        }
+        presetScroll.setMinimumSize(new Dimension(200, 120));
 
         JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
         JButton add = new JButton("Добавить");
         add.addActionListener(e -> {
-            EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), null).showDialog();
+            EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), null,
+                    selectedOrFirstCategory(categoryList)).showDialog();
             if (r != null) tryRun(() -> model.addEquipmentPreset(mode, r.category(), r.name(), r.description(), null));
         });
         JButton edit = new JButton("Изменить");
@@ -371,10 +423,31 @@ public class LibrariesStagePanel extends JPanel {
         crud.add(edit);
         crud.add(cardsBtn);
         crud.add(del);
+
+        categoryList.addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) {
+                refreshPowerPresets();
+            }
+        });
+
+        JPanel categoryPane = UiKit.vbox();
+        categoryPane.add(UiKit.muted("Категория"));
+        categoryPane.add(categoryScroll);
+
+        JPanel presetsPane = UiKit.vbox();
+        presetsPane.add(UiKit.muted("Пресеты этой категории"));
+        presetsPane.add(presetScroll);
+        presetsPane.add(crud);
+
+        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, categoryPane, presetsPane);
+        split.setResizeWeight(0.28);
+        split.setBorder(BorderFactory.createEmptyBorder());
+        split.setContinuousLayout(true);
+
         JLabel hint = UiKit.muted("<html>Пресеты доступны при добавлении узла в общей схеме "
                 + (mode == SchemaMode.POWER ? "питания" : "сигнала")
                 + " (категория узла подставляет сначала пресеты этой категории, затем — свой текст).</html>");
-        return (JPanel) UiKit.dynamicSection(title, listSectionBody(presetScroll, crud, UiKit.vgap(6), hint));
+        return (JPanel) UiKit.dynamicSection(title, listSectionBody(split, UiKit.vgap(2), hint));
     }
 
     // ---- библиотека кабелей/переходников (WireLabelDialog/PowerConnectorsConfigDialog) ----
@@ -415,20 +488,33 @@ public class LibrariesStagePanel extends JPanel {
     // ---- оборудование сигнала: слева тип оборудования, справа его карты-шаблоны ----
 
     private JPanel buildSignalEquipmentSection() {
+        signalCategoryList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        signalCategoryList.setCellRenderer(categoryRenderer());
+        for (SchemaNodeType t : EQUIPMENT_CATEGORIES) {
+            signalCategoryModel.addElement(t);
+        }
+        signalCategoryList.setSelectedIndex(0);
+        signalCategoryScroll.setMinimumSize(new Dimension(150, 120));
+
         signalPresetList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         signalPresetList.setCellRenderer(new NamedRenderer<EquipmentPreset>(
-                p -> p.getName() + " (" + p.getCategory().getLabel() + ")",
+                EquipmentPreset::getName,
                 p -> (p.getDescription() == null || p.getDescription().isEmpty() ? "" : p.getDescription() + " · ")
                         + "карт: " + p.getCards().size()));
         signalPresetScroll.setMinimumSize(new Dimension(180, 120));
 
+        JPanel categoryPane = UiKit.vbox();
+        categoryPane.add(UiKit.muted("Категория"));
+        categoryPane.add(signalCategoryScroll);
+
         JPanel left = UiKit.vbox();
-        left.add(UiKit.muted("Тип оборудования (библиотека)"));
+        left.add(UiKit.muted("Тип оборудования этой категории"));
         left.add(signalPresetScroll);
         JPanel leftCrud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
         JButton add = new JButton("Добавить");
         add.addActionListener(e -> {
-            EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), null).showDialog();
+            EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), null,
+                    selectedOrFirstCategory(signalCategoryList)).showDialog();
             if (r != null) {
                 tryRun(() -> model.addEquipmentPreset(SchemaMode.SIGNAL, r.category(), r.name(), r.description(), null));
             }
@@ -455,6 +541,12 @@ public class LibrariesStagePanel extends JPanel {
         leftCrud.add(edit);
         leftCrud.add(del);
         left.add(leftCrud);
+
+        signalCategoryList.addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) {
+                refreshSignalPresets();
+            }
+        });
 
         signalCardList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         signalCardList.setCellRenderer(new NamedRenderer<SchemaCard>(SchemaCard::getName, SchemaCard::portsSummary));
@@ -523,8 +615,13 @@ public class LibrariesStagePanel extends JPanel {
             }
         });
 
-        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, right);
-        split.setResizeWeight(0.45);
+        JSplitPane presetsAndCards = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, right);
+        presetsAndCards.setResizeWeight(0.45);
+        presetsAndCards.setBorder(BorderFactory.createEmptyBorder());
+        presetsAndCards.setContinuousLayout(true);
+
+        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, categoryPane, presetsAndCards);
+        split.setResizeWeight(0.2);
         split.setBorder(BorderFactory.createEmptyBorder());
         split.setContinuousLayout(true);
         // Раньше здесь был отдельный жёсткий предел ширины (Task #95/v1.5) — больше
@@ -532,24 +629,48 @@ public class LibrariesStagePanel extends JPanel {
         // а BorderLayout/BoxLayout сами передают эту фактическую ширину вниз до
         // split, не требуя дублирующего предела здесь же.
 
-        JPanel body = UiKit.vbox();
-        body.add(split);
-        body.add(UiKit.vgap(6));
-        body.add(UiKit.muted("<html>Пресеты доступны при добавлении узла в общей схеме сигнала (категория"
+        JLabel hint = UiKit.muted("<html>Пресеты доступны при добавлении узла в общей схеме сигнала (категория"
                 + " узла подставляет сначала пресеты этой категории, затем — свой текст). При добавлении узла"
-                + " можно задать, сколько экземпляров каждой карты реально стоит в устройстве.</html>"));
-        return (JPanel) UiKit.dynamicSection("Оборудование сигнала (пресеты для схемы)", body);
+                + " можно задать, сколько экземпляров каждой карты реально стоит в устройстве.</html>");
+        return (JPanel) UiKit.dynamicSection("Оборудование сигнала (пресеты для схемы)",
+                listSectionBody(split, UiKit.vgap(2), hint));
     }
 
     private void refreshSignalCards() {
         EquipmentPreset sel = signalPresetList.getSelectedValue();
         List<SchemaCard> cards = sel == null ? List.of() : sel.getCards();
         syncList(signalCardModel, cards);
-        // Внутри JSplitPane — ширина уже ограничена половиной split (см.
-        // применение contentWidth к секции в applyContentWidth), список сам
-        // растягивается на выделенную ему половину (capWidth=false), а не на
-        // отдельно заданную ширину.
+        // Внутри JSplitPane — ширина уже ограничена его долей (см. применение
+        // contentWidth к секции в applyContentWidth), список сам растягивается
+        // на выделенную ему часть (capWidth=false), а не на отдельно заданную ширину.
         ListSizing.fit(signalCardList, signalCardScroll, 2, 6, false);
+    }
+
+    /** Пересобирает список пресетов ПИТАНИЯ под текущую выбранную категорию (левая
+     *  панель дерева библиотеки) — вызывается и из refresh(), и при смене категории. */
+    private void refreshPowerPresets() {
+        EquipmentPreset selPreset = powerPresetList.getSelectedValue();
+        SchemaNodeType category = selectedOrFirstCategory(powerCategoryList);
+        List<EquipmentPreset> presets = presetsForModeAndCategory(SchemaMode.POWER, category);
+        syncList(powerPresetModel, presets);
+        ListSizing.fit(powerPresetList, powerPresetScroll, 2, 8, false);
+        if (selPreset != null && presets.contains(selPreset)) {
+            powerPresetList.setSelectedValue(selPreset, false);
+        }
+    }
+
+    /** То же для СИГНАЛА — плюс пересобирает список карт справа (см. refreshSignalCards),
+     *  т.к. смена категории обычно меняет и текущий выбранный пресет (карты — его). */
+    private void refreshSignalPresets() {
+        EquipmentPreset selPreset = signalPresetList.getSelectedValue();
+        SchemaNodeType category = selectedOrFirstCategory(signalCategoryList);
+        List<EquipmentPreset> presets = presetsForModeAndCategory(SchemaMode.SIGNAL, category);
+        syncList(signalPresetModel, presets);
+        ListSizing.fit(signalPresetList, signalPresetScroll, 2, 8, false);
+        if (selPreset != null && presets.contains(selPreset)) {
+            signalPresetList.setSelectedValue(selPreset, false);
+        }
+        refreshSignalCards();
     }
 
     private void refresh() {
@@ -563,19 +684,14 @@ public class LibrariesStagePanel extends JPanel {
         syncList(ctrlLibModel, model.getWorkspace().getControllerTypes());
         ListSizing.fit(ctrlLibList, ctrlLibScroll, 2, 6, w);
         recapSection(controllersSection);
-        powerPresetRenderer.setFixedWidth(rw);
-        syncList(powerPresetModel, presetsForMode(SchemaMode.POWER));
-        ListSizing.fit(powerPresetList, powerPresetScroll, 2, 6, w);
+        ListSizing.fit(powerCategoryList, powerCategoryScroll, EQUIPMENT_CATEGORIES.length,
+                EQUIPMENT_CATEGORIES.length, false);
+        refreshPowerPresets();
         recapSection(powerPresetsSection);
 
-        EquipmentPreset selSignalPreset = signalPresetList.getSelectedValue();
-        List<EquipmentPreset> signalPresets = presetsForMode(SchemaMode.SIGNAL);
-        syncList(signalPresetModel, signalPresets);
-        ListSizing.fit(signalPresetList, signalPresetScroll, 2, 6, false);
-        if (selSignalPreset != null && signalPresets.contains(selSignalPreset)) {
-            signalPresetList.setSelectedValue(selSignalPreset, false);
-        }
-        refreshSignalCards();
+        ListSizing.fit(signalCategoryList, signalCategoryScroll, EQUIPMENT_CATEGORIES.length,
+                EQUIPMENT_CATEGORIES.length, false);
+        refreshSignalPresets();
         recapSection(signalEquipmentSection);
 
         cableRenderer.setFixedWidth(rw);
@@ -584,10 +700,10 @@ public class LibrariesStagePanel extends JPanel {
         recapSection(cableSection);
     }
 
-    private List<EquipmentPreset> presetsForMode(SchemaMode mode) {
+    private List<EquipmentPreset> presetsForModeAndCategory(SchemaMode mode, SchemaNodeType category) {
         List<EquipmentPreset> result = new java.util.ArrayList<>();
         for (EquipmentPreset p : model.getEquipmentPresets()) {
-            if (p.getMode() == mode) {
+            if (p.getMode() == mode && p.getCategory() == category) {
                 result.add(p);
             }
         }
