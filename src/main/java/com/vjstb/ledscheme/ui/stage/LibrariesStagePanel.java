@@ -291,7 +291,7 @@ public class LibrariesStagePanel extends JPanel {
             ControllerType sel = ctrlLibList.getSelectedValue();
             if (sel == null) return;
             CardsConfigDialog dlg = new CardsConfigDialog(topWindow(), sel.getName(),
-                    CardsConfigDialog.forController(model, sel));
+                    CardsConfigDialog.forController(model, sel), model);
             dlg.setVisible(true);
         });
         Runnable deleteSelectedControllerType = () -> {
@@ -353,7 +353,7 @@ public class LibrariesStagePanel extends JPanel {
                 dlg.setVisible(true);
             } else {
                 CardsConfigDialog dlg = new CardsConfigDialog(topWindow(), dlgTitle,
-                        CardsConfigDialog.forPreset(model, sel));
+                        CardsConfigDialog.forPreset(model, sel), model);
                 dlg.setVisible(true);
             }
         });
@@ -387,7 +387,7 @@ public class LibrariesStagePanel extends JPanel {
         JPanel addRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
         JButton add = new JButton("+ Добавить кабель…");
         add.addActionListener(e -> {
-            com.vjstb.ledscheme.ui.CableTypeDialog dlg = new com.vjstb.ledscheme.ui.CableTypeDialog(topWindow());
+            com.vjstb.ledscheme.ui.CableTypeDialog dlg = new com.vjstb.ledscheme.ui.CableTypeDialog(topWindow(), model);
             String label = dlg.showDialog();
             if (label != null) {
                 tryRun(() -> model.addCableType(dlg.getMode(), label));
@@ -472,7 +472,7 @@ public class LibrariesStagePanel extends JPanel {
                 return;
             }
             CardsConfigDialog dlg = new CardsConfigDialog(topWindow(), sel.getName(),
-                    CardsConfigDialog.forPreset(model, sel));
+                    CardsConfigDialog.forPreset(model, sel), model);
             dlg.setVisible(true);
         });
         Runnable deleteSelectedSignalCard = () -> {

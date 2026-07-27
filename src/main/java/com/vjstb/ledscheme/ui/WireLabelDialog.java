@@ -346,7 +346,7 @@ public class WireLabelDialog extends JDialog {
         if (model == null) {
             return;
         }
-        CableTypeDialog dlg = new CableTypeDialog(SwingUtilities.getWindowAncestor(this), mode);
+        CableTypeDialog dlg = new CableTypeDialog(SwingUtilities.getWindowAncestor(this), model, mode);
         String label = dlg.showDialog();
         if (label == null) {
             return;

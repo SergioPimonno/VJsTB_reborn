@@ -2,7 +2,9 @@ package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.model.ConnectorGender;
 import com.vjstb.ledscheme.model.SchemaMode;
+import com.vjstb.ledscheme.service.AppModel;
 import java.awt.BorderLayout;
+import java.awt.CardLayout;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
 import java.awt.Window;
@@ -36,28 +38,35 @@ public class CableTypeDialog extends JDialog {
             "CEE 125A", "CEE 63A", "CEE 32A", "CEE 16A", "Schuko",
             "PowerCon TRUE1", "PowerCon 20A", "TRUEcon", "IEC C13", "IEC C19", "Powerlock"
     };
-    private static final String[] SIGNAL_CONNECTOR_PRESETS = {
-            "SDI", "HDMI", "DisplayPort", "DVI", "Fiber", "Ethernet", "Genlock (SDI)", "XLR", "BNC",
-            "USB-C", "Thunderbolt"
-    };
 
     private static final ConnectorGender OUTPUT_END_GENDER = ConnectorGender.FEMALE;
     private static final ConnectorGender INPUT_END_GENDER = ConnectorGender.MALE;
 
+    private static final String CARD_POWER = "power";
+    private static final String CARD_SIGNAL = "signal";
+
     private final JComboBox<SchemaMode> modeCombo = new JComboBox<>(SchemaMode.values());
     private final JComboBox<String> typeComboOutput = new JComboBox<>();
     private final JComboBox<String> typeComboInput = new JComboBox<>();
+    private final InterfaceTypeVersionPicker pickerOutput;
+    private final InterfaceTypeVersionPicker pickerInput;
+    private final CardLayout outputCards = new CardLayout();
+    private final CardLayout inputCards = new CardLayout();
+    private final JPanel outputHost = new JPanel(outputCards);
+    private final JPanel inputHost = new JPanel(inputCards);
     private final JLabel preview = new JLabel(" ");
     private String result;
 
-    public CableTypeDialog(Window owner) {
-        this(owner, SchemaMode.POWER);
+    public CableTypeDialog(Window owner, AppModel model) {
+        this(owner, model, SchemaMode.POWER);
     }
 
-    public CableTypeDialog(Window owner, SchemaMode initialMode) {
+    public CableTypeDialog(Window owner, AppModel model, SchemaMode initialMode) {
         super(owner, "Новый кабель/переходник", ModalityType.APPLICATION_MODAL);
         typeComboOutput.setEditable(true);
         typeComboInput.setEditable(true);
+        pickerOutput = new InterfaceTypeVersionPicker(model);
+        pickerInput = new InterfaceTypeVersionPicker(model);
 
         JPanel content = new JPanel(new BorderLayout(8, 8));
         content.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
@@ -71,19 +80,23 @@ public class CableTypeDialog extends JDialog {
         form.add(modeRow);
         form.add(Box.createVerticalStrut(6));
 
+        outputHost.add(typeComboOutput, CARD_POWER);
+        outputHost.add(pickerOutput, CARD_SIGNAL);
         JPanel endOutput = new JPanel(new GridLayout(0, 2, 6, 4));
         endOutput.setBorder(BorderFactory.createTitledBorder(
                 "Выход источника — «" + OUTPUT_END_GENDER.getLabel() + "»"));
         endOutput.add(new JLabel("Тип"));
-        endOutput.add(typeComboOutput);
+        endOutput.add(outputHost);
         form.add(endOutput);
         form.add(Box.createVerticalStrut(6));
 
+        inputHost.add(typeComboInput, CARD_POWER);
+        inputHost.add(pickerInput, CARD_SIGNAL);
         JPanel endInput = new JPanel(new GridLayout(0, 2, 6, 4));
         endInput.setBorder(BorderFactory.createTitledBorder(
                 "Вход нагрузки — «" + INPUT_END_GENDER.getLabel() + "»"));
         endInput.add(new JLabel("Тип"));
-        endInput.add(typeComboInput);
+        endInput.add(inputHost);
         form.add(endInput);
         form.add(Box.createVerticalStrut(8));
 
@@ -112,6 +125,8 @@ public class CableTypeDialog extends JDialog {
         });
         bindPreviewUpdates(typeComboOutput);
         bindPreviewUpdates(typeComboInput);
+        pickerOutput.setOnChange(this::updatePreview);
+        pickerInput.setOnChange(this::updatePreview);
 
         modeCombo.setSelectedItem(initialMode);
         populateTypesFor(initialMode);
@@ -145,19 +160,31 @@ public class CableTypeDialog extends JDialog {
     }
 
     private void populateTypesFor(SchemaMode mode) {
-        String[] presets = mode == SchemaMode.POWER ? POWER_CONNECTOR_PRESETS : SIGNAL_CONNECTOR_PRESETS;
-        typeComboOutput.setModel(new javax.swing.DefaultComboBoxModel<>(presets));
-        typeComboInput.setModel(new javax.swing.DefaultComboBoxModel<>(presets));
-        typeComboOutput.setSelectedIndex(0);
-        typeComboInput.setSelectedIndex(presets.length > 1 ? 1 : 0);
+        if (mode == SchemaMode.POWER) {
+            typeComboOutput.setModel(new javax.swing.DefaultComboBoxModel<>(POWER_CONNECTOR_PRESETS));
+            typeComboInput.setModel(new javax.swing.DefaultComboBoxModel<>(POWER_CONNECTOR_PRESETS));
+            typeComboOutput.setSelectedIndex(0);
+            typeComboInput.setSelectedIndex(POWER_CONNECTOR_PRESETS.length > 1 ? 1 : 0);
+            outputCards.show(outputHost, CARD_POWER);
+            inputCards.show(inputHost, CARD_POWER);
+        } else {
+            outputCards.show(outputHost, CARD_SIGNAL);
+            inputCards.show(inputHost, CARD_SIGNAL);
+        }
     }
 
     private String typeOutput() {
-        return String.valueOf(typeComboOutput.getEditor().getItem()).trim();
+        if (modeCombo.getSelectedItem() == SchemaMode.POWER) {
+            return String.valueOf(typeComboOutput.getEditor().getItem()).trim();
+        }
+        return pickerOutput.getValue();
     }
 
     private String typeInput() {
-        return String.valueOf(typeComboInput.getEditor().getItem()).trim();
+        if (modeCombo.getSelectedItem() == SchemaMode.POWER) {
+            return String.valueOf(typeComboInput.getEditor().getItem()).trim();
+        }
+        return pickerInput.getValue();
     }
 
     private void updatePreview() {
