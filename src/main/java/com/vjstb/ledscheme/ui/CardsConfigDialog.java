@@ -201,8 +201,7 @@ public class CardsConfigDialog extends JDialog {
                     boolean isSelected, boolean cellHasFocus) {
                 super.getListCellRendererComponent(l, value, index, isSelected, cellHasFocus);
                 if (value instanceof CardPort p) {
-                    setText(p.getCount() + "× " + p.getConnectorType() + " ("
-                            + (p.getDirection() == PortDirection.IN ? "вход" : "выход") + ")");
+                    setText(p.getCount() + "× " + p.getConnectorType() + " (" + p.getDirection().getLabel().toLowerCase() + ")");
                 }
                 return this;
             }

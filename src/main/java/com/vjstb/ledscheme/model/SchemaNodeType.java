@@ -8,6 +8,7 @@ public enum SchemaNodeType {
     SERVER("Медиасервер"),
     CONTROLLER("Контроллер"),
     SCREEN("Экран"),
+    MONITOR("Монитор/TV"),
     CUSTOM("Прочее оборудование");
 
     private final String label;
