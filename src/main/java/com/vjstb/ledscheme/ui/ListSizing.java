@@ -53,7 +53,23 @@ public final class ListSizing {
         int h = rows * rowH + 6;
         scroll.setPreferredSize(new Dimension(width, h));
         scroll.setMaximumSize(new Dimension(width, h));
-        scroll.revalidate();
+        // scroll.revalidate() САМО ПО СЕБЕ не всегда заставляет BoxLayout
+        // непосредственного родителя (vbox секции) реально пересчитать позицию/
+        // ширину этого списка заново — на практике родитель иногда остаётся
+        // "valid" со старой (более узкой, от предыдущего прохода ресайза) шириной
+        // ребёнка, из-за чего список в одной секции визуально "уезжает"
+        // относительно другой при абсолютно одинаковом коде (баг-репорт:
+        // "оффсет окошка библиотеки кабинетов" — воспроизведено и подтверждено
+        // диагностикой: preferredSize/maximumSize были верны, а РЕАЛЬНЫЕ bounds —
+        // нет). Явно инвалидируем и пересобираем родителя, а не только сам scroll.
+        java.awt.Container parent = scroll.getParent();
+        if (parent != null) {
+            parent.invalidate();
+            parent.revalidate();
+            parent.repaint();
+        } else {
+            scroll.revalidate();
+        }
     }
 
     private static int estimateRowHeight(JList<?> list) {

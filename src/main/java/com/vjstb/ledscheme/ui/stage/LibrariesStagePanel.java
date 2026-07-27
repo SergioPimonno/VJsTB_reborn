@@ -24,6 +24,7 @@ import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
+import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -127,6 +128,13 @@ public class LibrariesStagePanel extends JPanel {
 
         for (JScrollPane sp : new JScrollPane[]{libScroll, ctrlLibScroll, powerPresetScroll, cableScroll}) {
             sp.setMinimumSize(new Dimension(200, 80));
+            // ВСЕГДА показывать вертикальный скроллбар (даже когда все позиции
+            // помещаются) — иначе два списка одинаковой ширины секции переносят
+            // текст по-разному в зависимости от того, есть ли у НИХ КОНКРЕТНО
+            // прокрутка прямо сейчас, и визуально расходятся по правому отступу
+            // (баг-репорт: "оффсет окошка библиотеки кабинетов" против библиотеки
+            // контроллеров) — см. rendererWidth()/SCROLLBAR_RESERVE выше.
+            sp.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
         }
 
         // scroll.getViewport().getWidth() УЖЕ не включает ширину вертикального
@@ -168,6 +176,20 @@ public class LibrariesStagePanel extends JPanel {
         return Math.max(200, contentWidth - 60);
     }
 
+    /** Ширина вертикального скроллбара, ВСЕГДА резервируемая под текст в
+     *  NamedRenderer — намеренно не зависит от того, показан ли скроллбар у
+     *  КОНКРЕТНОГО списка прямо сейчас. Если резервировать место только когда
+     *  скроллбар реально есть, два списка с одинаковой шириной секции (например,
+     *  «Библиотека кабинетов» с прокруткой и «Библиотека контроллеров» без неё)
+     *  переносят текст по-разному и визуально расходятся по правому отступу —
+     *  ровно баг-репорт "оффсет окошка библиотеки кабинетов". Постоянный отступ
+     *  устраняет расхождение независимо от текущего количества позиций. */
+    private static final int SCROLLBAR_RESERVE = 18;
+
+    private int rendererWidth(int w) {
+        return Math.max(160, w - SCROLLBAR_RESERVE);
+    }
+
     /** Пересчитывает МАКСИМАЛЬНУЮ ширину (см. applyContentWidth) И высоту секции по
      *  ЖИВОМУ preferredSize (не setPreferredSize — тот бы заморозил значение и
      *  сломал пересчёт при следующем изменении числа строк списка внутри) — для
@@ -176,17 +198,38 @@ public class LibrariesStagePanel extends JPanel {
         section.setMaximumSize(new Dimension(contentWidth, section.getPreferredSize().height));
     }
 
+    /** Тело секции со списком: список в CENTER, остальные элементы (кнопки,
+     *  подсказка) снизу в SOUTH — оба ВСЕГДА получают полную ширину секции
+     *  безусловно (в отличие от BoxLayout.Y_AXIS, который делит "поперечную"
+     *  ширину между детьми через SizeRequirements.calculateAlignedPositions;
+     *  на практике это давало то одному, то другому ребёнку заметно МЕНЬШЕ
+     *  положенной ширины при нескольких детях с разным maximumSize в одном
+     *  BoxLayout-контейнере — подтверждено диагностикой с реальными числами:
+     *  список с подсказкой-«муткой» снизу ужимался почти на 200px против
+     *  списка без неё при абсолютно одинаковой ширине секции; баг-репорт
+     *  "оффсет окошка библиотеки кабинетов", повторный). BorderLayout не
+     *  занимается таким "дележом" — CENTER/SOUTH всегда получают 100% ширины
+     *  родителя, поэтому переносим сюда всю "поперечную" геометрию целиком. */
+    private static JPanel listSectionBody(JScrollPane scroll, java.awt.Component... southParts) {
+        JPanel body = new JPanel(new BorderLayout(0, 6));
+        body.add(scroll, BorderLayout.CENTER);
+        JPanel south = UiKit.vbox();
+        for (java.awt.Component c : southParts) {
+            south.add(c);
+        }
+        body.add(south, BorderLayout.SOUTH);
+        return body;
+    }
+
     // ---- библиотека кабинетов ----
 
     private JPanel buildLibrary() {
-        JPanel body = UiKit.vbox();
         libList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         libRenderer = new NamedRenderer<CabinetType>(CabinetType::getName, ct ->
                 UiKit.fmt(ct.getWidthMm()) + "×" + UiKit.fmt(ct.getHeightMm()) + "мм · "
                         + ct.getResolutionWidth() + "×" + ct.getResolutionHeight() + "px · "
                         + UiKit.fmt(ct.getPowerConsumptionW()) + "Вт · " + UiKit.fmt(ct.getWeightKg()) + "кг");
         libList.setCellRenderer(libRenderer);
-        body.add(libScroll);
 
         JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
         JButton add = new JButton("Добавить");
@@ -211,14 +254,12 @@ public class LibrariesStagePanel extends JPanel {
         crud.add(add);
         crud.add(edit);
         crud.add(del);
-        body.add(crud);
-        return (JPanel) UiKit.dynamicSection("Библиотека кабинетов", body);
+        return (JPanel) UiKit.dynamicSection("Библиотека кабинетов", listSectionBody(libScroll, crud));
     }
 
     // ---- библиотека контроллеров (аналог SmartLCT) ----
 
     private JPanel buildControllerLibrary() {
-        JPanel body = UiKit.vbox();
         ctrlLibList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         ctrlLibRenderer = new NamedRenderer<ControllerType>(
                 ct -> ct.getName() + (ct.getVendor().isEmpty() ? "" : " (" + ct.getVendor() + ")"),
@@ -231,7 +272,6 @@ public class LibrariesStagePanel extends JPanel {
                                 : "")
                         + (ct.isLoopPort() ? " · Loop" : ""));
         ctrlLibList.setCellRenderer(ctrlLibRenderer);
-        body.add(ctrlLibScroll);
 
         JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
         JButton add = new JButton("Добавить");
@@ -267,18 +307,16 @@ public class LibrariesStagePanel extends JPanel {
         crud.add(edit);
         crud.add(cardsBtn);
         crud.add(del);
-        body.add(crud);
-        body.add(UiKit.vgap(6));
-        body.add(UiKit.muted("<html>Для модульных контроллеров (например, Novastar H-серии) задайте карты"
-                + " вывода вместо ручного числа портов — «Вых. портов» выше тогда считается по картам.</html>"));
-        return (JPanel) UiKit.dynamicSection("Библиотека контроллеров", body);
+        JLabel hint = UiKit.muted("<html>Для модульных контроллеров (например, Novastar H-серии) задайте карты"
+                + " вывода вместо ручного числа портов — «Вых. портов» выше тогда считается по картам.</html>");
+        return (JPanel) UiKit.dynamicSection("Библиотека контроллеров",
+                listSectionBody(ctrlLibScroll, crud, UiKit.vgap(6), hint));
     }
 
     // ---- пресеты оборудования (для схемы питания/сигнала) ----
 
     private JPanel buildEquipmentPresetSection(SchemaMode mode, String title, JList<EquipmentPreset> presetList,
                                                 JScrollPane presetScroll) {
-        JPanel body = UiKit.vbox();
         presetList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         NamedRenderer<EquipmentPreset> renderer = new NamedRenderer<EquipmentPreset>(
                 p -> p.getName() + " (" + p.getCategory().getLabel() + ")",
@@ -290,7 +328,6 @@ public class LibrariesStagePanel extends JPanel {
         if (mode == SchemaMode.POWER) {
             powerPresetRenderer = renderer;
         }
-        body.add(presetScroll);
 
         JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
         JButton add = new JButton("Добавить");
@@ -333,23 +370,19 @@ public class LibrariesStagePanel extends JPanel {
         crud.add(edit);
         crud.add(cardsBtn);
         crud.add(del);
-        body.add(crud);
-        body.add(UiKit.vgap(6));
-        body.add(UiKit.muted("<html>Пресеты доступны при добавлении узла в общей схеме "
+        JLabel hint = UiKit.muted("<html>Пресеты доступны при добавлении узла в общей схеме "
                 + (mode == SchemaMode.POWER ? "питания" : "сигнала")
-                + " (категория узла подставляет сначала пресеты этой категории, затем — свой текст).</html>"));
-        return (JPanel) UiKit.dynamicSection(title, body);
+                + " (категория узла подставляет сначала пресеты этой категории, затем — свой текст).</html>");
+        return (JPanel) UiKit.dynamicSection(title, listSectionBody(presetScroll, crud, UiKit.vgap(6), hint));
     }
 
     // ---- библиотека кабелей/переходников (WireLabelDialog/PowerConnectorsConfigDialog) ----
 
     private JPanel buildCableLibrary() {
-        JPanel body = UiKit.vbox();
         cableList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         cableRenderer = new NamedRenderer<CableType>(
                 c -> (c.getMode() == SchemaMode.POWER ? "[Питание] " : "[Сигнал] ") + c.getLabel(), c -> "");
         cableList.setCellRenderer(cableRenderer);
-        body.add(cableScroll);
 
         JPanel addRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
         JButton add = new JButton("+ Добавить кабель…");
@@ -371,13 +404,11 @@ public class LibrariesStagePanel extends JPanel {
         UiKit.bindDeleteKey(cableList, deleteSelectedCable);
         addRow.add(add);
         addRow.add(del);
-        body.add(addRow);
-        body.add(UiKit.vgap(4));
-        body.add(UiKit.muted("Кабели/переходники (например, комбинированные вроде «CEE 16A → TrueCON»): "
+        JLabel hint = UiKit.muted("Кабели/переходники (например, комбинированные вроде «CEE 16A → TrueCON»): "
                 + "выберите разъём и исполнение («папа»/«мама») на каждом конце — подпись соберётся "
                 + "автоматически. Также предлагаются вдобавок к встроенным при подписи связи схемы и при "
-                + "заведении разъёмов распределения, откуда их можно сохранить кнопкой «В библиотеку кабелей»."));
-        return (JPanel) UiKit.dynamicSection("Кабели", body);
+                + "заведении разъёмов распределения, откуда их можно сохранить кнопкой «В библиотеку кабелей».");
+        return (JPanel) UiKit.dynamicSection("Кабели", listSectionBody(cableScroll, addRow, UiKit.vgap(4), hint));
     }
 
     // ---- оборудование сигнала: слева тип оборудования, справа его карты-шаблоны ----
@@ -499,15 +530,16 @@ public class LibrariesStagePanel extends JPanel {
 
     private void refresh() {
         int w = listWidth();
-        libRenderer.setFixedWidth(w);
+        int rw = rendererWidth(w);
+        libRenderer.setFixedWidth(rw);
         syncList(libModel, model.getCabinetTypes());
         ListSizing.fit(libList, libScroll, 2, 8, w);
         recapSection(cabinetsSection);
-        ctrlLibRenderer.setFixedWidth(w);
+        ctrlLibRenderer.setFixedWidth(rw);
         syncList(ctrlLibModel, model.getWorkspace().getControllerTypes());
         ListSizing.fit(ctrlLibList, ctrlLibScroll, 2, 6, w);
         recapSection(controllersSection);
-        powerPresetRenderer.setFixedWidth(w);
+        powerPresetRenderer.setFixedWidth(rw);
         syncList(powerPresetModel, presetsForMode(SchemaMode.POWER));
         ListSizing.fit(powerPresetList, powerPresetScroll, 2, 6, w);
         recapSection(powerPresetsSection);
@@ -522,7 +554,7 @@ public class LibrariesStagePanel extends JPanel {
         refreshSignalCards();
         recapSection(signalEquipmentSection);
 
-        cableRenderer.setFixedWidth(w);
+        cableRenderer.setFixedWidth(rw);
         syncList(cableModel, model.getCableTypes());
         ListSizing.fit(cableList, cableScroll, 2, 6, w);
         recapSection(cableSection);
