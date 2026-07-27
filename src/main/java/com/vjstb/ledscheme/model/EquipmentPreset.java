@@ -25,6 +25,13 @@ public class EquipmentPreset {
     /** Разъёмы питания пресета (только для mode == POWER): тип+направление+количество
      *  без группировки по картам, см. {@link SchemaNode#getPowerConnectors()}. */
     private List<CardPort> powerConnectors = new ArrayList<>();
+    /** Комплектация по умолчанию — id карт-шаблонов из {@link #cards} В ПОРЯДКЕ
+     *  размещения (шаблон может повторяться, если в устройстве несколько
+     *  экземпляров одной карты) — при добавлении узла из этого пресета
+     *  диалог сборки карт (см. AssembleCardsDialog) стартует с этого набора
+     *  вместо пустого, чтобы не собирать одну и ту же типовую комплектацию
+     *  заново на каждый узел. Пусто — старое поведение (пустой старт). */
+    private List<String> defaultCardTemplateIds = new ArrayList<>();
 
     public EquipmentPreset() {
     }
@@ -92,6 +99,14 @@ public class EquipmentPreset {
         this.powerConnectors = powerConnectors;
     }
 
+    public List<String> getDefaultCardTemplateIds() {
+        return defaultCardTemplateIds;
+    }
+
+    public void setDefaultCardTemplateIds(List<String> defaultCardTemplateIds) {
+        this.defaultCardTemplateIds = defaultCardTemplateIds;
+    }
+
     public EquipmentPreset copy() {
         EquipmentPreset p = new EquipmentPreset();
         p.id = id;
@@ -107,6 +122,7 @@ public class EquipmentPreset {
         for (CardPort cp : powerConnectors) {
             p.powerConnectors.add(cp.copy());
         }
+        p.defaultCardTemplateIds = new ArrayList<>(defaultCardTemplateIds);
         return p;
     }
 }

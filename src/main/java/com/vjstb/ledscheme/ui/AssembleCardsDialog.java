@@ -44,7 +44,17 @@ public class AssembleCardsDialog extends JDialog {
     private List<String> result;
 
     public AssembleCardsDialog(Window owner, EquipmentPreset preset) {
-        super(owner, "Состав карт — " + preset.getName(), ModalityType.APPLICATION_MODAL);
+        this(owner, preset, preset.getDefaultCardTemplateIds(), "Состав карт — " + preset.getName(), "Добавить узел");
+    }
+
+    /** initialTemplateIds — комплектация, с которой стартует левый список (см.
+     *  EquipmentPreset.defaultCardTemplateIds) — пусто, если начинать с чистого
+     *  листа; title/okLabel — под конкретный сценарий вызова (добавление узла
+     *  из пресета в схему, либо редактирование самой комплектации по умолчанию
+     *  в библиотеке — см. LibrariesStagePanel). */
+    public AssembleCardsDialog(Window owner, EquipmentPreset preset, List<String> initialTemplateIds,
+                                String title, String okLabel) {
+        super(owner, title, ModalityType.APPLICATION_MODAL);
         this.preset = preset;
 
         DefaultListModel<SchemaCard> libraryModel = new DefaultListModel<>();
@@ -52,6 +62,12 @@ public class AssembleCardsDialog extends JDialog {
             libraryModel.addElement(template);
         }
         libraryList = new JList<>(libraryModel);
+        for (String id : initialTemplateIds) {
+            SchemaCard template = findTemplateById(id);
+            if (template != null) {
+                assembledModel.addElement(template);
+            }
+        }
 
         assembledList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         assembledList.setCellRenderer(new NamedRenderer<SchemaCard>(SchemaCard::getName, SchemaCard::portsSummary));
@@ -121,7 +137,7 @@ public class AssembleCardsDialog extends JDialog {
         content.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
         content.add(split, BorderLayout.CENTER);
 
-        JButton ok = new JButton("Добавить узел");
+        JButton ok = new JButton(okLabel);
         ok.addActionListener(e -> {
             result = new ArrayList<>();
             for (int i = 0; i < assembledModel.size(); i++) {
