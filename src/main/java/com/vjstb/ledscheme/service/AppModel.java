@@ -1405,6 +1405,16 @@ public class AppModel {
         changed();
     }
 
+    /** Задаёт комплектацию по умолчанию пресета (см. EquipmentPreset.defaultCardTemplateIds) —
+     *  список id карт-шаблонов ЭТОГО ЖЕ пресета в порядке размещения (см. AssembleCardsDialog).
+     *  Не проверяет, что id реально существуют среди preset.getCards() — устаревшая ссылка
+     *  на удалённый шаблон просто безвредно пропускается при следующем открытии диалога
+     *  сборки (см. AssembleCardsDialog конструктор), а не бросает исключение здесь. */
+    public void setDefaultCardLoadout(EquipmentPreset preset, List<String> templateIds) {
+        preset.setDefaultCardTemplateIds(new ArrayList<>(templateIds));
+        changed();
+    }
+
     public CardPort addPowerConnectorToPreset(EquipmentPreset preset, String connectorType, PortDirection direction,
                                                int count) {
         return addPowerConnectorToPreset(preset, connectorType, direction, count, 1, null);

@@ -8,6 +8,7 @@ import com.vjstb.ledscheme.model.SchemaCard;
 import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.SchemaNodeType;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.ui.AssembleCardsDialog;
 import com.vjstb.ledscheme.ui.CabinetTypeDialog;
 import com.vjstb.ledscheme.ui.CabinetTypeRenderer;
 import com.vjstb.ledscheme.ui.CardsConfigDialog;
@@ -486,8 +487,31 @@ public class LibrariesStagePanel extends JPanel {
         JButton cardDel = new JButton("Удалить карту");
         cardDel.addActionListener(e -> deleteSelectedSignalCard.run());
         UiKit.bindDeleteKey(signalCardList, deleteSelectedSignalCard);
+        JButton defaultLoadoutBtn = new JButton("По умолчанию…");
+        defaultLoadoutBtn.setToolTipText("Задать комплектацию, с которой будет стартовать сборка узла из этого"
+                + " пресета в общей схеме, вместо пустого списка каждый раз");
+        defaultLoadoutBtn.addActionListener(e -> {
+            EquipmentPreset sel = signalPresetList.getSelectedValue();
+            if (sel == null) {
+                JOptionPane.showMessageDialog(this, "Сначала выберите тип оборудования слева",
+                        "Комплектация по умолчанию", JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            if (sel.getCards().isEmpty()) {
+                JOptionPane.showMessageDialog(this, "У этого оборудования ещё нет карт-шаблонов — сначала"
+                        + " добавьте хотя бы одну кнопкой «Добавить карту»", "Комплектация по умолчанию",
+                        JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            List<String> order = new AssembleCardsDialog(topWindow(), sel, sel.getDefaultCardTemplateIds(),
+                    "Комплектация по умолчанию — " + sel.getName(), "Сохранить по умолчанию").showDialog();
+            if (order != null) {
+                tryRun(() -> model.setDefaultCardLoadout(sel, order));
+            }
+        });
         rightCrud.add(cardAdd);
         rightCrud.add(cardDel);
+        rightCrud.add(defaultLoadoutBtn);
         right.add(rightCrud);
         right.add(UiKit.vgap(6));
         right.add(UiKit.muted("<html>Одинаковых карт в устройстве может быть несколько — их количество"
