@@ -33,6 +33,7 @@ import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
 import javax.swing.JOptionPane;
@@ -1747,6 +1748,29 @@ public class SchemaCanvasPanel extends JPanel {
 
     private static final int CONNECTOR_ROW_H = 13;
     private static final int CONNECTOR_DOT_D = 7;
+    /** Отступ от верха узла до первой строки разъёмов — увеличен с 34 до 38
+     *  (Task #110), т.к. у карт первая "строка" теперь шапка-рамка с названием
+     *  карты, и заголовку узла нужно чуть больше запаса, чтобы рамка блока не
+     *  подходила к нему вплотную (баг-репорт: рамка/шапка карты наезжала на
+     *  название узла). Продублировано в AppModel.PORT_ROWS_TOP_OFFSET — держать
+     *  оба значения одинаковыми. */
+    private static final int PORT_ROWS_TOP_OFFSET = 38;
+    /** Разъёмы одной карты рисуются внутри своего рамка-блока (а не одним общим
+     *  списком строк вперемешку с другими картами, как раньше) — см. Task #109:
+     *  повторный баг-репорт, что при большом количестве разъёмов подписи разных
+     *  карт визуально сливались/наезжали друг на друга. CARD_HEADER_H — место под
+     *  строку названия карты в шапке блока — РАВНО высоте обычной строки разъёма
+     *  (CONNECTOR_ROW_H), а не отдельное произвольное число: шапка по сути и есть
+     *  ещё одна строка в том же ритме, только без точки-гнезда — так гарантированно
+     *  не наезжает на первую настоящую строку карты (первая попытка со своим
+     *  числом ловила именно это — баг-репорт со скриншотом, где название карты
+     *  накладывалось на "4×SDI..."). CARD_BLOCK_PAD — внутренний отступ рамки
+     *  сверху/снизу, CARD_BLOCK_GAP — промежуток МЕЖДУ блоками соседних карт. Эти
+     *  же константы задействованы в AppModel.autoFitNodeToPorts, чтобы авто-высота
+     *  узла учитывала место под рамки, а не только под строки. */
+    private static final int CARD_HEADER_H = CONNECTOR_ROW_H;
+    private static final int CARD_BLOCK_PAD = 3;
+    private static final int CARD_BLOCK_GAP = 6;
     /** Небольшая устойчивая палитра для разъёмов — цвет назначается по хэшу типа
      *  (а не по жёсткому списку известных типов вроде HDMI/CEE), чтобы работать с
      *  любым введённым пользователем названием разъёма и не требовать сопровождения
@@ -1769,9 +1793,25 @@ public class SchemaCanvasPanel extends JPanel {
      *  не увеличат). */
     private static List<SocketRect> computeSocketRects(List<PortEntry> ports, int x, int y, int w, int h) {
         List<SocketRect> rects = new ArrayList<>();
-        int rowY = y + 34;
+        int rowY = y + PORT_ROWS_TOP_OFFSET;
         int maxY = y + h - 4;
+        String prevCardId = null;
+        boolean started = false;
         for (PortEntry entry : ports) {
+            String cardId = entry.cardId();
+            if (!started || !Objects.equals(cardId, prevCardId)) {
+                // Новая карта (или, для разъёмов питания без карт — первый и единственный
+                // "безрамочный" проход) — резервируем место под шапку блока и, если это
+                // не первый блок вообще, промежуток перед ним (см. CARD_HEADER_H/GAP выше).
+                if (started) {
+                    rowY += CARD_BLOCK_GAP;
+                }
+                if (cardId != null) {
+                    rowY += CARD_HEADER_H;
+                }
+                prevCardId = cardId;
+                started = true;
+            }
             if (rowY > maxY) {
                 break;
             }
@@ -1797,16 +1837,81 @@ public class SchemaCanvasPanel extends JPanel {
         return rects;
     }
 
-    /** Разъёмы узла построчно — гнёзда с цветной точкой по типу разъёма, входы
-     *  слева, выходы справа (как в патч-панели): раньше вся комплектация сжималась
-     *  в одну обрезаемую строку («2×CEE 63…»), теперь каждая группа разъёмов —
-     *  своя строка, обрезается по ширине только САМА строка, а не всё вместе.
-     *  Название карты в скобках — иначе одинаковые по типу разъёмы из РАЗНЫХ карт
-     *  неразличимы на вид. Если включена «коммутация через гнёзда» — гнёзда ещё и
+    /** Рамка-блок карты + название в шапке — границы блока получаются прямо из
+     *  Y-координат уже вычисленных {@link SocketRect} (т.е. гарантированно
+     *  согласованы с местом, которое для шапки/отступов зарезервировал
+     *  {@link #computeSocketRects}, без повторного дублирования этой геометрии).
+     *  Идущие подряд {@link SocketRect} с одинаковым (не-null) cardId — один блок;
+     *  у разъёмов питания cardId всегда null — для них блок не рисуется. */
+    private void drawCardBlockBorders(Graphics2D g2, List<SocketRect> rects, int x, int w) {
+        String curCardId = null;
+        String curCardName = null;
+        int blockTop = -1;
+        int blockBottom = -1;
+        boolean open = false;
+        for (SocketRect r : rects) {
+            String cardId = r.entry().cardId();
+            if (!open || !Objects.equals(cardId, curCardId)) {
+                if (open && curCardId != null) {
+                    paintCardBlockBorder(g2, x, w, blockTop, blockBottom);
+                }
+                curCardId = cardId;
+                curCardName = r.entry().groupName();
+                // computeSocketRects зарезервировал под шапку ровно ОДНУ строку
+                // (CARD_HEADER_H == CONNECTOR_ROW_H) перед первой настоящей строкой
+                // карты — значит "виртуальная" позиция шапки лежит на один такой шаг
+                // выше первой точки-гнезда, в том же ритме, что и обычные строки
+                // (гарантированно не наезжает на неё, в отличие от первой попытки
+                // с произвольным числом — баг-репорт, где название карты налезало
+                // на первую строку разъёмов). Рамка — с небольшим отступом ещё выше.
+                int headerDotY = r.dotY() - CARD_HEADER_H;
+                blockTop = headerDotY - CARD_BLOCK_PAD;
+                blockBottom = r.dotY() + CONNECTOR_DOT_D + CARD_BLOCK_PAD;
+                open = true;
+                if (cardId != null) {
+                    paintCardBlockHeader(g2, x, w, headerDotY, curCardName);
+                }
+            } else {
+                blockBottom = Math.max(blockBottom, r.dotY() + CONNECTOR_DOT_D + CARD_BLOCK_PAD);
+            }
+        }
+        if (open && curCardId != null) {
+            paintCardBlockBorder(g2, x, w, blockTop, blockBottom);
+        }
+    }
+
+    private void paintCardBlockBorder(Graphics2D g2, int x, int w, int top, int bottom) {
+        g2.setColor(new Color(0, 0, 0, 60));
+        g2.setStroke(new BasicStroke(1f));
+        g2.drawRoundRect(x + 3, top, w - 6, bottom - top, 6, 6);
+    }
+
+    /** Название карты в шапке блока — печатается той же строкой, что и baseline
+     *  обычной строки разъёма ({@code headerDotY + CONNECTOR_DOT_D}, см. основной
+     *  цикл drawConnectorRows), просто на строку выше первой строки этой карты. */
+    private void paintCardBlockHeader(Graphics2D g2, int x, int w, int headerDotY, String cardName) {
+        if (cardName == null || cardName.isEmpty()) {
+            return;
+        }
+        g2.setColor(new Color(0, 0, 0, 150));
+        String clipped = clipToWidth(g2, cardName, w - 16);
+        g2.drawString(clipped, x + 8, headerDotY + CONNECTOR_DOT_D);
+    }
+
+    /** Разъёмы узла построчно, сгруппированные визуально по картам — каждая карта
+     *  рисуется своим рамка-блоком с шапкой (название карты) внутри блока
+     *  оборудования, а не одним общим списком строк вперемешку с другими картами
+     *  (Task #109, повторный запрос: «разъёмы входящие в одну и ту же карточку
+     *  должны объединяться визуально в блок этой карточки» — раньше название
+     *  карты писалось лишь ИНЛАЙНОМ у первой строки её группы (Task #67), из-за
+     *  чего при большом числе разъёмов подписи разных карт визуально сливались/
+     *  наезжали друг на друга, как на скриншоте с "SMODE"). У разъёмов питания
+     *  (без карт, cardId==null) рамка не рисуется — они остаются плоским списком,
+     *  как и раньше. Если включена «коммутация через гнёзда» — гнёзда ещё и
      *  кликабельны (см. {@link #socketAt}), наведённое подсвечивается белым кольцом. */
     private void drawConnectorRows(Graphics2D g2, SchemaNode node, List<PortEntry> ports, int x, int y, int w, int h) {
         List<SocketRect> rects = computeSocketRects(ports, x, y, w, h);
-        String prevCardId = null;
+        drawCardBlockBorders(g2, rects, x, w);
         for (SocketRect r : rects) {
             CardPort port = r.entry().port();
             boolean hovered = hoveredSocket != null && hoveredSocket.node() == node && hoveredSocket.port() == port;
@@ -1817,20 +1922,9 @@ public class SchemaCanvasPanel extends JPanel {
             int ring = hovered ? 2 : 0;
             g2.drawOval(r.dotX() - ring, r.dotY() - ring, CONNECTOR_DOT_D + ring * 2, CONNECTOR_DOT_D + ring * 2);
 
-            // Название карты пишется только у ПЕРВОЙ строки её группы портов — если
-            // подряд идут несколько строк одной и той же карты (например 2×HDMI +
-            // 2×DisplayPort на одной карте видеовхода), повторять её название на
-            // каждой строке избыточно и загромождает вид (см. Task #67). Группировка —
-            // по id САМОЙ карты, а не по строке названия: у нескольких ЭКЗЕМПЛЯРОВ
-            // одного шаблона (Task #59) название совпадает, но это разные карты —
-            // сравнение по названию ошибочно "склеивало" второй экземпляр с первым,
-            // оставляя его вовсе без подписи (баг, найденный пользователем визуально).
-            String groupName = r.entry().groupName();
-            String cardId = r.entry().cardId();
-            boolean sameCardAsPrev = cardId != null && cardId.equals(prevCardId);
-            String label = port.getCount() + "×" + port.getConnectorType()
-                    + (groupName != null && !groupName.isEmpty() && !sameCardAsPrev ? " (" + groupName + ")" : "");
-            prevCardId = cardId;
+            // Название карты теперь пишется в шапке её блока (см. drawCardBlockBorders),
+            // повторять его в скобках у каждой строки больше не нужно.
+            String label = port.getCount() + "×" + port.getConnectorType();
             int maxTextW = w - CONNECTOR_DOT_D - 16;
             g2.setColor(new Color(0, 0, 0, 190));
             String clipped = clipToWidth(g2, label, maxTextW);
@@ -1844,7 +1938,8 @@ public class SchemaCanvasPanel extends JPanel {
         long renderedEntries = rects.stream().map(SocketRect::entry).distinct().count();
         if (renderedEntries < ports.size()) {
             int remaining = ports.size() - (int) renderedEntries;
-            int hintY = rects.isEmpty() ? y + 34 : rects.get(rects.size() - 1).dotY() + CONNECTOR_DOT_D + CONNECTOR_ROW_H;
+            int hintY = rects.isEmpty() ? y + PORT_ROWS_TOP_OFFSET
+                    : rects.get(rects.size() - 1).dotY() + CONNECTOR_DOT_D + CONNECTOR_ROW_H;
             g2.setColor(new Color(0, 0, 0, 150));
             g2.drawString("+" + remaining + " ещё…", x + 10, hintY);
         }

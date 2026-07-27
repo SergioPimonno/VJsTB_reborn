@@ -871,8 +871,17 @@ public class AppModel {
      *  SchemaCanvasPanel.computeSocketRects, продублированы здесь намеренно (модель
      *  не должна зависеть от UI-класса) для расчёта минимальной высоты под все порты. */
     private static final int PORT_ROW_H = 13;
-    private static final int PORT_ROWS_TOP_OFFSET = 34;
+    private static final int PORT_ROWS_TOP_OFFSET = 38;
     private static final int PORT_ROWS_BOTTOM_PAD = 6;
+    /** Разъёмы карт теперь рисуются каждый в своём рамка-блоке с шапкой (см.
+     *  SchemaCanvasPanel.CARD_HEADER_H/CARD_BLOCK_PAD/CARD_BLOCK_GAP, продублировано
+     *  здесь по той же причине, что и PORT_ROW_H выше) — авто-высота узла должна
+     *  учитывать место под эти шапки/отступы, иначе блоки карт обрезаются. У
+     *  разъёмов питания (без карт) рамки не рисуются — на них эта надбавка не
+     *  распространяется. */
+    private static final int CARD_HEADER_H = 14;
+    private static final int CARD_BLOCK_PAD = 3;
+    private static final int CARD_BLOCK_GAP = 6;
 
     /** Растягивает высоту узла так, чтобы были видны ВСЕ его порты (карты сигнала
      *  или разъёмы питания), не обрезаясь в «+N ещё» — вызывается при создании узла
@@ -881,14 +890,22 @@ public class AppModel {
      *  подстроил вручную крупнее необходимого. */
     public void autoFitNodeToPorts(SchemaNode node) {
         int portCount = 0;
+        int cardCount = 0;
         for (SchemaCard c : node.getCards()) {
-            portCount += c.getPorts().size();
+            int n = c.getPorts().size();
+            portCount += n;
+            if (n > 0) {
+                cardCount++;
+            }
         }
         portCount += node.getPowerConnectors().size();
         if (portCount == 0) {
             return;
         }
         double needed = PORT_ROWS_TOP_OFFSET + portCount * PORT_ROW_H + PORT_ROWS_BOTTOM_PAD;
+        if (cardCount > 0) {
+            needed += cardCount * (CARD_HEADER_H + CARD_BLOCK_PAD * 2) + Math.max(0, cardCount - 1) * CARD_BLOCK_GAP;
+        }
         if (node.getHeight() < needed) {
             node.setHeight(needed);
         }

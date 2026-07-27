@@ -15,9 +15,11 @@ import javax.swing.JTabbedPane;
 
 /**
  * «Руководство» — единое место для пояснений, как пользоваться приложением.
- * Текст разделов полностью пользовательский (см. {@link ContentEditorDialog},
- * кнопка «Редактировать руководство» ниже) — начинается с встроенного текста
- * по умолчанию, который можно переписать под себя, не трогая код приложения.
+ * Текст разделов полностью пользовательский (см. {@link ContentEditorDialog}) —
+ * начинается с встроенного текста по умолчанию, который можно переписать под
+ * себя, не трогая код приложения. Само редактирование теперь только через
+ * Инструменты → «Админ-режим…» (см. AdminDialog.buildTextsTab, который вызывает
+ * {@link #openEditor()} напрямую) — здесь остаётся только просмотр.
  */
 public class GuideDialog extends JDialog {
 
@@ -103,15 +105,10 @@ public class GuideDialog extends JDialog {
 
         JPanel content = new JPanel(new BorderLayout());
         content.add(tabs, BorderLayout.CENTER);
-        JPanel bottom = new JPanel(new BorderLayout());
-        JButton edit = new JButton("✎ Редактировать руководство");
-        edit.addActionListener(e -> openEditor());
-        bottom.add(edit, BorderLayout.WEST);
-        JPanel rightBtns = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT));
+        JPanel bottom = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT));
         JButton close = new JButton("Закрыть");
         close.addActionListener(e -> dispose());
-        rightBtns.add(close);
-        bottom.add(rightBtns, BorderLayout.EAST);
+        bottom.add(close);
         content.add(bottom, BorderLayout.SOUTH);
 
         setContentPane(content);
@@ -135,7 +132,10 @@ public class GuideDialog extends JDialog {
         }
     }
 
-    private void openEditor() {
+    /** Открывает редактор текста руководства — вызывается из AdminDialog
+     *  (Инструменты → «Админ-режим…» → «Тексты»), больше не из кнопки в самом
+     *  диалоге руководства. */
+    public void openEditor() {
         ContentEditorDialog dlg = new ContentEditorDialog(this, "Редактировать руководство", sections(),
                 DEFAULT_SECTIONS, saved -> {
                     settings.setCustomContent(CONTENT_KEY, saved);
