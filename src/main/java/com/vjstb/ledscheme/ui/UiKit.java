@@ -162,6 +162,19 @@ public final class UiKit {
         JLabel l = new JLabel(wrapHtml(text));
         l.setForeground(Palette.MUTED);
         l.setAlignmentX(Component.LEFT_ALIGNMENT);
+        // JLabel с HTML-содержимым отдаёт getMaximumSize().width == Integer.MAX_VALUE
+        // (блочный HTML-контент теоретически может занять любую ширину) — в
+        // BoxLayout.Y_AXIS (см. LibrariesStagePanel) это ломает расчёт горизонтальной
+        // раскладки СОСЕДНИХ детей контейнера: список (JScrollPane) над этой подсказкой
+        // получает заметно МЕНЬШЕ положенной ширины вместо всей доступной — отсюда
+        // разный видимый отступ у секций библиотеки в зависимости от того, есть ли у
+        // них такая подсказка снизу (баг-репорт "оффсет окошка библиотеки кабинетов",
+        // подтверждено диагностикой: без этой подсказки список ложится ровно, с ней —
+        // нет). Ограничиваем максимум конечным (но заведомо большим) значением, как у
+        // остальных "растягивающихся" компонентов этих панелей (JPanel по умолчанию
+        // отдаёт Short.MAX_VALUE, а не Integer.MAX_VALUE, и с ними бага нет).
+        Dimension max = l.getMaximumSize();
+        l.setMaximumSize(new Dimension(Short.MAX_VALUE, max.height));
         return l;
     }
 
