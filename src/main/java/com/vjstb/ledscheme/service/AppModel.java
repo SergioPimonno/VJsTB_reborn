@@ -9,6 +9,7 @@ import com.vjstb.ledscheme.model.ContentCanvas;
 import com.vjstb.ledscheme.model.ControllerInstance;
 import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.EquipmentPreset;
+import com.vjstb.ledscheme.model.InterfaceType;
 import com.vjstb.ledscheme.model.LibraryBundle;
 import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.PowerChain;
@@ -69,6 +70,35 @@ public class AppModel {
     public AppModel(WorkspaceStore store) {
         this.store = store;
         this.workspace = store.load();
+        seedDefaultInterfaceTypesIfEmpty();
+    }
+
+    /** Заполняет справочник видов интерфейса встроенными значениями при первом
+     *  запуске (пустой список — и для только что созданного workspace, и для
+     *  файла, сохранённого до появления этого справочника, т.к. Jackson просто
+     *  оставляет для отсутствующего в JSON поля значение по умолчанию из
+     *  инициализатора поля — пустой список). Дальше список полностью
+     *  редактируемый (см. AdminDialog) — это лишь стартовые данные, а не
+     *  зашитая жёстко таблица. */
+    private void seedDefaultInterfaceTypesIfEmpty() {
+        if (!workspace.getInterfaceTypes().isEmpty()) {
+            return;
+        }
+        List<InterfaceType> defaults = new ArrayList<>();
+        defaults.add(new InterfaceType("HDMI", List.of("1.4", "2.0", "2.1")));
+        defaults.add(new InterfaceType("DisplayPort", List.of("1.2", "1.4", "2.0", "2.1")));
+        defaults.add(new InterfaceType("SDI", List.of("SD-SDI", "HD-SDI", "3G-SDI", "6G-SDI", "12G-SDI", "24G-SDI")));
+        defaults.add(new InterfaceType("DVI", List.of("DVI-D Single Link", "DVI-D Dual Link",
+                "DVI-I Single Link", "DVI-I Dual Link")));
+        defaults.add(new InterfaceType("Ethernet", List.of("Cat5e", "Cat6", "Cat6a", "Cat7", "Cat8")));
+        defaults.add(new InterfaceType("USB-C", List.of("USB 3.2 Gen1", "USB 3.2 Gen2", "USB4", "USB4 v2")));
+        defaults.add(new InterfaceType("Thunderbolt", List.of("3", "4", "5")));
+        defaults.add(new InterfaceType("Fiber", List.of("Multimode OM3", "Multimode OM4", "Multimode OM5", "Singlemode OS2")));
+        defaults.add(new InterfaceType("Genlock", List.of("Blackburst", "Tri-Level")));
+        defaults.add(new InterfaceType("XLR", List.of()));
+        defaults.add(new InterfaceType("BNC", List.of()));
+        workspace.getInterfaceTypes().addAll(defaults);
+        persist();
     }
 
     // ---- listeners ----
@@ -1203,6 +1233,69 @@ public class AppModel {
 
     public void exportEquipmentPresetLibrary(File file) {
         store.exportList(workspace.getEquipmentPresets(), file);
+    }
+
+    // ---- справочник видов интерфейса и их версий (InterfaceType) ----
+
+    public List<InterfaceType> getInterfaceTypes() {
+        return workspace.getInterfaceTypes();
+    }
+
+    public InterfaceType interfaceTypeByName(String name) {
+        if (name == null) {
+            return null;
+        }
+        for (InterfaceType t : workspace.getInterfaceTypes()) {
+            if (t.getName().equalsIgnoreCase(name)) {
+                return t;
+            }
+        }
+        return null;
+    }
+
+    public InterfaceType addInterfaceType(String name, List<String> versions) {
+        String trimmed = name == null ? "" : name.trim();
+        if (trimmed.isEmpty()) {
+            throw new IllegalArgumentException("Укажите название вида интерфейса");
+        }
+        InterfaceType t = new InterfaceType(trimmed, versions == null ? List.of() : versions);
+        workspace.getInterfaceTypes().add(t);
+        changed();
+        return t;
+    }
+
+    public void updateInterfaceType(InterfaceType type, String name, List<String> versions) {
+        String trimmed = name == null ? "" : name.trim();
+        if (trimmed.isEmpty()) {
+            throw new IllegalArgumentException("Укажите название вида интерфейса");
+        }
+        type.setName(trimmed);
+        type.setVersions(versions == null ? new ArrayList<>() : new ArrayList<>(versions));
+        changed();
+    }
+
+    public void deleteInterfaceType(InterfaceType type) {
+        workspace.getInterfaceTypes().remove(type);
+        changed();
+    }
+
+    /** Импорт: существующие по названию (без учёта регистра) обновляются, новые добавляются. */
+    public int importInterfaceLibrary(File file) {
+        List<InterfaceType> incoming = store.importList(file, InterfaceType.class);
+        for (InterfaceType inc : incoming) {
+            InterfaceType match = interfaceTypeByName(inc.getName());
+            if (match != null) {
+                match.setVersions(inc.getVersions());
+            } else {
+                workspace.getInterfaceTypes().add(inc);
+            }
+        }
+        changed();
+        return incoming.size();
+    }
+
+    public void exportInterfaceLibrary(File file) {
+        store.exportList(workspace.getInterfaceTypes(), file);
     }
 
     // ---- экспорт/импорт ВСЕХ библиотек разом ----

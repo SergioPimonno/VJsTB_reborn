@@ -130,9 +130,7 @@ public class CardsConfigDialog extends JDialog {
     private final JLabel totalsLabel = new JLabel();
 
     private final JTextField nameField = new JTextField();
-    private final javax.swing.JComboBox<String> connectorCombo = new javax.swing.JComboBox<>(
-            new String[]{"HDMI 2.1", "HDMI 2.0", "DisplayPort 1.4", "DisplayPort 1.2", "SDI", "DVI",
-                    "Fiber", "Ethernet", "USB-C", "Thunderbolt", "Генлок"});
+    private final InterfaceTypeVersionPicker connectorPicker;
     private final javax.swing.JComboBox<PortDirection> directionCombo = new javax.swing.JComboBox<>(PortDirection.values());
     private final JSpinner countSpinner = new JSpinner(new SpinnerNumberModel(1, 1, 64, 1));
 
@@ -148,13 +146,13 @@ public class CardsConfigDialog extends JDialog {
     private JButton editButton;
 
     public CardsConfigDialog(Window owner, AppModel model, SchemaNode node) {
-        this(owner, labelOf(node), forNode(model, node));
+        this(owner, labelOf(node), forNode(model, node), model);
     }
 
-    public CardsConfigDialog(Window owner, String title, CardsHost host) {
+    public CardsConfigDialog(Window owner, String title, CardsHost host, AppModel model) {
         super(owner, "Комплектация карт — " + title, ModalityType.APPLICATION_MODAL);
         this.host = host;
-        connectorCombo.setEditable(true);
+        this.connectorPicker = new InterfaceTypeVersionPicker(model);
 
         JPanel content = new JPanel(new BorderLayout(8, 8));
         content.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
@@ -181,7 +179,7 @@ public class CardsConfigDialog extends JDialog {
         JPanel portForm = new JPanel(new GridLayout(0, 2, 6, 4));
         portForm.setBorder(BorderFactory.createTitledBorder("Добавить группу разъёмов в карту"));
         portForm.add(new JLabel("Разъём"));
-        portForm.add(connectorCombo);
+        portForm.add(connectorPicker);
         portForm.add(new JLabel("Направление"));
         portForm.add(directionCombo);
         portForm.add(new JLabel("Количество"));
@@ -255,7 +253,7 @@ public class CardsConfigDialog extends JDialog {
     }
 
     private void addPendingPort() {
-        String connector = String.valueOf(connectorCombo.getEditor().getItem()).trim();
+        String connector = connectorPicker.getValue();
         if (connector.isEmpty()) {
             JOptionPane.showMessageDialog(this, "Укажите тип разъёма", "Проверка данных", JOptionPane.WARNING_MESSAGE);
             return;

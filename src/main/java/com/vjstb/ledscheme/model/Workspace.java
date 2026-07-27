@@ -18,6 +18,9 @@ public class Workspace {
     /** Библиотека пользовательских кабелей/переходников (например «CEE 16A →
      *  TrueCON») — дополняет встроенные пресеты в WireLabelDialog/PowerConnectorsConfigDialog. */
     private List<CableType> cableTypes = new ArrayList<>();
+    /** Справочник видов интерфейса (HDMI/DisplayPort/SDI/...) и их версий — общий
+     *  для карт оборудования, кабелей и подписи связи схемы (см. InterfaceType). */
+    private List<InterfaceType> interfaceTypes = new ArrayList<>();
     private List<Project> projects = new ArrayList<>();
 
     public List<CabinetType> getCabinetTypes() {
@@ -50,6 +53,14 @@ public class Workspace {
 
     public void setCableTypes(List<CableType> cableTypes) {
         this.cableTypes = cableTypes;
+    }
+
+    public List<InterfaceType> getInterfaceTypes() {
+        return interfaceTypes;
+    }
+
+    public void setInterfaceTypes(List<InterfaceType> interfaceTypes) {
+        this.interfaceTypes = interfaceTypes;
     }
 
     public List<Project> getProjects() {
