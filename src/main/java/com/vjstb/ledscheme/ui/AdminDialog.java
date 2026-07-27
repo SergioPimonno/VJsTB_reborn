@@ -181,21 +181,33 @@ public class AdminDialog extends JDialog {
     private JPanel buildTextsTab(SettingsManager settings) {
         JPanel body = new JPanel(new BorderLayout(0, 10));
         body.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-        body.add(UiKit.muted("<html>Открывает существующие окна «Руководство»/«Приветствие» — редактирование"
-                + " текста там же, кнопкой «✎ Редактировать» (см. верхнюю панель приложения).</html>"),
-                BorderLayout.NORTH);
+        body.add(UiKit.muted("<html>Правка текста «Руководства»/«Приветствия» — раньше кнопка «✎ Редактировать»"
+                + " была в самих этих окнах, теперь редактирование только здесь.</html>"), BorderLayout.NORTH);
 
         JPanel buttons = new JPanel();
         buttons.setLayout(new javax.swing.BoxLayout(buttons, javax.swing.BoxLayout.Y_AXIS));
         JButton openGuide = new JButton("Открыть «Руководство»…");
         openGuide.addActionListener(e -> new GuideDialog(this, settings).setVisible(true));
+        JButton editGuide = new JButton("✎ Редактировать руководство…");
+        editGuide.addActionListener(e -> {
+            GuideDialog guide = new GuideDialog(this, settings);
+            guide.setVisible(true);
+            guide.openEditor();
+        });
         JButton openOnboarding = new JButton("Открыть «Приветствие»…");
         openOnboarding.addActionListener(e -> new OnboardingDialog(this, settings).setVisible(true));
-        openGuide.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
-        openOnboarding.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
-        buttons.add(openGuide);
-        buttons.add(javax.swing.Box.createVerticalStrut(6));
-        buttons.add(openOnboarding);
+        JButton editOnboarding = new JButton("✎ Редактировать текст приветствия…");
+        // OnboardingDialog модальный (это же обучающий тур) — показывать его тут же
+        // нельзя, setVisible(true) заблокировал бы поток до закрытия тура, и
+        // openEditor() ниже не вызвался бы вовсе. Открываем редактор напрямую на
+        // непоказанном экземпляре — Swing не требует, чтобы владелец модального
+        // окна был видим.
+        editOnboarding.addActionListener(e -> new OnboardingDialog(this, settings).openEditor());
+        for (JButton b : new JButton[]{openGuide, editGuide, openOnboarding, editOnboarding}) {
+            b.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+            buttons.add(b);
+            buttons.add(javax.swing.Box.createVerticalStrut(6));
+        }
         body.add(buttons, BorderLayout.CENTER);
         return body;
     }

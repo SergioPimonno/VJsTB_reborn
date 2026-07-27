@@ -78,8 +78,6 @@ public class OnboardingDialog extends JDialog {
         content.add(cardsPanel, BorderLayout.CENTER);
 
         JPanel nav = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 8));
-        JButton editText = new JButton("✎ Редактировать текст");
-        editText.addActionListener(e -> openEditor());
         JButton skip = new JButton("Пропустить");
         skip.addActionListener(e -> {
             settings.setOnboardingCompleted(true);
@@ -91,7 +89,6 @@ public class OnboardingDialog extends JDialog {
             settings.setOnboardingCompleted(true);
             dispose();
         });
-        nav.add(editText);
         nav.add(skip);
         nav.add(back);
         nav.add(next);
@@ -129,7 +126,9 @@ public class OnboardingDialog extends JDialog {
         cardsPanel.add(personalizationPanel, STEPS[2]);
     }
 
-    private void openEditor() {
+    /** Открывает редактор текста приветствия — вызывается из AdminDialog
+     *  (Инструменты → «Админ-режим…» → «Тексты»), больше не из кнопки в самом туре. */
+    public void openEditor() {
         ContentEditorDialog dlg = new ContentEditorDialog(this, "Редактировать текст приветствия", sections(),
                 DEFAULT_SECTIONS, saved -> {
                     settings.setCustomContent(CONTENT_KEY, saved);
