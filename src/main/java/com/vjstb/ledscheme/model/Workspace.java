@@ -21,6 +21,9 @@ public class Workspace {
     /** Справочник видов интерфейса (HDMI/DisplayPort/SDI/...) и их версий — общий
      *  для карт оборудования, кабелей и подписи связи схемы (см. InterfaceType). */
     private List<InterfaceType> interfaceTypes = new ArrayList<>();
+    /** Админ-редактируемые подкатегории оборудования под "Прочее оборудование" —
+     *  см. EquipmentPreset.customCategoryLabel/AdminDialog. */
+    private List<String> customEquipmentCategories = new ArrayList<>();
     private List<Project> projects = new ArrayList<>();
 
     public List<CabinetType> getCabinetTypes() {
@@ -61,6 +64,14 @@ public class Workspace {
 
     public void setInterfaceTypes(List<InterfaceType> interfaceTypes) {
         this.interfaceTypes = interfaceTypes;
+    }
+
+    public List<String> getCustomEquipmentCategories() {
+        return customEquipmentCategories;
+    }
+
+    public void setCustomEquipmentCategories(List<String> customEquipmentCategories) {
+        this.customEquipmentCategories = customEquipmentCategories;
     }
 
     public List<Project> getProjects() {

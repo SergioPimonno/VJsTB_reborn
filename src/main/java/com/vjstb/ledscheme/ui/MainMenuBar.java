@@ -26,7 +26,7 @@ public class MainMenuBar extends JMenuBar {
 
     public MainMenuBar(JFrame owner, AppModel model, SettingsManager settings, Runnable onShowShortcuts) {
         add(buildSettingsMenu(owner, settings));
-        add(buildToolsMenu(owner, model));
+        add(buildToolsMenu(owner, model, settings));
         add(buildPersonalizationMenu(owner, settings));
         add(buildHelpMenu(onShowShortcuts));
     }
@@ -68,7 +68,7 @@ public class MainMenuBar extends JMenuBar {
         }
     }
 
-    private JMenu buildToolsMenu(JFrame owner, AppModel model) {
+    private JMenu buildToolsMenu(JFrame owner, AppModel model, SettingsManager settings) {
         JMenu menu = new JMenu("Инструменты");
 
         JMenuItem exportImportLib = new JMenuItem("Экспорт/импорт библиотек…");
@@ -84,6 +84,13 @@ public class MainMenuBar extends JMenuBar {
         // Импорт из NovaLCT (.scr) временно отключён из меню — формат разобран лишь
         // частично (см. NovaLctScrParser/NovaLctImportDialog), доработка в следующих
         // версиях. Классы намеренно оставлены нетронутыми для продолжения работы.
+
+        menu.addSeparator();
+        JMenuItem admin = new JMenuItem("Админ-режим…");
+        admin.setToolTipText("Справочник видов интерфейса/версий, подкатегории оборудования, тексты"
+                + " Руководства/Приветствия — заготовка под будущую серверную интеграцию");
+        admin.addActionListener(e -> new AdminDialog(owner, model, settings).setVisible(true));
+        menu.add(admin);
 
         return menu;
     }
