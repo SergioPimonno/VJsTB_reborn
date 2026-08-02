@@ -41,6 +41,12 @@ public class SchemaEdge {
      *  «стандартный цвет по режиму схемы» (см. SchemaCanvasPanel); отдельная связь
      *  сигнала может получить свой цвет для читаемости плотной схемы. */
     private Integer color;
+    /** Смещение подписи (экранные пиксели) от расчётной точки по центру маршрута
+     *  ({@code midOfRoute}) — 0,0 (по умолчанию) означает текущее поведение
+     *  «подпись всегда по центру линии»; ненулевое значение задаётся перетаскиванием
+     *  чипа подписи в редакторе схемы (Task #3). */
+    private double labelDx;
+    private double labelDy;
 
     public SchemaEdge() {
     }
@@ -156,6 +162,22 @@ public class SchemaEdge {
         this.color = color;
     }
 
+    public double getLabelDx() {
+        return labelDx;
+    }
+
+    public void setLabelDx(double labelDx) {
+        this.labelDx = labelDx;
+    }
+
+    public double getLabelDy() {
+        return labelDy;
+    }
+
+    public void setLabelDy(double labelDy) {
+        this.labelDy = labelDy;
+    }
+
     /** true, если подпись задана структурированно (N×тип) — только такие связи
      *  попадают в автоматическую спецификацию коммутации на этапе «Вывод». */
     public boolean hasStructuredWire() {
@@ -196,6 +218,8 @@ public class SchemaEdge {
         }
         e.dashed = dashed;
         e.color = color;
+        e.labelDx = labelDx;
+        e.labelDy = labelDy;
         return e;
     }
 }

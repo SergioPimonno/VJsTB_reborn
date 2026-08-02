@@ -39,12 +39,42 @@ public final class SchemeRenderer {
     private SchemeRenderer() {
     }
 
+    /** Цвет цепочки питания для отрисовки — свой (Task #4), если задан, иначе
+     *  как раньше по фазе (см. Palette.phaseColor). */
+    public static Color chainColor(PowerChain chain) {
+        return chain.getColor() != null ? new Color(chain.getColor()) : Palette.phaseColor(chain.getPhase());
+    }
+
+    /** Цвет цепочки сигнала — свой (Task #4), если задан, иначе по индексу в
+     *  списке цепочек экрана, как раньше (см. Palette.signalColor). */
+    public static Color chainColor(SignalChain chain, int indexInList) {
+        return chain.getColor() != null ? new Color(chain.getColor()) : Palette.signalColor(indexInList);
+    }
+
     /** Размер ячейки кабинета по соотношению сторон типа. */
     public static Dimension cellSize(CabinetType type, int base) {
         double ratio = type != null && type.getHeightMm() > 0 ? type.getWidthMm() / type.getHeightMm() : 1;
         int w = ratio >= 1 ? base : (int) Math.round(base * ratio);
         int h = ratio >= 1 ? (int) Math.round(base / ratio) : base;
         return new Dimension(Math.max(w, 24), Math.max(h, 24));
+    }
+
+    /** Экранная позиция ячейки (X/Y) — сеточная позиция (rowIndex/colIndex * размер
+     *  ячейки) плюс свободное мм-смещение ячейки (см. CabinetInstance.getOffsetXMm/
+     *  getOffsetYMm, Task #7/v1.6), переведённое в пиксели ТЕКУЩЕГО масштаба через
+     *  {@link ScreenLogic#offsetPx} — единая точка правды для всех мест, что кладут
+     *  ячейку на сетку (используется здесь ВЕЗДЕ вместо прямого offX + col*cellW,
+     *  иначе часть отрисовки учитывала бы смещение, а часть — нет, и ячейка визуально
+     *  «расползалась» бы между линией цепочки/подписью и своим же контуром).
+     *  type может быть null (см. effectiveTypeOf) — тогда смещение не применяется. */
+    private static int cabX(CabinetInstance cab, CabinetType type, int cellW, int offX) {
+        double dx = type != null ? ScreenLogic.offsetPx(cab.getOffsetXMm(), cellW, type.getWidthMm()) : 0;
+        return offX + (int) Math.round(cab.getColIndex() * cellW + dx);
+    }
+
+    private static int cabY(CabinetInstance cab, CabinetType type, int cellH, int offY) {
+        double dy = type != null ? ScreenLogic.offsetPx(cab.getOffsetYMm(), cellH, type.getHeightMm()) : 0;
+        return offY + (int) Math.round(cab.getRowIndex() * cellH + dy);
     }
 
     /** То же, но с указанием workspace — тогда для ячеек с переопределённым типом
@@ -77,16 +107,23 @@ public final class SchemeRenderer {
             if (cab.isHidden()) {
                 continue;
             }
-            int x = offX + cab.getColIndex() * cellW;
-            int y = offY + cab.getRowIndex() * cellH;
+            int x = cabX(cab, type, cellW, offX);
+            int y = cabY(cab, type, cellH, offY);
 
             CabinetType effective = effectiveTypeOf(cab, type, workspace);
             CabinetShape shape = cab.getShapeOverride() != null ? cab.getShapeOverride()
                     : (effective != null ? effective.getShape() : null);
             double rotationDeg = effectiveRotationDeg(cab, effective);
+            // Ячейка с переопределённым типом другого физического размера рисуется
+            // ПРОПОРЦИОНАЛЬНО этому размеру (см. ScreenLogic.effectiveCellW/H), а не
+            // втискивается в номинальную cellW/cellH — иначе комбинация кабинетов
+            // разных габаритов на одном экране визуально неотличима от однородной
+            // сетки (баг-репорт про 500×1000мм кабинет в экране 500×500мм).
+            int ew = (int) Math.round(ScreenLogic.effectiveCellW(effective, type, cellW));
+            int eh = (int) Math.round(ScreenLogic.effectiveCellH(effective, type, cellH));
 
             g2.setColor(Palette.BORDER);
-            outlineCabinetShape(g2, x, y, cellW, cellH, shape, rotationDeg);
+            outlineCabinetShape(g2, x, y, ew, eh, shape, rotationDeg);
 
             if (showLabels) {
                 g2.setColor(new Color(0xc0, 0xc8, 0xd0));
@@ -100,13 +137,13 @@ public final class SchemeRenderer {
                 // Метка фазы — только у НАЧАЛА цепочки: питание не закольцовывается
                 // (в отличие от сигнала с резервным портом на другом конце), поэтому
                 // дублировать фазу на последнем кабинете незачем.
-                drawChain(g2, scr, chain.getCabinetInstanceIds(), Palette.phaseColor(chain.getPhase()),
+                drawChain(g2, scr, chain.getCabinetInstanceIds(), chainColor(chain),
                         false, cellW, cellH, offX, offY, type, workspace, "L" + chain.getPhase(), null);
             }
         } else {
             for (int i = 0; i < signalChains.size(); i++) {
                 SignalChain chain = signalChains.get(i);
-                drawChain(g2, scr, chain.getCabinetInstanceIds(), Palette.signalColor(i),
+                drawChain(g2, scr, chain.getCabinetInstanceIds(), chainColor(chain, i),
                         false, cellW, cellH, offX, offY, type, workspace, signalChainLabel(scr, chain, workspace),
                         signalChainEndLabel(scr, chain, workspace));
             }
@@ -132,7 +169,7 @@ public final class SchemeRenderer {
         if (power) {
             for (int ci = 0; ci < powerChains.size(); ci++) {
                 PowerChain chain = powerChains.get(ci);
-                Color color = Palette.phaseColor(chain.getPhase());
+                Color color = chainColor(chain);
                 List<String> ids = chain.getCabinetInstanceIds();
                 for (int i = 0; i < ids.size(); i++) {
                     byCab.put(ids.get(i), new ChainMembership(ci, i + 1, color, chain.getPhase(), null));
@@ -141,7 +178,7 @@ public final class SchemeRenderer {
         } else {
             for (int ci = 0; ci < signalChains.size(); ci++) {
                 SignalChain chain = signalChains.get(ci);
-                Color color = Palette.signalColor(ci);
+                Color color = chainColor(chain, ci);
                 List<String> ids = chain.getCabinetInstanceIds();
                 for (int i = 0; i < ids.size(); i++) {
                     byCab.put(ids.get(i), new ChainMembership(ci, i + 1, color, null, chain.getPortNumber()));
@@ -160,18 +197,20 @@ public final class SchemeRenderer {
             if (cab.isHidden()) {
                 continue;
             }
-            int x = offX + cab.getColIndex() * cellW;
-            int y = offY + cab.getRowIndex() * cellH;
+            int x = cabX(cab, type, cellW, offX);
+            int y = cabY(cab, type, cellH, offY);
             ChainMembership m = byCab.get(cab.getId());
             CabinetType effective = effectiveTypeOf(cab, type, workspace);
             CabinetShape shape = cab.getShapeOverride() != null ? cab.getShapeOverride()
                     : (effective != null ? effective.getShape() : null);
             double rotationDeg = effectiveRotationDeg(cab, effective);
+            int ew = (int) Math.round(ScreenLogic.effectiveCellW(effective, type, cellW));
+            int eh = (int) Math.round(ScreenLogic.effectiveCellH(effective, type, cellH));
 
             g2.setColor(m != null ? m.color() : Palette.PANEL);
-            fillCabinetShape(g2, x, y, cellW, cellH, shape, rotationDeg);
+            fillCabinetShape(g2, x, y, ew, eh, shape, rotationDeg);
             g2.setColor(Palette.BORDER);
-            outlineCabinetShape(g2, x, y, cellW, cellH, shape, rotationDeg);
+            outlineCabinetShape(g2, x, y, ew, eh, shape, rotationDeg);
 
             if (m != null && showLabels) {
                 List<String> lines = new ArrayList<>();
@@ -190,15 +229,15 @@ public final class SchemeRenderer {
                 // прямоугольник), для остальных форм подпись, не попавшая внутрь
                 // формы, просто не рисуется, а не наезжает на пустой фон.
                 Graphics2D gc = (Graphics2D) g2.create();
-                gc.clip(cabinetShapeOutline(x, y, cellW, cellH, shape, rotationDeg));
+                gc.clip(cabinetShapeOutline(x, y, ew, eh, shape, rotationDeg));
                 gc.setFont(labelFont);
                 gc.setColor(Color.BLACK);
                 java.awt.FontMetrics fm = gc.getFontMetrics();
                 int lineH = fm.getHeight();
                 int ty = y + lineH;
-                int maxTextW = cellW - 6;
+                int maxTextW = ew - 6;
                 for (String line : lines) {
-                    if (ty > y + cellH - 2) {
+                    if (ty > y + eh - 2) {
                         break;
                     }
                     gc.drawString(clipToWidth(gc, line, maxTextW), x + 3, ty);
@@ -254,13 +293,13 @@ public final class SchemeRenderer {
             for (var entry : startLabelsByCabinet.entrySet()) {
                 CabinetInstance cab = scr.cabinetById(entry.getKey());
                 if (cab != null) {
-                    drawStartLabelBadge(g2, cab, cellW, cellH, offX, offY, entry.getValue(), false);
+                    drawStartLabelBadge(g2, cab, type, cellW, cellH, offX, offY, entry.getValue(), false);
                 }
             }
             for (var entry : endLabelsByCabinet.entrySet()) {
                 CabinetInstance cab = scr.cabinetById(entry.getKey());
                 if (cab != null) {
-                    drawStartLabelBadge(g2, cab, cellW, cellH, offX, offY, entry.getValue(), true);
+                    drawStartLabelBadge(g2, cab, type, cellW, cellH, offX, offY, entry.getValue(), true);
                 }
             }
         }
@@ -287,11 +326,11 @@ public final class SchemeRenderer {
      *  правом нижнем углу вместо левого верхнего (для подписи резервного порта на
      *  ПОСЛЕДНЕМ кабинете цепочки — не должна перекрывать подпись начала другой
      *  цепочки, если та начинается в этой же ячейке). */
-    private static void drawStartLabelBadge(Graphics2D g2, CabinetInstance cab, int cellW, int cellH,
+    private static void drawStartLabelBadge(Graphics2D g2, CabinetInstance cab, CabinetType type, int cellW, int cellH,
                                              int offX, int offY, List<LabelLine> lines, boolean bottomRight) {
         int minCell = Math.min(cellW, cellH);
-        int x = offX + cab.getColIndex() * cellW;
-        int y = offY + cab.getRowIndex() * cellH;
+        int x = cabX(cab, type, cellW, offX);
+        int y = cabY(cab, type, cellH, offY);
         Font f = g2.getFont().deriveFont(Font.BOLD, Math.max(7f, Math.min(minCell * 0.32f, 11f)));
         g2.setFont(f);
         java.awt.FontMetrics fm = g2.getFontMetrics();
@@ -360,13 +399,15 @@ public final class SchemeRenderer {
      *  {@link #cabinetConnectionAnchor}. */
     private static java.awt.Point anchorFor(CabinetInstance cab, int offX, int offY, int cellW, int cellH,
                                              CabinetType type, Workspace workspace) {
-        int x = offX + cab.getColIndex() * cellW;
-        int y = offY + cab.getRowIndex() * cellH;
+        int x = cabX(cab, type, cellW, offX);
+        int y = cabY(cab, type, cellH, offY);
         CabinetType effective = effectiveTypeOf(cab, type, workspace);
         CabinetShape shape = cab.getShapeOverride() != null ? cab.getShapeOverride()
                 : (effective != null ? effective.getShape() : null);
         double rotationDeg = effectiveRotationDeg(cab, effective);
-        return cabinetConnectionAnchor(x, y, cellW, cellH, shape, rotationDeg);
+        int ew = (int) Math.round(ScreenLogic.effectiveCellW(effective, type, cellW));
+        int eh = (int) Math.round(ScreenLogic.effectiveCellH(effective, type, cellH));
+        return cabinetConnectionAnchor(x, y, ew, eh, shape, rotationDeg);
     }
 
     /** Обрезает строку по ширине (с "…"), чтобы не наезжала на соседние ячейки при
@@ -578,10 +619,10 @@ public final class SchemeRenderer {
 
         if (!ids.isEmpty() && minCell >= 22) {
             if (startLabel != null && !startLabel.isEmpty()) {
-                drawChainEndpointLabel(g2, scr, ids.get(0), color, cellW, cellH, offX, offY, startLabel);
+                drawChainEndpointLabel(g2, scr, ids.get(0), color, type, cellW, cellH, offX, offY, startLabel);
             }
             if (ids.size() > 1 && endLabel != null && !endLabel.isEmpty()) {
-                drawChainEndpointLabel(g2, scr, ids.get(ids.size() - 1), color, cellW, cellH, offX, offY, endLabel);
+                drawChainEndpointLabel(g2, scr, ids.get(ids.size() - 1), color, type, cellW, cellH, offX, offY, endLabel);
             }
         }
     }
@@ -605,14 +646,14 @@ public final class SchemeRenderer {
     }
 
     /** Кружок с меткой в углу ячейки кабинета — конец цепочки. */
-    static void drawChainEndpointLabel(Graphics2D g2, Screen scr, String cabId, Color color,
+    static void drawChainEndpointLabel(Graphics2D g2, Screen scr, String cabId, Color color, CabinetType type,
                                                 int cellW, int cellH, int offX, int offY, String label) {
         CabinetInstance cab = scr.cabinetById(cabId);
         if (cab == null) {
             return;
         }
-        int x = offX + cab.getColIndex() * cellW;
-        int y = offY + cab.getRowIndex() * cellH;
+        int x = cabX(cab, type, cellW, offX);
+        int y = cabY(cab, type, cellH, offY);
         int d = Math.max(14, Math.min(Math.min(cellW, cellH) / 2, 20));
         int cx = x + cellW - d / 2 - 2;
         int cy = y + d / 2 + 2;

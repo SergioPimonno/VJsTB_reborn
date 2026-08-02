@@ -124,22 +124,27 @@ public class SetupStagePanel extends JPanel {
         JPanel left = new JPanel(new BorderLayout());
         left.add(leftSplitNav, BorderLayout.CENTER);
 
-        // Правая колонка — только сводка (прериг) и предпросмотр/редактор формы экрана.
-        JPanel right = UiKit.vbox();
+        // Правая колонка — сводка (прериг) и предпросмотр/редактор формы экрана,
+        // между ними перетаскиваемый разделитель (тот же приём, что и у левой
+        // колонки, см. leftSplit2/leftSplit3/leftSplitNav) — раньше это была просто
+        // жёстко сложенная колонка (vbox), из-за чего при небольшой высоте окна
+        // «Форма экрана» уезжала за нижний край окна без возможности отдать ей
+        // больше места за счёт «Прериг сцены» (баг-репорт).
         prerigPreview = new com.vjstb.ledscheme.ui.SceneCanvasPanel(model);
         prerigPreview.setShowRiggingPoints(true);
         prerigSection = buildPrerig();
-        right.add(prerigSection);
         shapeEditor = new ShapeEditorPanel(model);
         shapeScroll = new JScrollPane(shapeEditor);
         shapeSection = buildShapeEditor();
-        right.add(shapeSection);
-        right.add(javax.swing.Box.createVerticalGlue());
+        JSplitPane rightSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, prerigSection, shapeSection);
+        rightSplit.setContinuousLayout(true);
+        rightSplit.setResizeWeight(0.6);
+        UiKit.persistentDivider(settings, "setup.prerigShape", rightSplit, 0.6);
 
         JScrollPane leftScroll = new JScrollPane(left);
         leftScroll.setBorder(null);
         leftScroll.getVerticalScrollBar().setUnitIncrement(16);
-        JScrollPane rightScroll = new JScrollPane(right);
+        JScrollPane rightScroll = new JScrollPane(rightSplit);
         rightScroll.setBorder(null);
         rightScroll.getVerticalScrollBar().setUnitIncrement(16);
 
@@ -311,38 +316,82 @@ public class SetupStagePanel extends JPanel {
     // ---- прериг ----
 
     private JPanel buildPrerig() {
-        JPanel body = UiKit.vbox();
-        body.add(statRow("Экранов", prerigScreens));
-        body.add(statRow("Кабинетов", prerigCabinets));
-        body.add(statRow("Мощность сцены", prerigPower));
-        body.add(statRow("Вес сцены", prerigWeight));
-        body.add(UiKit.vgap());
+        JPanel stats = UiKit.vbox();
+        stats.add(statRow("Экранов", prerigScreens));
+        stats.add(statRow("Кабинетов", prerigCabinets));
+        stats.add(statRow("Мощность сцены", prerigPower));
+        stats.add(statRow("Вес сцены", prerigWeight));
+        stats.add(UiKit.vgap());
+
         // Мини-превью раскладки сцены: показывает все экраны сцены сразу, но
         // активным (выделенным) становится только выбранный в списке слева —
         // остальные притушены (setCompact(true)), без подписей и метража. Точки
         // подвеса (жёлтые треугольники по верхнему краю) рисуются здесь же — сама
         // SceneCanvasPanel решает это по mountType/riggingPointsCount экрана.
+        // Обёрнут в свой JScrollPane (Task #7/v1.6, доработка после баг-репорта) —
+        // нужен для панорамирования, когда включён детальный режим с масштабом
+        // (см. ниже), и позволяет холсту растягиваться по всей высоте, которую
+        // выделит ему разделитель prerigSplit, а не быть жёстко зафиксированным
+        // на 220px — тесно для точной расстановки отдельных кабинетов.
         prerigPreview.setCompact(true);
         prerigPreview.setPreferredSize(new Dimension(10, 220));
-        prerigPreview.setMaximumSize(new Dimension(Integer.MAX_VALUE, 220));
         prerigPreview.setBorder(BorderFactory.createLineBorder(Palette.BORDER));
-        body.add(prerigPreview);
+        javax.swing.JScrollPane prerigScroll = new javax.swing.JScrollPane(prerigPreview);
+        prerigScroll.getVerticalScrollBar().setUnitIncrement(16);
+        prerigScroll.getHorizontalScrollBar().setUnitIncrement(16);
+        prerigScroll.setPreferredSize(new Dimension(10, 260));
 
-        body.add(UiKit.vgap(10));
-        body.add(UiKit.formRow("Точек подвеса", pRiggingPoints));
+        // Task #7/v1.6: экран целиком можно перетаскивать мышью прямо в превью выше
+        // (координаты X/Y обновляются автоматически) без переключения в этот режим —
+        // он нужен только чтобы дотянуться до ОТДЕЛЬНЫХ кабинетов (в свёрнутом виде
+        // виден только прямоугольник экрана целиком, кабинеты внутри не различить и
+        // не кликнуть).
+        javax.swing.JCheckBox showCabinetsCheck = new javax.swing.JCheckBox(
+                "Кабинеты по отдельности (можно двигать каждый, Shift — прилипание к соседям,"
+                        + " Ctrl+колесо — масштаб)");
+        showCabinetsCheck.addActionListener(e -> {
+            boolean detail = showCabinetsCheck.isSelected();
+            // fitToViewport=false в детальном режиме — иначе Ctrl+колесо (масштаб,
+            // см. mouseWheelMoved) не работает вовсе, а именно масштаб и нужен для
+            // точной расстановки отдельных кабинетов (баг-репорт: без масштаба
+            // порог привязки к соседям физически недостижим мышью при мелком виде).
+            prerigPreview.setDetailMode(detail, true, !detail);
+            prerigPreview.revalidate();
+            prerigPreview.repaint();
+        });
+
+        JPanel canvasArea = new JPanel(new BorderLayout());
+        canvasArea.add(stats, BorderLayout.NORTH);
+        canvasArea.add(prerigScroll, BorderLayout.CENTER);
+        JPanel canvasFooter = UiKit.vbox();
+        canvasFooter.add(UiKit.vgap(6));
+        canvasFooter.add(showCabinetsCheck);
+        canvasArea.add(canvasFooter, BorderLayout.SOUTH);
+
+        JPanel riggingArea = UiKit.vbox();
+        riggingArea.add(UiKit.formRow("Точек подвеса", pRiggingPoints));
         MathFields.enableExpressions(pRiggingPoints);
-        body.add(UiKit.vgap());
-        body.add(UiKit.formRow("Заметки по подвесу", pRiggingNotes));
-        body.add(UiKit.vgap());
+        riggingArea.add(UiKit.vgap());
+        riggingArea.add(UiKit.formRow("Заметки по подвесу", pRiggingNotes));
+        riggingArea.add(UiKit.vgap());
 
         calcRiggingBtn.setToolTipText("Активно только для экрана с монтажом «Подвес» — способ монтажа задаётся"
                 + " в «Параметры экрана».");
         calcRiggingBtn.addActionListener(e -> calculateRiggingPoints());
-        body.add(calcRiggingBtn);
-        body.add(UiKit.vgap());
-        body.add(UiKit.muted("<html>Пересчитывает точки подвеса по формуле из риг-тех таблиц (по ширине экрана),"
+        riggingArea.add(calcRiggingBtn);
+        riggingArea.add(UiKit.vgap());
+        riggingArea.add(UiKit.muted("<html>Пересчитывает точки подвеса по формуле из риг-тех таблиц (по ширине экрана),"
                 + " рисует их на схеме выше и сохраняет схему отдельной картинкой.</html>"));
-        return (JPanel) UiKit.section("Прериг сцены", body);
+
+        // Разделитель, а не фиксированная высота (Task #7/v1.6, доработка) — тянуть
+        // можно мышью за границу, «растягивая» окно прерига под текущую задачу
+        // (обзор всей сцены сразу или точная расстановка одного экрана).
+        JSplitPane prerigSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, canvasArea, riggingArea);
+        prerigSplit.setContinuousLayout(true);
+        prerigSplit.setResizeWeight(1.0);
+        UiKit.persistentDivider(settings, "setup.prerigCanvas", prerigSplit, 0.68);
+
+        return (JPanel) UiKit.section("Прериг сцены", prerigSplit);
     }
 
     /** Пересчитывает точки подвеса выбранного экрана, обновляет их на схеме сцены
@@ -506,7 +555,25 @@ public class SetupStagePanel extends JPanel {
             }
 
             boolean hasScene = model.getCurrentScene() != null;
-            UiKit.setSectionVisible(screensSection, hasScene, leftSplit3, settings, "setup.screensParams", 0.32);
+            Screen scr = model.getCurrentScreen();
+            // screensSection и paramsSection — оба потомки ОДНОГО leftSplit3. Если оба
+            // становятся видимы в одном и том же проходе doRebuild() (например,
+            // восстановление выбора и сцены, и экрана из сохранённого состояния при
+            // открытии проекта), нельзя вызывать setSectionVisible/restoreDividerProportion
+            // по отдельности для каждого — см. javadoc restoreDividerProportion: два
+            // независимых invokeLater гонятся с внутренним пересчётом JSplitPane и в сумме
+            // дают абсурдный результат. Раньше это и происходило (баг-репорт: кнопка
+            // «Применить настройки экрана» иногда залипает — видна, но нулевой высоты,
+            // пока пользователь не потянет окно руками). Переключаем видимость обеих
+            // секций напрямую и вызываем restoreDividerProportion ОДИН раз, если хотя бы
+            // одна из них только что стала видимой.
+            boolean screensWasVisible = screensSection.isVisible();
+            boolean paramsWasVisible = paramsSection.isVisible();
+            screensSection.setVisible(hasScene);
+            paramsSection.setVisible(scr != null);
+            if ((hasScene && !screensWasVisible) || (scr != null && !paramsWasVisible)) {
+                UiKit.restoreDividerProportion(leftSplit3, settings, "setup.screensParams", 0.32);
+            }
             prerigSection.setVisible(hasScene);
             if (hasScene) {
                 syncList(screenModel, model.getCurrentScene().getScreens());
@@ -515,8 +582,6 @@ public class SetupStagePanel extends JPanel {
                 rebuildPrerig();
             }
 
-            Screen scr = model.getCurrentScreen();
-            UiKit.setSectionVisible(paramsSection, scr != null, leftSplit3, settings, "setup.screensParams", 0.32);
             shapeSection.setVisible(scr != null);
             if (scr != null) {
                 pName.setText(scr.getName());

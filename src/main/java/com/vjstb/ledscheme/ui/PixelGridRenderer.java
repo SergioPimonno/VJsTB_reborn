@@ -4,6 +4,7 @@ import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.CanvasPlacement;
 import com.vjstb.ledscheme.model.ContentCanvas;
+import com.vjstb.ledscheme.model.MaskColorPreset;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.Workspace;
@@ -31,13 +32,25 @@ import javax.imageio.ImageIO;
  */
 public final class PixelGridRenderer {
 
-    private static final Color[] CHECKER = {
-            new Color(0x2b2f36), new Color(0x3d434c)
-    };
     private static final Color GRID_LINE = new Color(255, 255, 255, 40);
     private static final int GRID_STEP_PX = 16;
 
     private PixelGridRenderer() {
+    }
+
+    /** Позиция ячейки в НАТИВНЫХ пикселях маски — сеточная позиция плюс свободное
+     *  мм-смещение (см. CabinetInstance.getOffsetXMm/getOffsetYMm, Task #7/v1.6),
+     *  переведённое через {@link ScreenLogic#offsetPx} (тот же приём, что и в
+     *  SchemeRenderer/CanvasPanel/SceneCanvasPanel — независимая копия, здесь
+     *  масштаб пикселей другой: не экранный зум, а реальное разрешение маски). */
+    private static int cabX(CabinetInstance cab, CabinetType type, int cellW) {
+        double dx = type != null ? ScreenLogic.offsetPx(cab.getOffsetXMm(), cellW, type.getWidthMm()) : 0;
+        return (int) Math.round(cab.getColIndex() * cellW + dx);
+    }
+
+    private static int cabY(CabinetInstance cab, CabinetType type, int cellH) {
+        double dy = type != null ? ScreenLogic.offsetPx(cab.getOffsetYMm(), cellH, type.getHeightMm()) : 0;
+        return (int) Math.round(cab.getRowIndex() * cellH + dy);
     }
 
     public static BufferedImage renderMask(Screen screen, CabinetType defaultType, Workspace workspace) {
@@ -54,15 +67,16 @@ public final class PixelGridRenderer {
         int cellW = defaultType != null && screen.getCols() > 0 ? w / screen.getCols() : w;
         int cellH = defaultType != null && screen.getRows() > 0 ? h / screen.getRows() : h;
         Font cellFont = g2.getFont().deriveFont(Font.BOLD, Math.max(10f, Math.min(cellW, cellH) * 0.16f));
+        MaskColorPreset colorPreset = screen.getMaskColorPreset();
 
         for (CabinetInstance cab : screen.getCabinets()) {
             if (cab.isHidden()) {
                 continue;
             }
-            int x = cab.getColIndex() * cellW;
-            int y = cab.getRowIndex() * cellH;
+            int x = cabX(cab, defaultType, cellW);
+            int y = cabY(cab, defaultType, cellH);
 
-            g2.setColor(CHECKER[(cab.getRowIndex() + cab.getColIndex()) % 2]);
+            g2.setColor(colorPreset.color((cab.getRowIndex() + cab.getColIndex()) % 2));
             g2.fillRect(x, y, cellW, cellH);
 
             g2.setColor(GRID_LINE);

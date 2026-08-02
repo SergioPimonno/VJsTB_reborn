@@ -1,6 +1,7 @@
 package com.vjstb.ledscheme.ui.stage;
 
 import com.vjstb.ledscheme.model.ContentCanvas;
+import com.vjstb.ledscheme.model.MaskColorPreset;
 import com.vjstb.ledscheme.model.Project;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
@@ -59,7 +60,14 @@ public class VisualizationStagePanel extends JPanel {
     private final JTextField folderField = new JTextField();
     private final JComboBox<ContentCanvas> canvasCombo = new JComboBox<>();
     private final JComboBox<Screen> addScreenCombo = new JComboBox<>();
+    private final JComboBox<Screen> maskColorScreenCombo = new JComboBox<>();
+    private final JComboBox<MaskColorPreset> maskColorPresetCombo = new JComboBox<>(MaskColorPreset.values());
     private ContentCanvas currentCanvas;
+    /** Подавляет обратный вызов model.setScreenMaskColorPreset при программной
+     *  синхронизации maskColorPresetCombo под смену выбранного экрана (см.
+     *  syncMaskColorPresetCombo) — иначе просто переключение экрана в комбобоксе
+     *  без намерения менять цвет вызывало бы «изменение» модели вхолостую. */
+    private boolean syncingMaskColorCombo;
 
     public VisualizationStagePanel(AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings) {
         this.model = model;
@@ -184,6 +192,36 @@ public class VisualizationStagePanel extends JPanel {
         body.add(UiKit.vgap(10));
         body.add(removeSelectedBtn);
 
+        body.add(UiKit.vgap(14));
+        maskColorScreenCombo.setRenderer(new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public java.awt.Component getListCellRendererComponent(javax.swing.JList<?> list, Object value,
+                    int index, boolean isSelected, boolean cellHasFocus) {
+                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                if (value instanceof Screen s) {
+                    setText(s.getName());
+                }
+                return this;
+            }
+        });
+        maskColorScreenCombo.addActionListener(e -> syncMaskColorPresetCombo());
+        maskColorPresetCombo.addActionListener(e -> {
+            if (syncingMaskColorCombo) {
+                return;
+            }
+            Screen sel = (Screen) maskColorScreenCombo.getSelectedItem();
+            MaskColorPreset preset = (MaskColorPreset) maskColorPresetCombo.getSelectedItem();
+            if (sel != null && preset != null) {
+                model.setScreenMaskColorPreset(sel, preset);
+            }
+        });
+        body.add(UiKit.section("Экран для цвета маски", maskColorScreenCombo));
+        body.add(UiKit.vgap(6));
+        body.add(UiKit.section("Цвет маски (чек-борд)", maskColorPresetCombo));
+        body.add(UiKit.vgap(6));
+        body.add(UiKit.muted("<html>Различать экраны по цвету маски при объединении в канвас — например,"
+                + " левый Red/Gray, центральный Green/Gray, правый Blue/Gray.</html>"));
+
         body.add(UiKit.vgap(10));
         body.add(UiKit.muted("<html>Канвас — виртуальный выходной кадр (как Advanced Output в Resolume)."
                 + " Разрешение настраивается как разрешение сигнала; экраны внутри перетаскиваются мышью"
@@ -253,12 +291,35 @@ public class VisualizationStagePanel extends JPanel {
         }
         addScreenCombo.setModel(sm);
 
+        DefaultComboBoxModel<Screen> maskSm = new DefaultComboBoxModel<>();
+        if (scene != null) {
+            for (Screen s : scene.getScreens()) {
+                maskSm.addElement(s);
+            }
+        }
+        Screen prevMaskSel = (Screen) maskColorScreenCombo.getSelectedItem();
+        maskColorScreenCombo.setModel(maskSm);
+        if (prevMaskSel != null && scene != null && scene.getScreens().contains(prevMaskSel)) {
+            maskColorScreenCombo.setSelectedItem(prevMaskSel);
+        }
+        syncMaskColorPresetCombo();
+
         if (chosenFolder == null) {
             Project project = model.getCurrentProject();
             folderField.setText(project != null
                     ? OutputPaths.defaultFolder(project, model.getCurrentScene()).getAbsolutePath()
                     : "(сначала выберите проект)");
         }
+    }
+
+    /** Подставляет в maskColorPresetCombo текущий пресет ВЫБРАННОГО в
+     *  maskColorScreenCombo экрана — без этого пикер всегда показывал бы значение
+     *  по умолчанию (первое в enum), даже если у экрана уже выбран другой пресет. */
+    private void syncMaskColorPresetCombo() {
+        Screen sel = (Screen) maskColorScreenCombo.getSelectedItem();
+        syncingMaskColorCombo = true;
+        maskColorPresetCombo.setSelectedItem(sel != null ? sel.getMaskColorPreset() : MaskColorPreset.NORMAL);
+        syncingMaskColorCombo = false;
     }
 
     private File resolveFolder() {

@@ -11,6 +11,7 @@ import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.EquipmentPreset;
 import com.vjstb.ledscheme.model.InterfaceType;
 import com.vjstb.ledscheme.model.LibraryBundle;
+import com.vjstb.ledscheme.model.MaskColorPreset;
 import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.Project;
@@ -285,7 +286,7 @@ public class AppModel {
     }
 
     public void exportCabinetLibrary(File file) {
-        store.exportList(workspace.getCabinetTypes(), file);
+        store.exportList(workspace.getCabinetTypes(), file, "CABINET");
     }
 
     // ---- controller types (библиотека контроллеров, аналог SmartLCT) ----
@@ -385,7 +386,7 @@ public class AppModel {
     }
 
     public void exportControllerLibrary(File file) {
-        store.exportList(workspace.getControllerTypes(), file);
+        store.exportList(workspace.getControllerTypes(), file, "CONTROLLER");
     }
 
     // ---- контроллеры, общие для СЦЕНЫ (не для одного экрана — см. Task #58) ----
@@ -719,6 +720,14 @@ public class AppModel {
         changed();
     }
 
+    /** Цветовая пара чек-борда генерируемой маски экрана (Task #13/v1.6) — см.
+     *  MaskColorPreset. Не проходит через pushUndo() — чисто визуальная настройка
+     *  экспорта, не часть коммутации/геометрии, откатывать которую имеет смысл. */
+    public void setScreenMaskColorPreset(Screen screen, MaskColorPreset preset) {
+        screen.setMaskColorPreset(preset);
+        changed();
+    }
+
     /** Переставляет все экраны текущей сцены в ряд без наложения (по X, Y=0). */
     /**
      * Расставляет все экраны сцены в один ряд слева направо без наложения,
@@ -1001,6 +1010,14 @@ public class AppModel {
         changed();
     }
 
+    /** Смещение чипа подписи связи от расчётной точки, экранные пиксели схемы
+     *  (Task #3) — задаётся перетаскиванием в SchemaCanvasPanel. */
+    public void setSchemaEdgeLabelOffset(SchemaEdge edge, double dx, double dy) {
+        edge.setLabelDx(dx);
+        edge.setLabelDy(dy);
+        changed();
+    }
+
     public void deleteSchemaEdge(SchemaEdge edge) {
         if (currentScene == null) {
             return;
@@ -1116,12 +1133,18 @@ public class AppModel {
 
     public EquipmentPreset addEquipmentPreset(SchemaMode mode, SchemaNodeType category, String name,
                                                String description, List<SchemaCard> cards) {
+        return addEquipmentPreset(mode, category, name, description, cards, null);
+    }
+
+    public EquipmentPreset addEquipmentPreset(SchemaMode mode, SchemaNodeType category, String name,
+                                               String description, List<SchemaCard> cards, String customCategoryLabel) {
         String trimmed = name == null ? "" : name.trim();
         if (trimmed.isEmpty()) {
             throw new IllegalArgumentException("Укажите название пресета");
         }
         EquipmentPreset preset = new EquipmentPreset(mode, category, trimmed,
                 description == null ? "" : description.trim());
+        preset.setCustomCategoryLabel(customCategoryLabel);
         if (cards != null) {
             for (SchemaCard c : cards) {
                 preset.getCards().add(c.copy());
@@ -1134,6 +1157,11 @@ public class AppModel {
 
     public void updateEquipmentPreset(EquipmentPreset preset, SchemaMode mode, SchemaNodeType category, String name,
                                        String description) {
+        updateEquipmentPreset(preset, mode, category, name, description, preset.getCustomCategoryLabel());
+    }
+
+    public void updateEquipmentPreset(EquipmentPreset preset, SchemaMode mode, SchemaNodeType category, String name,
+                                       String description, String customCategoryLabel) {
         String trimmed = name == null ? "" : name.trim();
         if (trimmed.isEmpty()) {
             throw new IllegalArgumentException("Укажите название пресета");
@@ -1142,6 +1170,7 @@ public class AppModel {
         preset.setCategory(category);
         preset.setName(trimmed);
         preset.setDescription(description == null ? "" : description.trim());
+        preset.setCustomCategoryLabel(customCategoryLabel);
         changed();
     }
 
@@ -1223,7 +1252,7 @@ public class AppModel {
     }
 
     public void exportCableLibrary(File file) {
-        store.exportList(workspace.getCableTypes(), file);
+        store.exportList(workspace.getCableTypes(), file, "CABLE");
     }
 
     /** Импорт: существующие по (режим, категория, имя) обновляются, новые добавляются. */
@@ -1249,7 +1278,7 @@ public class AppModel {
     }
 
     public void exportEquipmentPresetLibrary(File file) {
-        store.exportList(workspace.getEquipmentPresets(), file);
+        store.exportList(workspace.getEquipmentPresets(), file, "EQUIPMENT");
     }
 
     // ---- справочник видов интерфейса и их версий (InterfaceType) ----
@@ -1312,7 +1341,14 @@ public class AppModel {
     }
 
     public void exportInterfaceLibrary(File file) {
-        store.exportList(workspace.getInterfaceTypes(), file);
+        store.exportList(workspace.getInterfaceTypes(), file, "INTERFACE");
+    }
+
+    /** Тип библиотеки, которым файл экспорта себя маркирует (Task #5) — null, если
+     *  файл в старом формате или маркер не распознан; тогда UI возвращается к
+     *  ручному выбору типа в комбобоксе, как раньше. */
+    public String detectLibraryKind(File file) {
+        return store.detectKind(file);
     }
 
     // ---- админ-редактируемые подкатегории оборудования (см. AdminDialog) ----
@@ -1366,6 +1402,43 @@ public class AppModel {
      *  списке — данные не теряются, просто перестают группироваться отдельно). */
     public void deleteCustomEquipmentCategory(String name) {
         workspace.getCustomEquipmentCategories().remove(name);
+        changed();
+    }
+
+    // ---- админ-редактируемая ПОДПИСЬ встроенных категорий верхнего уровня (см. AdminDialog) ----
+
+    /** Подпись встроенной категории для отображения пользователю — переопределённая
+     *  админом (см. renameBuiltinEquipmentCategory), иначе стандартная
+     *  SchemaNodeType.getLabel(). Единая точка правды: ВСЯ UI-отрисовка названия
+     *  категории (дерево библиотеки, комбобоксы выбора типа узла, подпись узла на
+     *  холсте схемы) должна вызывать именно этот метод, а не category.getLabel()
+     *  напрямую — иначе переименование было бы видно не везде (см. П.12: реальная
+     *  просьба пользователя была не про подкатегории "Прочее", а именно про
+     *  встроенные категории вроде "Источник"/"Медиасервер"). */
+    public String categoryLabel(SchemaNodeType type) {
+        String override = workspace.getEquipmentCategoryLabelOverrides().get(type.name());
+        return override != null && !override.isEmpty() ? override : type.getLabel();
+    }
+
+    /** Переименовывает ПОДПИСЬ встроенной категории — сам enum-константа и всё,
+     *  что на неё ссылается по имени (пресеты, узлы схемы, цвет узла, де-рейтинг
+     *  DISTRO, особая обработка SCREEN — см. class-javadoc SchemaNodeType),
+     *  НЕ трогается: список категорий фиксирован, меняется только текст, который
+     *  видит пользователь. Существующие пресеты/узлы автоматически подхватят
+     *  новую подпись через categoryLabel() — им ничего обновлять не нужно, они
+     *  ссылаются на категорию по константе, а не по скопированному тексту. */
+    public void renameBuiltinEquipmentCategory(SchemaNodeType type, String newLabel) {
+        String trimmed = newLabel == null ? "" : newLabel.trim();
+        if (trimmed.isEmpty()) {
+            throw new IllegalArgumentException("Укажите название категории");
+        }
+        workspace.getEquipmentCategoryLabelOverrides().put(type.name(), trimmed);
+        changed();
+    }
+
+    /** Возвращает подпись встроенной категории обратно к значению по умолчанию. */
+    public void resetBuiltinEquipmentCategoryLabel(SchemaNodeType type) {
+        workspace.getEquipmentCategoryLabelOverrides().remove(type.name());
         changed();
     }
 
@@ -1748,6 +1821,7 @@ public class AppModel {
                 cab.setShapeOverride(null);
             }
         }
+        autoDisableOverlapping(currentScreen, cab);
         changed();
     }
 
@@ -1778,6 +1852,50 @@ public class AppModel {
         pushUndo();
         cab.setRotationOverride(rotationDeg);
         changed();
+    }
+
+    /** Свободное смещение конкретной ячейки от её сеточной позиции (мм) — Task #7/v1.6:
+     *  задаётся перетаскиванием в детальном режиме прерига (SceneCanvasPanel), 0,0 —
+     *  сброс на обычную сетку. Коммитится один раз по отпусканию кнопки мыши — во
+     *  время самого перетаскивания вызывающий код меняет поля кабинета напрямую для
+     *  живого превью (тот же приём, что и у перетаскивания узлов схемы/размещений
+     *  канваса), не дёргая этот метод (и pushUndo()) на каждый кадр драга. */
+    public void updateCabinetOffset(CabinetInstance cab, double offsetXMm, double offsetYMm) {
+        pushUndo();
+        cab.setOffsetXMm(offsetXMm);
+        cab.setOffsetYMm(offsetYMm);
+        autoDisableOverlapping(currentScene != null ? screenOfCabinet(currentScene, cab.getId()) : null, cab);
+        changed();
+    }
+
+    /** Наложение кабинетов (Task #7 follow-up): свободное смещение (см.
+     *  updateCabinetOffset) или переопределение типа на физически другой размер
+     *  (см. setCabinetTypeOverride, Issue B/v1.6) может визуально свести ДВА
+     *  кабинета в одну и ту же область — раньше это никак не показывалось
+     *  пользователю и не разрешалось (баг-репорт). Приоритет отдаётся ПОСЛЕДНЕМУ
+     *  действию: только что подвинутый/перетипированный кабинет остаётся видимым,
+     *  а любой ДРУГОЙ кабинет экрана, чей фактический прямоугольник (см.
+     *  ScreenLogic.cabinetRectMm) пересёкся с ним — автоматически скрывается
+     *  (тот же isHidden, что и у ручного скрытия ячейки в форме экрана), а не
+     *  оставляется в виде невидимого наложения без предупреждения. */
+    private void autoDisableOverlapping(Screen scr, CabinetInstance moved) {
+        if (scr == null || moved.isHidden()) {
+            return;
+        }
+        CabinetType defaultType = typeOf(scr);
+        if (defaultType == null) {
+            return;
+        }
+        double[] rectA = ScreenLogic.cabinetRectMm(moved, defaultType, workspace);
+        for (CabinetInstance other : scr.getCabinets()) {
+            if (other == moved || other.isHidden()) {
+                continue;
+            }
+            double[] rectB = ScreenLogic.cabinetRectMm(other, defaultType, workspace);
+            if (ScreenLogic.rectsOverlap(rectA, rectB)) {
+                other.setHidden(true);
+            }
+        }
     }
 
     // ---- chains ----
@@ -2016,6 +2134,60 @@ public class AppModel {
         if (chain != null) {
             resyncSignalSocketsForScreensOf(currentScene, chain.getCabinetInstanceIds());
         }
+        changed();
+    }
+
+    /** Обновляет список кабинетов УЖЕ существующей цепочки питания по её id (Task
+     *  #11/v1.6) — в отличие от {@link #addPowerChain} не создаёт новую запись, а
+     *  значит сохраняются id/цвет/подтверждение перегрузки уже существующей
+     *  цепочки (см. Task #4). Используется при возобновлении редактирования из
+     *  списка цепочек (см. ChainInteractionController.resumeEditing). Резинк гнёзд
+     *  затрагивает экраны и старого, и нового маршрута — старый мог остаться
+     *  без единого кабинета этой цепочки (гнездо нужно убрать), новый — получить
+     *  цепочку впервые (гнездо нужно добавить). */
+    public void updatePowerChain(String chainId, List<String> cabinetIds) {
+        if (currentScene == null || cabinetIds == null || cabinetIds.isEmpty()) {
+            return;
+        }
+        PowerChain chain = currentScene.getPowerChains().stream()
+                .filter(c -> c.getId().equals(chainId)).findFirst().orElse(null);
+        if (chain == null) {
+            return;
+        }
+        validateCabinetIdsAcrossScene(cabinetIds);
+        pushUndo();
+        List<String> oldIds = new ArrayList<>(chain.getCabinetInstanceIds());
+        for (String cabId : cabinetIds) {
+            CabinetInstance cab = cabinetInScene(cabId);
+            if (cab != null) {
+                cab.setPhase(chain.getPhase());
+            }
+        }
+        chain.setCabinetInstanceIds(new ArrayList<>(cabinetIds));
+        java.util.LinkedHashSet<String> touched = new java.util.LinkedHashSet<>(oldIds);
+        touched.addAll(cabinetIds);
+        resyncPowerSocketsForScreensOf(currentScene, new ArrayList<>(touched));
+        changed();
+    }
+
+    /** То же для сигнала (см. {@link #updatePowerChain}) — порт/бэкап-флаг
+     *  остаются прежними, меняется только маршрут кабинетов. */
+    public void updateSignalChain(String chainId, List<String> cabinetIds) {
+        if (currentScene == null || cabinetIds == null || cabinetIds.isEmpty()) {
+            return;
+        }
+        SignalChain chain = currentScene.getSignalChains().stream()
+                .filter(c -> c.getId().equals(chainId)).findFirst().orElse(null);
+        if (chain == null) {
+            return;
+        }
+        validateCabinetIdsAcrossScene(cabinetIds);
+        pushUndo();
+        List<String> oldIds = new ArrayList<>(chain.getCabinetInstanceIds());
+        chain.setCabinetInstanceIds(new ArrayList<>(cabinetIds));
+        java.util.LinkedHashSet<String> touched = new java.util.LinkedHashSet<>(oldIds);
+        touched.addAll(cabinetIds);
+        resyncSignalSocketsForScreensOf(currentScene, new ArrayList<>(touched));
         changed();
     }
 
@@ -2345,6 +2517,20 @@ public class AppModel {
         changed();
     }
 
+    /** Свой цвет цепочки питания (Task #4) — null сбрасывает на цвет по фазе, как
+     *  и было раньше (см. SchemeRenderer.chainColor). По образцу setSchemaEdgeColor. */
+    public void setPowerChainColor(PowerChain chain, Integer rgb) {
+        chain.setColor(rgb);
+        changed();
+    }
+
+    /** Свой цвет цепочки сигнала (Task #4) — null сбрасывает на цвет по индексу,
+     *  как и было раньше. По образцу setSchemaEdgeColor/setPowerChainColor. */
+    public void setSignalChainColor(SignalChain chain, Integer rgb) {
+        chain.setColor(rgb);
+        changed();
+    }
+
     /** capacityKnown=false — тип разъёма кабинета не позволяет посчитать номинал
      *  (см. PowerCalc.cabinetConnectorAmps), контроль для цепочки не проводится. */
     public record ChainLoadStatus(double loadWatts, double capacityWatts, boolean capacityKnown,
@@ -2365,7 +2551,7 @@ public class AppModel {
         double load = powerChainLoadWatts(scene, chain);
         double ampRating = powerChainConnectorAmps(scene, chain);
         boolean capacityKnown = ampRating > 0;
-        double capacity = capacityKnown ? PowerCalc.capacityWatts(ampRating, PowerCalc.DEFAULT_DERATING_PERCENT) : 0;
+        double capacity = capacityKnown ? PowerCalc.capacityWatts(ampRating, PowerCalc.DISTRO_DEFAULT_DERATING_PERCENT) : 0;
         boolean overloaded = capacityKnown && load > capacity;
         boolean acknowledged = !overloaded || (chain.getAcknowledgedOverloadWatts() != null
                 && chain.getAcknowledgedOverloadWatts() >= load);

@@ -34,6 +34,11 @@ public class Screen {
     private int riggingPointsCount = 0;
     private String riggingNotes;
 
+    /** Цветовая пара чек-борда генерируемой маски (Task #13/v1.6) — по умолчанию
+     *  «Обычный» (прежнее поведение), меняется в «Генерация масок» для визуального
+     *  различения экранов при объединении их масок в общий канвас. */
+    private MaskColorPreset maskColorPreset = MaskColorPreset.NORMAL;
+
     /** Контроллеры, обслуживающие экран (может быть несколько). Если список не пуст,
      *  суммарное число их портов определяет доступные порты сигнала вместо signalPortCount. */
     private List<ControllerInstance> controllers = new ArrayList<>();
@@ -149,6 +154,14 @@ public class Screen {
         this.riggingNotes = riggingNotes;
     }
 
+    public MaskColorPreset getMaskColorPreset() {
+        return maskColorPreset != null ? maskColorPreset : MaskColorPreset.NORMAL;
+    }
+
+    public void setMaskColorPreset(MaskColorPreset maskColorPreset) {
+        this.maskColorPreset = maskColorPreset != null ? maskColorPreset : MaskColorPreset.NORMAL;
+    }
+
     public List<ControllerInstance> getControllers() {
         return controllers;
     }
@@ -218,6 +231,7 @@ public class Screen {
         s.mountType = mountType;
         s.riggingPointsCount = riggingPointsCount;
         s.riggingNotes = riggingNotes;
+        s.maskColorPreset = maskColorPreset;
         s.controllers = new ArrayList<>();
         for (ControllerInstance c : controllers) {
             s.controllers.add(c.copy());

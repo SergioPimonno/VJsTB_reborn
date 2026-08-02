@@ -116,6 +116,16 @@ public class SettingsManager {
         persist();
     }
 
+    public void setConnectorDisplayMode(ConnectorDisplayMode mode) {
+        activeProfile().setConnectorDisplayMode(mode);
+        persist();
+    }
+
+    public void setConnectorsVertical(boolean vertical) {
+        activeProfile().setConnectorsVertical(vertical);
+        persist();
+    }
+
     public void setLoadTrackingEnabled(boolean enabled) {
         activeProfile().setLoadTrackingEnabled(enabled);
         persist();

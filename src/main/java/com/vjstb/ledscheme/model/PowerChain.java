@@ -19,6 +19,10 @@ public class PowerChain {
      *  так добавление кабинетов в уже подтверждённую перегруженную цепочку снова
      *  требует подтверждения, а простое пересохранение/переоткрытие проекта — нет. */
     private Double acknowledgedOverloadWatts;
+    /** Свой цвет цепочки (RGB), null — цвет по фазе как раньше (см. Palette.phaseColor).
+     *  По аналогии с {@link SchemaEdge#getColor()} в общей схеме (Task #4) — там же
+     *  образец UI (контекстное меню «Цвет линии…»/«Сбросить цвет»). */
+    private Integer color;
 
     public PowerChain() {
     }
@@ -60,12 +64,21 @@ public class PowerChain {
         this.acknowledgedOverloadWatts = acknowledgedOverloadWatts;
     }
 
+    public Integer getColor() {
+        return color;
+    }
+
+    public void setColor(Integer color) {
+        this.color = color;
+    }
+
     public PowerChain copy() {
         PowerChain c = new PowerChain();
         c.id = id;
         c.phase = phase;
         c.cabinetInstanceIds = new ArrayList<>(cabinetInstanceIds);
         c.acknowledgedOverloadWatts = acknowledgedOverloadWatts;
+        c.color = color;
         return c;
     }
 }

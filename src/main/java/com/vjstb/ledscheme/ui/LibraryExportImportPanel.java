@@ -64,18 +64,40 @@ public class LibraryExportImportPanel extends JPanel {
         });
 
         importBtn.addActionListener(e -> {
-            Kind kind = (Kind) kindBox.getSelectedItem();
             Window owner = SwingUtilities.getWindowAncestor(this);
             JFileChooser fc = new JFileChooser();
             fc.setFileFilter(new FileNameExtensionFilter("JSON", "json"));
-            if (fc.showOpenDialog(owner) == JFileChooser.APPROVE_OPTION) {
+            if (fc.showOpenDialog(owner) != JFileChooser.APPROVE_OPTION) {
+                return;
+            }
+            File selected = fc.getSelectedFile();
+            // Файл сам подсказывает свой тип (Task #5) — если распознали и он не
+            // совпадает с выбором в комбобоксе, используем подсказку файла и
+            // синхронизируем комбобокс, а не заставляем угадывать вручную (раньше
+            // неверный ручной выбор тихо создавал мусорные записи, т.к. импорт не
+            // проверял соответствие полей). Если подсказки нет (старый формат без
+            // обёртки, либо «Всё сразу» — bundle-формат не маркируется так же) —
+            // используем то, что выбрано в комбобоксе, как раньше.
+            Kind kind = (Kind) kindBox.getSelectedItem();
+            String detected = model.detectLibraryKind(selected);
+            if (detected != null) {
                 try {
-                    int n = importKind(model, kind, fc.getSelectedFile());
-                    JOptionPane.showMessageDialog(owner, "Импортировано записей: " + n, "Импорт",
-                            JOptionPane.INFORMATION_MESSAGE);
-                } catch (RuntimeException ex) {
-                    JOptionPane.showMessageDialog(owner, ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
+                    Kind detectedKind = Kind.valueOf(detected);
+                    if (detectedKind != kind) {
+                        kind = detectedKind;
+                        kindBox.setSelectedItem(detectedKind);
+                    }
+                } catch (IllegalArgumentException ignored) {
+                    // Неизвестная метка kind (например, из более новой версии) — остаёмся
+                    // на ручном выборе, не падаем.
                 }
+            }
+            try {
+                int n = importKind(model, kind, selected);
+                JOptionPane.showMessageDialog(owner, "Импортировано записей: " + n, "Импорт",
+                        JOptionPane.INFORMATION_MESSAGE);
+            } catch (RuntimeException ex) {
+                JOptionPane.showMessageDialog(owner, ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
             }
         });
 

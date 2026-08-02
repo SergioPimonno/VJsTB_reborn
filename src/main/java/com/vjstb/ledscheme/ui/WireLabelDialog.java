@@ -90,6 +90,18 @@ public class WireLabelDialog extends JDialog {
     public WireLabelDialog(Window owner, AppModel model, SchemaMode mode, SchemaEdge edge,
                             Set<PowerConnectorType> connectorHints, String lockedConnectorType, Integer maxCount,
                             String maxCountReason, boolean enforceCap) {
+        this(owner, model, mode, edge, connectorHints, lockedConnectorType, maxCount, maxCountReason, enforceCap, false);
+    }
+
+    /** forceSingleCable — связь заведена через КОНКРЕТНОЕ гнездо при включённом
+     *  режиме отображения разъёмов «по одному» (см. ConnectorDisplayMode.INDIVIDUAL,
+     *  Task #2/v1.6): каждая отдельно нарисованная точка-гнездо — это ровно один
+     *  физический разъём, поэтому «сколько кабелей в этой линии» перестаёт быть
+     *  осмысленным вопросом — всегда 1, спиннер блокируется (не скрывается целиком —
+     *  так виднее, что значение НЕ забыто, а намеренно зафиксировано). */
+    public WireLabelDialog(Window owner, AppModel model, SchemaMode mode, SchemaEdge edge,
+                            Set<PowerConnectorType> connectorHints, String lockedConnectorType, Integer maxCount,
+                            String maxCountReason, boolean enforceCap, boolean forceSingleCable) {
         super(owner, "Подпись связи (коммутация)", ModalityType.APPLICATION_MODAL);
         this.model = model;
         this.mode = mode;
@@ -97,6 +109,10 @@ public class WireLabelDialog extends JDialog {
         int spinnerMax = enforceCap && maxCount != null ? maxCount : 999;
         countSpinner.setModel(new SpinnerNumberModel(1, 1, spinnerMax, 1));
         MathFields.enableExpressions(countSpinner);
+        if (forceSingleCable) {
+            countSpinner.setValue(1);
+            countSpinner.setEnabled(false);
+        }
 
         List<String> libraryLabels = model != null ? model.cableTypesForMode(mode).stream()
                 .map(CableType::getLabel).toList() : List.of();
@@ -129,7 +145,7 @@ public class WireLabelDialog extends JDialog {
             form.add(lengthField);
         }
 
-        if (edge.getWireCount() != null) {
+        if (!forceSingleCable && edge.getWireCount() != null) {
             countSpinner.setValue(Math.min(edge.getWireCount(), spinnerMax));
         }
         if (locked) {
@@ -146,7 +162,13 @@ public class WireLabelDialog extends JDialog {
             lengthField.setText(UiKit.fmt(edge.getLengthM()));
         }
 
-        if (maxCount != null) {
+        if (forceSingleCable) {
+            JLabel singleHint = new JLabel("<html>Каждый разъём нарисован отдельным гнездом (см. Персонализация —"
+                    + " «показывать каждый разъём карты отдельным гнездом») — эта линия всегда одна.</html>");
+            singleHint.setForeground(Palette.MUTED);
+            form.add(new JLabel());
+            form.add(singleHint);
+        } else if (maxCount != null) {
             String text = "Максимум линий на этом гнезде: " + maxCount
                     + (maxCountReason != null ? " (ограничивает: " + maxCountReason + ")" : "")
                     + (enforceCap ? "" : " — защита от дурака выключена, ограничение не применяется");

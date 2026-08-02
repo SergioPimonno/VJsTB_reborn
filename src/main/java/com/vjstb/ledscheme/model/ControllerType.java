@@ -129,6 +129,179 @@ public class ControllerType {
         return total;
     }
 
+    /** true — локальный выходной порт (1..{@link #effectivePortCount()}, тот же
+     *  порядок обхода карт/групп, что и в effectivePortCount/totalOutputs) —
+     *  Ethernet, т.е. годится для расключения сигнальной цепочки на экран.
+     *  У модульных контроллеров (карты) на одной карте физически могут стоять и
+     *  Ethernet-, и fiber-порты одновременно (пользователь сам заводит и то, и
+     *  другое через тип разъёма CardPort) — но в схему расключения экрана
+     *  подаётся только Ethernet, fiber/оптика — для магистральных соединений
+     *  между устройствами, не для конечных LED-кабинетов. Без карт (плоский
+     *  portCount, без информации о типе) — фильтровать нечем, порт считается
+     *  доступным как раньше. */
+    public boolean isEffectivePortEthernet(int localPort1Based) {
+        if (cards.isEmpty()) {
+            return true;
+        }
+        int seen = 0;
+        for (SchemaCard c : cards) {
+            for (CardPort p : c.getPorts()) {
+                if (p.getDirection() == PortDirection.IN) {
+                    continue;
+                }
+                int groupStart = seen + 1;
+                int groupEnd = seen + p.getCount();
+                if (localPort1Based >= groupStart && localPort1Based <= groupEnd) {
+                    String type = p.getConnectorType();
+                    return type != null && type.toLowerCase(java.util.Locale.ROOT).contains("ethernet");
+                }
+                seen = groupEnd;
+            }
+        }
+        return false;
+    }
+
+    /** Сколько из {@link #effectivePortCount()} реально пригодны для расключения
+     *  экрана (Ethernet) — меньше общего числа, если на картах есть fiber-группы
+     *  (см. isEffectivePortEthernet). У контроллеров без карт совпадает с
+     *  effectivePortCount() (фильтровать нечем). Отдельный метод, а не изменение
+     *  самого effectivePortCount() — тот считает ФИЗИЧЕСКИЙ итог для смещения
+     *  номеров портов следующего контроллера сцены и для ёмкости, его нельзя
+     *  тихо уменьшать. */
+    public int effectiveEthernetPortCount() {
+        int total = effectivePortCount();
+        if (cards.isEmpty()) {
+            return total;
+        }
+        int usable = 0;
+        for (int i = 1; i <= total; i++) {
+            if (isEffectivePortEthernet(i)) {
+                usable++;
+            }
+        }
+        return usable;
+    }
+
+    /** Число независимых пулов нумерации ВЫХОДНЫХ Ethernet-портов — по картам
+     *  (каждая карта — свой пул, нумеруется от 1 отдельно от других карт), если
+     *  хоть одна карта задана, иначе один общий пул на весь плоский portCount
+     *  (как было всегда — там нечем разбивать на карты). Нужно, чтобы UI показывал
+     *  СТОЛЬКО ЖЕ отдельных областей нумерации портов, сколько реально card-групп
+     *  задействовано в контроллере (баг-репорт: было видно одну сквозную нумерацию
+     *  на весь контроллер, из-за чего fiber-порты "съедали" первые номера, и
+     *  Ethernet-порты второй карты продолжали нумерацию первой, а не начинали
+     *  заново с 1). */
+    public int ethernetPoolCount() {
+        return cards.isEmpty() ? 1 : cards.size();
+    }
+
+    /** Сколько Ethernet-портов в пуле нумерации КОНКРЕТНОЙ карты (poolIndex,
+     *  0-based) — см. {@link #ethernetPoolCount()}. Для контроллера без карт
+     *  единственный пул (poolIndex=0) — это весь portCount целиком (типов нет,
+     *  фильтровать нечем, как и раньше в isEffectivePortEthernet). */
+    public int ethernetPortCountInPool(int poolIndex) {
+        if (cards.isEmpty()) {
+            return poolIndex == 0 ? portCount : 0;
+        }
+        if (poolIndex < 0 || poolIndex >= cards.size()) {
+            return 0;
+        }
+        int count = 0;
+        for (CardPort p : cards.get(poolIndex).getPorts()) {
+            if (p.getDirection() == PortDirection.IN) {
+                continue;
+            }
+            String type = p.getConnectorType();
+            if (type != null && type.toLowerCase(java.util.Locale.ROOT).contains("ethernet")) {
+                count += p.getCount();
+            }
+        }
+        return count;
+    }
+
+    /** Разбирает СКВОЗНОЙ номер выходного порта КОНТРОЛЛЕРА (1..{@link #effectivePortCount()},
+     *  тот же локальный-в-пределах-контроллера номер, что использует
+     *  {@link #isEffectivePortEthernet}, — НЕ полный сквозной номер по всей сцене,
+     *  тот считается на уровень выше, в AppModel.portOffsetOf) на пару (индекс пула/
+     *  карты 0-based, номер порта В ПРЕДЕЛАХ Ethernet-пула ЭТОЙ карты, 1-based,
+     *  считая только Ethernet-порты карты подряд, без учёта fiber-пропусков) — то,
+     *  что реально должен видеть пользователь в сетке портов вместо сквозного
+     *  номера "с дырками" от fiber-групп. null — порт вне диапазона ИЛИ это НЕ
+     *  Ethernet-порт (fiber ни в какой пул нумерации не входит — он не участвует в
+     *  расключении экрана вовсе, см. {@link #isEffectivePortEthernet}). */
+    public int[] ethernetPoolLocalPort(int controllerLocalPort1Based) {
+        if (cards.isEmpty()) {
+            if (controllerLocalPort1Based < 1 || controllerLocalPort1Based > portCount) {
+                return null;
+            }
+            return new int[]{0, controllerLocalPort1Based};
+        }
+        int seenGlobal = 0;
+        for (int ci = 0; ci < cards.size(); ci++) {
+            int localEthernetSeen = 0;
+            for (CardPort p : cards.get(ci).getPorts()) {
+                if (p.getDirection() == PortDirection.IN) {
+                    continue;
+                }
+                int groupStart = seenGlobal + 1;
+                int groupEnd = seenGlobal + p.getCount();
+                boolean isEth = p.getConnectorType() != null
+                        && p.getConnectorType().toLowerCase(java.util.Locale.ROOT).contains("ethernet");
+                if (controllerLocalPort1Based >= groupStart && controllerLocalPort1Based <= groupEnd) {
+                    if (!isEth) {
+                        return null;
+                    }
+                    return new int[]{ci, localEthernetSeen + (controllerLocalPort1Based - groupStart) + 1};
+                }
+                if (isEth) {
+                    localEthernetSeen += groupEnd - groupStart + 1;
+                }
+                seenGlobal = groupEnd;
+            }
+        }
+        return null;
+    }
+
+    /** Обратное преобразование к {@link #ethernetPoolLocalPort} — по индексу пула/
+     *  карты и номеру Ethernet-порта В ПРЕДЕЛАХ этого пула (1-based) восстанавливает
+     *  локальный-в-пределах-контроллера сквозной номер (тот же, что хранится/
+     *  ожидается методами вроде AppModel.signalChainByPort). -1 — такого порта нет
+     *  (индекс пула вне диапазона, либо локальный номер больше числа Ethernet-портов
+     *  на этой карте). */
+    public int globalPortFor(int poolIndex, int poolLocalPort1Based) {
+        if (cards.isEmpty()) {
+            return poolIndex == 0 && poolLocalPort1Based >= 1 && poolLocalPort1Based <= portCount
+                    ? poolLocalPort1Based : -1;
+        }
+        if (poolIndex < 0 || poolIndex >= cards.size()) {
+            return -1;
+        }
+        int seenGlobal = 0;
+        for (int ci = 0; ci < cards.size(); ci++) {
+            int localEthernetSeen = 0;
+            for (CardPort p : cards.get(ci).getPorts()) {
+                if (p.getDirection() == PortDirection.IN) {
+                    continue;
+                }
+                boolean isEth = p.getConnectorType() != null
+                        && p.getConnectorType().toLowerCase(java.util.Locale.ROOT).contains("ethernet");
+                if (ci == poolIndex && isEth) {
+                    int groupLocalStart = localEthernetSeen + 1;
+                    int groupLocalEnd = localEthernetSeen + p.getCount();
+                    if (poolLocalPort1Based >= groupLocalStart && poolLocalPort1Based <= groupLocalEnd) {
+                        return seenGlobal + (poolLocalPort1Based - groupLocalStart) + 1;
+                    }
+                    localEthernetSeen = groupLocalEnd;
+                }
+                seenGlobal += p.getCount();
+            }
+            if (ci == poolIndex) {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
     /** Число входных портов: по картам (сумма IN-направления), если хоть одна
      *  карта задана, иначе — ручной {@link #getInputPortCount()}. */
     public int effectiveInputPortCount() {

@@ -20,6 +20,7 @@ import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JRadioButton;
+import javax.swing.Scrollable;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 
@@ -63,8 +64,8 @@ public class OnboardingDialog extends JDialog {
     private final JButton next = new JButton("Далее");
     private final JButton finish = new JButton("Готово");
     private final SettingsManager settings;
-    private JPanel welcomePanel;
-    private JPanel personalizationPanel;
+    private javax.swing.JScrollPane welcomePanel;
+    private javax.swing.JScrollPane personalizationPanel;
     private int step = 0;
 
     public OnboardingDialog(Window owner, SettingsManager settings) {
@@ -72,7 +73,7 @@ public class OnboardingDialog extends JDialog {
         this.settings = settings;
 
         rebuildTextSteps();
-        cardsPanel.add(buildThemeStep(owner), STEPS[1]);
+        cardsPanel.add(scrollWrap(buildThemeStep(owner)), STEPS[1]);
 
         JPanel content = new JPanel(new BorderLayout());
         content.add(cardsPanel, BorderLayout.CENTER);
@@ -96,7 +97,7 @@ public class OnboardingDialog extends JDialog {
         content.add(nav, BorderLayout.SOUTH);
 
         setContentPane(content);
-        setSize(480, 360);
+        setSize(480, 420);
         setLocationRelativeTo(owner);
         goTo(0);
     }
@@ -116,13 +117,13 @@ public class OnboardingDialog extends JDialog {
         if (welcomePanel != null) {
             cardsPanel.remove(welcomePanel);
         }
-        welcomePanel = step(s.get(0).getTitle(), s.get(0).getBodyHtml());
+        welcomePanel = scrollWrap(step(s.get(0).getTitle(), s.get(0).getBodyHtml()));
         cardsPanel.add(welcomePanel, STEPS[0]);
 
         if (personalizationPanel != null) {
             cardsPanel.remove(personalizationPanel);
         }
-        personalizationPanel = step(s.get(1).getTitle(), s.get(1).getBodyHtml());
+        personalizationPanel = scrollWrap(step(s.get(1).getTitle(), s.get(1).getBodyHtml()));
         cardsPanel.add(personalizationPanel, STEPS[2]);
     }
 
@@ -147,19 +148,74 @@ public class OnboardingDialog extends JDialog {
         finish.setVisible(last);
     }
 
+    /** Без ширины в CSS у HTML-label preferredSize получается ПОЧТИ
+     *  неограниченным (естественная ширина в одну строку, проверено эмпирически:
+     *  ~1100px на реальном тексте) — со шириной, наоборот, JLabel.getPreferredSize()
+     *  её игнорирует (см. {@link NamedRenderer} этой кодовой базы) и снова
+     *  отчитывается "естественной" шириной, а рисуется уже по навязанной, более
+     *  узкой — середина длинных строк молча пропадает без переноса. Оба пути
+     *  ломают отображение в диалоге фиксированного размера (баг-репорт:
+     *  обрезанный текст в приветствии). Правильный путь — не бороться с
+     *  preferredSize вообще, а сделать саму панель шага {@link Scrollable} с
+     *  {@code getScrollableTracksViewportWidth()==true}: тогда JViewport задаёт
+     *  ей РЕАЛЬНУЮ ширину вьюпорта (не её собственный preferredSize), HTML
+     *  переносится по словам по этой настоящей ширине при обычной раскладке/
+     *  отрисовке (без единого ручного View.setSize/setPreferredSize трюка), а
+     *  высота остаётся свободной под скролл. */
+    private static final class WidthTrackingPanel extends JPanel implements Scrollable {
+        WidthTrackingPanel(java.awt.LayoutManager layout) {
+            super(layout);
+        }
+
+        @Override
+        public java.awt.Dimension getPreferredScrollableViewportSize() {
+            return getPreferredSize();
+        }
+
+        @Override
+        public int getScrollableUnitIncrement(java.awt.Rectangle visibleRect, int orientation, int direction) {
+            return 16;
+        }
+
+        @Override
+        public int getScrollableBlockIncrement(java.awt.Rectangle visibleRect, int orientation, int direction) {
+            return 100;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportWidth() {
+            return true;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportHeight() {
+            return false;
+        }
+    }
+
     private JPanel step(String title, String html) {
-        JPanel p = new JPanel();
-        p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
+        JPanel p = new WidthTrackingPanel(new BorderLayout());
         p.setBorder(BorderFactory.createEmptyBorder(20, 24, 10, 24));
-        JLabel titleLabel = new JLabel(title);
-        titleLabel.setFont(titleLabel.getFont().deriveFont(java.awt.Font.BOLD, 16f));
-        titleLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        p.add(titleLabel);
-        p.add(Box.createVerticalStrut(12));
-        JLabel body = new JLabel("<html><body style='width: 380px'>" + html + "</body></html>");
-        body.setAlignmentX(Component.LEFT_ALIGNMENT);
-        p.add(body);
+        JLabel body = new JLabel("<html><body>"
+                + "<div style='font-size:16px;font-weight:bold;margin-bottom:10px;'>" + title + "</div>"
+                + html + "</body></html>");
+        p.add(body, BorderLayout.NORTH);
         return p;
+    }
+
+    /** Оборачивает шаг в {@link javax.swing.JScrollPane} перед добавлением в
+     *  {@code cardsPanel} — шаг «Остальная персонализация» (несколько абзацев +
+     *  список) при фиксированном размере диалога {@code setSize(480, 360)}
+     *  обрезался снизу без скролла (баг-репорт: обрезанный текст в приветствии).
+     *  {@link GuideDialog#section} уже решает это так же для своих вкладок — тот
+     *  же приём здесь, отдельным шагом от {@link #step}, чтобы {@link #buildThemeStep}
+     *  по-прежнему мог дозаполнять возвращённую {@link JPanel} (радиокнопки темы)
+     *  до оборачивания. */
+    private javax.swing.JScrollPane scrollWrap(JPanel p) {
+        javax.swing.JScrollPane scroll = new javax.swing.JScrollPane(p);
+        scroll.setBorder(BorderFactory.createEmptyBorder());
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
+        return scroll;
     }
 
     private JPanel buildThemeStep(Window owner) {
@@ -179,8 +235,10 @@ public class OnboardingDialog extends JDialog {
         light.addActionListener(e -> applyTheme(owner, new FlatLightLaf()));
         radios.add(dark);
         radios.add(light);
-        p.add(Box.createVerticalStrut(10));
-        p.add(radios);
+        JPanel radiosWrap = new JPanel(new BorderLayout());
+        radiosWrap.setBorder(BorderFactory.createEmptyBorder(10, 0, 0, 0));
+        radiosWrap.add(radios, BorderLayout.NORTH);
+        p.add(radiosWrap, BorderLayout.CENTER);
         return p;
     }
 

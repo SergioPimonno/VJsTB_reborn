@@ -334,8 +334,9 @@ public class PowerStagePanel extends JPanel {
                 String label = "L" + c.getPhase() + " · " + c.getCabinetInstanceIds().size() + " каб." + suffix
                         + " · " + UiKit.fmt(status.loadWatts()) + " Вт";
                 AppModel.ChainLoadStatus warnStatus = trackLoad ? status : null;
-                chainListPanel.add(chainRow(label, Palette.phaseColor(c.getPhase()), warnStatus,
-                        () -> model.acknowledgePowerChainOverload(scene, c), () -> model.deletePowerChain(c.getId())));
+                chainListPanel.add(chainRow(label, com.vjstb.ledscheme.ui.SchemeRenderer.chainColor(c), warnStatus,
+                        () -> model.acknowledgePowerChainOverload(scene, c), () -> model.deletePowerChain(c.getId()),
+                        c));
             }
         }
         UiKit.recapHeight(chainsSection);
@@ -395,7 +396,7 @@ public class PowerStagePanel extends JPanel {
     }
 
     private javax.swing.JComponent chainRow(String label, java.awt.Color dot, AppModel.ChainLoadStatus status,
-                                             Runnable onAcknowledge, Runnable onDelete) {
+                                             Runnable onAcknowledge, Runnable onDelete, PowerChain chain) {
         JPanel row = new JPanel(new BorderLayout(6, 0));
         row.setAlignmentX(LEFT_ALIGNMENT);
         row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
@@ -408,6 +409,57 @@ public class PowerStagePanel extends JPanel {
             text.setToolTipText("Перегрузка: " + UiKit.fmt(status.loadWatts()) + " Вт при допустимых "
                     + UiKit.fmt(status.capacityWatts()) + " Вт на разъём кабинета");
         }
+        // ПКМ по строке — свой цвет цепочки (Task #4), по образцу SchemaCanvasPanel.showEdgeMenu.
+        // ЛКМ по строке (не по кнопкам справа) — возобновить построение ЭТОЙ цепочки
+        // (Task #11/v1.6), см. ChainInteractionController.resumeEditing. Слушатель
+        // регистрируется на row, dotLabel И text — Swing доставляет событие клика
+        // САМОМУ ГЛУБОКОМУ компоненту под курсором (обычно это как раз text, который
+        // BorderLayout растягивает на всю видимую площадь строки), а не всплывает к
+        // родителю без явного добавления того же слушателя на дочерние компоненты.
+        java.awt.event.MouseAdapter rowMouse = new java.awt.event.MouseAdapter() {
+            @Override
+            public void mousePressed(java.awt.event.MouseEvent e) {
+                maybeShowMenu(e);
+            }
+
+            @Override
+            public void mouseReleased(java.awt.event.MouseEvent e) {
+                if (maybeShowMenu(e)) {
+                    return;
+                }
+                if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
+                    chainCtrl.resumeEditing(new java.util.ArrayList<>(chain.getCabinetInstanceIds()),
+                            ids -> model.updatePowerChain(chain.getId(), ids));
+                }
+            }
+
+            private boolean maybeShowMenu(java.awt.event.MouseEvent e) {
+                if (!e.isPopupTrigger()) {
+                    return false;
+                }
+                javax.swing.JPopupMenu menu = new javax.swing.JPopupMenu();
+                javax.swing.JMenuItem colorItem = new javax.swing.JMenuItem("Цвет цепочки…");
+                colorItem.addActionListener(ev -> {
+                    java.awt.Color initial = chain.getColor() != null ? new java.awt.Color(chain.getColor()) : dot;
+                    java.awt.Color chosen = javax.swing.JColorChooser.showDialog(PowerStagePanel.this,
+                            "Цвет цепочки питания", initial);
+                    if (chosen != null) {
+                        model.setPowerChainColor(chain, chosen.getRGB());
+                    }
+                });
+                menu.add(colorItem);
+                if (chain.getColor() != null) {
+                    javax.swing.JMenuItem reset = new javax.swing.JMenuItem("Сбросить цвет");
+                    reset.addActionListener(ev -> model.setPowerChainColor(chain, null));
+                    menu.add(reset);
+                }
+                menu.show(e.getComponent(), e.getX(), e.getY());
+                return true;
+            }
+        };
+        row.addMouseListener(rowMouse);
+        dotLabel.addMouseListener(rowMouse);
+        text.addMouseListener(rowMouse);
         JPanel east = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
         if (overloaded && !status.acknowledged()) {
             JButton ack = new JButton("Я знаю");

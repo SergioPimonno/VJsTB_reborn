@@ -12,6 +12,7 @@ import com.vjstb.ledscheme.ui.stage.VisualizationStagePanel;
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
 import java.awt.Component;
+import java.awt.Dimension;
 import java.awt.KeyEventDispatcher;
 import java.awt.KeyboardFocusManager;
 import java.awt.event.KeyEvent;
@@ -60,7 +61,14 @@ public class MainFrame extends JFrame {
         librariesStage = new LibrariesStagePanel(model);
 
         setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setSize(1360, 860);
+        setSize(1360, 900);
+        // Без явного минимума окно можно было схлопнуть настолько, что секции этапа
+        // «Сетап» (прериг + форма экрана) перестают помещаться и обрезаются НИЖНИМ
+        // краем окна без какой-либо прокрутки/индикации (баг-репорт) — значения
+        // подобраны по факту, во сколько реально помещаются оба блока с их
+        // минимальным разумным содержимым (см. SetupStagePanel.buildPrerig/
+        // buildShapeEditor).
+        setMinimumSize(new Dimension(1100, 760));
         setLocationRelativeTo(null);
         setLayout(new BorderLayout());
 

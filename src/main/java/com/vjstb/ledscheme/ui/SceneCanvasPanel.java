@@ -37,6 +37,15 @@ public class SceneCanvasPanel extends JPanel {
     /** Ниже этой ширины ячейки кабинета детальная сетка/цепочки уже нечитаемы —
      *  показываем упрощённый прямоугольник с названием, как в обычном обзоре. */
     private static final int DETAIL_MIN_CELL_PX = 5;
+    /** Порог привязки при Shift-перетаскивании кабинета — в ЭКРАННЫХ пикселях (не в
+     *  мм!), переводится в мм через текущий масштаб на месте сравнения (см.
+     *  {@link #snapCabinetOffset}) — тот же приём, что и у CanvasEditorPanel.snap()
+     *  (SNAP_THRESHOLD_SCREEN_PX). Фиксированный порог В ММ (как было раньше — баг-
+     *  репорт «привязка не работает вообще») на практике оказывался то слишком тугим,
+     *  то почти неощутимым в зависимости от масштаба прериг-превью: при типичном
+     *  сильном уменьшении (много экранов сразу, режим "по размеру") 15мм — это доля
+     *  экранного пикселя, курсором столько не поймать. */
+    private static final int SNAP_THRESHOLD_SCREEN_PX = 10;
 
     private final AppModel model;
     private boolean compact;
@@ -58,6 +67,28 @@ public class SceneCanvasPanel extends JPanel {
      *  просто лишний визуальный шум, не относящийся к текущей задаче. */
     private boolean showRiggingPoints;
 
+    /** Перетаскивание ЦЕЛОГО экрана (Task #7/v1.6) — только когда chainController
+     *  не задан (т.е. этот виджет используется как прериг-превью, а не как
+     *  интерактивная пропись цепочек Питания/Сигнала — там клик по экрану/кабинету
+     *  уже означает совсем другое, см. mousePressed). Перетаскивание — прямая
+     *  мутация live-объекта для отклика "на лету" (как и перетаскивание узла схемы/
+     *  размещения канваса — SchemaCanvasPanel/CanvasEditorPanel), коммит через
+     *  AppModel только один раз по отпусканию кнопки (см. mouseReleased). */
+    private Screen draggingScreen;
+    private double dragScreenStartX, dragScreenStartY;
+    private int dragScreenPressPxX, dragScreenPressPxY;
+    private boolean dragScreenMoved;
+
+    /** Перетаскивание ОТДЕЛЬНОГО кабинета (Task #7/v1.6) — доступно только в
+     *  detailMode (там вообще видны отдельные кабинеты) и тоже только когда
+     *  chainController не задан. Shift во время перетаскивания — привязка к
+     *  соседним (по сетке) кабинетам, см. {@link #snapCabinetOffset}. */
+    private CabinetInstance draggingCabinet;
+    private Screen draggingCabinetScreen;
+    private double dragCabStartOffX, dragCabStartOffY;
+    private int dragCabPressPxX, dragCabPressPxY;
+    private boolean dragCabMoved;
+
     public SceneCanvasPanel(AppModel model) {
         this.model = model;
         setBackground(Palette.BG);
@@ -74,6 +105,50 @@ public class SceneCanvasPanel extends JPanel {
                         if (hit != null && hit[1] != null) {
                             chainController.removeFromActive(((CabinetInstance) hit[1]).getId());
                         }
+                    }
+                    return;
+                }
+                // Перетаскивание экрана/кабинета (Task #7/v1.6) — только когда виджет
+                // используется как ПРОСМОТР/ПРЕРИГ (chainController не задан); при
+                // реальной интерактивной прописке цепочек (Питание/Сигнал, chainController
+                // задан) клик по экрану/кабинету означает совсем другое — ветка ниже.
+                if (chainController == null && javax.swing.SwingUtilities.isLeftMouseButton(e)) {
+                    if (detailMode) {
+                        Object[] hit = screenAndCabinetAt(e.getX(), e.getY());
+                        if (hit != null) {
+                            Screen s = (Screen) hit[0];
+                            CabinetInstance cab = (CabinetInstance) hit[1];
+                            model.selectScreen(s);
+                            if (cab != null) {
+                                draggingCabinetScreen = s;
+                                draggingCabinet = cab;
+                                dragCabStartOffX = cab.getOffsetXMm();
+                                dragCabStartOffY = cab.getOffsetYMm();
+                                dragCabPressPxX = e.getX();
+                                dragCabPressPxY = e.getY();
+                                dragCabMoved = false;
+                            } else {
+                                draggingScreen = s;
+                                dragScreenStartX = s.getPosXMm();
+                                dragScreenStartY = s.getPosYMm();
+                                dragScreenPressPxX = e.getX();
+                                dragScreenPressPxY = e.getY();
+                                dragScreenMoved = false;
+                            }
+                            repaint();
+                        }
+                        return;
+                    }
+                    Screen s = screenAt(e.getX(), e.getY());
+                    if (s != null) {
+                        model.selectScreen(s);
+                        draggingScreen = s;
+                        dragScreenStartX = s.getPosXMm();
+                        dragScreenStartY = s.getPosYMm();
+                        dragScreenPressPxX = e.getX();
+                        dragScreenPressPxY = e.getY();
+                        dragScreenMoved = false;
+                        repaint();
                     }
                     return;
                 }
@@ -102,12 +177,84 @@ public class SceneCanvasPanel extends JPanel {
             @Override
             public void mouseReleased(MouseEvent e) {
                 lastDragCabId = null;
+                if (draggingScreen != null) {
+                    if (dragScreenMoved) {
+                        // Тот же приём, что и у перетаскивания подписи связи в общей схеме
+                        // (SchemaCanvasPanel, Task #3): live-мутация во время драга уже
+                        // записала в объект ИТОГОВУЮ позицию — возвращаем поле к исходному
+                        // значению ПЕРЕД вызовом AppModel-метода, чтобы его pushUndo()
+                        // (снимающий состояние ДО мутации) на самом деле снял состояние
+                        // ДО перетаскивания, а не уже сдвинутое.
+                        double finalX = draggingScreen.getPosXMm();
+                        double finalY = draggingScreen.getPosYMm();
+                        draggingScreen.setPosXMm(dragScreenStartX);
+                        draggingScreen.setPosYMm(dragScreenStartY);
+                        model.updateScreenPosition(draggingScreen, finalX, finalY);
+                    }
+                    draggingScreen = null;
+                    repaint();
+                    return;
+                }
+                if (draggingCabinet != null) {
+                    if (dragCabMoved) {
+                        double finalOffX = draggingCabinet.getOffsetXMm();
+                        double finalOffY = draggingCabinet.getOffsetYMm();
+                        draggingCabinet.setOffsetXMm(dragCabStartOffX);
+                        draggingCabinet.setOffsetYMm(dragCabStartOffY);
+                        model.updateCabinetOffset(draggingCabinet, finalOffX, finalOffY);
+                    }
+                    draggingCabinet = null;
+                    draggingCabinetScreen = null;
+                    repaint();
+                }
             }
 
             @Override
             public void mouseDragged(MouseEvent e) {
-                if (!detailMode || chainController == null || !chainController.isChainBuilding()
-                        || !javax.swing.SwingUtilities.isLeftMouseButton(e)) {
+                if (!javax.swing.SwingUtilities.isLeftMouseButton(e)) {
+                    return;
+                }
+                if (draggingScreen != null) {
+                    double[] b = boundsMm();
+                    if (b == null) {
+                        return;
+                    }
+                    double sc = scaleFor(b, getWidth(), getHeight());
+                    double dxMm = (e.getX() - dragScreenPressPxX) / sc;
+                    double dyMm = (e.getY() - dragScreenPressPxY) / sc;
+                    if (!dragScreenMoved && Math.hypot(e.getX() - dragScreenPressPxX, e.getY() - dragScreenPressPxY) > 3) {
+                        dragScreenMoved = true;
+                    }
+                    draggingScreen.setPosXMm(dragScreenStartX + dxMm);
+                    draggingScreen.setPosYMm(dragScreenStartY + dyMm);
+                    repaint();
+                    return;
+                }
+                if (draggingCabinet != null) {
+                    double[] b = boundsMm();
+                    if (b == null) {
+                        return;
+                    }
+                    double sc = scaleFor(b, getWidth(), getHeight());
+                    double dxMm = (e.getX() - dragCabPressPxX) / sc;
+                    double dyMm = (e.getY() - dragCabPressPxY) / sc;
+                    if (!dragCabMoved && Math.hypot(e.getX() - dragCabPressPxX, e.getY() - dragCabPressPxY) > 3) {
+                        dragCabMoved = true;
+                    }
+                    double candidateOffX = dragCabStartOffX + dxMm;
+                    double candidateOffY = dragCabStartOffY + dyMm;
+                    if (e.isShiftDown()) {
+                        double[] snapped = snapCabinetOffset(draggingCabinetScreen, draggingCabinet,
+                                candidateOffX, candidateOffY, sc);
+                        candidateOffX = snapped[0];
+                        candidateOffY = snapped[1];
+                    }
+                    draggingCabinet.setOffsetXMm(candidateOffX);
+                    draggingCabinet.setOffsetYMm(candidateOffY);
+                    repaint();
+                    return;
+                }
+                if (!detailMode || chainController == null || !chainController.isChainBuilding()) {
                     return;
                 }
                 Object[] hit = screenAndCabinetAt(e.getX(), e.getY());
@@ -175,20 +322,39 @@ public class SceneCanvasPanel extends JPanel {
             if (t == null) {
                 continue;
             }
-            int x = padding + (int) Math.round((s.getPosXMm() - b[0]) * sc);
-            int y = padding + (int) Math.round((s.getPosYMm() - b[1]) * sc);
             int cellW = (int) Math.round(t.getWidthMm() * sc);
             int cellH = (int) Math.round(t.getHeightMm() * sc);
             if (cellW <= 0 || cellH <= 0) {
                 continue;
             }
-            int w = s.getCols() * cellW;
-            int h = s.getRows() * cellH;
-            if (px >= x && px <= x + w && py >= y && py <= y + h) {
-                int col = (px - x) / cellW;
-                int row = (py - y) / cellH;
-                CabinetInstance cab = s.cabinetAt(row, col);
+            // Расширенный бокс (см. screenBoxPx) — та же грубая отбраковка "попал ли
+            // курсор в экран вообще", что рисует paint(), иначе кабинет, вытащенный
+            // свободным смещением ЗА номинальную сетку, был бы виден, но недоступен
+            // для клика/перетаскивания (баг-репорт).
+            int[] box = screenBoxPx(s, t, b, sc, padding);
+            if (px >= box[0] && px <= box[0] + box[2] && py >= box[1] && py <= box[1] + box[3]) {
+                int gridX = screenGridX(s, b, sc, padding);
+                int gridY = screenGridY(s, b, sc, padding);
+                CabinetInstance cab = cabinetAtPoint(s, t, px, py, cellW, cellH, gridX, gridY);
                 return new Object[]{s, cab};
+            }
+        }
+        return null;
+    }
+
+    /** Кабинет экрана под точкой — линейный перебор с учётом свободного мм-смещения
+     *  ячейки (Task #7/v1.6): при офсете ячейка может физически оказаться не там, где
+     *  её кладёт голая формула row*cellH/col*cellW (та годится лишь для грубой
+     *  отбраковки экрана целиком, см. вызывающий код выше), поэтому точный кабинет
+     *  под курсором ищем перебором актуальных прямоугольников — экраны обычно от
+     *  единиц до сотен кабинетов, перебор на глаз не заметен. */
+    private CabinetInstance cabinetAtPoint(Screen s, CabinetType t, int px, int py,
+                                            int cellW, int cellH, int offX, int offY) {
+        for (CabinetInstance cab : s.getCabinets()) {
+            int cx = cabX(cab, t, cellW, offX);
+            int cy = cabY(cab, t, cellH, offY);
+            if (px >= cx && px < cx + cellW && py >= cy && py < cy + cellH) {
+                return cab;
             }
         }
         return null;
@@ -245,15 +411,52 @@ public class SceneCanvasPanel extends JPanel {
             if (t == null) {
                 continue;
             }
-            double w = s.getCols() * t.getWidthMm();
-            double h = s.getRows() * t.getHeightMm();
-            minX = Math.min(minX, s.getPosXMm());
-            minY = Math.min(minY, s.getPosYMm());
-            maxX = Math.max(maxX, s.getPosXMm() + w);
-            maxY = Math.max(maxY, s.getPosYMm() + h);
+            double[] ext = screenExtentMm(s, t);
+            minX = Math.min(minX, s.getPosXMm() + ext[0]);
+            minY = Math.min(minY, s.getPosYMm() + ext[1]);
+            maxX = Math.max(maxX, s.getPosXMm() + ext[2]);
+            maxY = Math.max(maxY, s.getPosYMm() + ext[3]);
             any = true;
         }
         return any ? new double[]{minX, minY, maxX, maxY} : null;
+    }
+
+    /** Границы экрана В ЕГО ЛОКАЛЬНЫХ координатах (0,0 = левый верхний угол сетки
+     *  без смещений) — [minX, minY, maxX, maxY] в мм. По умолчанию это просто
+     *  номинальная сетка [0,0, cols*widthMm, rows*heightMm], НО если какой-то
+     *  кабинет свободным смещением (Task #7/v1.6) вытащен ЗА эти пределы, граница
+     *  расширяется, чтобы включить его — иначе (баг-репорт) вытащенный за номинальную
+     *  сетку кабинет становился недоступен для клика/перетаскивания (весь расчёт
+     *  «попал ли курсор в экран» проверял только номинальный прямоугольник) и мог
+     *  визуально обрезаться масштабом/паддингом всей сцены, посчитанными без него. */
+    private double[] screenExtentMm(Screen s, CabinetType t) {
+        return ScreenLogic.cabinetExtentMm(s, t, model.getWorkspace());
+    }
+
+    /** Прямоугольник экрана на экране (px) — РАСШИРЕННЫЙ до фактических границ его
+     *  кабинетов (см. {@link #screenExtentMm}), используется для отрисовки рамки/
+     *  заливки И для хит-теста (screenAt/screenAndCabinetAt) — обе стороны должны
+     *  видеть ОДНИ И ТЕ ЖЕ границы, иначе клик и картинка разъедутся (тот же принцип,
+     *  что и у SchemaCanvasPanel.computeSocketRects). */
+    private int[] screenBoxPx(Screen s, CabinetType t, double[] b, double sc, int padding) {
+        double[] ext = screenExtentMm(s, t);
+        int x = padding + (int) Math.round((s.getPosXMm() + ext[0] - b[0]) * sc);
+        int y = padding + (int) Math.round((s.getPosYMm() + ext[1] - b[1]) * sc);
+        int w = Math.max(2, (int) Math.round((ext[2] - ext[0]) * sc));
+        int h = Math.max(2, (int) Math.round((ext[3] - ext[1]) * sc));
+        return new int[]{x, y, w, h};
+    }
+
+    /** Номинальное начало сетки экрана (col=0,row=0, БЕЗ учёта того, что вытащенный
+     *  наружу кабинет мог расширить видимый бокс, см. {@link #screenBoxPx}) — именно
+     *  этот якорь передаётся в SchemeRenderer.paintScheme/cabX/cabY, у которых
+     *  смещение каждой ячейки уже само по себе может быть отрицательным. */
+    private int screenGridX(Screen s, double[] b, double sc, int padding) {
+        return padding + (int) Math.round((s.getPosXMm() - b[0]) * sc);
+    }
+
+    private int screenGridY(Screen s, double[] b, double sc, int padding) {
+        return padding + (int) Math.round((s.getPosYMm() - b[1]) * sc);
     }
 
     /** Компактный режим для мини-превью (прериг): без подписей и без разметки под
@@ -285,11 +488,8 @@ public class SceneCanvasPanel extends JPanel {
             if (t == null) {
                 continue;
             }
-            int x = padding + (int) Math.round((s.getPosXMm() - b[0]) * sc);
-            int y = padding + (int) Math.round((s.getPosYMm() - b[1]) * sc);
-            int w = (int) Math.round(s.getCols() * t.getWidthMm() * sc);
-            int h = (int) Math.round(s.getRows() * t.getHeightMm() * sc);
-            if (px >= x && px <= x + w && py >= y && py <= y + h) {
+            int[] box = screenBoxPx(s, t, b, sc, padding);
+            if (px >= box[0] && px <= box[0] + box[2] && py >= box[1] && py <= box[1] + box[3]) {
                 return s;
             }
         }
@@ -360,12 +560,10 @@ public class SceneCanvasPanel extends JPanel {
             if (t == null) {
                 continue;
             }
-            double wMm = s.getCols() * t.getWidthMm();
-            double hMm = s.getRows() * t.getHeightMm();
-            int x = padding + (int) Math.round((s.getPosXMm() - b[0]) * sc);
-            int y = padding + (int) Math.round((s.getPosYMm() - b[1]) * sc);
-            int w = Math.max(2, (int) Math.round(wMm * sc));
-            int h = Math.max(2, (int) Math.round(hMm * sc));
+            int[] box = screenBoxPx(s, t, b, sc, padding);
+            int x = box[0], y = box[1], w = box[2], h = box[3];
+            int gridX = screenGridX(s, b, sc, padding);
+            int gridY = screenGridY(s, b, sc, padding);
 
             boolean current = s == model.getCurrentScreen();
             boolean overlapped = overlapping.contains(s);
@@ -418,14 +616,25 @@ public class SceneCanvasPanel extends JPanel {
                     if (overlapped) {
                         Graphics2D go = (Graphics2D) g2.create();
                         go.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.55f));
-                        SchemeRenderer.paintScheme(go, s, t, detailPower, cellW, cellH, x, y, model.getWorkspace(),
+                        SchemeRenderer.paintScheme(go, s, t, detailPower, cellW, cellH, gridX, gridY, model.getWorkspace(),
                                 scenePowerChains, sceneSignalChains);
+                        if (chainController != null && chainController.isChainBuilding()) {
+                            drawChainBuildingOverlay(go, s, cellW, cellH, gridX, gridY);
+                        }
                         go.dispose();
                     } else {
-                        SchemeRenderer.paintScheme(g2, s, t, detailPower, cellW, cellH, x, y, model.getWorkspace(),
+                        SchemeRenderer.paintScheme(g2, s, t, detailPower, cellW, cellH, gridX, gridY, model.getWorkspace(),
                                 scenePowerChains, sceneSignalChains);
+                        if (chainController != null && chainController.isChainBuilding()) {
+                            drawChainBuildingOverlay(g2, s, cellW, cellH, gridX, gridY);
+                        }
                     }
-                    screenBoxes.put(s.getId(), new int[]{x, y, cellW, cellH});
+                    // NB: НОМИНАЛЬНОЕ начало сетки (gridX/gridY), не расширенный бокс x/y —
+                    // locateCabinet ниже вызывает cabX/cabY, которые сами уже прибавляют
+                    // (возможно отрицательное) мм-смещение конкретного кабинета поверх
+                    // этого якоря, поэтому якорь должен оставаться «как если бы смещений
+                    // не было», иначе смещение учлось бы дважды.
+                    screenBoxes.put(s.getId(), new int[]{gridX, gridY, cellW, cellH});
                 }
                 g2.setColor(overlapped ? Color.RED : (current ? Palette.ACCENT : new Color(0xc0, 0xc8, 0xd0)));
                 g2.setFont(getFont().deriveFont(Font.BOLD, detailFit ? 10f : 12f));
@@ -452,7 +661,8 @@ public class SceneCanvasPanel extends JPanel {
             g2.setColor(Palette.MUTED);
             g2.setFont(getFont().deriveFont(Font.PLAIN, 10f));
             g2.drawString(st.resolutionWidthPx() + "×" + st.resolutionHeightPx() + " px", x + 4, y + 30);
-            g2.drawString(Math.round(wMm) + "×" + Math.round(hMm) + " мм", x + 4, y + 43);
+            g2.drawString(Math.round(s.getCols() * t.getWidthMm()) + "×" + Math.round(s.getRows() * t.getHeightMm())
+                    + " мм", x + 4, y + 43);
         }
 
         // Сам переход цепочки через границу между экранами — единственное, что
@@ -470,6 +680,15 @@ public class SceneCanvasPanel extends JPanel {
             } else {
                 drawCrossScreenBridges(g2, scene, List.of(), sceneSignalChains, screenBoxes);
             }
+            // Переход ЕЩЁ НЕ СОХРАНЁННОЙ (строящейся) цепочки через границу экранов —
+            // тем же приёмом, что и для уже сохранённых цепочек выше, но по активному
+            // списку кабинетов контроллера, а не по scene.getPowerChains()/getSignalChains()
+            // (Task #8/v1.6: раньше сам переход между экранами при построении был
+            // не виден, пока не завершишь Esc-ом и он не станет сохранённой цепочкой).
+            if (chainController != null && chainController.isChainBuilding()) {
+                Color activeColor = detailPower ? Palette.phaseColor(model.getActivePhase()) : Color.WHITE;
+                drawBridgeSegments(g2, scene, chainController.activeChainCabIds(), activeColor, screenBoxes);
+            }
         }
 
         if (!overlapping.isEmpty() && !compact) {
@@ -479,6 +698,48 @@ public class SceneCanvasPanel extends JPanel {
                     padding, height - 10);
         }
         g2.dispose();
+    }
+
+    /** Живая отрисовка ЕЩЁ НЕ сохранённой цепочки поверх детальной сетки конкретного
+     *  экрана — аналог блока isChainBuilding() в CanvasPanel.paintComponent, которого
+     *  раньше не было в общем обзоре сцены (Task #8/v1.6): построение цепочки из
+     *  «показать все экраны» уже было возможно (см. setChainController), но сам
+     *  процесс был не виден, пока не завершишь Esc-ом. active может содержать id
+     *  кабинетов ДРУГИХ экранов сцены (цепочка сигнала может физически продолжаться
+     *  туда) — SchemeRenderer.drawChain сам молча пропускает отрезки, где кабинет не
+     *  резолвится на этот scr, как и paintScheme выше для сохранённых цепочек. */
+    private void drawChainBuildingOverlay(Graphics2D g2, Screen s, int cellW, int cellH, int offX, int offY) {
+        List<String> active = chainController.activeChainCabIds();
+        Color c = detailPower ? Palette.phaseColor(model.getActivePhase()) : Color.WHITE;
+        CabinetType type = model.typeOf(s);
+        java.awt.Stroke prevStroke = g2.getStroke();
+        Color prevColor = g2.getColor();
+        for (String id : active) {
+            CabinetInstance cab = s.cabinetById(id);
+            if (cab != null) {
+                int x = cabX(cab, type, cellW, offX);
+                int y = cabY(cab, type, cellH, offY);
+                int ew = effW(cab, type, cellW);
+                int eh = effH(cab, type, cellH);
+                g2.setColor(Color.WHITE);
+                g2.setStroke(new BasicStroke(2f));
+                g2.drawRect(x + 1, y + 1, ew - 2, eh - 2);
+            }
+        }
+        SchemeRenderer.drawChain(g2, s, active, c, true, cellW, cellH, offX, offY, model.typeOf(s), model.getWorkspace());
+        if (s == model.getCurrentScreen()) {
+            int cr = chainController.cursorRow();
+            int cc = chainController.cursorCol();
+            if (cr >= 0 && cc >= 0) {
+                int x = offX + cc * cellW;
+                int y = offY + cr * cellH;
+                g2.setColor(Color.YELLOW);
+                g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, new float[]{4, 3}, 0));
+                g2.drawRect(x + 3, y + 3, cellW - 6, cellH - 6);
+            }
+        }
+        g2.setStroke(prevStroke);
+        g2.setColor(prevColor);
     }
 
     /** Точки подвеса — маркеры-треугольники, равномерно разнесённые по верхнему
@@ -517,8 +778,9 @@ public class SceneCanvasPanel extends JPanel {
             if (box == null) {
                 return null;
             }
-            int x = box[0] + cab.getColIndex() * box[2];
-            int y = box[1] + cab.getRowIndex() * box[3];
+            CabinetType defaultType = model.typeOf(s);
+            int x = cabX(cab, defaultType, box[2], box[0]);
+            int y = cabY(cab, defaultType, box[3], box[1]);
             // Точка привязки моста между экранами — тот же принцип, что и внутри
             // одного экрана (см. SchemeRenderer.cabinetConnectionAnchor, Task #93/v1.5):
             // для непрямоугольного кабинета не геометрический центр ячейки, а центр
@@ -526,7 +788,7 @@ public class SceneCanvasPanel extends JPanel {
             CabinetType effective = cab.getCabinetTypeId() != null
                     ? model.getWorkspace().cabinetTypeById(cab.getCabinetTypeId()) : null;
             if (effective == null) {
-                effective = model.typeOf(s);
+                effective = defaultType;
             }
             com.vjstb.ledscheme.model.CabinetShape shape = cab.getShapeOverride() != null ? cab.getShapeOverride()
                     : (effective != null ? effective.getShape() : null);
@@ -653,6 +915,95 @@ public class SceneCanvasPanel extends JPanel {
             }
         }
         return (double) wiredCount / total;
+    }
+
+    /** Привязка кандидата свободного мм-смещения кабинета к соседям по СЕТКЕ (те же
+     *  4 непосредственных соседа, что даёт rowIndex±1/colIndex±1 — Task #7/v1.6):
+     *  сравнивает абсолютную (относительно левого верхнего угла экрана, в мм) позицию
+     *  кандидата с гранями каждого соседа (его собственная позиция ± ширина/высота
+     *  типа) и с «родной» позицией сетки самого кабинета (без смещения — чтобы легко
+     *  вернуть кабинет на штатное место), примерно как CanvasEditorPanel.snap() для
+     *  размещений канваса, только здесь сравнение сразу в мм (без промежуточного
+     *  перевода в px — то, что двигаем, само по себе мм-величина). Кросс-экранные
+     *  соседи сознательно не учитываются (эта же ячейка может быть физически рядом
+     *  с кабинетом другого экрана только по счастливой координате — надёжно определить
+     *  такое соседство без дополнительной геометрии нельзя, разумный первый шаг —
+     *  сетка одного экрана). */
+    private double[] snapCabinetOffset(Screen s, CabinetInstance cab, double candidateOffX, double candidateOffY,
+                                        double sc) {
+        CabinetType t = model.typeOf(s);
+        if (t == null || t.getWidthMm() <= 0 || t.getHeightMm() <= 0) {
+            return new double[]{candidateOffX, candidateOffY};
+        }
+        double thresholdMm = SNAP_THRESHOLD_SCREEN_PX / Math.max(0.0001, sc);
+        double myW = t.getWidthMm();
+        double myH = t.getHeightMm();
+        double candAbsX = cab.getColIndex() * myW + candidateOffX;
+        double candAbsY = cab.getRowIndex() * myH + candidateOffY;
+        List<Double> xTargets = new java.util.ArrayList<>();
+        List<Double> yTargets = new java.util.ArrayList<>();
+        xTargets.add(cab.getColIndex() * myW);
+        yTargets.add(cab.getRowIndex() * myH);
+        int[][] neighborDeltas = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+        for (int[] d : neighborDeltas) {
+            CabinetInstance n = s.cabinetAt(cab.getRowIndex() + d[0], cab.getColIndex() + d[1]);
+            if (n == null) {
+                continue;
+            }
+            double nAbsX = n.getColIndex() * myW + n.getOffsetXMm();
+            double nAbsY = n.getRowIndex() * myH + n.getOffsetYMm();
+            xTargets.add(nAbsX);
+            xTargets.add(nAbsX + myW);
+            xTargets.add(nAbsX - myW);
+            yTargets.add(nAbsY);
+            yTargets.add(nAbsY + myH);
+            yTargets.add(nAbsY - myH);
+        }
+        double snappedAbsX = closestMm(candAbsX, xTargets, thresholdMm);
+        double snappedAbsY = closestMm(candAbsY, yTargets, thresholdMm);
+        return new double[]{snappedAbsX - cab.getColIndex() * myW, snappedAbsY - cab.getRowIndex() * myH};
+    }
+
+    private static double closestMm(double value, List<Double> targets, double threshold) {
+        double best = value;
+        double bestDist = threshold;
+        for (double target : targets) {
+            double d = Math.abs(target - value);
+            if (d < bestDist) {
+                bestDist = d;
+                best = target;
+            }
+        }
+        return best;
+    }
+
+    /** Экранная позиция ячейки — сеточная позиция плюс свободное мм-смещение (см.
+     *  CabinetInstance.getOffsetXMm/getOffsetYMm, Task #7/v1.6), переведённое в
+     *  пиксели ТЕКУЩЕГО масштаба через {@link ScreenLogic#offsetPx} — тот же приём,
+     *  что и в SchemeRenderer.cabX/cabY (независимая копия: этот класс сам не
+     *  использует SchemeRenderer для отрисовки сетки в detailMode, паддинг/сетку
+     *  считает сам). type может быть null — тогда смещение не применяется. */
+    private static int cabX(CabinetInstance cab, CabinetType type, int cellW, int offX) {
+        double dx = type != null ? ScreenLogic.offsetPx(cab.getOffsetXMm(), cellW, type.getWidthMm()) : 0;
+        return offX + (int) Math.round(cab.getColIndex() * cellW + dx);
+    }
+
+    private static int cabY(CabinetInstance cab, CabinetType type, int cellH, int offY) {
+        double dy = type != null ? ScreenLogic.offsetPx(cab.getOffsetYMm(), cellH, type.getHeightMm()) : 0;
+        return offY + (int) Math.round(cab.getRowIndex() * cellH + dy);
+    }
+
+    /** Размер overlay-прямоугольника (подсветка строящейся цепочки) для ячейки с
+     *  переопределённым типом другого физического размера — см. CanvasPanel.effW/
+     *  effH и SchemeRenderer.paintScheme (ScreenLogic.effectiveCellW/H). */
+    private int effW(CabinetInstance cab, CabinetType defaultType, int cellW) {
+        CabinetType eff = ScreenLogic.effectiveType(cab, defaultType, model.getWorkspace());
+        return (int) Math.round(ScreenLogic.effectiveCellW(eff, defaultType, cellW));
+    }
+
+    private int effH(CabinetInstance cab, CabinetType defaultType, int cellH) {
+        CabinetType eff = ScreenLogic.effectiveType(cab, defaultType, model.getWorkspace());
+        return (int) Math.round(ScreenLogic.effectiveCellH(eff, defaultType, cellH));
     }
 
     private double boundsToScale(double[] b, int width, int height) {

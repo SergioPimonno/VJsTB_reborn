@@ -85,6 +85,19 @@ public class MainMenuBar extends JMenuBar {
         // частично (см. NovaLctScrParser/NovaLctImportDialog), доработка в следующих
         // версиях. Классы намеренно оставлены нетронутыми для продолжения работы.
 
+        // Экспорт шаблона NovaLCT (.scr) — тоже временно отключён из меню: реальный
+        // NovaLCT отвечает "Failed to load screen information file!" на файлы ОБОИХ
+        // сгенерированных вариантов (Standard и Complex Screen), т.е. реверс-инжиниринг
+        // формата (см. NovaLctScrWriter) пока недостаточен для рабочего экспорта.
+        // Классы намеренно оставлены нетронутыми для продолжения работы.
+
+        JMenuItem videoTiming = new JMenuItem("Калькулятор видеотайминга…");
+        videoTiming.setToolTipText("Расчёт частоты пикселей (VESA CVT/CVT-RB/CVT-RBv2) и проверка, помещается ли"
+                + " она в полосу DisplayPort/HDMI/SDI/Ethernet без сжатия — полезно при подборе медиасервера"
+                + " и разъёма под нестандартное разрешение LED-стены");
+        videoTiming.addActionListener(e -> new VideoTimingCalculatorDialog(owner).setVisible(true));
+        menu.add(videoTiming);
+
         menu.addSeparator();
         JMenuItem admin = new JMenuItem("Админ-режим…");
         admin.setToolTipText("Справочник видов интерфейса/версий, подкатегории оборудования, тексты"

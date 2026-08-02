@@ -56,6 +56,18 @@ public class UserProfile {
      *  Применяется и к живому редактору схемы, и к экспорту пакета документации. */
     private boolean schemaScreensAsWiringDiagram = false;
 
+    /** Как рисовать разъёмы на блоке узла общей схемы — группой по типу (как было,
+     *  по умолчанию) или каждый физический разъём отдельным гнездом. Независимая ось
+     *  от {@link #socketWiringEnabled} — та решает, цепляется ли линия связи за
+     *  конкретное гнездо; эта — как гнёзда рисуются, см. {@link ConnectorDisplayMode}. */
+    private ConnectorDisplayMode connectorDisplayMode = ConnectorDisplayMode.GROUPED;
+
+    /** Ориентация разъёмов на блоке узла общей схемы (Task #2/v1.6, часть 2): false
+     *  (по умолчанию) — гнёзда у левого/правого края, строки сверху вниз, как раньше;
+     *  true — гнёзда у верхнего/нижнего края, строки колонками слева направо. Тоже
+     *  независимая ось — сочетается с любым {@link #connectorDisplayMode}. */
+    private boolean connectorsVertical = false;
+
     /** Контроль электрической/сигнальной нагрузки (Task #80/#81/#86/#87): сравнение
      *  тока цепочки/суммарной нагрузки силового узла схемы с ёмкостью разъёма/автомата,
      *  предупреждения в списке цепочек и на схеме, блокировка экспорта при
@@ -183,6 +195,22 @@ public class UserProfile {
         this.schemaScreensAsWiringDiagram = schemaScreensAsWiringDiagram;
     }
 
+    public ConnectorDisplayMode getConnectorDisplayMode() {
+        return connectorDisplayMode != null ? connectorDisplayMode : ConnectorDisplayMode.GROUPED;
+    }
+
+    public void setConnectorDisplayMode(ConnectorDisplayMode connectorDisplayMode) {
+        this.connectorDisplayMode = connectorDisplayMode != null ? connectorDisplayMode : ConnectorDisplayMode.GROUPED;
+    }
+
+    public boolean isConnectorsVertical() {
+        return connectorsVertical;
+    }
+
+    public void setConnectorsVertical(boolean connectorsVertical) {
+        this.connectorsVertical = connectorsVertical;
+    }
+
     public boolean isLoadTrackingEnabled() {
         return loadTrackingEnabled;
     }
@@ -222,6 +250,8 @@ public class UserProfile {
         p.socketWiringEnabled = socketWiringEnabled;
         p.foolProofWiringEnabled = foolProofWiringEnabled;
         p.schemaScreensAsWiringDiagram = schemaScreensAsWiringDiagram;
+        p.connectorDisplayMode = connectorDisplayMode;
+        p.connectorsVertical = connectorsVertical;
         p.loadTrackingEnabled = loadTrackingEnabled;
         p.keyBindings = new LinkedHashMap<>();
         for (Map.Entry<String, KeyCombo> en : keyBindings.entrySet()) {

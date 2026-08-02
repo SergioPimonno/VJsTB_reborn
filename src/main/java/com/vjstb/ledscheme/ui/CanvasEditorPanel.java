@@ -18,8 +18,11 @@ import java.awt.Point;
 import java.awt.RenderingHints;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.image.BufferedImage;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 
@@ -45,6 +48,15 @@ public class CanvasEditorPanel extends JPanel {
     private CanvasPlacement dragging;
     private double dragOffXpx, dragOffYpx;
     private CanvasPlacement selected;
+
+    /** Кэш отрендеренных масок по id экрана — тот же PixelGridRenderer.renderMask,
+     *  что и настоящий экспорт (превью не «похоже», а РОВНО то же изображение,
+     *  просто уменьшенное), но пересчитывать его на каждый repaint() было бы
+     *  расточительно во время перетаскивания размещения мышью (repaint() при
+     *  drag не проходит через setCanvas — см. ниже, поэтому кэш переживает
+     *  drag не инвалидируясь, и пересчитывается только когда снаружи реально
+     *  могло что-то измениться). */
+    private final Map<String, BufferedImage> maskCache = new HashMap<>();
 
     public CanvasEditorPanel(AppModel model, SettingsManager settings) {
         this.model = model;
@@ -121,6 +133,13 @@ public class CanvasEditorPanel extends JPanel {
             this.selected = null;
         }
         this.canvas = canvas;
+        // setCanvas() вызывается снаружи при КАЖДОМ изменении модели (см.
+        // VisualizationStagePanel.refreshCanvasSide — общий слушатель модели), в
+        // отличие от repaint() внутри mouseDragged (там снаружи ничего не менялось,
+        // кроме позиции самого перетаскиваемого размещения) — поэтому кэш здесь
+        // безопасно сбросить целиком: неважно, что именно изменилось (цвет маски,
+        // состав кабинетов, что угодно), картинка должна быть пересчитана заново.
+        maskCache.clear();
         repaint();
     }
 
@@ -282,18 +301,33 @@ public class CanvasEditorPanel extends JPanel {
             int h = (int) Math.max(2, st.resolutionHeightPx() * scale);
 
             boolean isSelected = pl == selected;
-            g2.setColor(Palette.PHASE_NONE);
-            g2.fillRect(x, y, w, h);
+            // Настоящая маска (тот же PixelGridRenderer, что и экспорт), просто
+            // отмасштабированная под текущий вид канваса — вместо плоского
+            // прямоугольника-заглушки видно реальный чек-борд, цвет пресета,
+            // сетку и подписи кабинетов, как это будет выглядеть у контентщика.
+            BufferedImage maskImg = maskCache.computeIfAbsent(scr.getId(),
+                    id -> PixelGridRenderer.renderMask(scr, type, model.getWorkspace()));
+            g2.drawImage(maskImg, x, y, w, h, null);
             g2.setColor(isSelected ? Color.WHITE : Palette.BORDER);
             g2.setStroke(new BasicStroke(isSelected ? 2.5f : 1.4f));
             g2.drawRect(x, y, w, h);
 
+            // Мелкий HUD-лейбл поверх маски в углу — крупная подпись уже вписана
+            // renderMask-ом по центру, но при сильном уменьшении масштаба канваса
+            // (много экранов сразу) она нечитаема; этот всегда виден.
+            String resLabel = st.resolutionWidthPx() + "×" + st.resolutionHeightPx() + " px";
+            g2.setFont(labelFont);
+            int nameW = g2.getFontMetrics().stringWidth(scr.getName());
+            g2.setFont(metaFont);
+            int resW = g2.getFontMetrics().stringWidth(resLabel);
+            g2.setColor(new Color(0, 0, 0, 170));
+            g2.fillRect(x, y, Math.max(nameW, resW) + 8, 32);
             g2.setColor(isSelected ? Palette.ACCENT : new Color(0xc0, 0xc8, 0xd0));
             g2.setFont(labelFont);
             g2.drawString(scr.getName(), x + 4, y + 16);
             g2.setColor(Palette.MUTED);
             g2.setFont(metaFont);
-            g2.drawString(st.resolutionWidthPx() + "×" + st.resolutionHeightPx() + " px", x + 4, y + 30);
+            g2.drawString(resLabel, x + 4, y + 30);
         }
 
         g2.setColor(Palette.MUTED);

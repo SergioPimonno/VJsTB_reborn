@@ -232,6 +232,55 @@ class ChainInteractionControllerTest {
     }
 
     @Test
+    void resumeEditingPreloadsExistingCabinetsAndUpdatesSameChainOnFinish(@TempDir Path dir) {
+        // Task #11/v1.6: клик по уже построенной цепочке в списке должен дать
+        // достроить её, а по завершении обновить ТУ ЖЕ запись (по id), а не создать
+        // новую через starter — starter вообще не должен вызываться в этом режиме.
+        AppModel model = freshModelWithScreen(dir, 2, 3);
+        Screen scr = model.getCurrentScreen();
+        String a = scr.cabinetAt(0, 0).getId();
+        String b = scr.cabinetAt(0, 1).getId();
+        String c = scr.cabinetAt(1, 1).getId();
+
+        List<List<String>> updated = new ArrayList<>();
+        List<List<String>> startedNew = new ArrayList<>();
+        ChainInteractionController ctrl = new ChainInteractionController(model, () -> { });
+        ctrl.setStarter(cabId -> startedNew::add);
+
+        ctrl.resumeEditing(List.of(a, b), ids -> updated.add(ids));
+        assertTrue(ctrl.isChainBuilding());
+        assertEquals(List.of(a, b), ctrl.activeChainCabIds());
+
+        ctrl.cabinetClicked(c);
+        assertEquals(List.of(a, b, c), ctrl.activeChainCabIds());
+
+        ctrl.finish();
+        assertFalse(ctrl.isChainBuilding());
+        assertEquals(1, updated.size());
+        assertEquals(List.of(a, b, c), updated.get(0));
+        assertTrue(startedNew.isEmpty(), "starter (создание НОВОЙ цепочки) не должен вызываться при редактировании существующей");
+    }
+
+    @Test
+    void resumeEditingEmptiedByRightClickLeavesOriginalChainUntouched(@TempDir Path dir) {
+        // Если во время редактирования убрать ПКМ все кабинеты — коммита не должно
+        // случиться вовсе (см. commitCurrentSilently: building && !activeIds.isEmpty()),
+        // т.е. правка не должна превращаться в случайное удаление цепочки.
+        AppModel model = freshModelWithScreen(dir, 2, 2);
+        Screen scr = model.getCurrentScreen();
+        String a = scr.cabinetAt(0, 0).getId();
+
+        List<List<String>> updated = new ArrayList<>();
+        ChainInteractionController ctrl = new ChainInteractionController(model, () -> { });
+        ctrl.resumeEditing(List.of(a), updated::add);
+        ctrl.removeFromActive(a);
+        assertTrue(ctrl.activeChainCabIds().isEmpty());
+
+        ctrl.finish();
+        assertTrue(updated.isEmpty());
+    }
+
+    @Test
     void cursorClampsAtGridBounds(@TempDir Path dir) {
         AppModel model = freshModelWithScreen(dir, 2, 2);
         ChainInteractionController ctrl = new ChainInteractionController(model, () -> { });

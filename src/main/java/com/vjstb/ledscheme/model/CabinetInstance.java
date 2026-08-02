@@ -25,6 +25,13 @@ public class CabinetInstance {
      *  через радиальное меню (0°/90°/180°/270°/"другое"), не требуя заводить отдельный
      *  тип кабинета только ради другого угла. */
     private Integer rotationOverride;
+    /** Свободное смещение ЭТОЙ ячейки от её расчётной сеточной позиции (мм) — Task #7/v1.6:
+     *  разрешает разорвать сетку и сдвинуть кабинет физически (например, подвинуть на
+     *  реальном месте монтажа), не трогая rowIndex/colIndex (те остаются «логическим»
+     *  местом ячейки в сетке — нумерация, поиск соседей для привязки, resize сетки —
+     *  и не меняются перетаскиванием). 0,0 (по умолчанию) — сетка без изменений, как раньше. */
+    private double offsetXMm;
+    private double offsetYMm;
 
     public CabinetInstance() {
     }
@@ -110,6 +117,22 @@ public class CabinetInstance {
         this.rotationOverride = rotationOverride;
     }
 
+    public double getOffsetXMm() {
+        return offsetXMm;
+    }
+
+    public void setOffsetXMm(double offsetXMm) {
+        this.offsetXMm = offsetXMm;
+    }
+
+    public double getOffsetYMm() {
+        return offsetYMm;
+    }
+
+    public void setOffsetYMm(double offsetYMm) {
+        this.offsetYMm = offsetYMm;
+    }
+
     public CabinetInstance copy() {
         CabinetInstance c = new CabinetInstance();
         c.id = id;
@@ -120,6 +143,8 @@ public class CabinetInstance {
         c.cabinetTypeId = cabinetTypeId;
         c.shapeOverride = shapeOverride;
         c.rotationOverride = rotationOverride;
+        c.offsetXMm = offsetXMm;
+        c.offsetYMm = offsetYMm;
         return c;
     }
 }

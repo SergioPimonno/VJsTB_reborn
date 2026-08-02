@@ -1,18 +1,22 @@
 package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.model.ControllerInstance;
+import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SignalChain;
 import com.vjstb.ledscheme.service.AppModel;
 import java.awt.Color;
 import java.awt.Dimension;
+import java.awt.Font;
 import java.awt.GridLayout;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.List;
 import java.util.Objects;
 import javax.swing.BorderFactory;
+import javax.swing.BoxLayout;
 import javax.swing.JButton;
+import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 
@@ -41,7 +45,14 @@ public class PortPickerPanel extends JPanel {
     public PortPickerPanel(AppModel model, PortListener listener) {
         this.model = model;
         this.listener = listener;
-        setLayout(new GridLayout(0, COLUMNS, 4, 4));
+        // Раньше вся сетка была ОДНИМ GridLayout на всю панель — годилось, пока
+        // портов было мало и они шли одним сплошным диапазоном. Теперь портов
+        // может быть НЕСКОЛЬКО отдельных пулов нумерации (по одному на карту
+        // контроллера, см. ControllerType.ethernetPoolCount, баг-репорт: "у меня в
+        // Н2 2 выходные карты — должен видеть 2 области портов") — вертикальный
+        // стек, где на каждый пул своя мини-сетка (+ заголовок карты, если пулов
+        // больше одного), собирается заново в rebuild().
+        setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
     }
 
     /** Без выбранного контроллера — сетка пуста (см. rebuild(Integer, ControllerInstance)). */
@@ -73,20 +84,47 @@ public class PortPickerPanel extends JPanel {
         List<SignalChain> chains = model.getCurrentScene() != null
                 ? model.getCurrentScene().getSignalChains() : List.of();
         int offset = model.portOffsetOf(scr, selectedController);
-        com.vjstb.ledscheme.model.ControllerType t =
-                model.getWorkspace().controllerTypeById(selectedController.getControllerTypeId());
-        int count = t != null ? t.effectivePortCount() : 0;
+        ControllerType t = model.getWorkspace().controllerTypeById(selectedController.getControllerTypeId());
         int rangeStart = offset + 1;
-        int rangeEnd = offset + count;
-        for (int p = rangeStart; p <= rangeEnd; p++) {
-            add(portButton(scr, chains, p, activePort, offset, rangeStart, rangeEnd));
+        int rangeEnd = offset + (t != null ? t.effectivePortCount() : 0);
+        // Отдельная область (мини-сетка) на КАЖДЫЙ пул нумерации Ethernet-портов —
+        // как правило, один пул на карту контроллера (см. ControllerType
+        // .ethernetPoolCount) — Ethernet-порты каждой карты нумеруются заново от 1,
+        // а не сквозным номером на весь контроллер (раньше fiber-порты первой
+        // группы "съедали" первые номера, и Ethernet начинался не с 1 — баг-репорт).
+        int poolCount = t != null ? t.ethernetPoolCount() : 0;
+        for (int poolIdx = 0; poolIdx < poolCount; poolIdx++) {
+            int portsInPool = t.ethernetPortCountInPool(poolIdx);
+            if (portsInPool == 0) {
+                continue;
+            }
+            if (poolCount > 1) {
+                String cardName = !t.getCards().isEmpty() ? t.getCards().get(poolIdx).getName() : "";
+                JLabel header = new JLabel("Карта " + (poolIdx + 1) + (cardName.isEmpty() ? "" : " — " + cardName));
+                header.setFont(header.getFont().deriveFont(Font.BOLD, 11f));
+                header.setForeground(Palette.MUTED);
+                header.setAlignmentX(LEFT_ALIGNMENT);
+                add(header);
+            }
+            JPanel grid = new JPanel(new GridLayout(0, COLUMNS, 4, 4));
+            grid.setAlignmentX(LEFT_ALIGNMENT);
+            grid.setOpaque(false);
+            for (int local = 1; local <= portsInPool; local++) {
+                int controllerLocal = t.globalPortFor(poolIdx, local);
+                int port = offset + controllerLocal;
+                grid.add(portButton(scr, chains, port, activePort, t, offset, local));
+            }
+            add(grid);
+            if (poolIdx < poolCount - 1) {
+                add(javax.swing.Box.createVerticalStrut(6));
+            }
         }
         revalidate();
         repaint();
     }
 
     private JButton portButton(Screen scr, List<SignalChain> chains, int port, Integer activePort,
-                                int labelOffset, int rangeStart, int rangeEnd) {
+                                ControllerType t, int offset, int poolLocalPort) {
         SignalChain main = model.signalChainByPort(scr, port, false);
         Integer backupLink = main != null ? main.getBackupPortNumber() : null;
 
@@ -108,16 +146,24 @@ public class PortPickerPanel extends JPanel {
         // тускло закрашивается и блокируется, а не просто подсвечивается.
         boolean controllerReserved = reservedFor == null && main == null && model.isPortReservedAsBackup(scr, port);
 
-        int localPort = port - labelOffset;
-        // Если резервный порт лежит в диапазоне ЭТОГО ЖЕ контроллера — показываем
-        // его тоже локальным номером (согласованно с основным); если резерв на
-        // ДРУГОМ контроллере — локальный номер был бы бессмысленным/обманчивым,
-        // показываем глобальный со знаком "P" как опознавательную метку.
+        int localPort = poolLocalPort;
+        // Если резервный порт лежит в диапазоне ЭТОГО ЖЕ контроллера — раскладываем
+        // его на (пул, локальный номер) той же формулой, что и основной, показывая
+        // "К{пул}·{номер}" (или просто номер, если у контроллера всего один пул —
+        // согласованно с основным); если резерв на ДРУГОМ контроллере или указывает
+        // на fiber-порт (не входит ни в один Ethernet-пул) — локальный номер был бы
+        // бессмысленным/обманчивым, показываем глобальный со знаком "P".
         String backupLabel = null;
         if (backupLink != null) {
-            backupLabel = (backupLink >= rangeStart && backupLink <= rangeEnd)
-                    ? String.valueOf(backupLink - labelOffset)
-                    : "P" + backupLink;
+            int backupControllerLocal = backupLink - offset;
+            int[] backupPool = t != null ? t.ethernetPoolLocalPort(backupControllerLocal) : null;
+            if (backupPool != null) {
+                backupLabel = t.ethernetPoolCount() > 1
+                        ? "К" + (backupPool[0] + 1) + "·" + backupPool[1]
+                        : String.valueOf(backupPool[1]);
+            } else {
+                backupLabel = "P" + backupLink;
+            }
         }
 
         // Ширина у всех кнопок ОДИНАКОВАЯ: GridLayout растягивает каждую ячейку

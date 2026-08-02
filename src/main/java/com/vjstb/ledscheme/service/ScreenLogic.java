@@ -2,8 +2,11 @@ package com.vjstb.ledscheme.service;
 
 import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
+import com.vjstb.ledscheme.model.ControllerInstance;
+import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.Scene;
+import com.vjstb.ledscheme.model.SchemaCard;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SignalChain;
 import com.vjstb.ledscheme.model.Workspace;
@@ -20,6 +23,112 @@ import java.util.Set;
 public final class ScreenLogic {
 
     private ScreenLogic() {
+    }
+
+    /** Переводит свободное мм-смещение ячейки (см. {@link CabinetInstance#getOffsetXMm()}/
+     *  {@code getOffsetYMm}) в экранные пиксели ТЕКУЩЕГО контекста отрисовки — единая
+     *  формула для всех мест, что рисуют сетку кабинетов (Task #7/v1.6): большинство из
+     *  них не имеют единого «мм на пиксель» масштаба (размер ячейки на экране считается
+     *  по произвольному пиксельному бюджету, лишь СОХРАНЯЯ пропорцию ширина/высота типа
+     *  кабинета — см. SchemeRenderer.cellSize/CanvasPanel.cabW), поэтому локальный
+     *  масштаб выводится из уже посчитанного размера самой ячейки (cellPx/typeMm), а не
+     *  берётся откуда-то извне. typeMm<=0 — защита от деления на 0 (некорректный тип). */
+    public static double offsetPx(double offsetMm, double cellPx, double typeMm) {
+        return typeMm > 0 ? offsetMm * (cellPx / typeMm) : 0;
+    }
+
+    /** Границы экрана В ЕГО ЛОКАЛЬНЫХ координатах (0,0 = левый верхний угол сетки
+     *  без смещений) — [minX, minY, maxX, maxY] в мм. По умолчанию это просто
+     *  номинальная сетка [0,0, cols*widthMm, rows*heightMm], НО если какой-то
+     *  кабинет свободным смещением (см. {@link CabinetInstance#getOffsetXMm()}/
+     *  {@code getOffsetYMm}, Task #7/v1.6) вытащен ЗА эти пределы, граница
+     *  расширяется, чтобы включить его — иначе (баг-репорт) вытащенный за номинальную
+     *  сетку кабинет становился недоступен для клика/перетаскивания (весь расчёт
+     *  «попал ли курсор в экран» проверял только номинальный прямоугольник) или
+     *  визуально обрезался масштабом миниатюры схемы, посчитанным без него. Общая
+     *  точка правды для SceneCanvasPanel (обзор сцены/прериг) и SchemaCanvasPanel
+     *  (миниатюра расключения экрана в общей схеме) — раньше каждый считал только
+     *  свою локальную копию нужной геометрии, теперь одна и та же формула.
+     *  workspace (может быть null — тогда переопределение типа по ячейке не
+     *  разрешается) нужен, чтобы кабинет с ФАКТИЧЕСКИ БОЛЬШИМ типом (переопределение
+     *  {@link CabinetInstance#getCabinetTypeId()}, например 500×1000мм ячейка в
+     *  экране с типом 500×500мм по умолчанию) тоже расширял границы — иначе он
+     *  просто не поместился бы в номинальную ячейку даже без всякого смещения. */
+    public static double[] cabinetExtentMm(Screen s, CabinetType t, Workspace workspace) {
+        double minX = 0, minY = 0;
+        double maxX = s.getCols() * t.getWidthMm();
+        double maxY = s.getRows() * t.getHeightMm();
+        for (CabinetInstance cab : s.getCabinets()) {
+            CabinetType eff = effectiveType(cab, t, workspace);
+            double ew = eff != null ? eff.getWidthMm() : t.getWidthMm();
+            double eh = eff != null ? eff.getHeightMm() : t.getHeightMm();
+            double x0 = cab.getColIndex() * t.getWidthMm() + cab.getOffsetXMm();
+            double y0 = cab.getRowIndex() * t.getHeightMm() + cab.getOffsetYMm();
+            minX = Math.min(minX, x0);
+            minY = Math.min(minY, y0);
+            maxX = Math.max(maxX, x0 + ew);
+            maxY = Math.max(maxY, y0 + eh);
+        }
+        return new double[]{minX, minY, maxX, maxY};
+    }
+
+    /** Перегрузка без workspace — не разрешает переопределение типа по ячейке
+     *  (только свободное смещение). Оставлена для мест, где workspace недоступен
+     *  или разрешение типа заведомо не нужно. */
+    public static double[] cabinetExtentMm(Screen s, CabinetType t) {
+        return cabinetExtentMm(s, t, null);
+    }
+
+    /** Экран физически представляет собой РОВНУЮ прямоугольную сетку одинаковых
+     *  кабинетов — false, если есть скрытые ("вырезанные") ячейки, свободное мм-
+     *  смещение (Task #7/v1.6) или переопределение типа хотя бы у одной ячейки
+     *  (разный физический размер, Issue B/v1.6). Нужно экспорту в NovaLCT (см.
+     *  NovaLctScrWriter) — формат "Standard Screen" (простая прямоугольная сетка,
+     *  row/col-индекс на кабинет) и "Complex Screen" (произвольные прямоугольники,
+     *  явные пиксельные X/Y/Width/Height на кабинет) в самом NovaLCT — РАЗНЫЕ
+     *  бинарные структуры (подтверждено побайтовым разбором реального образца
+     *  Complex Screen — там нет ни привычного 6-байтового якоря, ни JSON-маркера
+     *  простого формата вовсе), выбор писать которую нужно делать ДО генерации
+     *  байтов, а не пытаться впихнуть неровную форму в простой формат. */
+    public static boolean isUniformRectangularGrid(Screen s, CabinetType defaultType, Workspace workspace) {
+        for (CabinetInstance cab : s.getCabinets()) {
+            if (cab.isHidden()) {
+                return false;
+            }
+            if (cab.getOffsetXMm() != 0 || cab.getOffsetYMm() != 0) {
+                return false;
+            }
+            CabinetType eff = effectiveType(cab, defaultType, workspace);
+            if (eff != null && defaultType != null && !eff.getId().equals(defaultType.getId())) {
+                return false;
+            }
+        }
+        return s.getCabinets().size() == s.getRows() * s.getCols();
+    }
+
+    /** Эффективный размер ячейки (px) для конкретного кабинета — если у него
+     *  переопределён тип (см. {@link #effectiveType}) и он физически отличается по
+     *  габаритам от типа экрана по умолчанию, ячейка рисуется ПРОПОРЦИОНАЛЬНО
+     *  больше/меньше номинальной cellW/cellH, а не втискивается в неё — иначе
+     *  комбинация кабинетов разных габаритов на одном экране визуально неотличима
+     *  от однородной сетки (баг-репорт: добавил кабинет 500×1000мм в экран с типом
+     *  500×500мм — «не изменил размеры модельки, которые должны были подстроиться
+     *  под его габариты»). Привязка (левый верхний угол ячейки, см. cabX/cabY)
+     *  остаётся номинальной — растёт/уменьшается только сам прямоугольник, поэтому
+     *  более крупный кабинет визуально перекрывает соседние ячейки вместо
+     *  перестройки всей сетки. */
+    public static double effectiveCellW(CabinetType effective, CabinetType defaultType, double cellW) {
+        if (effective == null || defaultType == null || defaultType.getWidthMm() <= 0) {
+            return cellW;
+        }
+        return cellW * (effective.getWidthMm() / defaultType.getWidthMm());
+    }
+
+    public static double effectiveCellH(CabinetType effective, CabinetType defaultType, double cellH) {
+        if (effective == null || defaultType == null || defaultType.getHeightMm() <= 0) {
+            return cellH;
+        }
+        return cellH * (effective.getHeightMm() / defaultType.getHeightMm());
     }
 
     /** Заполняет экран сеткой rows x cols новых кабинетов. Цепочки теперь хранятся
@@ -85,6 +194,66 @@ public final class ScreenLogic {
             }
         }
         return defaultType;
+    }
+
+    /** Разбирает сквозной (в рамках экрана) номер порта сигнальной цепочки
+     *  (см. {@link SignalChain#getPortNumber()}, нумеруется подряд по назначенным
+     *  экрану контроллерам — тот же обход, что и SchemeRenderer.controllerForPort)
+     *  на пару (индекс карты, локальный порт НА карте, оба 0-based) — так, как эту
+     *  пару хранит бинарный формат NovaLCT .scr (см. {@link NovaLctScrWriter}).
+     *  У контроллера без карт (плоский portCount) карта считается единственной
+     *  нулевой. null — порт вне диапазона всех контроллеров экрана. */
+    public static int[] cardAndLocalPort(Screen scr, Workspace workspace, int globalPort) {
+        if (workspace == null) {
+            return null;
+        }
+        int offset = 0;
+        for (ControllerInstance ci : scr.getControllers()) {
+            ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
+            int count = t != null ? t.effectivePortCount() : 0;
+            if (globalPort > offset && globalPort <= offset + count) {
+                int local = globalPort - offset;
+                if (t == null || t.getCards().isEmpty()) {
+                    return new int[]{0, local - 1};
+                }
+                int cardIdx = 0;
+                for (SchemaCard c : t.getCards()) {
+                    int cardOutputs = c.totalOutputs();
+                    if (local <= cardOutputs) {
+                        return new int[]{cardIdx, local - 1};
+                    }
+                    local -= cardOutputs;
+                    cardIdx++;
+                }
+                return new int[]{Math.max(0, cardIdx - 1), 0};
+            }
+            offset += count;
+        }
+        return null;
+    }
+
+    /** Прямоугольник ФАКТИЧЕСКИ занимаемого кабинетом места на сетке экрана, В ММ,
+     *  в локальных координатах экрана (0,0 = номинальный левый верхний угол сетки) —
+     *  [x, y, ширина, высота] — учитывает и свободное смещение (offsetXMm/YMm,
+     *  Task #7/v1.6), и переопределение физического размера по ячейке (effectiveType,
+     *  см. эффективный размер в SchemeRenderer/CanvasPanel/SceneCanvasPanel). Нужен
+     *  для проверки наложения кабинетов друг на друга (см. AppModel.updateCabinetOffset/
+     *  setCabinetTypeOverride) — оба источника наложения (сдвинули ИЛИ поменяли тип
+     *  на другой физический размер) сводятся к одной и той же геометрии в мм, без
+     *  привязки к какому-либо конкретному масштабу отрисовки. */
+    public static double[] cabinetRectMm(CabinetInstance cab, CabinetType defaultType, Workspace workspace) {
+        CabinetType eff = effectiveType(cab, defaultType, workspace);
+        double w = eff != null ? eff.getWidthMm() : defaultType.getWidthMm();
+        double h = eff != null ? eff.getHeightMm() : defaultType.getHeightMm();
+        double x = cab.getColIndex() * defaultType.getWidthMm() + cab.getOffsetXMm();
+        double y = cab.getRowIndex() * defaultType.getHeightMm() + cab.getOffsetYMm();
+        return new double[]{x, y, w, h};
+    }
+
+    /** Пересекаются ли два прямоугольника [x,y,w,h] — строго (общая граница без
+     *  общей площади наложением не считается), обычный AABB-тест. */
+    public static boolean rectsOverlap(double[] a, double[] b) {
+        return a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3];
     }
 
     private static CabinetInstance findAt(List<CabinetInstance> list, int row, int col) {
