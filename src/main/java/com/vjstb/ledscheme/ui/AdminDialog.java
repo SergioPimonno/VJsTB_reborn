@@ -1,6 +1,7 @@
 package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.model.InterfaceType;
+import com.vjstb.ledscheme.model.SchemaNodeType;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.settings.SettingsManager;
 import java.awt.BorderLayout;
@@ -16,6 +17,7 @@ import javax.swing.JList;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.JSplitPane;
 import javax.swing.JTabbedPane;
 import javax.swing.ListSelectionModel;
 
@@ -116,9 +118,74 @@ public class AdminDialog extends JDialog {
         return body;
     }
 
+    // ---- встроенные категории верхнего уровня (переименование подписи) ----
+
+    /** Список самих категорий ФИКСИРОВАН (см. class-javadoc SchemaNodeType — цвет
+     *  узла, де-рейтинг DISTRO, особая обработка SCREEN и т.д. завязаны на сам
+     *  Java-enum) — админ может только переименовать ПОДПИСЬ, которую видит
+     *  пользователь (дерево библиотеки, выбор типа узла, название на холсте),
+     *  см. AppModel.categoryLabel/renameBuiltinEquipmentCategory. SCREEN не
+     *  входит в список — это не оборудование, а ссылка на уже созданный экран. */
+    private JPanel buildBuiltinCategoriesSection(AppModel model) {
+        DefaultListModel<SchemaNodeType> listModel = new DefaultListModel<>();
+        for (SchemaNodeType t : SchemaNodeType.values()) {
+            if (t != SchemaNodeType.SCREEN) {
+                listModel.addElement(t);
+            }
+        }
+        JList<SchemaNodeType> list = new JList<>(listModel);
+        list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        list.setCellRenderer(new NamedRenderer<SchemaNodeType>(model::categoryLabel,
+                t -> "по умолчанию: " + t.getLabel()));
+
+        JScrollPane scroll = new JScrollPane(list);
+        scroll.setPreferredSize(new Dimension(200, 140));
+
+        JButton rename = new JButton("Переименовать");
+        rename.addActionListener(e -> {
+            SchemaNodeType sel = list.getSelectedValue();
+            if (sel == null) return;
+            String name = JOptionPane.showInputDialog(this, "Новая подпись категории:", model.categoryLabel(sel));
+            if (name != null && !name.trim().isEmpty()) {
+                tryRun(() -> model.renameBuiltinEquipmentCategory(sel, name));
+                list.repaint();
+            }
+        });
+        JButton reset = new JButton("Сбросить к умолчанию");
+        reset.addActionListener(e -> {
+            SchemaNodeType sel = list.getSelectedValue();
+            if (sel != null) {
+                model.resetBuiltinEquipmentCategoryLabel(sel);
+                list.repaint();
+            }
+        });
+        JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
+        crud.add(rename);
+        crud.add(reset);
+
+        JPanel body = new JPanel(new BorderLayout(0, 6));
+        body.add(UiKit.muted("<html>Встроенные категории оборудования — можно переименовать подпись"
+                + " (видно везде: библиотека, выбор типа узла, подпись на холсте), сам список категорий фиксирован.</html>"),
+                BorderLayout.NORTH);
+        body.add(scroll, BorderLayout.CENTER);
+        body.add(crud, BorderLayout.SOUTH);
+        return body;
+    }
+
     // ---- подкатегории оборудования ----
 
     private JPanel buildCategoriesTab(AppModel model) {
+        JPanel builtin = buildBuiltinCategoriesSection(model);
+        JPanel custom = buildCustomSubcategoriesSection(model);
+        JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, builtin, custom);
+        split.setResizeWeight(0.45);
+        split.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        JPanel wrapper = new JPanel(new BorderLayout());
+        wrapper.add(split, BorderLayout.CENTER);
+        return wrapper;
+    }
+
+    private JPanel buildCustomSubcategoriesSection(AppModel model) {
         DefaultListModel<String> listModel = new DefaultListModel<>();
         for (String c : model.getCustomEquipmentCategories()) {
             listModel.addElement(c);
@@ -168,9 +235,9 @@ public class AdminDialog extends JDialog {
 
         JPanel body = new JPanel(new BorderLayout(0, 6));
         body.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-        body.add(UiKit.muted("<html>Дополнительные подкатегории под общим «Прочее оборудование» — заготовка:"
-                + " список пока не подставляется автоматически в выбор категории пресета, доступен здесь для"
-                + " подготовки к будущей интеграции.</html>"), BorderLayout.NORTH);
+        body.add(UiKit.muted("<html>Дополнительные подкатегории под общим «Прочее оборудование» — доступны"
+                + " в выборе категории пресета (см. диалог добавления/редактирования пресета).</html>"),
+                BorderLayout.NORTH);
         body.add(scroll, BorderLayout.CENTER);
         body.add(crud, BorderLayout.SOUTH);
         return body;

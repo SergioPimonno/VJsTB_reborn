@@ -2,6 +2,7 @@ package com.vjstb.ledscheme.ui.stage;
 
 import com.vjstb.ledscheme.model.ControllerInstance;
 import com.vjstb.ledscheme.model.ControllerType;
+import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SignalChain;
@@ -83,10 +84,20 @@ public class SignalStagePanel extends JPanel {
      *  локальными номерами портов, а не сквозной суммой по всем контроллерам сцены
      *  (см. Task #73). null — контроллеров в сцене нет вовсе (старый ручной режим). */
     private String selectedControllerId;
+    /** Индекс пула/карты (0-based, см. ControllerType.ethernetPoolCount), которую
+     *  сейчас "показывают" цифровые хоткеи 1-9/0 и выбор по умолчанию — раньше
+     *  хоткеи всегда целили в пул 0, а первая карта контроллера часто входная
+     *  (без единого выходного Ethernet-порта, например у Novastar H-серии) — тогда
+     *  хоткеи молча не делали вообще ничего (баг-репорт). null — ещё не выбрано
+     *  явно, тогда берётся первый непустой пул (см. resolveCardPool). Сбрасывается
+     *  при смене выбранного контроллера. */
+    private Integer selectedCardPool;
 
     private final JPanel chainListPanel = new JPanel();
     private javax.swing.JComponent portsSection;
     private javax.swing.JComponent chainsSection;
+    private final JComboBox<Integer> cardPoolCombo = new JComboBox<>();
+    private JPanel cardPoolRow;
 
     private final JComboBox<ControllerType> controllerTypeCombo = new JComboBox<>();
     private final JPanel controllerListPanel = new JPanel();
@@ -121,7 +132,16 @@ public class SignalStagePanel extends JPanel {
                 return null;
             }
             int port = activePort;
-            return ids -> model.addSignalChain(port, false, ids);
+            return ids -> {
+                model.addSignalChain(port, false, ids);
+                // Автопереход на следующий свободный порт ТОЙ ЖЕ карты после
+                // сохранения цепочки — раньше activePort оставался прежним, пока
+                // пользователь явно не кликал другую кнопку; при быстрой прописке
+                // нескольких серпантинов подряд («Быстрое подключение» много раз без
+                // выбора нового порта между ними) это тихо сажало ВТОРУЮ цепочку на
+                // ТОТ ЖЕ порт первой (баг-репорт: два "Порт К2·1" в списке цепочек).
+                advanceActivePortAfterCommit(port);
+            };
         });
         this.chainCtrl.setOnCommitError(msg ->
                 JOptionPane.showMessageDialog(this, msg, "Не удалось завершить цепочку",
@@ -140,36 +160,41 @@ public class SignalStagePanel extends JPanel {
 
             @Override
             public void onPortBackupLinkRequested(int port) {
-                // Диалог работает ЛОКАЛЬНЫМИ номерами выбранного контроллера — так же,
-                // как и сама сетка портов (см. Task #73) — раньше здесь оставался
-                // сквозной номер по сцене (например "порт 17"), хотя сетка уже
-                // показывала локальные "1..4", что выглядело как потеря/рассинхрон
-                // данных порта (см. Task #75).
+                // Диалог работает номером В ПРЕДЕЛАХ ETHERNET-ПУЛА той же карты, что и
+                // сам исходный порт (см. ControllerType.ethernetPoolLocalPort/
+                // ethernetPoolCount, Task #17 follow-up: "отдельные пулы нумерации на
+                // карту") — так же, как и сама сетка портов; раньше номер был локальным
+                // ко ВСЕМУ контроллеру сквозным числом с "дырками" от fiber-портов
+                // (см. Task #73/#75), что не совпадало с новой пер-карточной нумерацией
+                // сетки. Резерв на ДРУГОЙ карте/контроллере этим диалогом не назначить —
+                // для подавляющего большинства контроллеров (одна карта или без карт)
+                // никакого ограничения на самом деле нет.
                 Screen scr = model.getCurrentScreen();
                 if (scr == null) return;
                 ControllerInstance selected = selectedController(scr);
-                int offset = 0;
-                int maxLocal = model.effectiveSignalPortCount(scr);
-                if (selected != null) {
-                    offset = model.portOffsetOf(scr, selected);
-                    ControllerType t = model.getWorkspace().controllerTypeById(selected.getControllerTypeId());
-                    maxLocal = t != null ? t.effectivePortCount() : 0;
-                }
-                int localPort = port - offset;
+                if (selected == null) return;
+                int offset = model.portOffsetOf(scr, selected);
+                ControllerType t = model.getWorkspace().controllerTypeById(selected.getControllerTypeId());
+                int[] pool = t != null ? t.ethernetPoolLocalPort(port - offset) : null;
+                if (pool == null) return;
+                int poolIdx = pool[0];
+                int maxLocal = t.ethernetPortCountInPool(poolIdx);
                 SignalChain main = model.signalChainByPort(scr, port, false);
                 Integer currentGlobal = main != null ? main.getBackupPortNumber() : null;
                 Integer currentLocal = null;
                 String crossControllerNote = "";
                 if (currentGlobal != null) {
-                    if (currentGlobal > offset && currentGlobal <= offset + maxLocal) {
-                        currentLocal = currentGlobal - offset;
+                    int[] currentPool = t.ethernetPoolLocalPort(currentGlobal - offset);
+                    if (currentPool != null && currentPool[0] == poolIdx) {
+                        currentLocal = currentPool[1];
                     } else {
-                        crossControllerNote = " (сейчас резерв — порт ДРУГОГО контроллера сцены;"
-                                + " это окно назначает резерв только в пределах текущего контроллера)";
+                        crossControllerNote = " (сейчас резерв — порт другой карты/контроллера сцены;"
+                                + " это окно назначает резерв только в пределах текущей карты)";
                     }
                 }
+                String cardNote = t.ethernetPoolCount() > 1 ? " (карта " + (poolIdx + 1) + ")" : "";
                 String input = JOptionPane.showInputDialog(SignalStagePanel.this,
-                        "Номер резервного порта (текущего контроллера) для порта " + localPort
+                        "Номер резервного порта" + cardNote + " для порта " + pool[1]
                                 + crossControllerNote + " (пусто — снять):",
                         currentLocal != null ? String.valueOf(currentLocal) : "");
                 if (input == null) return;
@@ -182,7 +207,7 @@ public class SignalStagePanel extends JPanel {
                                 "Ошибка", JOptionPane.ERROR_MESSAGE);
                         return;
                     }
-                    Integer backupGlobal = backupLocal != null ? offset + backupLocal : null;
+                    Integer backupGlobal = backupLocal != null ? offset + t.globalPortFor(poolIdx, backupLocal) : null;
                     model.setSignalBackupPortLink(port, backupGlobal);
                 } catch (NumberFormatException ex) {
                     JOptionPane.showMessageDialog(SignalStagePanel.this, "Введите число порта",
@@ -323,12 +348,43 @@ public class SignalStagePanel extends JPanel {
             return String.valueOf(globalPort);
         }
         int offset = model.portOffsetOf(scr, owner);
-        int localPort = globalPort - offset;
+        int controllerLocal = globalPort - offset;
+        ControllerType t = model.getWorkspace().controllerTypeById(owner.getControllerTypeId());
+        // Раскладываем на (пул/карта, номер В ПРЕДЕЛАХ ETHERNET-пула) — та же формула,
+        // что и сетка портов (см. PortPickerPanel/ControllerType.ethernetPoolLocalPort) —
+        // раньше здесь показывался номер, сквозной по ВСЕМУ контроллеру (с "дырками"
+        // от fiber-портов), не совпадающий с новой пер-карточной нумерацией сетки.
+        int[] pool = t != null ? t.ethernetPoolLocalPort(controllerLocal) : null;
+        String portPart;
+        if (pool != null && t.ethernetPoolCount() > 1) {
+            portPart = "К" + (pool[0] + 1) + "·" + pool[1];
+        } else {
+            portPart = String.valueOf(pool != null ? pool[1] : controllerLocal);
+        }
         if (sceneControllers.size() <= 1) {
-            return String.valueOf(localPort);
+            return portPart;
         }
         int idx = sceneControllers.indexOf(owner) + 1;
-        return "C" + idx + "·" + localPort;
+        return "C" + idx + "·" + portPart;
+    }
+
+    /** Индексы карт/пулов КОНТРОЛЛЕРА, у которых реально есть хотя бы один выходной
+     *  Ethernet-порт — карты только со входными портами (например, входная карта
+     *  H2) или только с fiber-портами дают пустой пул и не участвуют в выборе
+     *  "текущей карты" (незачем предлагать переключиться на карту, где вообще
+     *  нечего расключать). Пустой список — у контроллера вовсе нет выходных
+     *  Ethernet-портов (t == null или все карты входные/оптические). */
+    private static List<Integer> nonEmptyEthernetPools(ControllerType t) {
+        if (t == null) {
+            return List.of();
+        }
+        List<Integer> result = new java.util.ArrayList<>();
+        for (int p = 0; p < t.ethernetPoolCount(); p++) {
+            if (t.ethernetPortCountInPool(p) > 0) {
+                result.add(p);
+            }
+        }
+        return result;
     }
 
     /** Контроллер, чьи порты сейчас показаны — выбранный явно (ЛКМ по строке), или
@@ -377,11 +433,54 @@ public class SignalStagePanel extends JPanel {
         refresh();
     }
 
+    /** После сохранения цепочки на {@code justCommittedPort} — переводит activePort
+     *  на СЛЕДУЮЩИЙ свободный (без своей цепочки, не зарезервированный под бэкап)
+     *  Ethernet-порт ТОЙ ЖЕ карты/пула. Не находит такой — activePort остаётся как
+     *  есть (пул исчерпан или контроллер без карт/пулов), клик по кнопке порта
+     *  по-прежнему остаётся основным способом переключиться. Без этого при
+     *  нескольких «Быстрых подключениях» подряд (протяжка → выбор шаблона серпантина
+     *  → повтор, без явного клика по новой кнопке порта между ними) вторая цепочка
+     *  молча садилась на ТОТ ЖЕ порт, что и первая (баг-репорт: два одинаковых
+     *  "Порт К2·1" в списке цепочек при быстрой последовательной прописке). */
+    private void advanceActivePortAfterCommit(int justCommittedPort) {
+        Screen scr = model.getCurrentScreen();
+        ControllerInstance owner = scr != null ? model.controllerForPort(scr, justCommittedPort) : null;
+        if (owner == null) {
+            return;
+        }
+        ControllerType t = model.getWorkspace().controllerTypeById(owner.getControllerTypeId());
+        if (t == null) {
+            return;
+        }
+        int offset = model.portOffsetOf(scr, owner);
+        int[] pool = t.ethernetPoolLocalPort(justCommittedPort - offset);
+        if (pool == null) {
+            return;
+        }
+        int poolIdx = pool[0];
+        int poolSize = t.ethernetPortCountInPool(poolIdx);
+        for (int local = pool[1] + 1; local <= poolSize; local++) {
+            int candidateGlobal = offset + t.globalPortFor(poolIdx, local);
+            if (model.signalChainByPort(scr, candidateGlobal, false) == null
+                    && !model.isPortReservedAsBackup(scr, candidateGlobal)) {
+                activePort = candidateGlobal;
+                return;
+            }
+        }
+    }
+
     /** Хоткей 1-9/0 (глобальный обработчик в MainFrame) — то же самое, что клик по
-     *  кнопке порта в сетке портов контроллера. Цифра — ЛОКАЛЬНЫЙ номер порта
-     *  показанного (выбранного) контроллера, а не сквозной по сцене (см. Task #73) —
-     *  переводим её в глобальный номер тем же смещением, что и сама сетка портов. */
-    public void selectPortByHotkey(int localPort) {
+     *  кнопке порта в сетке портов контроллера. Цифра — номер порта В ПРЕДЕЛАХ
+     *  Ethernet-пула ТЕКУЩЕЙ выбранной карты показанного контроллера (см.
+     *  selectedCardPool/ControllerType.ethernetPoolLocalPort/globalPortFor) — не
+     *  обязательно первой: у многих контроллеров (например Novastar H-серии)
+     *  первая карта входная и не имеет вообще ни одного выходного Ethernet-порта,
+     *  раньше хоткей был жёстко привязан к пулу 0 и на таких контроллерах молча
+     *  ничего не делал (баг-репорт: "первые карты обычно входные"). Для
+     *  контроллеров с одной (или без) картой выбор не показывается пользователю
+     *  и всегда указывает на единственный существующий пул — поведение не
+     *  меняется. */
+    public void selectPortByHotkey(int poolLocalPort) {
         Screen scr = model.getCurrentScreen();
         if (scr == null) {
             return;
@@ -394,13 +493,21 @@ public class SignalStagePanel extends JPanel {
             return;
         }
         int offset = model.portOffsetOf(scr, selected);
-        com.vjstb.ledscheme.model.ControllerType t =
-                model.getWorkspace().controllerTypeById(selected.getControllerTypeId());
-        int count = t != null ? t.effectivePortCount() : 0;
-        if (localPort < 1 || localPort > count) {
+        ControllerType t = model.getWorkspace().controllerTypeById(selected.getControllerTypeId());
+        if (t == null) {
             return;
         }
-        selectPort(offset + localPort);
+        List<Integer> nonEmptyPools = nonEmptyEthernetPools(t);
+        if (nonEmptyPools.isEmpty()) {
+            return;
+        }
+        int pool = selectedCardPool != null && nonEmptyPools.contains(selectedCardPool)
+                ? selectedCardPool : nonEmptyPools.get(0);
+        int controllerLocal = t.globalPortFor(pool, poolLocalPort);
+        if (controllerLocal < 0) {
+            return;
+        }
+        selectPort(offset + controllerLocal);
     }
 
     private static final int SIDE_WIDTH = 300;
@@ -455,10 +562,26 @@ public class SignalStagePanel extends JPanel {
                 }
             }
         });
+        JButton cardsCtrl = new JButton("Карты…");
+        cardsCtrl.setToolTipText("Комплектация карт выбранного (в списке слева) типа контроллера — правит"
+                + " СРАЗУ библиотечный тип (как и одноимённая кнопка в разделе «Библиотеки»), без создания"
+                + " нового типа: раньше собрать карты для контроллера можно было только через отдельный"
+                + " заход в «Библиотеки», что было неудобно прямо во время расключения сцены.");
+        cardsCtrl.addActionListener(e -> {
+            ControllerType sel = (ControllerType) controllerTypeCombo.getSelectedItem();
+            if (sel == null) {
+                return;
+            }
+            com.vjstb.ledscheme.ui.CardsConfigDialog dlg = new com.vjstb.ledscheme.ui.CardsConfigDialog(
+                    javax.swing.SwingUtilities.getWindowAncestor(this),
+                    sel.getName(), com.vjstb.ledscheme.ui.CardsConfigDialog.forController(model, sel), model);
+            dlg.setVisible(true);
+        });
         addRow.add(controllerTypeCombo, BorderLayout.CENTER);
         JPanel addButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         addButtons.add(addCtrl);
         addButtons.add(editCtrl);
+        addButtons.add(cardsCtrl);
         addRow.add(addButtons, BorderLayout.EAST);
         controllersBody.add(UiKit.vgap());
         controllersBody.add(addRow);
@@ -469,6 +592,43 @@ public class SignalStagePanel extends JPanel {
         portCountLabel.setForeground(Palette.MUTED);
         body.add(portCountLabel);
         body.add(UiKit.vgap());
+
+        // Видна, только если у контроллера НЕСКОЛЬКО карт с выходными Ethernet-
+        // портами — выбирает, какую из них показывают хоткеи 1-9/0 (сама сетка
+        // портов справа всегда рисует ВСЕ карты сразу, этот выбор влияет только
+        // на хоткеи, см. selectPortByHotkey).
+        cardPoolCombo.setRenderer(new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public java.awt.Component getListCellRendererComponent(javax.swing.JList<?> list, Object value,
+                    int index, boolean isSelected, boolean cellHasFocus) {
+                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                if (value instanceof Integer poolIdx) {
+                    Screen scr = model.getCurrentScreen();
+                    ControllerInstance sel = scr != null ? selectedController(scr) : null;
+                    ControllerType t = sel != null
+                            ? model.getWorkspace().controllerTypeById(sel.getControllerTypeId()) : null;
+                    String cardName = t != null && !t.getCards().isEmpty() && poolIdx < t.getCards().size()
+                            ? t.getCards().get(poolIdx).getName() : "";
+                    setText("Карта " + (poolIdx + 1) + (cardName.isEmpty() ? "" : " — " + cardName));
+                }
+                return this;
+            }
+        });
+        cardPoolCombo.addActionListener(e -> {
+            Integer sel = (Integer) cardPoolCombo.getSelectedItem();
+            if (sel != null && !sel.equals(selectedCardPool)) {
+                selectedCardPool = sel;
+                refresh();
+            }
+        });
+        cardPoolRow = new JPanel(new BorderLayout(6, 0));
+        cardPoolRow.setAlignmentX(LEFT_ALIGNMENT);
+        cardPoolRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+        cardPoolRow.add(new JLabel("Текущая карта (для хоткеев)"), BorderLayout.WEST);
+        cardPoolRow.add(cardPoolCombo, BorderLayout.CENTER);
+        body.add(cardPoolRow);
+        body.add(UiKit.vgap());
+
         // portPicker наполняется кнопками в rebuild(), уже после первой сборки — динамическая секция.
         portsSection = UiKit.dynamicSection("Порты контроллера", portPicker);
         body.add(portsSection);
@@ -544,8 +704,16 @@ public class SignalStagePanel extends JPanel {
             // Порты показанной сетки — ТОЛЬКО выбранного контроллера, локальными
             // номерами, а не сквозная сумма по всем контроллерам сцены (Task #73).
             ControllerType t = model.getWorkspace().controllerTypeById(selected.getControllerTypeId());
-            int count = t != null ? t.effectivePortCount() : 0;
-            portCountLabel.setText("Портов: " + count + " (контроллер «" + selected.getLabel() + "»)");
+            int total = t != null ? t.effectivePortCount() : 0;
+            int usable = t != null ? t.effectiveEthernetPortCount() : 0;
+            // Если на картах есть fiber-группы — они физически существуют (считаются
+            // в total, влияют на смещение портов следующего контроллера сцены), но не
+            // предлагаются для расключения экрана (см. PortPickerPanel, Task #17):
+            // явно показываем оба числа, иначе "Портов: 18" выглядит как расхождение
+            // с сеткой, где реально доступно меньше (баг-репорт: "всё ещё 18 портов").
+            String countText = usable == total ? String.valueOf(total)
+                    : usable + " Ethernet из " + total + " (" + (total - usable) + " fiber/оптика — не для расключения экрана)";
+            portCountLabel.setText("Портов: " + countText + " (контроллер «" + selected.getLabel() + "»)");
         } else if (has) {
             portCountLabel.setText("Контроллеры не назначены — добавьте хотя бы один, чтобы получить порты сигнала");
         } else {
@@ -553,6 +721,25 @@ public class SignalStagePanel extends JPanel {
         }
         portPicker.rebuild(activePort, selected);
         UiKit.recapHeight(portsSection);
+
+        // Выбор "текущей карты" для хоткеев — показываем переключатель, только если
+        // у контроллера реально ЕСТЬ выбор (2+ карты с выходными Ethernet-портами);
+        // сама сетка портов выше рисует ВСЕ карты одновременно независимо от этого.
+        ControllerType selectedType = has && selected != null
+                ? model.getWorkspace().controllerTypeById(selected.getControllerTypeId()) : null;
+        List<Integer> nonEmptyPools = nonEmptyEthernetPools(selectedType);
+        if (selectedCardPool == null || !nonEmptyPools.contains(selectedCardPool)) {
+            selectedCardPool = nonEmptyPools.isEmpty() ? null : nonEmptyPools.get(0);
+        }
+        cardPoolRow.setVisible(nonEmptyPools.size() > 1);
+        if (nonEmptyPools.size() > 1) {
+            DefaultComboBoxModel<Integer> poolModel = new DefaultComboBoxModel<>();
+            for (int p : nonEmptyPools) {
+                poolModel.addElement(p);
+            }
+            cardPoolCombo.setModel(poolModel);
+            cardPoolCombo.setSelectedItem(selectedCardPool);
+        }
 
         chainListPanel.removeAll();
         if (has) {
@@ -563,15 +750,26 @@ public class SignalStagePanel extends JPanel {
             if (chains.isEmpty()) {
                 chainListPanel.add(UiKit.muted("Цепочек ещё нет"));
             }
+            boolean trackLoad = settings.activeProfile().isLoadTrackingEnabled();
+            Scene scene = model.getCurrentScene();
             for (int i = 0; i < chains.size(); i++) {
                 SignalChain c = chains.get(i);
                 boolean crossScreen = c.getCabinetInstanceIds().stream().anyMatch(id -> scr.cabinetById(id) == null);
+                // Как и в Питании (Task #80) — текущая нагрузка (в пикселях) показывается
+                // ВСЕГДА, предупреждение/кнопка «Я знаю» — только если включён контроль
+                // нагрузки в Предпочтениях (см. AppModel.signalChainLoadStatus, дублирует
+                // уже готовый паттерн PowerStagePanel.refresh()).
+                AppModel.SignalChainLoadStatus status = model.signalChainLoadStatus(scene, c);
                 String label = (c.getPortNumber() != null ? "Порт " + portDisplayLabel(scr, c.getPortNumber()) : "Без порта")
                         + (c.isBackup() ? " (бэкап)" : "") + " · " + c.getCabinetInstanceIds().size() + " каб."
                         + (c.getBackupPortNumber() != null
                                 ? " · резерв: порт " + portDisplayLabel(scr, c.getBackupPortNumber()) : "")
-                        + (crossScreen ? " (продолжается на другом экране)" : "");
-                chainListPanel.add(chainRow(label, Palette.signalColor(i), () -> model.deleteSignalChain(c.getId())));
+                        + (crossScreen ? " (продолжается на другом экране)" : "")
+                        + " · " + UiKit.fmt(status.loadPixels()) + " px";
+                AppModel.SignalChainLoadStatus warnStatus = trackLoad ? status : null;
+                chainListPanel.add(chainRow(label, com.vjstb.ledscheme.ui.SchemeRenderer.chainColor(c, i), warnStatus,
+                        () -> model.acknowledgeSignalChainOverload(scene, c), () -> model.deleteSignalChain(c.getId()),
+                        c));
             }
         }
         UiKit.recapHeight(chainsSection);
@@ -685,6 +883,7 @@ public class SignalStagePanel extends JPanel {
                     // Обычный ЛКМ (не в режиме назначения резерва) — выбрать этот
                     // контроллер для сетки портов (Task #73).
                     selectedControllerId = ci.getId();
+                    selectedCardPool = null; // сброс -- при новом контроллере снова первая непустая карта
                     refresh();
                 }
             }
@@ -701,19 +900,84 @@ public class SignalStagePanel extends JPanel {
         return null;
     }
 
-    private javax.swing.JComponent chainRow(String label, java.awt.Color dot, Runnable onDelete) {
+    private javax.swing.JComponent chainRow(String label, java.awt.Color dot, AppModel.SignalChainLoadStatus status,
+                                             Runnable onAcknowledge, Runnable onDelete, SignalChain chain) {
         JPanel row = new JPanel(new BorderLayout(6, 0));
         row.setAlignmentX(LEFT_ALIGNMENT);
         row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
         JLabel dotLabel = new JLabel("●");
         dotLabel.setForeground(dot);
-        JLabel text = new JLabel(label);
+        boolean overloaded = status != null && status.overloaded();
+        JLabel text = new JLabel((overloaded ? "⚠ " : "") + label);
+        if (overloaded) {
+            text.setForeground(Palette.WARN);
+            text.setToolTipText("Превышена ёмкость порта: " + UiKit.fmt(status.loadPixels()) + " px при допустимых "
+                    + UiKit.fmt(status.capacityPixels()) + " px");
+        }
+        // ПКМ по строке — свой цвет цепочки вместо цвета по индексу (Task #4), тот же
+        // приём, что и в PowerStagePanel.chainRow/SchemaCanvasPanel.showEdgeMenu.
+        // ЛКМ по строке (не по кнопкам справа) — возобновить построение ЭТОЙ цепочки
+        // (Task #11/v1.6). Слушатель регистрируется на row, dotLabel И text — см.
+        // комментарий в PowerStagePanel.chainRow про то, почему одного row мало.
+        java.awt.event.MouseAdapter rowMouse = new java.awt.event.MouseAdapter() {
+            @Override
+            public void mousePressed(java.awt.event.MouseEvent e) {
+                maybeShowMenu(e);
+            }
+
+            @Override
+            public void mouseReleased(java.awt.event.MouseEvent e) {
+                if (maybeShowMenu(e)) {
+                    return;
+                }
+                if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
+                    chainCtrl.resumeEditing(new java.util.ArrayList<>(chain.getCabinetInstanceIds()),
+                            ids -> model.updateSignalChain(chain.getId(), ids));
+                }
+            }
+
+            private boolean maybeShowMenu(java.awt.event.MouseEvent e) {
+                if (!e.isPopupTrigger()) {
+                    return false;
+                }
+                javax.swing.JPopupMenu menu = new javax.swing.JPopupMenu();
+                javax.swing.JMenuItem colorItem = new javax.swing.JMenuItem("Цвет цепочки…");
+                colorItem.addActionListener(ev -> {
+                    java.awt.Color initial = chain.getColor() != null ? new java.awt.Color(chain.getColor()) : dot;
+                    java.awt.Color chosen = javax.swing.JColorChooser.showDialog(SignalStagePanel.this,
+                            "Цвет цепочки сигнала", initial);
+                    if (chosen != null) {
+                        model.setSignalChainColor(chain, chosen.getRGB());
+                    }
+                });
+                menu.add(colorItem);
+                if (chain.getColor() != null) {
+                    javax.swing.JMenuItem reset = new javax.swing.JMenuItem("Сбросить цвет");
+                    reset.addActionListener(ev -> model.setSignalChainColor(chain, null));
+                    menu.add(reset);
+                }
+                menu.show(e.getComponent(), e.getX(), e.getY());
+                return true;
+            }
+        };
+        row.addMouseListener(rowMouse);
+        dotLabel.addMouseListener(rowMouse);
+        text.addMouseListener(rowMouse);
+        JPanel east = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        if (overloaded && !status.acknowledged()) {
+            JButton ack = new JButton("Я знаю");
+            ack.setToolTipText("Подтвердить превышение — предупреждение и блокировка экспорта снимутся,"
+                    + " пока нагрузка не вырастет ещё больше");
+            ack.addActionListener(e -> onAcknowledge.run());
+            east.add(ack);
+        }
         JButton del = new JButton("✕");
         del.setMargin(new java.awt.Insets(0, 4, 0, 4));
         del.addActionListener(e -> onDelete.run());
+        east.add(del);
         row.add(dotLabel, BorderLayout.WEST);
         row.add(text, BorderLayout.CENTER);
-        row.add(del, BorderLayout.EAST);
+        row.add(east, BorderLayout.EAST);
         return row;
     }
 

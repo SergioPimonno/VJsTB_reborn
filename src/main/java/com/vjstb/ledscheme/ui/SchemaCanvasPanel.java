@@ -17,6 +17,7 @@ import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SignalChain;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.ScreenLogic;
+import com.vjstb.ledscheme.settings.ConnectorDisplayMode;
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Cursor;
@@ -75,6 +76,15 @@ public class SchemaCanvasPanel extends JPanel {
      *  если ничего не тащат. */
     private SchemaEdge draggingWaypointEdge;
     private int draggingWaypointIndex = -1;
+    /** Чип подписи связи, который сейчас тащат мышью (Task #3) — null, если ничего
+     *  не тащат. Отличие от точки излома: короткий клик без реального сдвига должен
+     *  по-прежнему открывать редактор подписи (см. draggingLabelMoved), а не просто
+     *  сбрасывать смещение в исходное. */
+    private SchemaEdge draggingLabelEdge;
+    private double draggingLabelStartDx;
+    private double draggingLabelStartDy;
+    private Point draggingLabelPressMp;
+    private boolean draggingLabelMoved;
     private String connectPendingId;
     /** Гнездо (CardPort), от которого начато соединение — только когда включена
      *  настройка «коммутация через гнёзда разъёмов»; null — соединение идёт от
@@ -120,8 +130,11 @@ public class SchemaCanvasPanel extends JPanel {
 
     /** Экранные координаты гнезда: центр точки-разъёма, вычисленные той же
      *  геометрией, что и отрисовка (см. {@link #computeSocketRects}) — используется
-     *  и для хит-теста клика, и для привязки конца линии связи к гнезду. */
-    private record SocketRect(PortEntry entry, boolean isIn, int dotX, int dotY) {
+     *  и для хит-теста клика, и для привязки конца линии связи к гнезду. slotIndex —
+     *  порядковый номер строки СРЕДИ РАЗВЁРНУТЫХ строк одной группы в режиме
+     *  INDIVIDUAL (0 в режиме GROUPED/для групп с count==1/для IN_OUT) — только для
+     *  подписи «Тип #N» на каждой отдельной строке, не участвует в хит-тесте. */
+    private record SocketRect(PortEntry entry, boolean isIn, int dotX, int dotY, int slotIndex) {
         int centerX() {
             return dotX + CONNECTOR_DOT_D / 2;
         }
@@ -272,8 +285,15 @@ public class SchemaCanvasPanel extends JPanel {
                 if (chipHit != null) {
                     selectedNode = null;
                     selectedEdge = chipHit;
+                    // Не открываем редактор подписи сразу по нажатию — короткий клик
+                    // без сдвига мыши откроет его в mouseReleased (см. draggingLabelMoved),
+                    // а реальное перетаскивание сместит чип (Task #3).
+                    draggingLabelEdge = chipHit;
+                    draggingLabelStartDx = chipHit.getLabelDx();
+                    draggingLabelStartDy = chipHit.getLabelDy();
+                    draggingLabelPressMp = mp;
+                    draggingLabelMoved = false;
                     repaint();
-                    editEdgeLabel(chipHit);
                     return;
                 }
                 selectedNode = null;
@@ -301,8 +321,23 @@ public class SchemaCanvasPanel extends JPanel {
                 }
                 Point mp = toModel(e.getPoint());
                 if (resizeNode != null) {
-                    resizeNode.setWidth(Math.max(MIN_NODE_W, mp.x - resizeNode.getX()));
-                    resizeNode.setHeight(Math.max(MIN_NODE_H, mp.y - resizeNode.getY()));
+                    double newW = Math.max(MIN_NODE_W, mp.x - resizeNode.getX());
+                    double newH = Math.max(MIN_NODE_H, mp.y - resizeNode.getY());
+                    Double aspect = screenWiringAspect(resizeNode);
+                    if (aspect != null) {
+                        // Тянуть можно за любую ось — берём вариант, что просит БОЛЬШУЮ
+                        // площадь (обычно тот, куда пользователь реально потянул), вторую
+                        // сторону пересчитываем по отношению, чтобы не "проскакивать"
+                        // мимо курсора. Финальный пересчёт width от height — на случай,
+                        // если MIN_NODE_H подрезал высоту снизу.
+                        double byWidth = newW;
+                        double byHeight = newH * aspect;
+                        newW = Math.max(MIN_NODE_W, Math.max(byWidth, byHeight));
+                        newH = Math.max(MIN_NODE_H, newW / aspect);
+                        newW = newH * aspect;
+                    }
+                    resizeNode.setWidth(newW);
+                    resizeNode.setHeight(newH);
                     revalidate();
                     repaint();
                 } else if (draggingWaypointEdge != null) {
@@ -325,6 +360,16 @@ public class SchemaCanvasPanel extends JPanel {
                     }
                     w.setX(candidateX);
                     w.setY(candidateY);
+                    repaint();
+                } else if (draggingLabelEdge != null) {
+                    double dx = draggingLabelStartDx + (mp.x - draggingLabelPressMp.x);
+                    double dy = draggingLabelStartDy + (mp.y - draggingLabelPressMp.y);
+                    if (!draggingLabelMoved
+                            && Math.hypot(mp.x - draggingLabelPressMp.x, mp.y - draggingLabelPressMp.y) > 3) {
+                        draggingLabelMoved = true;
+                    }
+                    draggingLabelEdge.setLabelDx(dx);
+                    draggingLabelEdge.setLabelDy(dy);
                     repaint();
                 } else if (dragNode != null) {
                     double candidateX = mp.x - dragOffX;
@@ -387,6 +432,20 @@ public class SchemaCanvasPanel extends JPanel {
                     draggingWaypointEdge = null;
                     draggingWaypointIndex = -1;
                     onChanged.run();
+                } else if (draggingLabelEdge != null) {
+                    if (draggingLabelMoved) {
+                        model.setSchemaEdgeLabelOffset(draggingLabelEdge,
+                                draggingLabelEdge.getLabelDx(), draggingLabelEdge.getLabelDy());
+                    } else {
+                        // Клик без сдвига — вернуть смещение как было (на случай
+                        // микро-дрожания курсора) и открыть редактор подписи, как раньше.
+                        draggingLabelEdge.setLabelDx(draggingLabelStartDx);
+                        draggingLabelEdge.setLabelDy(draggingLabelStartDy);
+                        editEdgeLabel(draggingLabelEdge);
+                    }
+                    draggingLabelEdge = null;
+                    draggingLabelPressMp = null;
+                    draggingLabelMoved = false;
                 } else if (dragNode != null) {
                     model.moveSchemaNode(dragNode, dragNode.getX(), dragNode.getY());
                     dragNode = null;
@@ -697,8 +756,8 @@ public class SchemaCanvasPanel extends JPanel {
         if (a == null || b == null) {
             return null;
         }
-        Point aSocket = socketPosition(a, edge.getFromPortId());
-        Point bSocket = socketPosition(b, edge.getToPortId());
+        Point aSocket = socketPosition(a, edge.getFromPortId(), edge);
+        Point bSocket = socketPosition(b, edge.getToPortId(), edge);
         List<com.vjstb.ledscheme.model.EdgeWaypoint> wps = edge.getWaypoints();
 
         double[] aCenter = {a.getX() + a.getWidth() / 2.0, a.getY() + a.getHeight() / 2.0};
@@ -879,8 +938,10 @@ public class SchemaCanvasPanel extends JPanel {
             return null;
         }
         double[] mid = midOfRoute(pts);
-        int mx = (int) mid[0];
-        int my = (int) mid[1];
+        // Смещение, заданное перетаскиванием чипа (Task #3) — 0,0 по умолчанию,
+        // т.е. поведение не меняется для всех связей, у которых чип не двигали.
+        int mx = (int) (mid[0] + edge.getLabelDx());
+        int my = (int) (mid[1] + edge.getLabelDy());
         String display = edge.displayLabel();
         boolean hasLabel = display != null && !display.isEmpty();
         String text = hasLabel ? display : "+ подпись";
@@ -959,8 +1020,16 @@ public class SchemaCanvasPanel extends JPanel {
         // конце связи (см. connectorHints/lockedOptionsFor), а не молча подменит
         // значение без права выбора.
         Set<PowerConnectorType> hints = connectorHintsFor(edge);
+        // INDIVIDUAL-режим (Task #2/v1.6): каждая точка-гнездо — отдельный физический
+        // разъём, поэтому «сколько кабелей» перестаёт быть выбором инженера — всегда 1
+        // (см. WireLabelDialog(..., forceSingleCable)). Проверяем именно эту связь, а не
+        // узел целиком — связь без привязки к гнезду (fromPortId/toPortId оба null)
+        // продолжает работать как обычная связь узел-узел, режим на неё не влияет.
+        boolean forceSingleCable = settings.activeProfile().getConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL
+                && (edge.getFromPortId() != null || edge.getToPortId() != null);
         WireLabelDialog dlg = new WireLabelDialog(SwingUtilities.getWindowAncestor(this), model, mode, edge,
-                hints, lockedType, maxCount, maxCountReason, settings.activeProfile().isFoolProofWiringEnabled());
+                hints, lockedType, maxCount, maxCountReason, settings.activeProfile().isFoolProofWiringEnabled(),
+                forceSingleCable);
         dlg.setVisible(true);
         if (!dlg.isConfirmed()) {
             return;
@@ -1208,7 +1277,7 @@ public class SchemaCanvasPanel extends JPanel {
                 if (t == SchemaNodeType.SCREEN) {
                     continue;
                 }
-                javax.swing.JMenuItem item = new javax.swing.JMenuItem(t.getLabel());
+                javax.swing.JMenuItem item = new javax.swing.JMenuItem(model.categoryLabel(t));
                 item.setBackground(nodeColor(t));
                 item.setOpaque(true);
                 item.addActionListener(ev -> {
@@ -1240,7 +1309,7 @@ public class SchemaCanvasPanel extends JPanel {
             javax.swing.JMenuItem connectors = new javax.swing.JMenuItem("Разъёмы питания…");
             connectors.addActionListener(ev -> {
                 String title = node.getLabel() == null || node.getLabel().isEmpty()
-                        ? node.getType().getLabel() : node.getLabel();
+                        ? model.categoryLabel(node.getType()) : node.getLabel();
                 PowerConnectorsConfigDialog dlg = new PowerConnectorsConfigDialog(
                         SwingUtilities.getWindowAncestor(this), title,
                         PowerConnectorsConfigDialog.forNode(model, node), model);
@@ -1318,6 +1387,15 @@ public class SchemaCanvasPanel extends JPanel {
             });
             menu.add(resetColor);
         }
+        if (edge.getLabelDx() != 0 || edge.getLabelDy() != 0) {
+            javax.swing.JMenuItem resetLabelPos = new javax.swing.JMenuItem("Вернуть подпись на линию");
+            resetLabelPos.addActionListener(ev -> {
+                model.setSchemaEdgeLabelOffset(edge, 0, 0);
+                onChanged.run();
+                repaint();
+            });
+            menu.add(resetLabelPos);
+        }
 
         javax.swing.JMenuItem straighten = new javax.swing.JMenuItem("Выпрямить");
         straighten.setEnabled(!edge.getWaypoints().isEmpty());
@@ -1372,7 +1450,7 @@ public class SchemaCanvasPanel extends JPanel {
                 com.vjstb.ledscheme.service.SchemaLoadCalc.NodeLoad load =
                         com.vjstb.ledscheme.service.SchemaLoadCalc.evaluate(n, loadScene, model);
                 return "<html>Перегрузка узла «" + escapeHtml(n.getLabel() != null && !n.getLabel().isEmpty()
-                        ? n.getLabel() : n.getType().getLabel()) + "»<br>"
+                        ? n.getLabel() : model.categoryLabel(n.getType())) + "»<br>"
                         + "Нагрузка через исходящие связи: " + UiKit.fmt(load.loadWatts()) + " Вт<br>"
                         + "Ёмкость входных разъёмов: " + UiKit.fmt(load.capacityWatts()) + " Вт<br>"
                         + "Подтвердить/изменить запас — «Разъёмы питания…» этого узла.</html>";
@@ -1529,7 +1607,7 @@ public class SchemaCanvasPanel extends JPanel {
         if (interaction == Interaction.CONNECT && connectPendingId != null && lastMouse != null) {
             SchemaNode pending = nodeById(connectPendingId);
             if (pending != null) {
-                Point socket = socketPosition(pending, connectPendingPortId);
+                Point socket = socketPosition(pending, connectPendingPortId, null);
                 int px, py;
                 if (socket != null) {
                     px = socket.x;
@@ -1549,6 +1627,7 @@ public class SchemaCanvasPanel extends JPanel {
 
         Font titleFont = getFont().deriveFont(Font.BOLD, 12f);
         Font metaFont = getFont().deriveFont(10f);
+        boolean verticalConnectors = settings.activeProfile().isConnectorsVertical();
         overloadIconRects.clear();
         for (SchemaNode n : ns) {
             boolean selected = n == selectedNode;
@@ -1581,11 +1660,26 @@ public class SchemaCanvasPanel extends JPanel {
 
             String title = n.getType() == SchemaNodeType.SCREEN ? resolveScreenLabel(n) : n.getLabel();
             if (title == null || title.isEmpty()) {
-                title = n.getType().getLabel();
+                title = model.categoryLabel(n.getType());
             }
             g2.setColor(Color.BLACK);
             g2.setFont(titleFont);
-            drawClipped(g2, title, (int) n.getX() + 8, (int) n.getY() + 20, nw - 16);
+            // В вертикальной ориентации разъёмов (Task #2/v1.6) гнёзда занимают ВСЮ
+            // ширину узла у верхнего края — обычное название узла в углу (как раньше)
+            // визуально налезало на эту строку гнёзд (баг-репорт со скриншотом). Для
+            // узлов, у которых вообще рисуются гнёзда, название вместо угла ставим по
+            // центру блока — пользователь попросил именно так («писать посередине»).
+            boolean centerTitle = verticalConnectors && n.getType() != SchemaNodeType.SCREEN
+                    && !portsOf(n).isEmpty();
+            if (centerTitle) {
+                String clippedTitle = clipToWidth(g2, title, nw - 16);
+                int titleW = g2.getFontMetrics().stringWidth(clippedTitle);
+                int titleX = (int) n.getX() + (nw - titleW) / 2;
+                int titleY = (int) n.getY() + nh / 2 + g2.getFontMetrics().getAscent() / 2 - 2;
+                g2.drawString(clippedTitle, titleX, titleY);
+            } else {
+                drawClipped(g2, title, (int) n.getX() + 8, (int) n.getY() + 20, nw - 16);
+            }
             g2.setFont(metaFont);
             g2.setColor(new Color(0, 0, 0, 160));
             if (n.getType() == SchemaNodeType.SCREEN) {
@@ -1597,7 +1691,7 @@ public class SchemaCanvasPanel extends JPanel {
             } else if (!portsOf(n).isEmpty()) {
                 drawConnectorRows(g2, n, portsOf(n), (int) n.getX(), (int) n.getY(), nw, nh);
             } else {
-                drawClipped(g2, n.getType().getLabel(), (int) n.getX() + 8, (int) n.getY() + 38, nw - 16);
+                drawClipped(g2, model.categoryLabel(n.getType()), (int) n.getX() + 8, (int) n.getY() + 38, nw - 16);
             }
 
             if (overloaded) {
@@ -1681,6 +1775,30 @@ public class SchemaCanvasPanel extends JPanel {
         return sb.toString();
     }
 
+    /** Соотношение width:height (ширина/высота), которому должен подчиняться resize
+     *  узла-экрана, если включена настройка «узел экрана показывает схему расключения
+     *  его кабинетов» (Task #16) — та же формула физического размера экрана (мм), что
+     *  {@link #drawScreenWiringThumbnail} использует для вписывания миниатюры. null —
+     *  ограничивать нечем (не узел-экран, эта настройка выключена, узел не привязан к
+     *  реальному экрану библиотеки, или тип кабинета/сетка неизвестны) — resize
+     *  остаётся свободным, как раньше. */
+    private Double screenWiringAspect(SchemaNode n) {
+        if (n.getType() != SchemaNodeType.SCREEN || !settings.activeProfile().isSchemaScreensAsWiringDiagram()) {
+            return null;
+        }
+        Screen scr = screenById(n.getScreenRefId());
+        if (scr == null) {
+            return null;
+        }
+        CabinetType t = model.typeOf(scr);
+        if (t == null || t.getWidthMm() <= 0 || t.getHeightMm() <= 0 || scr.getCols() <= 0 || scr.getRows() <= 0) {
+            return null;
+        }
+        double widthMm = scr.getCols() * t.getWidthMm();
+        double heightMm = scr.getRows() * t.getHeightMm();
+        return widthMm / heightMm;
+    }
+
     /** "Тестовая" замена обычного текста статистики узла-экрана (см. renderScreenWiring
      *  в {@link #paint}) — рисует уменьшенную схему расключения ЭТОГО экрана (сетка
      *  кабинетов + цепочки текущего режима) внутри того же прямоугольника узла, где
@@ -1716,12 +1834,27 @@ public class SchemaCanvasPanel extends JPanel {
         if (availW < 10 || availH < 10) {
             return;
         }
-        double scale = Math.min(availW / (scr.getCols() * t.getWidthMm()), availH / (scr.getRows() * t.getHeightMm()));
+        // Границы могут выходить за номинальную сетку (кабинет вытащен свободным
+        // смещением, Task #7/v1.6) — считаем масштаб/якорь по ФАКТИЧЕСКОМУ охвату,
+        // иначе такой кабинет обрезается клипом узла или рисуется поверх соседей
+        // не вписавшись в миниатюру (баг-репорт: "блок схема не включает в себя
+        // смещённый кабинет").
+        double[] ext = ScreenLogic.cabinetExtentMm(scr, t, model.getWorkspace());
+        double extW = ext[2] - ext[0], extH = ext[3] - ext[1];
+        double scale = Math.min(availW / extW, availH / extH);
         if (scale <= 0) {
             return;
         }
         int cellW = Math.max(1, (int) Math.round(t.getWidthMm() * scale));
         int cellH = Math.max(1, (int) Math.round(t.getHeightMm() * scale));
+        // left/top должны оставаться якорем ИМЕННО ячейки (col=0,row=0) — как и
+        // ожидает paintWiringDiagram/cabX/cabY (та же развязка "номинальный якорь
+        // сетки" vs "расширенная рамка охвата", что и в SceneCanvasPanel.screenGridX/
+        // screenGridY) — поэтому сдвигаем left/top НАЗАД на -ext[0]/-ext[1], давая
+        // место кабинетам, ушедшим в отрицательные локальные координаты (выше/левее
+        // номинального угла), вместо того чтобы сдвигать саму точку (0,0).
+        left -= (int) Math.round(ext[0] * scale);
+        top -= (int) Math.round(ext[1] * scale);
         Scene scene = model.getCurrentScene();
         List<PowerChain> powerChains = scene != null ? scene.getPowerChains() : List.of();
         List<SignalChain> signalChains = scene != null ? scene.getSignalChains() : List.of();
@@ -1771,6 +1904,19 @@ public class SchemaCanvasPanel extends JPanel {
     private static final int CARD_HEADER_H = CONNECTOR_ROW_H;
     private static final int CARD_BLOCK_PAD = 3;
     private static final int CARD_BLOCK_GAP = 6;
+    /** Ширина одной колонки в ВЕРТИКАЛЬНОЙ ориентации разъёмов (Task #2/v1.6, часть 2,
+     *  см. UserProfile.isConnectorsVertical) — аналог CONNECTOR_ROW_H, но вдоль
+     *  горизонтальной оси. Уже CONNECTOR_ROW_H: подпись типа разъёма здесь повёрнута
+     *  на 90° (см. drawVerticalLabel), поэтому её ЧИТАЕМАЯ длина укладывается вдоль
+     *  всей высоты узла (там обычно много места), а колонке нужно вместить только
+     *  «толщину» повёрнутого текста + точку гнезда, а не всю строку целиком, как в
+     *  горизонтальном режиме. CARD_HEADER_W — по той же логике, что и CARD_HEADER_H:
+     *  шапка блока карты — это ещё одна такая же колонка, только без гнезда. */
+    private static final int CONNECTOR_COL_W = 18;
+    private static final int CARD_HEADER_W = CONNECTOR_COL_W;
+    /** Отступ гнезда от края узла (гориз. режим) / от края зоны разъёмов под
+     *  заголовком узла (верт. режим) — общее число для обеих ориентаций. */
+    private static final int SOCKET_EDGE_MARGIN = 6;
     /** Небольшая устойчивая палитра для разъёмов — цвет назначается по хэшу типа
      *  (а не по жёсткому списку известных типов вроде HDMI/CEE), чтобы работать с
      *  любым введённым пользователем названием разъёма и не требовать сопровождения
@@ -1791,12 +1937,37 @@ public class SchemaCanvasPanel extends JPanel {
      *  Возвращает только те гнёзда, что реально помещаются в текущий размер узла
      *  (как и раньше — остаток показывается «+N ещё» и не кликабелен, пока узел
      *  не увеличат). */
-    private static List<SocketRect> computeSocketRects(List<PortEntry> ports, int x, int y, int w, int h) {
+    private List<SocketRect> computeSocketRects(List<PortEntry> ports, int x, int y, int w, int h) {
+        // INDIVIDUAL (Task #2/v1.6) — независимая настройка ОТОБРАЖЕНИЯ (не путать с
+        // isSocketWiringEnabled, которая решает, цепляется ли ВООБЩЕ линия связи за
+        // конкретное гнездо, а не за узел целиком): группа CardPort с count>1
+        // разворачивается в N отдельных строк-гнёзд вместо одной строки «N×Тип».
+        // Модель не меняется — все N строк по-прежнему ссылаются на один и тот же
+        // CardPort.getId(), занятость конкретного гнезда определяется на лету по
+        // порядку уже существующих SchemaEdge с этим portId (см. socketPosition).
+        boolean individual = settings.activeProfile().getConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL;
+        boolean vertical = settings.activeProfile().isConnectorsVertical();
         List<SocketRect> rects = new ArrayList<>();
-        int rowY = y + PORT_ROWS_TOP_OFFSET;
-        int maxY = y + h - 4;
         String prevCardId = null;
         boolean started = false;
+        // "along" — координата вдоль направления, в котором идут строки/колонки
+        // (Y сверху вниз в горизонтальном режиме, X слева направо в вертикальном);
+        // "alongMax" — граница, за которой узел уже не вмещает следующую строку/
+        // колонку целиком (остаток — "+N ещё…", см. drawConnectorRows). Шаг
+        // (CONNECTOR_ROW_H/CONNECTOR_COL_W) и резервирование места под шапку блока
+        // карты (CARD_HEADER_H/CARD_HEADER_W) — по одной и той же логике, просто
+        // вдоль разных осей (см. javadoc у CONNECTOR_COL_W).
+        int along = (vertical ? x : y) + PORT_ROWS_TOP_OFFSET;
+        int alongMax = (vertical ? x + w : y + h) - 4;
+        int alongStep = vertical ? CONNECTOR_COL_W : CONNECTOR_ROW_H;
+        int headerStep = vertical ? CARD_HEADER_W : CARD_HEADER_H;
+        // "across" — зона поперёк направления строк/колонок, где физически лежат
+        // гнёзда: полная ширина узла в горизонтальном режиме (гнездо у левого ИЛИ
+        // правого края), полная высота зоны разъёмов (под заголовком узла) в
+        // вертикальном (гнездо у верхнего ИЛИ нижнего края этой зоны).
+        int acrossNear = vertical ? y + PORT_ROWS_TOP_OFFSET : x;
+        int acrossFar = vertical ? y + h - 4 : x + w;
+        outer:
         for (PortEntry entry : ports) {
             String cardId = entry.cardId();
             if (!started || !Objects.equals(cardId, prevCardId)) {
@@ -1804,98 +1975,194 @@ public class SchemaCanvasPanel extends JPanel {
                 // "безрамочный" проход) — резервируем место под шапку блока и, если это
                 // не первый блок вообще, промежуток перед ним (см. CARD_HEADER_H/GAP выше).
                 if (started) {
-                    rowY += CARD_BLOCK_GAP;
+                    along += CARD_BLOCK_GAP;
                 }
                 if (cardId != null) {
-                    rowY += CARD_HEADER_H;
+                    along += headerStep;
                 }
                 prevCardId = cardId;
                 started = true;
             }
-            if (rowY > maxY) {
-                break;
-            }
-            int dotY = rowY - CONNECTOR_DOT_D;
             PortDirection dir = entry.port().getDirection();
-            if (dir == PortDirection.IN_OUT) {
-                // Двунаправленное гнездо (например, SDI Loop In/Out) — физически ОДИН
-                // разъём, но т.к. вход рисуется слева, а выход справа (как в патч-
-                // панели), для наглядности он получает ТОЧКУ С ОБЕИХ СТОРОН строки;
-                // это одна и та же группа CardPort (общий id и count), доступное
-                // количество НЕ удваивается — обе точки лишь два способа щёлкнуть/
-                // подвести линию к одному и тому же гнезду (см. socketAt/socketPosition,
-                // которые ищут совпадение по CardPort.getId(), а не по стороне).
-                rects.add(new SocketRect(entry, true, x + 6, dotY));
-                rects.add(new SocketRect(entry, false, x + w - CONNECTOR_DOT_D - 6, dotY));
-            } else {
-                boolean isIn = dir == PortDirection.IN;
-                int dotX = isIn ? x + 6 : x + w - CONNECTOR_DOT_D - 6;
-                rects.add(new SocketRect(entry, isIn, dotX, dotY));
+            // Двунаправленное гнездо (IN_OUT, например SDI Loop In/Out) физически ОДИН
+            // разъём независимо от режима отображения — оно и в INDIVIDUAL остаётся
+            // одной строкой с точкой с обеих сторон (см. ветку ниже), а не N строками:
+            // разворачивать в отдельные гнёзда имеет смысл только для однонаправленных
+            // групп однотипных разъёмов (типичный случай — распределительный блок).
+            int slots = individual && dir != PortDirection.IN_OUT ? Math.max(1, entry.port().getCount()) : 1;
+            for (int slot = 0; slot < slots; slot++) {
+                if (along > alongMax) {
+                    break outer;
+                }
+                if (vertical) {
+                    int dotX = along;
+                    if (dir == PortDirection.IN_OUT) {
+                        rects.add(new SocketRect(entry, true, dotX, acrossNear + SOCKET_EDGE_MARGIN, slot));
+                        rects.add(new SocketRect(entry, false, dotX,
+                                acrossFar - CONNECTOR_DOT_D - SOCKET_EDGE_MARGIN, slot));
+                    } else {
+                        boolean isIn = dir == PortDirection.IN;
+                        int dotY = isIn ? acrossNear + SOCKET_EDGE_MARGIN
+                                : acrossFar - CONNECTOR_DOT_D - SOCKET_EDGE_MARGIN;
+                        rects.add(new SocketRect(entry, isIn, dotX, dotY, slot));
+                    }
+                } else {
+                    int dotY = along - CONNECTOR_DOT_D;
+                    if (dir == PortDirection.IN_OUT) {
+                        // Одна и та же группа CardPort (общий id и count), доступное количество
+                        // НЕ удваивается — обе точки лишь два способа щёлкнуть/подвести линию к
+                        // одному и тому же гнезду (см. socketAt/socketPosition, которые ищут
+                        // совпадение по CardPort.getId(), а не по стороне).
+                        rects.add(new SocketRect(entry, true, acrossNear + SOCKET_EDGE_MARGIN, dotY, slot));
+                        rects.add(new SocketRect(entry, false,
+                                acrossFar - CONNECTOR_DOT_D - SOCKET_EDGE_MARGIN, dotY, slot));
+                    } else {
+                        boolean isIn = dir == PortDirection.IN;
+                        int dotX = isIn ? acrossNear + SOCKET_EDGE_MARGIN
+                                : acrossFar - CONNECTOR_DOT_D - SOCKET_EDGE_MARGIN;
+                        rects.add(new SocketRect(entry, isIn, dotX, dotY, slot));
+                    }
+                }
+                along += alongStep;
             }
-            rowY += CONNECTOR_ROW_H;
         }
         return rects;
     }
 
     /** Рамка-блок карты + название в шапке — границы блока получаются прямо из
-     *  Y-координат уже вычисленных {@link SocketRect} (т.е. гарантированно
-     *  согласованы с местом, которое для шапки/отступов зарезервировал
-     *  {@link #computeSocketRects}, без повторного дублирования этой геометрии).
-     *  Идущие подряд {@link SocketRect} с одинаковым (не-null) cardId — один блок;
-     *  у разъёмов питания cardId всегда null — для них блок не рисуется. */
-    private void drawCardBlockBorders(Graphics2D g2, List<SocketRect> rects, int x, int w) {
+     *  along-координат (Y в горизонтальном режиме, X в вертикальном) уже вычисленных
+     *  {@link SocketRect} (т.е. гарантированно согласованы с местом, которое для
+     *  шапки/отступов зарезервировал {@link #computeSocketRects}, без повторного
+     *  дублирования этой геометрии). Идущие подряд {@link SocketRect} с одинаковым
+     *  (не-null) cardId — один блок; у разъёмов питания cardId всегда null — для
+     *  них блок не рисуется. */
+    private void drawCardBlockBorders(Graphics2D g2, List<SocketRect> rects, int x, int y, int w, int h) {
+        boolean vertical = settings.activeProfile().isConnectorsVertical();
+        // "across" — поперечная зона блока: полная ширина узла в горизонтальном
+        // режиме, полная высота зоны разъёмов (под заголовком узла) в вертикальном —
+        // одна и та же зона для ВСЕХ блоков карт узла, вдоль неё блок просто рисуется
+        // на всю глубину (как и раньше в горизонтальном режиме).
+        int acrossNear = vertical ? y + PORT_ROWS_TOP_OFFSET : x;
+        int acrossFar = vertical ? y + h - 4 : x + w;
         String curCardId = null;
         String curCardName = null;
-        int blockTop = -1;
-        int blockBottom = -1;
+        int blockStart = -1;
+        int blockEnd = -1;
         boolean open = false;
         for (SocketRect r : rects) {
             String cardId = r.entry().cardId();
+            int alongPos = vertical ? r.dotX() : r.dotY();
             if (!open || !Objects.equals(cardId, curCardId)) {
                 if (open && curCardId != null) {
-                    paintCardBlockBorder(g2, x, w, blockTop, blockBottom);
+                    paintCardBlockBorder(g2, vertical, acrossNear, acrossFar, blockStart, blockEnd);
                 }
                 curCardId = cardId;
                 curCardName = r.entry().groupName();
-                // computeSocketRects зарезервировал под шапку ровно ОДНУ строку
-                // (CARD_HEADER_H == CONNECTOR_ROW_H) перед первой настоящей строкой
-                // карты — значит "виртуальная" позиция шапки лежит на один такой шаг
-                // выше первой точки-гнезда, в том же ритме, что и обычные строки
-                // (гарантированно не наезжает на неё, в отличие от первой попытки
-                // с произвольным числом — баг-репорт, где название карты налезало
-                // на первую строку разъёмов). Рамка — с небольшим отступом ещё выше.
-                int headerDotY = r.dotY() - CARD_HEADER_H;
-                blockTop = headerDotY - CARD_BLOCK_PAD;
-                blockBottom = r.dotY() + CONNECTOR_DOT_D + CARD_BLOCK_PAD;
+                // computeSocketRects зарезервировал под шапку ровно ОДНУ строку/колонку
+                // (CARD_HEADER_H/CARD_HEADER_W == шаг обычной строки/колонки) перед первой
+                // настоящей строкой/колонкой карты — значит "виртуальная" позиция шапки
+                // лежит на один такой шаг раньше первой точки-гнезда, в том же ритме, что
+                // и обычные строки/колонки (гарантированно не наезжает на неё, в отличие
+                // от первой попытки с произвольным числом — баг-репорт, где название карты
+                // налезало на первую строку разъёмов). Рамка — с небольшим отступом ещё раньше.
+                int headerAlong = alongPos - (vertical ? CARD_HEADER_W : CARD_HEADER_H);
+                blockStart = headerAlong - CARD_BLOCK_PAD;
+                blockEnd = alongPos + CONNECTOR_DOT_D + CARD_BLOCK_PAD;
                 open = true;
                 if (cardId != null) {
-                    paintCardBlockHeader(g2, x, w, headerDotY, curCardName);
+                    paintCardBlockHeader(g2, vertical, acrossNear, acrossFar, headerAlong, curCardName);
                 }
             } else {
-                blockBottom = Math.max(blockBottom, r.dotY() + CONNECTOR_DOT_D + CARD_BLOCK_PAD);
+                blockEnd = Math.max(blockEnd, alongPos + CONNECTOR_DOT_D + CARD_BLOCK_PAD);
             }
         }
         if (open && curCardId != null) {
-            paintCardBlockBorder(g2, x, w, blockTop, blockBottom);
+            paintCardBlockBorder(g2, vertical, acrossNear, acrossFar, blockStart, blockEnd);
         }
     }
 
-    private void paintCardBlockBorder(Graphics2D g2, int x, int w, int top, int bottom) {
+    private void paintCardBlockBorder(Graphics2D g2, boolean vertical, int acrossNear, int acrossFar,
+                                       int alongStart, int alongEnd) {
         g2.setColor(new Color(0, 0, 0, 60));
         g2.setStroke(new BasicStroke(1f));
-        g2.drawRoundRect(x + 3, top, w - 6, bottom - top, 6, 6);
+        if (vertical) {
+            g2.drawRoundRect(alongStart, acrossNear + 3, alongEnd - alongStart, acrossFar - acrossNear - 6, 6, 6);
+        } else {
+            g2.drawRoundRect(acrossNear + 3, alongStart, acrossFar - acrossNear - 6, alongEnd - alongStart, 6, 6);
+        }
     }
 
-    /** Название карты в шапке блока — печатается той же строкой, что и baseline
-     *  обычной строки разъёма ({@code headerDotY + CONNECTOR_DOT_D}, см. основной
-     *  цикл drawConnectorRows), просто на строку выше первой строки этой карты. */
-    private void paintCardBlockHeader(Graphics2D g2, int x, int w, int headerDotY, String cardName) {
+    /** Название карты в шапке блока — в горизонтальном режиме печатается той же
+     *  строкой, что и baseline обычной строки разъёма ({@code headerAlong + CONNECTOR_DOT_D}),
+     *  просто на строку выше первой строки этой карты; в вертикальном — центрируется
+     *  по высоте зоны разъёмов (у шапки нет своего гнезда, рядом с которым можно
+     *  было бы её поставить, см. {@link #drawVerticalLabelCentered}). */
+    private void paintCardBlockHeader(Graphics2D g2, boolean vertical, int acrossNear, int acrossFar,
+                                       int headerAlong, String cardName) {
         if (cardName == null || cardName.isEmpty()) {
             return;
         }
         g2.setColor(new Color(0, 0, 0, 150));
-        String clipped = clipToWidth(g2, cardName, w - 16);
-        g2.drawString(clipped, x + 8, headerDotY + CONNECTOR_DOT_D);
+        if (vertical) {
+            int maxLen = (acrossFar - acrossNear) - 12;
+            drawVerticalLabelCentered(g2, cardName, headerAlong + CONNECTOR_DOT_D / 2,
+                    (acrossNear + acrossFar) / 2, maxLen);
+        } else {
+            String clipped = clipToWidth(g2, cardName, (acrossFar - acrossNear) - 16);
+            g2.drawString(clipped, acrossNear + 8, headerAlong + CONNECTOR_DOT_D);
+        }
+    }
+
+    /** Подпись, повёрнутая на 90° (для вертикальной ориентации разъёмов, Task #2/v1.6,
+     *  часть 2, доработано после баг-репорта со скриншотом — см. Task #2/v1.6-fix:
+     *  подписи, растянутые на всю высоту зоны разъёмов от общего нижнего края, у
+     *  верхних (IN) гнёзд визуально проходили СКВОЗЬ саму точку-гнездо и налезали
+     *  друг на друга у соседних колонок). Каждая подпись теперь стоит РЯДОМ со своим
+     *  гнездом и растёт К ЦЕНТРУ блока, а не через всю его высоту:
+     *  {@link #drawVerticalLabelGrowUp} — читается снизу вверх, якорь у НИЖНЕГО края
+     *  (для OUT-гнёзд, растёт от гнезда вверх к центру); {@link #drawVerticalLabelGrowDown}
+     *  — читается сверху вниз, якорь у ВЕРХНЕГО края (для IN-гнёзд, растёт от гнезда
+     *  вниз к центру). centerX — центр колонки по X (совпадает с центром точки-гнезда),
+     *  maxLen — доступная длина вдоль вертикали (отсечение троеточием — см. {@link #clipToWidth}). */
+    private void drawVerticalLabelGrowUp(Graphics2D g2, String text, int centerX, int bottomY, int maxLen) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        String clipped = clipToWidth(g2, text, Math.max(0, maxLen));
+        FontMetrics fm = g2.getFontMetrics();
+        Graphics2D g2r = (Graphics2D) g2.create();
+        g2r.translate(centerX + fm.getAscent() / 2.0, bottomY);
+        g2r.rotate(-Math.PI / 2);
+        g2r.drawString(clipped, 0, 0);
+        g2r.dispose();
+    }
+
+    private void drawVerticalLabelGrowDown(Graphics2D g2, String text, int centerX, int topY, int maxLen) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        String clipped = clipToWidth(g2, text, Math.max(0, maxLen));
+        FontMetrics fm = g2.getFontMetrics();
+        Graphics2D g2r = (Graphics2D) g2.create();
+        g2r.translate(centerX - fm.getAscent() / 2.0, topY);
+        g2r.rotate(Math.PI / 2);
+        g2r.drawString(clipped, 0, 0);
+        g2r.dispose();
+    }
+
+    /** Подпись, отцентрованная по вертикали вокруг centerY (растёт вверх от
+     *  вычисленной нижней границы ровно настолько, чтобы её середина пришлась на
+     *  centerY) — для названия карты в шапке блока: у шапки нет своего гнезда,
+     *  рядом с которым можно было бы её поставить, поэтому центр всей зоны разъёмов —
+     *  осмысленное умолчание (тот же принцип, что пользователь попросил применить и
+     *  к названию самого узла — см. paint(), centerTitle). */
+    private void drawVerticalLabelCentered(Graphics2D g2, String text, int centerX, int centerY, int maxLen) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        String clipped = clipToWidth(g2, text, Math.max(0, maxLen));
+        int textLen = g2.getFontMetrics().stringWidth(clipped);
+        drawVerticalLabelGrowUp(g2, clipped, centerX, centerY + textLen / 2, maxLen);
     }
 
     /** Разъёмы узла построчно, сгруппированные визуально по картам — каждая карта
@@ -1910,8 +2177,11 @@ public class SchemaCanvasPanel extends JPanel {
      *  как и раньше. Если включена «коммутация через гнёзда» — гнёзда ещё и
      *  кликабельны (см. {@link #socketAt}), наведённое подсвечивается белым кольцом. */
     private void drawConnectorRows(Graphics2D g2, SchemaNode node, List<PortEntry> ports, int x, int y, int w, int h) {
+        boolean vertical = settings.activeProfile().isConnectorsVertical();
         List<SocketRect> rects = computeSocketRects(ports, x, y, w, h);
-        drawCardBlockBorders(g2, rects, x, w);
+        drawCardBlockBorders(g2, rects, x, y, w, h);
+        int acrossNear = vertical ? y + PORT_ROWS_TOP_OFFSET : x;
+        int acrossFar = vertical ? y + h - 4 : x + w;
         for (SocketRect r : rects) {
             CardPort port = r.entry().port();
             boolean hovered = hoveredSocket != null && hoveredSocket.node() == node && hoveredSocket.port() == port;
@@ -1922,15 +2192,44 @@ public class SchemaCanvasPanel extends JPanel {
             int ring = hovered ? 2 : 0;
             g2.drawOval(r.dotX() - ring, r.dotY() - ring, CONNECTOR_DOT_D + ring * 2, CONNECTOR_DOT_D + ring * 2);
 
+            // IN_OUT рисует ДВЕ точки на один и тот же порт (см. computeSocketRects) — в
+            // горизонтальном режиме они на разных сторонах строки, поэтому подпись у
+            // каждой отдельная и не сливается; в вертикальном обе точки в ОДНОЙ колонке —
+            // рисуем подпись только у первой (isIn=true), иначе она наложилась бы сама на себя.
+            if (vertical && !r.isIn() && port.getDirection() == PortDirection.IN_OUT) {
+                continue;
+            }
+
             // Название карты теперь пишется в шапке её блока (см. drawCardBlockBorders),
-            // повторять его в скобках у каждой строки больше не нужно.
-            String label = port.getCount() + "×" + port.getConnectorType();
-            int maxTextW = w - CONNECTOR_DOT_D - 16;
+            // повторять его в скобках у каждой строки больше не нужно. В INDIVIDUAL-
+            // режиме (Task #2/v1.6) группа с count>1 развёрнута в N отдельных строк —
+            // «N×Тип» на КАЖДОЙ из них было бы неверно (выглядело бы так, будто в
+            // каждой строке ещё N разъёмов), поэтому вместо этого — тип и номер
+            // конкретного гнезда среди развёрнутых.
+            boolean expandedRow = settings.activeProfile().getConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL
+                    && port.getCount() > 1 && port.getDirection() != PortDirection.IN_OUT;
+            String label = expandedRow ? port.getConnectorType() + " #" + (r.slotIndex() + 1)
+                    : port.getCount() + "×" + port.getConnectorType();
             g2.setColor(new Color(0, 0, 0, 190));
-            String clipped = clipToWidth(g2, label, maxTextW);
-            FontMetrics fm = g2.getFontMetrics();
-            int textX = r.isIn() ? r.dotX() + CONNECTOR_DOT_D + 4 : r.dotX() - 4 - fm.stringWidth(clipped);
-            g2.drawString(clipped, textX, r.dotY() + CONNECTOR_DOT_D);
+            if (vertical) {
+                // Подпись стоит РЯДОМ со своим гнездом и растёт К ЦЕНТРУ зоны разъёмов —
+                // не через всю высоту от общего дальнего края (см. javadoc у
+                // drawVerticalLabelGrowUp/Down выше — баг-репорт со скриншотом, где
+                // подписи проходили сквозь гнёзда и налезали друг на друга).
+                int maxLen = (acrossFar - acrossNear) / 2 - CONNECTOR_DOT_D - 8;
+                int labelCenterX = r.dotX() + CONNECTOR_DOT_D / 2;
+                if (r.isIn()) {
+                    drawVerticalLabelGrowDown(g2, label, labelCenterX, r.dotY() + CONNECTOR_DOT_D + 4, maxLen);
+                } else {
+                    drawVerticalLabelGrowUp(g2, label, labelCenterX, r.dotY() - 4, maxLen);
+                }
+            } else {
+                int maxTextW = w - CONNECTOR_DOT_D - 16;
+                String clipped = clipToWidth(g2, label, maxTextW);
+                FontMetrics fm = g2.getFontMetrics();
+                int textX = r.isIn() ? r.dotX() + CONNECTOR_DOT_D + 4 : r.dotX() - 4 - fm.stringWidth(clipped);
+                g2.drawString(clipped, textX, r.dotY() + CONNECTOR_DOT_D);
+            }
         }
         // Считаем по числу РАЗЛИЧНЫХ гнёзд (PortEntry), а не по числу точек — у
         // двунаправленного гнезда (IN_OUT) одна запись превращается в ДВЕ точки
@@ -1938,10 +2237,16 @@ public class SchemaCanvasPanel extends JPanel {
         long renderedEntries = rects.stream().map(SocketRect::entry).distinct().count();
         if (renderedEntries < ports.size()) {
             int remaining = ports.size() - (int) renderedEntries;
-            int hintY = rects.isEmpty() ? y + PORT_ROWS_TOP_OFFSET
-                    : rects.get(rects.size() - 1).dotY() + CONNECTOR_DOT_D + CONNECTOR_ROW_H;
             g2.setColor(new Color(0, 0, 0, 150));
-            g2.drawString("+" + remaining + " ещё…", x + 10, hintY);
+            if (vertical) {
+                int hintX = rects.isEmpty() ? x + 4 : rects.get(rects.size() - 1).dotX() + CONNECTOR_COL_W;
+                int hintY = acrossNear + (acrossFar - acrossNear) / 2;
+                g2.drawString("+" + remaining, hintX, hintY);
+            } else {
+                int hintY = rects.isEmpty() ? y + PORT_ROWS_TOP_OFFSET
+                        : rects.get(rects.size() - 1).dotY() + CONNECTOR_DOT_D + CONNECTOR_ROW_H;
+                g2.drawString("+" + remaining + " ещё…", x + 10, hintY);
+            }
         }
     }
 
@@ -1967,19 +2272,59 @@ public class SchemaCanvasPanel extends JPanel {
 
     /** Экранные координаты (центр) гнезда с указанным id разъёма — null, если
      *  разъём не найден (узел изменился/разъём удалён) или portId не задан, тогда
-     *  вызывающий код обычно откатывается к привязке от узла целиком. */
-    private Point socketPosition(SchemaNode node, String portId) {
+     *  вызывающий код обычно откатывается к привязке от узла целиком. forEdge —
+     *  КАКАЯ связь запрашивает точку (null — для превью ещё не созданной связи,
+     *  см. mouseDragged/CONNECT): в режиме INDIVIDUAL у одного portId может быть
+     *  НЕСКОЛЬКО гнёзд (развёрнутая группа, см. computeSocketRects) — тогда нужно
+     *  выбрать ИМЕННО ТО, что физически соответствует этой связи (по порядку
+     *  создания среди связей на этом portId, см. {@link #edgeOrdinalForPort}), а не
+     *  всегда первое — иначе несколько параллельных линий одной группы визуально
+     *  сходились бы в одну точку, что и обесценивало бы весь смысл INDIVIDUAL-режима. */
+    private Point socketPosition(SchemaNode node, String portId, SchemaEdge forEdge) {
         if (portId == null) {
             return null;
         }
         List<SocketRect> rects = computeSocketRects(portsOf(node), (int) node.getX(), (int) node.getY(),
                 (int) node.getWidth(), (int) node.getHeight());
+        List<SocketRect> matches = new ArrayList<>();
         for (SocketRect r : rects) {
             if (r.entry().port().getId().equals(portId)) {
-                return new Point(r.centerX(), r.centerY());
+                matches.add(r);
             }
         }
-        return null;
+        if (matches.isEmpty()) {
+            return null;
+        }
+        // IN_OUT всегда даёт РОВНО 2 совпадения (вход+выход одного и того же
+        // физического гнезда, см. computeSocketRects) — это НЕ развёрнутая группа,
+        // всегда берём первое (вход), как и раньше до появления INDIVIDUAL-режима.
+        if (matches.size() == 1 || matches.get(0).entry().port().getDirection() == PortDirection.IN_OUT) {
+            SocketRect r = matches.get(0);
+            return new Point(r.centerX(), r.centerY());
+        }
+        int ordinal = forEdge != null ? edgeOrdinalForPort(forEdge, portId) : usedCount(portId, null);
+        ordinal = Math.max(0, Math.min(ordinal, matches.size() - 1));
+        SocketRect r = matches.get(ordinal);
+        return new Point(r.centerX(), r.centerY());
+    }
+
+    /** Порядковый номер этой связи среди всех рёбер сцены, ссылающихся на portId (в
+     *  порядке списка — совпадает с порядком создания, т.к. новые рёбра всегда
+     *  добавляются в конец) — используется только в INDIVIDUAL-режиме отображения
+     *  разъёмов (см. socketPosition), чтобы параллельные кабели одной группы
+     *  визуально расходились по разным гнёздам, а не сходились в одну точку. */
+    private int edgeOrdinalForPort(SchemaEdge forEdge, String portId) {
+        int idx = 0;
+        for (SchemaEdge e : edges()) {
+            if (!portId.equals(e.getFromPortId()) && !portId.equals(e.getToPortId())) {
+                continue;
+            }
+            if (e == forEdge) {
+                return idx;
+            }
+            idx++;
+        }
+        return idx;
     }
 
     /** Вертикальный запас вокруг гнезда для хит-теста — кликабельна вся строка по
@@ -1993,20 +2338,39 @@ public class SchemaCanvasPanel extends JPanel {
      *  вся строка (по X — вся ширина узла, по Y — строка ± запас), не только сама
      *  точка-разъём. */
     private SocketHit socketAt(Point p) {
+        boolean vertical = settings.activeProfile().isConnectorsVertical();
         for (SchemaNode n : nodes()) {
             List<PortEntry> ports = portsOf(n);
             if (ports.isEmpty()) {
                 continue;
             }
             int nx = (int) n.getX(), ny = (int) n.getY(), nw = (int) n.getWidth(), nh = (int) n.getHeight();
-            if (p.x < nx || p.x > nx + nw) {
-                continue;
+            // Кликабельна вся строка/колонка целиком (см. javadoc класса ниже) — поэтому
+            // сперва грубо отсекаем узлы, где клик вообще не попадает в поперечную ось
+            // (полная ширина узла в горизонтальном режиме, полная высота — в вертикальном),
+            // а затем для каждого гнезда проверяем попадание вдоль ГЛАВНОЙ оси строки/колонки.
+            if (vertical) {
+                if (p.y < ny || p.y > ny + nh) {
+                    continue;
+                }
+            } else {
+                if (p.x < nx || p.x > nx + nw) {
+                    continue;
+                }
             }
             List<SocketRect> rects = computeSocketRects(ports, nx, ny, nw, nh);
             for (SocketRect r : rects) {
-                int rowTop = r.dotY() - SOCKET_ROW_HIT_PAD;
-                int rowBottom = r.dotY() + CONNECTOR_DOT_D + SOCKET_ROW_HIT_PAD;
-                if (p.y >= rowTop && p.y <= rowBottom) {
+                boolean hit;
+                if (vertical) {
+                    int colLeft = r.dotX() - SOCKET_ROW_HIT_PAD;
+                    int colRight = r.dotX() + CONNECTOR_DOT_D + SOCKET_ROW_HIT_PAD;
+                    hit = p.x >= colLeft && p.x <= colRight;
+                } else {
+                    int rowTop = r.dotY() - SOCKET_ROW_HIT_PAD;
+                    int rowBottom = r.dotY() + CONNECTOR_DOT_D + SOCKET_ROW_HIT_PAD;
+                    hit = p.y >= rowTop && p.y <= rowBottom;
+                }
+                if (hit) {
                     return new SocketHit(n, r.entry().port());
                 }
             }

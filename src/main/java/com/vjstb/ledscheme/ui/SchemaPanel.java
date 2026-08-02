@@ -88,7 +88,7 @@ public class SchemaPanel extends JPanel {
                     int index, boolean isSelected, boolean cellHasFocus) {
                 super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
                 if (value instanceof SchemaNodeType t) {
-                    setText(t.getLabel());
+                    setText(model.categoryLabel(t));
                 }
                 return this;
             }
@@ -259,7 +259,7 @@ public class SchemaPanel extends JPanel {
 
         String label = labelField.getText().trim();
         if (label.isEmpty()) {
-            label = type.getLabel();
+            label = model.categoryLabel(type);
         }
         model.addSchemaNode(mode, type, label, x, y, null);
         labelField.setText("");
@@ -274,7 +274,7 @@ public class SchemaPanel extends JPanel {
         }
         String suggested = labelField.getText().trim();
         String name = JOptionPane.showInputDialog(this, "Название пресета:",
-                suggested.isEmpty() ? type.getLabel() : suggested);
+                suggested.isEmpty() ? model.categoryLabel(type) : suggested);
         if (name == null || name.trim().isEmpty()) {
             return;
         }

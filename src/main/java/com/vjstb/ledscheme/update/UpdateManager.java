@@ -38,6 +38,9 @@ public final class UpdateManager {
     public static final String DOWNLOAD_URL_TEMPLATE =
             "https://github.com/SergioPimonno/VJsTB_reborn/releases/download/%s/%s";
 
+    private static final String RELEASE_API_TEMPLATE =
+            "https://api.github.com/repos/SergioPimonno/VJsTB_reborn/releases/tags/%s";
+
     private UpdateManager() {
     }
 
@@ -62,20 +65,25 @@ public final class UpdateManager {
     public static Path download(String releaseTag, LongConsumer onProgress) throws IOException, InterruptedException {
         String url = downloadUrlFor(releaseTag);
         String assetName = assetNameFor(releaseTag);
-        Path dest = Files.createTempFile("led-scheme-update-", "-" + assetName);
         HttpClient client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .followRedirects(HttpClient.Redirect.ALWAYS)
                 .build();
-        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
-                .timeout(Duration.ofMinutes(5))
-                .GET()
-                .build();
-        HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        HttpResponse<InputStream> response = openStream(client, url);
+        if (response.statusCode() == 404) {
+            // Прямой URL собран склейкой имени ассета (см. assetNameFor) — хрупко к
+            // тому, что реальный файл в релизе назван иначе (уже один раз так ловили
+            // ошибку обновления до v1.5, см. Task #14). Вместо немедленного падения —
+            // спросить у самого GitHub список ассетов релиза и попробовать ещё раз.
+            String fallbackUrl = resolveAssetUrl(client, releaseTag);
+            if (fallbackUrl != null) {
+                response = openStream(client, fallbackUrl);
+            }
+        }
         if (response.statusCode() != 200) {
-            Files.deleteIfExists(dest);
             throw new IOException("Сервер вернул код " + response.statusCode() + " при скачивании " + url);
         }
+        Path dest = Files.createTempFile("led-scheme-update-", "-" + assetName);
         long total = response.headers().firstValueAsLong("Content-Length").orElse(-1);
         try (InputStream in = response.body()) {
             byte[] buf = new byte[64 * 1024];
@@ -94,6 +102,57 @@ public final class UpdateManager {
             throw new IOException("Скачанный файл повреждён или неполон");
         }
         return dest;
+    }
+
+    private static HttpResponse<InputStream> openStream(HttpClient client, String url)
+            throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+                .timeout(Duration.ofMinutes(5))
+                .GET()
+                .build();
+        return client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+    }
+
+    /** Спрашивает GitHub Releases API за реальным списком ассетов релиза и берёт
+     *  первый, чьё имя подходит под текущую ОС (.jar для Windows, .dmg для mac) —
+     *  устойчиво к расхождению реального имени файла релиза с тем, что строит
+     *  {@link #assetNameFor}. null, если запрос не удался или подходящего ассета
+     *  нет — тогда вызывающий код падает с прежним понятным сообщением о 404. */
+    private static String resolveAssetUrl(HttpClient client, String releaseTag) {
+        try {
+            String apiUrl = String.format(RELEASE_API_TEMPLATE, releaseTag);
+            HttpRequest request = HttpRequest.newBuilder(URI.create(apiUrl))
+                    .timeout(Duration.ofSeconds(15))
+                    .header("Accept", "application/vnd.github+json")
+                    .GET()
+                    .build();
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                return null;
+            }
+            com.fasterxml.jackson.databind.JsonNode root =
+                    new com.fasterxml.jackson.databind.ObjectMapper().readTree(response.body());
+            com.fasterxml.jackson.databind.JsonNode assets = root.get("assets");
+            if (assets == null || !assets.isArray()) {
+                return null;
+            }
+            String suffix = isWindows() ? ".jar" : ".dmg";
+            for (com.fasterxml.jackson.databind.JsonNode asset : assets) {
+                String name = asset.path("name").asText("");
+                if (name.toLowerCase(java.util.Locale.ROOT).endsWith(suffix)) {
+                    String dlUrl = asset.path("browser_download_url").asText(null);
+                    if (dlUrl != null) {
+                        return dlUrl;
+                    }
+                }
+            }
+            return null;
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            return null;
+        } catch (IOException | RuntimeException ex) {
+            return null;
+        }
     }
 
     /** Простая проверка целостности — jar это zip-архив (сигнатура "PK"), для .dmg

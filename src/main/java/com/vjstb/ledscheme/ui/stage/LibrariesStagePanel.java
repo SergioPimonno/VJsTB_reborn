@@ -332,19 +332,21 @@ public class LibrariesStagePanel extends JPanel {
 
     // ---- пресеты оборудования (для схемы питания/сигнала) ----
 
-    /** Общий рендерер категории (SchemaNodeType) — подпись через getLabel(), а не
+    /** Общий рендерер категории (SchemaNodeType) — подпись через model.categoryLabel
+     *  (учитывает админ-переименование встроенной категории, см. П.12), а не
      *  toString умолчальный DefaultListCellRenderer (значение и так уже toString==
-     *  getLabel по факту, но явный рендерер защищает от расхождения, если это
-     *  когда-то изменится, и переиспользуется для питания и сигнала одинаково). */
+     *  getLabel по умолчанию, если категория не переименована, но подпись должна
+     *  идти через модель, иначе переименование не будет видно в этом дереве),
+     *  переиспользуется для питания и сигнала одинаково. */
     @SuppressWarnings("rawtypes")
-    private static javax.swing.ListCellRenderer categoryRenderer() {
+    private javax.swing.ListCellRenderer categoryRenderer() {
         return new javax.swing.DefaultListCellRenderer() {
             @Override
             public java.awt.Component getListCellRendererComponent(JList<?> list, Object value, int index,
                     boolean isSelected, boolean cellHasFocus) {
                 super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
                 if (value instanceof SchemaNodeType t) {
-                    setText(t.getLabel());
+                    setText(model.categoryLabel(t));
                 }
                 return this;
             }
@@ -384,22 +386,28 @@ public class LibrariesStagePanel extends JPanel {
         JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
         JButton add = new JButton("Добавить");
         add.addActionListener(e -> {
-            EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), null,
+            EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), model, null,
                     selectedOrFirstCategory(categoryList)).showDialog();
-            if (r != null) tryRun(() -> model.addEquipmentPreset(mode, r.category(), r.name(), r.description(), null));
+            if (r != null) {
+                tryRun(() -> model.addEquipmentPreset(mode, r.category(), r.name(), r.description(), null,
+                        r.customCategoryLabel()));
+            }
         });
         JButton edit = new JButton("Изменить");
         edit.addActionListener(e -> {
             EquipmentPreset sel = presetList.getSelectedValue();
             if (sel == null) return;
-            EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), sel).showDialog();
-            if (r != null) tryRun(() -> model.updateEquipmentPreset(sel, mode, r.category(), r.name(), r.description()));
+            EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), model, sel).showDialog();
+            if (r != null) {
+                tryRun(() -> model.updateEquipmentPreset(sel, mode, r.category(), r.name(), r.description(),
+                        r.customCategoryLabel()));
+            }
         });
         JButton cardsBtn = new JButton(mode == SchemaMode.POWER ? "Разъёмы…" : "Карты…");
         cardsBtn.addActionListener(e -> {
             EquipmentPreset sel = presetList.getSelectedValue();
             if (sel == null) return;
-            String dlgTitle = sel.getName().isEmpty() ? sel.getCategory().getLabel() : sel.getName();
+            String dlgTitle = sel.getName().isEmpty() ? model.categoryLabel(sel.getCategory()) : sel.getName();
             if (mode == SchemaMode.POWER) {
                 PowerConnectorsConfigDialog dlg = new PowerConnectorsConfigDialog(topWindow(), dlgTitle,
                         PowerConnectorsConfigDialog.forPreset(model, sel), model);
@@ -513,19 +521,21 @@ public class LibrariesStagePanel extends JPanel {
         JPanel leftCrud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
         JButton add = new JButton("Добавить");
         add.addActionListener(e -> {
-            EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), null,
+            EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), model, null,
                     selectedOrFirstCategory(signalCategoryList)).showDialog();
             if (r != null) {
-                tryRun(() -> model.addEquipmentPreset(SchemaMode.SIGNAL, r.category(), r.name(), r.description(), null));
+                tryRun(() -> model.addEquipmentPreset(SchemaMode.SIGNAL, r.category(), r.name(), r.description(), null,
+                        r.customCategoryLabel()));
             }
         });
         JButton edit = new JButton("Изменить");
         edit.addActionListener(e -> {
             EquipmentPreset sel = signalPresetList.getSelectedValue();
             if (sel == null) return;
-            EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), sel).showDialog();
+            EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), model, sel).showDialog();
             if (r != null) {
-                tryRun(() -> model.updateEquipmentPreset(sel, SchemaMode.SIGNAL, r.category(), r.name(), r.description()));
+                tryRun(() -> model.updateEquipmentPreset(sel, SchemaMode.SIGNAL, r.category(), r.name(), r.description(),
+                        r.customCategoryLabel()));
             }
         });
         Runnable deleteSelectedSignalPreset = () -> {

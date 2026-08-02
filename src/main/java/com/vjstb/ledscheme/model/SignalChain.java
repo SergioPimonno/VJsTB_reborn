@@ -23,6 +23,9 @@ public class SignalChain {
      *  подтверждалась. Как и у {@link PowerChain#getAcknowledgedOverloadWatts()} —
      *  подтверждение действует, пока текущая нагрузка не превысит это значение. */
     private Double acknowledgedOverloadPixels;
+    /** Свой цвет цепочки (RGB), null — цвет по индексу в списке как раньше (см.
+     *  Palette.signalColor). По аналогии с {@link PowerChain#getColor()} (Task #4). */
+    private Integer color;
 
     public SignalChain() {
     }
@@ -81,6 +84,14 @@ public class SignalChain {
         this.acknowledgedOverloadPixels = acknowledgedOverloadPixels;
     }
 
+    public Integer getColor() {
+        return color;
+    }
+
+    public void setColor(Integer color) {
+        this.color = color;
+    }
+
     public SignalChain copy() {
         SignalChain c = new SignalChain();
         c.id = id;
@@ -89,6 +100,7 @@ public class SignalChain {
         c.backupPortNumber = backupPortNumber;
         c.cabinetInstanceIds = new ArrayList<>(cabinetInstanceIds);
         c.acknowledgedOverloadPixels = acknowledgedOverloadPixels;
+        c.color = color;
         return c;
     }
 }

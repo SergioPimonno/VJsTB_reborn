@@ -90,19 +90,46 @@ public class WorkspaceStore {
         }
     }
 
-    /** Экспорт библиотеки ОДНОГО типа (кабинеты/контроллеры/пресеты/кабели) в JSON-файл. */
-    public <T> void exportList(List<T> items, File target) {
+    /** Экспорт библиотеки ОДНОГО типа (кабинеты/контроллеры/пресеты/кабели) в JSON-файл —
+     *  оборачивается в {"kind": kind, "items": [...]}, чтобы импорт мог сам определить
+     *  тип файла и не полагаться на ручной выбор пользователя (Task #5/v1.6: неверно
+     *  выбранный в комбобоксе тип раньше молча создавал мусорные записи, т.к.
+     *  FAIL_ON_UNKNOWN_PROPERTIES выключен и парсинг просто игнорировал лишние поля). */
+    public <T> void exportList(List<T> items, File target, String kind) {
         try {
-            mapper.writeValue(target, items);
+            java.util.Map<String, Object> wrapper = new java.util.LinkedHashMap<>();
+            wrapper.put("kind", kind);
+            wrapper.put("items", items);
+            mapper.writeValue(target, wrapper);
         } catch (IOException e) {
             throw new RuntimeException("Не удалось экспортировать библиотеку: " + e.getMessage(), e);
         }
     }
 
-    /** Импорт библиотеки ОДНОГО типа из JSON-файла (плоский массив элементов). */
+    /** Тип библиотеки, которым файл сам себя маркирует (см. {@link #exportList}) —
+     *  null, если файл в старом формате (голый массив без обёртки) или маркер не
+     *  распознан; тогда вызывающий код должен вернуться к ручному выбору типа,
+     *  как раньше. */
+    public String detectKind(File source) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(source);
+            if (root != null && root.isObject() && root.has("kind") && root.has("items")) {
+                return root.get("kind").asText(null);
+            }
+        } catch (IOException e) {
+            // Не критично для автоопределения — просто не подскажем тип, ручной выбор остаётся как раньше.
+        }
+        return null;
+    }
+
+    /** Импорт библиотеки ОДНОГО типа из JSON-файла — понимает и старый формат
+     *  (голый массив элементов), и новый (обёртка {"kind","items"} из {@link #exportList}). */
     public <T> List<T> importList(File source, Class<T> type) {
         try {
-            return mapper.readValue(source, mapper.getTypeFactory().constructCollectionType(List.class, type));
+            com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(source);
+            com.fasterxml.jackson.databind.JsonNode itemsNode = root.isObject() && root.has("items")
+                    ? root.get("items") : root;
+            return mapper.convertValue(itemsNode, mapper.getTypeFactory().constructCollectionType(List.class, type));
         } catch (IOException e) {
             throw new RuntimeException("Не удалось импортировать библиотеку: " + e.getMessage(), e);
         }

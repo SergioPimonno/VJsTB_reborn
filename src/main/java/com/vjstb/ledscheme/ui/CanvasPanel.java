@@ -7,6 +7,7 @@ import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SignalChain;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.service.ScreenLogic;
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Dimension;
@@ -263,21 +264,53 @@ public class CanvasPanel extends JPanel {
      *  или -1. Хит-тест по расстоянию до отрезка между центрами кабинетов — теми
      *  же координатами, что использует SchemeRenderer.drawChain для отрисовки. */
     private int linkIndexAt(Screen scr, List<String> ids, Point p, int cw, int ch) {
+        CabinetType type = model.typeOf(scr);
         for (int i = 0; i < ids.size() - 1; i++) {
             CabinetInstance a = scr.cabinetById(ids.get(i));
             CabinetInstance b = scr.cabinetById(ids.get(i + 1));
             if (a == null || b == null) {
                 continue;
             }
-            double ax = PADDING + a.getColIndex() * cw + cw / 2.0;
-            double ay = PADDING + a.getRowIndex() * ch + ch / 2.0;
-            double bx = PADDING + b.getColIndex() * cw + cw / 2.0;
-            double by = PADDING + b.getRowIndex() * ch + ch / 2.0;
+            double ax = cabX(a, type, cw, PADDING) + cw / 2.0;
+            double ay = cabY(a, type, ch, PADDING) + ch / 2.0;
+            double bx = cabX(b, type, cw, PADDING) + cw / 2.0;
+            double by = cabY(b, type, ch, PADDING) + ch / 2.0;
             if (distanceToSegment(p.x, p.y, ax, ay, bx, by) < 8) {
                 return i;
             }
         }
         return -1;
+    }
+
+    /** Экранная позиция ячейки — сеточная позиция плюс свободное мм-смещение (см.
+     *  CabinetInstance.getOffsetXMm/getOffsetYMm, Task #7/v1.6), переведённое в
+     *  пиксели ТЕКУЩЕГО масштаба через {@link ScreenLogic#offsetPx} (тот же приём,
+     *  что и в SchemeRenderer.cabX/cabY — независимая копия, этот класс сам
+     *  вычисляет свои cw/ch через cabW()/cabH(), не через SchemeRenderer.cellSize).
+     *  type может быть null — тогда смещение не применяется. */
+    private static int cabX(CabinetInstance cab, CabinetType type, int cellW, int offX) {
+        double dx = type != null ? ScreenLogic.offsetPx(cab.getOffsetXMm(), cellW, type.getWidthMm()) : 0;
+        return offX + (int) Math.round(cab.getColIndex() * cellW + dx);
+    }
+
+    private static int cabY(CabinetInstance cab, CabinetType type, int cellH, int offY) {
+        double dy = type != null ? ScreenLogic.offsetPx(cab.getOffsetYMm(), cellH, type.getHeightMm()) : 0;
+        return offY + (int) Math.round(cab.getRowIndex() * cellH + dy);
+    }
+
+    /** Размер overlay-прямоугольника (дим занятости, подсветка строящейся цепочки,
+     *  курсор) для ячейки с переопределённым типом другого физического размера —
+     *  тем же приёмом, что и SchemeRenderer.paintScheme (ScreenLogic.effectiveCellW/H),
+     *  иначе такой overlay остаётся размером нижней ячейки и визуально "отрезает"
+     *  часть уже увеличенного (см. paintScheme) кабинета. */
+    private int effW(CabinetInstance cab, CabinetType defaultType, int cellW) {
+        CabinetType eff = ScreenLogic.effectiveType(cab, defaultType, model.getWorkspace());
+        return (int) Math.round(ScreenLogic.effectiveCellW(eff, defaultType, cellW));
+    }
+
+    private int effH(CabinetInstance cab, CabinetType defaultType, int cellH) {
+        CabinetType eff = ScreenLogic.effectiveType(cab, defaultType, model.getWorkspace());
+        return (int) Math.round(ScreenLogic.effectiveCellH(eff, defaultType, cellH));
     }
 
     private static double distanceToSegment(double px, double py, double ax, double ay, double bx, double by) {
@@ -309,12 +342,22 @@ public class CanvasPanel extends JPanel {
         }
         int cw = cabW();
         int ch = cabH();
-        int col = (p.x - PADDING) / cw;
-        int row = (p.y - PADDING) / ch;
-        if (p.x < PADDING || p.y < PADDING || col < 0 || row < 0 || col >= scr.getCols() || row >= scr.getRows()) {
+        if (p.x < PADDING || p.y < PADDING) {
             return null;
         }
-        return scr.cabinetAt(row, col);
+        // Линейный перебор с учётом свободного мм-смещения ячейки (Task #7/v1.6) —
+        // при офсете ячейка может физически оказаться не там, где её кладёт голая
+        // формула row*ch/col*cw, поэтому точный кабинет под курсором ищем перебором
+        // актуальных прямоугольников (экраны обычно от единиц до сотен кабинетов).
+        CabinetType type = model.typeOf(scr);
+        for (CabinetInstance cab : scr.getCabinets()) {
+            int x = cabX(cab, type, cw, PADDING);
+            int y = cabY(cab, type, ch, PADDING);
+            if (p.x >= x && p.x < x + cw && p.y >= y && p.y < y + ch) {
+                return cab;
+            }
+        }
+        return null;
     }
 
     @Override
@@ -367,6 +410,7 @@ public class CanvasPanel extends JPanel {
         // закрашиваем, чтобы не выглядело, будто кабинет ещё можно расключить
         // отдельно. Для питания ячейка и так закрашена цветом фазы через
         // paintScheme, дополнительный дим не нужен и только испортил бы цвет фазы.
+        CabinetType type = model.typeOf(scr);
         if (!power) {
             for (CabinetInstance cab : scr.getCabinets()) {
                 if (cab.isHidden()) {
@@ -375,10 +419,12 @@ public class CanvasPanel extends JPanel {
                 boolean ownChain = sceneSignalChains.stream()
                         .anyMatch(sc -> sc.getCabinetInstanceIds().contains(cab.getId()));
                 if (!ownChain && model.isCabinetWiredForSignal(cab.getId())) {
-                    int x = PADDING + cab.getColIndex() * cw;
-                    int y = PADDING + cab.getRowIndex() * ch;
+                    int x = cabX(cab, type, cw, PADDING);
+                    int y = cabY(cab, type, ch, PADDING);
+                    int ew = effW(cab, type, cw);
+                    int eh = effH(cab, type, ch);
                     g2.setColor(new Color(0, 0, 0, 140));
-                    g2.fillRect(x + 1, y + 1, cw - 2, ch - 2);
+                    g2.fillRect(x + 1, y + 1, ew - 2, eh - 2);
                 }
             }
         }
@@ -390,11 +436,13 @@ public class CanvasPanel extends JPanel {
             for (String id : active) {
                 CabinetInstance cab = scr.cabinetById(id);
                 if (cab != null) {
-                    int x = PADDING + cab.getColIndex() * cw;
-                    int y = PADDING + cab.getRowIndex() * ch;
+                    int x = cabX(cab, type, cw, PADDING);
+                    int y = cabY(cab, type, ch, PADDING);
+                    int ew = effW(cab, type, cw);
+                    int eh = effH(cab, type, ch);
                     g2.setColor(Color.WHITE);
                     g2.setStroke(new BasicStroke(2f));
-                    g2.drawRect(x + 1, y + 1, cw - 2, ch - 2);
+                    g2.drawRect(x + 1, y + 1, ew - 2, eh - 2);
                 }
             }
             SchemeRenderer.drawChain(g2, scr, active, c, true, cw, ch, PADDING, PADDING,
@@ -403,11 +451,14 @@ public class CanvasPanel extends JPanel {
             int cr = controller.cursorRow();
             int cc = controller.cursorCol();
             if (cr >= 0 && cc >= 0) {
-                int x = PADDING + cc * cw;
-                int y = PADDING + cr * ch;
+                CabinetInstance cursorCab = scr.cabinetAt(cr, cc);
+                int x = cursorCab != null ? cabX(cursorCab, type, cw, PADDING) : PADDING + cc * cw;
+                int y = cursorCab != null ? cabY(cursorCab, type, ch, PADDING) : PADDING + cr * ch;
+                int cursorW = cursorCab != null ? effW(cursorCab, type, cw) : cw;
+                int cursorH = cursorCab != null ? effH(cursorCab, type, ch) : ch;
                 g2.setColor(Color.YELLOW);
                 g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, new float[]{4, 3}, 0));
-                g2.drawRect(x + 3, y + 3, cw - 6, ch - 6);
+                g2.drawRect(x + 3, y + 3, cursorW - 6, cursorH - 6);
             }
         }
 

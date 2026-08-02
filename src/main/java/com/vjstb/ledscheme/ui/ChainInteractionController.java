@@ -106,6 +106,29 @@ public class ChainInteractionController implements CanvasPanel.Controller {
         return null;
     }
 
+    /** Возобновляет построение УЖЕ СУЩЕСТВУЮЩЕЙ цепочки — клик по строке в списке
+     *  цепочек (не по «✕», см. Task #11/v1.6): загружает её текущий список
+     *  кабинетов, входит в режим построения (клики достраивают с конца/ПКМ убирает
+     *  с конца — как при обычной постройке), а завершение (Esc/клик вне) через
+     *  updateHandler обновляет ТУ ЖЕ цепочку по id вместо создания новой (id важен —
+     *  на цепочку могут ссылаться подтверждение перегрузки/цвет, см. Task #4). Если
+     *  редактирование заканчивается пустым списком (все кабинеты убраны ПКМ) —
+     *  updateHandler НЕ вызывается (см. commitCurrentSilently), исходная цепочка
+     *  остаётся как была, а не удаляется — правка не должна превращаться в
+     *  случайное удаление. */
+    public void resumeEditing(List<String> existingIds, Consumer<List<String>> updateHandler) {
+        if (!commitCurrentSilently()) {
+            return;
+        }
+        this.commitHandler = updateHandler;
+        activeIds.clear();
+        activeIds.addAll(existingIds);
+        cursorRow = -1;
+        cursorCol = -1;
+        building = true;
+        onChange.run();
+    }
+
     /** Esc: завершить построение, сохранив цепочку, если в ней есть кабинеты. */
     public void finish() {
         if (!building) {

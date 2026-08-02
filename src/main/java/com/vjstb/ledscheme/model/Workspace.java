@@ -1,7 +1,9 @@
 package com.vjstb.ledscheme.model;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Корневой контейнер данных приложения: библиотека кабинетов + проекты.
@@ -24,6 +26,12 @@ public class Workspace {
     /** Админ-редактируемые подкатегории оборудования под "Прочее оборудование" —
      *  см. EquipmentPreset.customCategoryLabel/AdminDialog. */
     private List<String> customEquipmentCategories = new ArrayList<>();
+    /** Переопределение ПОДПИСИ встроенной категории оборудования (см. SchemaNodeType),
+     *  ключ — имя константы enum (SOURCE, DISTRO, ...), значение — новый текст,
+     *  который видит пользователь (см. AppModel.categoryLabel). Сам список категорий
+     *  фиксирован — сюда попадают только переименованные, остальные просто
+     *  отсутствуют в карте и используют SchemaNodeType.getLabel() как есть. */
+    private Map<String, String> equipmentCategoryLabelOverrides = new LinkedHashMap<>();
     private List<Project> projects = new ArrayList<>();
 
     public List<CabinetType> getCabinetTypes() {
@@ -72,6 +80,14 @@ public class Workspace {
 
     public void setCustomEquipmentCategories(List<String> customEquipmentCategories) {
         this.customEquipmentCategories = customEquipmentCategories;
+    }
+
+    public Map<String, String> getEquipmentCategoryLabelOverrides() {
+        return equipmentCategoryLabelOverrides;
+    }
+
+    public void setEquipmentCategoryLabelOverrides(Map<String, String> equipmentCategoryLabelOverrides) {
+        this.equipmentCategoryLabelOverrides = equipmentCategoryLabelOverrides;
     }
 
     public List<Project> getProjects() {

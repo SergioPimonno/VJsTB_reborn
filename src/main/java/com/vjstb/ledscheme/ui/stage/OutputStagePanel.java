@@ -123,6 +123,13 @@ public class OutputStagePanel extends JPanel {
                     return true;
                 }
             }
+            // Сигнальная нагрузка на порт контроллера (Task v1.4) — тот же бэкенд, что и
+            // для питания выше, просто раньше нигде не вызывался на пути экспорта.
+            for (com.vjstb.ledscheme.model.SignalChain chain : scene.getSignalChains()) {
+                if (model.signalChainLoadStatus(scene, chain).blocksExport()) {
+                    return true;
+                }
+            }
         }
         return false;
     }
@@ -148,11 +155,12 @@ public class OutputStagePanel extends JPanel {
         }
         if (settings.activeProfile().isLoadTrackingEnabled() && hasUnacknowledgedOverload(project)) {
             JOptionPane.showMessageDialog(this,
-                    "<html>В проекте есть цепочки питания с неподтверждённой перегрузкой"
-                            + " (превышение ёмкости разъёма кабинета).<br>Откройте этап «Питание» нужной сцены,"
-                            + " проверьте цепочки, отмеченные ⚠, и подтвердите кнопкой «Я знаю»"
-                            + " (или измените коммутацию).<br>Экспорт остановлен, пока такие цепочки есть.</html>",
-                    "Перегрузка цепочек питания", JOptionPane.WARNING_MESSAGE);
+                    "<html>В проекте есть цепочки питания или сигнала с неподтверждённым превышением ёмкости"
+                            + " (разъёма кабинета — для питания, порта контроллера — для сигнала).<br>Откройте этап"
+                            + " «Питание»/«Сигнал» нужной сцены, проверьте цепочки, отмеченные ⚠, и подтвердите"
+                            + " кнопкой «Я знаю» (или измените коммутацию).<br>Экспорт остановлен, пока такие"
+                            + " цепочки есть.</html>",
+                    "Перегрузка цепочек", JOptionPane.WARNING_MESSAGE);
             return;
         }
         File folder = resolveFolder();
@@ -399,8 +407,9 @@ public class OutputStagePanel extends JPanel {
                     continue;
                 }
                 String modeLabel = n.getMode() == com.vjstb.ledscheme.model.SchemaMode.POWER ? "Питание" : "Сигнал";
-                String label = n.getLabel() == null || n.getLabel().isBlank() ? n.getType().getLabel() : n.getLabel();
-                String key = modeLabel + " · " + n.getType().getLabel() + " · " + label;
+                String typeLabel = model.categoryLabel(n.getType());
+                String label = n.getLabel() == null || n.getLabel().isBlank() ? typeLabel : n.getLabel();
+                String key = modeLabel + " · " + typeLabel + " · " + label;
                 equipmentNodes.merge(key, 1, Integer::sum);
             }
         }
