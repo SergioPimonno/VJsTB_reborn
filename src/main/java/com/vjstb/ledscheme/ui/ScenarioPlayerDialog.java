@@ -67,7 +67,7 @@ public class ScenarioPlayerDialog extends JDialog {
         bodyScroll.setPreferredSize(new Dimension(640, 90));
         content.add(bodyScroll, BorderLayout.SOUTH);
         add(content, BorderLayout.CENTER);
-        rewrapBody = UiKit.bindHtmlWrapWidth(bodyLabel, bodyScroll, () -> currentBodyHtml);
+        rewrapBody = UiKit.bindHtmlWrapWidthAndHeight(bodyLabel, bodyScroll, bodyScroll, 50, 220, () -> currentBodyHtml);
 
         JPanel bottom = new JPanel(new BorderLayout(8, 0));
         bottom.setBorder(BorderFactory.createEmptyBorder(0, 12, 10, 12));
