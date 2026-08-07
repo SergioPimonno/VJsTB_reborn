@@ -2056,4 +2056,105 @@ class AppModelTest {
                 "Разъёмов на всех проходных не хватает на обе цепочки — вторая остаётся неподключённой,"
                         + " новый узел не создаётся");
     }
+
+    @Test
+    void autoPopulateSchemaForPowerSkipsMismatchedSpareConnectorAndMovesToNextDistro(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+        model.selectScreen(screen);
+
+        // Проходная 1: основная группа CEE16A×2 + одиночный запасной транзитный
+        // CEE32A другого номинала — не должен использоваться автозаполнением.
+        SchemaNode distro1 = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "Проходная 1", 0, 0, null);
+        CardPort d1main = model.addPowerConnectorToNode(distro1, "CEE 16A", PortDirection.OUT, 2);
+        CardPort d1spare = model.addPowerConnectorToNode(distro1, "CEE 32A", PortDirection.OUT, 1);
+        SchemaNode distro2 = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "Проходная 2", 300, 0, null);
+        CardPort d2main = model.addPowerConnectorToNode(distro2, "CEE 16A", PortDirection.OUT, 2);
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+        model.addPowerChain(1, List.of(ids.get(0)));
+        model.addPowerChain(2, List.of(ids.get(1)));
+        model.addPowerChain(3, List.of(ids.get(2)));
+
+        model.autoPopulateSchema(SchemaMode.POWER, true);
+
+        List<SchemaEdge> edges = model.schemaEdgesForCurrentScene(SchemaMode.POWER);
+        assertEquals(3, edges.size());
+        assertTrue(edges.stream().noneMatch(e -> d1spare.getId().equals(e.getToPortId())),
+                "Запасной разъём другого номинала (CEE 32A) не должен использоваться автозаполнением");
+        assertTrue(edges.stream().filter(e -> d1main.getId().equals(e.getToPortId())).count() == 2,
+                "Основная группа первой проходной заполняется полностью (2 из 2)");
+        assertTrue(edges.stream().anyMatch(e -> ids.get(2).equals(e.getFromCabinetInstanceId())
+                        && d2main.getId().equals(e.getToPortId())),
+                "Третий кабинет уходит на основную группу СЛЕДУЮЩЕЙ проходной, а не на несовпадающий"
+                        + " запасной разъём первой");
+    }
+
+    @Test
+    void autoPopulateSchemaOnlyAutoConnectsScreenAddedInThisCall(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+        model.selectScreen(screen);
+
+        ControllerType ct = new ControllerType();
+        ct.setName("H2");
+        ct.setPortCount(4);
+        ct = model.addControllerType(ct);
+        model.addControllerToScreen(screen, ct.getId());
+
+        // Узел экрана уже добавлен на схему ВРУЧНУЮ (или предыдущим импортом) ДО
+        // того, как для него провели хоть одну цепочку, — т.е. не будет "свежим"
+        // на момент вызова autoPopulateSchema.
+        model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SCREEN, screen.getName(), 0, 0, screen.getId());
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+        model.addSignalChain(1, false, List.of(ids.get(0)));
+
+        model.autoPopulateSchema(SchemaMode.SIGNAL, true);
+
+        assertTrue(model.schemaNodesForCurrentScene(SchemaMode.SIGNAL).stream()
+                        .anyMatch(n -> n.getType() == SchemaNodeType.CONTROLLER),
+                "Использованный контроллер всё равно добавляется как узел");
+        assertTrue(model.schemaEdgesForCurrentScene(SchemaMode.SIGNAL).isEmpty(),
+                "Узел экрана НЕ был добавлен ЭТИМ вызовом — автосвязь для его кабинетов не проводится,"
+                        + " даже хотя у него есть непрописанный (несвязанный) кабинет");
+    }
+
+    @Test
+    void autoPopulateSchemaDoesNotReconnectManuallyRemovedEdgeOnSubsequentCall(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+        model.selectScreen(screen);
+
+        ControllerType ct = new ControllerType();
+        ct.setName("H2");
+        ct.setPortCount(4);
+        ct = model.addControllerType(ct);
+        model.addControllerToScreen(screen, ct.getId());
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+        model.addSignalChain(1, false, List.of(ids.get(0)));
+
+        model.autoPopulateSchema(SchemaMode.SIGNAL, true);
+        assertEquals(1, model.schemaEdgesForCurrentScene(SchemaMode.SIGNAL).size());
+
+        // Инженер сознательно разрывает автосвязь (например, кабель физически ушёл
+        // в другое место) — порт должен остаться свободным навсегда, а не
+        // перезаполняться заново при каждом следующем переходе на общую схему.
+        model.deleteSchemaEdge(model.schemaEdgesForCurrentScene(SchemaMode.SIGNAL).get(0));
+        assertTrue(model.schemaEdgesForCurrentScene(SchemaMode.SIGNAL).isEmpty());
+
+        model.autoPopulateSchema(SchemaMode.SIGNAL, true);
+        assertTrue(model.schemaEdgesForCurrentScene(SchemaMode.SIGNAL).isEmpty(),
+                "Узел экрана уже существовал до этого вызова — разорванная связь не должна восстановиться");
+    }
 }

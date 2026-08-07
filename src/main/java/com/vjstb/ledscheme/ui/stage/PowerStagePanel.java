@@ -175,7 +175,7 @@ public class PowerStagePanel extends JPanel {
                 // этого autoConnect распределяет вводные кабинеты по свободным
                 // разъёмам уже добавленных на схему узлов «Распределение».
                 boolean autoConnect = settings.activeProfile().isSocketWiringEnabled()
-                        && settings.activeProfile().isChainEndpointSocketsEnabled();
+                        && settings.activeProfile().isPowerChainEndpointSocketsEnabled();
                 model.autoPopulateSchema(SchemaMode.POWER, autoConnect);
             }
             viewCards.show(viewContainer, VIEW_SCHEMA);

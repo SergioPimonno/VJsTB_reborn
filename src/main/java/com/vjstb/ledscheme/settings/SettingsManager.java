@@ -135,8 +135,13 @@ public class SettingsManager {
         persist();
     }
 
-    public void setChainEndpointSocketsEnabled(boolean enabled) {
-        activeProfile().setChainEndpointSocketsEnabled(enabled);
+    public void setSignalChainEndpointSocketsEnabled(boolean enabled) {
+        activeProfile().setSignalChainEndpointSocketsEnabled(enabled);
+        persist();
+    }
+
+    public void setPowerChainEndpointSocketsEnabled(boolean enabled) {
+        activeProfile().setPowerChainEndpointSocketsEnabled(enabled);
         persist();
     }
 
@@ -160,8 +165,13 @@ public class SettingsManager {
         persist();
     }
 
-    public void setConnectorDisplayMode(ConnectorDisplayMode mode) {
-        activeProfile().setConnectorDisplayMode(mode);
+    public void setSignalConnectorDisplayMode(ConnectorDisplayMode mode) {
+        activeProfile().setSignalConnectorDisplayMode(mode);
+        persist();
+    }
+
+    public void setPowerConnectorDisplayMode(ConnectorDisplayMode mode) {
+        activeProfile().setPowerConnectorDisplayMode(mode);
         persist();
     }
 
