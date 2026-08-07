@@ -12,10 +12,12 @@ import com.vjstb.ledscheme.model.SchemaNode;
 import com.vjstb.ledscheme.model.SchemaNodeType;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.service.PowerCalc;
 import com.vjstb.ledscheme.service.SchemaLoadCalc;
 import com.vjstb.ledscheme.store.WorkspaceStore;
 import java.io.File;
 import java.nio.file.Path;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -23,6 +25,15 @@ import org.junit.jupiter.api.io.TempDir;
  *  дистрибьютор) сравнивает нагрузку, уходящую через его исходящие связи, с
  *  ёмкостью его входных разъёмов — включая рекурсию через промежуточные узлы. */
 class SchemaLoadCalcTest {
+
+    /** PowerCalc.Defaults теперь mutable static state (Task #135/v2.0, синк
+     *  CALC_DEFAULTS) — сбрасываем к зашитым значениям перед каждым тестом, чтобы
+     *  тесты, пиннящие "текущий дефолт по умолчанию", не текли от других тестов,
+     *  трогающих Defaults.apply(...). */
+    @BeforeEach
+    void resetCalcDefaults() {
+        PowerCalc.Defaults.reset();
+    }
 
     private AppModel freshModel(Path dir) {
         return new AppModel(new WorkspaceStore(new File(dir.toFile(), "workspace.json")));

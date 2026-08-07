@@ -3,6 +3,7 @@ package com.vjstb.ledscheme.ui;
 import com.vjstb.ledscheme.model.CabinetShape;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.PowerConnectorType;
+import com.vjstb.ledscheme.service.AppModel;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
@@ -69,11 +70,14 @@ public class CabinetTypeDialog extends JDialog {
             + "«Другой», А (для расчёта нагрузки)");
     private final JTextField powerConnectorsField = new JTextField();
     private final JTextField signalConnectorsField = new JTextField();
+    private final JComboBox<String> companyField = new JComboBox<>();
 
     private CabinetType result;
 
-    public CabinetTypeDialog(Window owner, CabinetType existing) {
+    public CabinetTypeDialog(Window owner, AppModel model, CabinetType existing) {
         super(owner, existing == null ? "Новый кабинет" : "Редактирование кабинета", ModalityType.APPLICATION_MODAL);
+        companyField.setEditable(true);
+        companyField.setModel(new javax.swing.DefaultComboBoxModel<>(model.getKnownCompanies().toArray(new String[0])));
 
         // Форма разбита на ДВЕ отдельные GridLayout-панели (formTop/formBottom), а не
         // одну общую — GridLayout заставляет ВСЕ строки сетки иметь одинаковую
@@ -85,6 +89,8 @@ public class CabinetTypeDialog extends JDialog {
         formTop.setBorder(BorderFactory.createEmptyBorder(14, 14, 6, 14));
         formTop.add(new JLabel("Название"));
         formTop.add(nameField);
+        formTop.add(new JLabel("Компания (владелец техники)"));
+        formTop.add(companyField);
         formTop.add(new JLabel("Ширина (мм)"));
         formTop.add(widthField);
         formTop.add(new JLabel("Высота (мм)"));
@@ -138,6 +144,7 @@ public class CabinetTypeDialog extends JDialog {
 
         CabinetType src = existing != null ? existing : new CabinetType();
         nameField.setText(src.getName());
+        companyField.getEditor().setItem(src.getCompany() != null ? src.getCompany() : "");
         widthField.setText(num(src.getWidthMm()));
         heightField.setText(num(src.getHeightMm()));
         depthField.setText(src.getDepthMm() != null ? num(src.getDepthMm()) : "");
@@ -259,6 +266,8 @@ public class CabinetTypeDialog extends JDialog {
                 throw new IllegalArgumentException("Укажите название кабинета");
             }
             ct.setName(name);
+            String company = String.valueOf(companyField.getEditor().getItem()).trim();
+            ct.setCompany(company.isEmpty() ? null : company);
             ct.setWidthMm(parsePositive(widthField.getText(), "Ширина"));
             ct.setHeightMm(parsePositive(heightField.getText(), "Высота"));
             ct.setDepthMm(depthField.getText().trim().isEmpty() ? null : parsePositive(depthField.getText(), "Глубина"));

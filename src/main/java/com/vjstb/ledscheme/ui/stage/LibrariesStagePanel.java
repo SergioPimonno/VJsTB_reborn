@@ -1,22 +1,27 @@
 package com.vjstb.ledscheme.ui.stage;
 
 import com.vjstb.ledscheme.model.CabinetType;
+import com.vjstb.ledscheme.model.CableLengthProfile;
 import com.vjstb.ledscheme.model.CableType;
 import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.EquipmentPreset;
+import com.vjstb.ledscheme.model.InterfaceType;
 import com.vjstb.ledscheme.model.SchemaCard;
 import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.SchemaNodeType;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.settings.SettingsManager;
 import com.vjstb.ledscheme.ui.AssembleCardsDialog;
 import com.vjstb.ledscheme.ui.CabinetTypeDialog;
 import com.vjstb.ledscheme.ui.CabinetTypeRenderer;
+import com.vjstb.ledscheme.ui.CableLengthProfileDialog;
 import com.vjstb.ledscheme.ui.CardsConfigDialog;
 import com.vjstb.ledscheme.ui.ControllerTypeDialog;
 import com.vjstb.ledscheme.ui.EquipmentPresetDialog;
 import com.vjstb.ledscheme.ui.ListSizing;
 import com.vjstb.ledscheme.ui.NamedRenderer;
 import com.vjstb.ledscheme.ui.PowerConnectorsConfigDialog;
+import com.vjstb.ledscheme.ui.ProposeDialog;
 import com.vjstb.ledscheme.ui.UiKit;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
@@ -42,6 +47,7 @@ import javax.swing.ListSelectionModel;
 public class LibrariesStagePanel extends JPanel {
 
     private final AppModel model;
+    private final SettingsManager settings;
 
     private final DefaultListModel<CabinetType> libModel = new DefaultListModel<>();
     private final JList<CabinetType> libList = new JList<>(libModel);
@@ -82,10 +88,20 @@ public class LibrariesStagePanel extends JPanel {
     private final JList<CableType> cableList = new JList<>(cableModel);
     private final JScrollPane cableScroll = new JScrollPane(cableList);
 
+    private final DefaultListModel<CableLengthProfile> cableLengthProfileModel = new DefaultListModel<>();
+    private final JList<CableLengthProfile> cableLengthProfileList = new JList<>(cableLengthProfileModel);
+    private final JScrollPane cableLengthProfileScroll = new JScrollPane(cableLengthProfileList);
+
+    private final DefaultListModel<InterfaceType> interfaceTypeModel = new DefaultListModel<>();
+    private final JList<InterfaceType> interfaceTypeList = new JList<>(interfaceTypeModel);
+    private final JScrollPane interfaceTypeScroll = new JScrollPane(interfaceTypeList);
+
     private NamedRenderer<CabinetType> libRenderer;
     private NamedRenderer<ControllerType> ctrlLibRenderer;
     private NamedRenderer<EquipmentPreset> powerPresetRenderer;
     private NamedRenderer<CableType> cableRenderer;
+    private NamedRenderer<CableLengthProfile> cableLengthProfileRenderer;
+    private NamedRenderer<InterfaceType> interfaceTypeRenderer;
 
     private javax.swing.JComponent exportImportSection;
     private javax.swing.JComponent cabinetsSection;
@@ -93,6 +109,8 @@ public class LibrariesStagePanel extends JPanel {
     private javax.swing.JComponent powerPresetsSection;
     private javax.swing.JComponent signalEquipmentSection;
     private javax.swing.JComponent cableSection;
+    private javax.swing.JComponent cableLengthProfileSection;
+    private javax.swing.JComponent interfaceTypeSection;
 
     /** Ширина содержимого этапа (окно минус вертикальный скроллбар минус паддинг
      *  body) — пересчитывается живьём при ресайзе (см. конструктор), а не
@@ -101,8 +119,9 @@ public class LibrariesStagePanel extends JPanel {
      *  повторный баг-репорт после промежуточного фикса с жёстким capWidth=720). */
     private int contentWidth = 700;
 
-    public LibrariesStagePanel(AppModel model) {
+    public LibrariesStagePanel(AppModel model, SettingsManager settings) {
         this.model = model;
+        this.settings = settings;
         setLayout(new BorderLayout());
 
         JPanel body = UiKit.vbox();
@@ -125,6 +144,8 @@ public class LibrariesStagePanel extends JPanel {
                 powerCategoryList, powerCategoryScroll);
         signalEquipmentSection = buildSignalEquipmentSection();
         cableSection = buildCableLibrary();
+        cableLengthProfileSection = buildCableLengthProfileLibrary();
+        interfaceTypeSection = buildInterfaceTypeSection();
         body.add(exportImportSection);
         body.add(UiKit.vgap(10));
         body.add(cabinetsSection);
@@ -136,6 +157,10 @@ public class LibrariesStagePanel extends JPanel {
         body.add(signalEquipmentSection);
         body.add(UiKit.vgap(10));
         body.add(cableSection);
+        body.add(UiKit.vgap(10));
+        body.add(cableLengthProfileSection);
+        body.add(UiKit.vgap(10));
+        body.add(interfaceTypeSection);
         body.add(javax.swing.Box.createVerticalGlue());
 
         JScrollPane scroll = new JScrollPane(body);
@@ -143,7 +168,8 @@ public class LibrariesStagePanel extends JPanel {
         scroll.getVerticalScrollBar().setUnitIncrement(16);
         add(scroll, BorderLayout.CENTER);
 
-        for (JScrollPane sp : new JScrollPane[]{libScroll, ctrlLibScroll, powerPresetScroll, cableScroll}) {
+        for (JScrollPane sp : new JScrollPane[]{libScroll, ctrlLibScroll, powerPresetScroll, cableScroll,
+                cableLengthProfileScroll, interfaceTypeScroll}) {
             sp.setMinimumSize(new Dimension(200, 80));
             // ВСЕГДА показывать вертикальный скроллбар (даже когда все позиции
             // помещаются) — иначе два списка одинаковой ширины секции переносят
@@ -242,23 +268,26 @@ public class LibrariesStagePanel extends JPanel {
 
     private JPanel buildLibrary() {
         libList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        libRenderer = new NamedRenderer<CabinetType>(CabinetType::getName, ct ->
+        libRenderer = new NamedRenderer<CabinetType>(
+                CabinetType::getName, ct ->
                 UiKit.fmt(ct.getWidthMm()) + "×" + UiKit.fmt(ct.getHeightMm()) + "мм · "
                         + ct.getResolutionWidth() + "×" + ct.getResolutionHeight() + "px · "
-                        + UiKit.fmt(ct.getPowerConsumptionW()) + "Вт · " + UiKit.fmt(ct.getWeightKg()) + "кг");
+                        + UiKit.fmt(ct.getPowerConsumptionW()) + "Вт · " + UiKit.fmt(ct.getWeightKg()) + "кг"
+                        + (ct.getCompany() == null || ct.getCompany().isEmpty() ? "" : " · Компания: " + ct.getCompany()),
+                ct -> model.isSharedCabinetType(ct.getId()));
         libList.setCellRenderer(libRenderer);
 
         JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
         JButton add = new JButton("Добавить");
         add.addActionListener(e -> {
-            CabinetType ct = new CabinetTypeDialog(topWindow(), null).showDialog();
+            CabinetType ct = new CabinetTypeDialog(topWindow(), model, null).showDialog();
             if (ct != null) tryRun(() -> model.addCabinetType(ct));
         });
         JButton edit = new JButton("Изменить");
         edit.addActionListener(e -> {
             CabinetType sel = libList.getSelectedValue();
             if (sel == null) return;
-            CabinetType ct = new CabinetTypeDialog(topWindow(), sel).showDialog();
+            CabinetType ct = new CabinetTypeDialog(topWindow(), model, sel).showDialog();
             if (ct != null) tryRun(() -> model.updateCabinetType(ct));
         });
         Runnable deleteSelectedCabinetType = () -> {
@@ -268,9 +297,27 @@ public class LibrariesStagePanel extends JPanel {
         JButton del = new JButton("Удалить");
         del.addActionListener(e -> deleteSelectedCabinetType.run());
         UiKit.bindDeleteKey(libList, deleteSelectedCabinetType);
+        JButton propose = new JButton("Предложить…");
+        propose.addActionListener(e -> {
+            CabinetType sel = libList.getSelectedValue();
+            if (sel != null) ProposeDialog.show(topWindow(), settings, "CABINET", sel.getName(), sel);
+        });
         crud.add(add);
         crud.add(edit);
         crud.add(del);
+        crud.add(propose);
+        String sharedTip = "Общие элементы редактируются только через админ-консоль";
+        libList.addListSelectionListener(e -> {
+            CabinetType sel = libList.getSelectedValue();
+            boolean shared = sel != null && model.isSharedCabinetType(sel.getId());
+            edit.setEnabled(sel != null && !shared);
+            del.setEnabled(sel != null && !shared);
+            propose.setEnabled(sel != null && !shared);
+            String tip = shared ? sharedTip : null;
+            edit.setToolTipText(tip);
+            del.setToolTipText(tip);
+            propose.setToolTipText(tip);
+        });
         return (JPanel) UiKit.dynamicSection("Библиотека кабинетов", listSectionBody(libScroll, crud));
     }
 
@@ -287,20 +334,22 @@ public class LibrariesStagePanel extends JPanel {
                                 ? " · вх. портов: " + ct.effectiveInputPortCount()
                                         + (ct.inputPortTypesSummary().isEmpty() ? "" : " (" + ct.inputPortTypesSummary() + ")")
                                 : "")
-                        + (ct.isLoopPort() ? " · Loop" : ""));
+                        + (ct.isLoopPort() ? " · Loop" : "")
+                        + (ct.getCompany() == null || ct.getCompany().isEmpty() ? "" : " · Компания: " + ct.getCompany()),
+                ct -> model.isSharedControllerType(ct.getId()));
         ctrlLibList.setCellRenderer(ctrlLibRenderer);
 
         JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
         JButton add = new JButton("Добавить");
         add.addActionListener(e -> {
-            ControllerType ct = new ControllerTypeDialog(topWindow(), null).showDialog();
+            ControllerType ct = new ControllerTypeDialog(topWindow(), model, null).showDialog();
             if (ct != null) tryRun(() -> model.addControllerType(ct));
         });
         JButton edit = new JButton("Изменить");
         edit.addActionListener(e -> {
             ControllerType sel = ctrlLibList.getSelectedValue();
             if (sel == null) return;
-            ControllerType ct = new ControllerTypeDialog(topWindow(), sel).showDialog();
+            ControllerType ct = new ControllerTypeDialog(topWindow(), model, sel).showDialog();
             if (ct != null) tryRun(() -> model.updateControllerType(ct));
         });
         JButton cardsBtn = new JButton("Карты…");
@@ -320,14 +369,31 @@ public class LibrariesStagePanel extends JPanel {
         JButton del = new JButton("Удалить");
         del.addActionListener(e -> deleteSelectedControllerType.run());
         UiKit.bindDeleteKey(ctrlLibList, deleteSelectedControllerType);
+        JButton propose = new JButton("Предложить…");
+        propose.addActionListener(e -> {
+            ControllerType sel = ctrlLibList.getSelectedValue();
+            if (sel != null) ProposeDialog.show(topWindow(), settings, "CONTROLLER", sel.getName(), sel);
+        });
         crud.add(add);
         crud.add(edit);
         crud.add(cardsBtn);
         crud.add(del);
-        JLabel hint = UiKit.muted("<html>Для модульных контроллеров (например, Novastar H-серии) задайте карты"
-                + " вывода вместо ручного числа портов — «Вых. портов» выше тогда считается по картам.</html>");
-        return (JPanel) UiKit.dynamicSection("Библиотека контроллеров",
-                listSectionBody(ctrlLibScroll, crud, UiKit.vgap(6), hint));
+        crud.add(propose);
+        String ctrlSharedTip = "Общие элементы редактируются только через админ-консоль";
+        ctrlLibList.addListSelectionListener(e -> {
+            ControllerType sel = ctrlLibList.getSelectedValue();
+            boolean shared = sel != null && model.isSharedControllerType(sel.getId());
+            edit.setEnabled(sel != null && !shared);
+            cardsBtn.setEnabled(sel != null && !shared);
+            del.setEnabled(sel != null && !shared);
+            propose.setEnabled(sel != null && !shared);
+            String tip = shared ? ctrlSharedTip : null;
+            edit.setToolTipText(tip);
+            cardsBtn.setToolTipText(tip);
+            del.setToolTipText(tip);
+            propose.setToolTipText(tip);
+        });
+        return (JPanel) UiKit.dynamicSection("Библиотека контроллеров", listSectionBody(ctrlLibScroll, crud));
     }
 
     // ---- пресеты оборудования (для схемы питания/сигнала) ----
@@ -379,7 +445,9 @@ public class LibrariesStagePanel extends JPanel {
                 p -> (p.getDescription() == null || p.getDescription().isEmpty() ? "" : p.getDescription() + " · ")
                         + (mode == SchemaMode.POWER
                                 ? "разъёмов: " + p.getPowerConnectors().size()
-                                : "карт: " + p.getCards().size()));
+                                : "карт: " + p.getCards().size())
+                        + (p.getCompany() == null || p.getCompany().isEmpty() ? "" : " · Компания: " + p.getCompany()),
+                p -> model.isSharedEquipmentPreset(p.getId()));
         presetList.setCellRenderer(renderer);
         presetScroll.setMinimumSize(new Dimension(200, 120));
 
@@ -390,7 +458,7 @@ public class LibrariesStagePanel extends JPanel {
                     selectedOrFirstCategory(categoryList)).showDialog();
             if (r != null) {
                 tryRun(() -> model.addEquipmentPreset(mode, r.category(), r.name(), r.description(), null,
-                        r.customCategoryLabel()));
+                        r.customCategoryLabel(), r.company()));
             }
         });
         JButton edit = new JButton("Изменить");
@@ -400,7 +468,7 @@ public class LibrariesStagePanel extends JPanel {
             EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), model, sel).showDialog();
             if (r != null) {
                 tryRun(() -> model.updateEquipmentPreset(sel, mode, r.category(), r.name(), r.description(),
-                        r.customCategoryLabel()));
+                        r.customCategoryLabel(), r.company()));
             }
         });
         JButton cardsBtn = new JButton(mode == SchemaMode.POWER ? "Разъёмы…" : "Карты…");
@@ -427,10 +495,30 @@ public class LibrariesStagePanel extends JPanel {
         JButton del = new JButton("Удалить");
         del.addActionListener(e -> deleteSelectedPreset.run());
         UiKit.bindDeleteKey(presetList, deleteSelectedPreset);
+        JButton propose = new JButton("Предложить…");
+        propose.addActionListener(e -> {
+            EquipmentPreset sel = presetList.getSelectedValue();
+            if (sel != null) ProposeDialog.show(topWindow(), settings, "EQUIPMENT", sel.getName(), sel);
+        });
         crud.add(add);
         crud.add(edit);
         crud.add(cardsBtn);
         crud.add(del);
+        crud.add(propose);
+        String presetSharedTip = "Общие элементы редактируются только через админ-консоль";
+        presetList.addListSelectionListener(e -> {
+            EquipmentPreset sel = presetList.getSelectedValue();
+            boolean shared = sel != null && model.isSharedEquipmentPreset(sel.getId());
+            edit.setEnabled(sel != null && !shared);
+            cardsBtn.setEnabled(sel != null && !shared);
+            del.setEnabled(sel != null && !shared);
+            propose.setEnabled(sel != null && !shared);
+            String tip = shared ? presetSharedTip : null;
+            edit.setToolTipText(tip);
+            cardsBtn.setToolTipText(tip);
+            del.setToolTipText(tip);
+            propose.setToolTipText(tip);
+        });
 
         categoryList.addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) {
@@ -452,10 +540,7 @@ public class LibrariesStagePanel extends JPanel {
         split.setBorder(BorderFactory.createEmptyBorder());
         split.setContinuousLayout(true);
 
-        JLabel hint = UiKit.muted("<html>Пресеты доступны при добавлении узла в общей схеме "
-                + (mode == SchemaMode.POWER ? "питания" : "сигнала")
-                + " (категория узла подставляет сначала пресеты этой категории, затем — свой текст).</html>");
-        return (JPanel) UiKit.dynamicSection(title, listSectionBody(split, UiKit.vgap(2), hint));
+        return (JPanel) UiKit.dynamicSection(title, listSectionBody(split));
     }
 
     // ---- библиотека кабелей/переходников (WireLabelDialog/PowerConnectorsConfigDialog) ----
@@ -463,7 +548,8 @@ public class LibrariesStagePanel extends JPanel {
     private JPanel buildCableLibrary() {
         cableList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         cableRenderer = new NamedRenderer<CableType>(
-                c -> (c.getMode() == SchemaMode.POWER ? "[Питание] " : "[Сигнал] ") + c.getLabel(), c -> "");
+                c -> (c.getMode() == SchemaMode.POWER ? "[Питание] " : "[Сигнал] ") + c.getLabel(), c -> "",
+                c -> model.isSharedCableType(c.getId()));
         cableList.setCellRenderer(cableRenderer);
 
         JPanel addRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
@@ -484,13 +570,121 @@ public class LibrariesStagePanel extends JPanel {
         JButton del = new JButton("Удалить");
         del.addActionListener(e -> deleteSelectedCable.run());
         UiKit.bindDeleteKey(cableList, deleteSelectedCable);
+        JButton propose = new JButton("Предложить…");
+        propose.addActionListener(e -> {
+            CableType sel = cableList.getSelectedValue();
+            if (sel != null) ProposeDialog.show(topWindow(), settings, "CABLE", sel.getLabel(), sel);
+        });
         addRow.add(add);
         addRow.add(del);
-        JLabel hint = UiKit.muted("Кабели/переходники (например, комбинированные вроде «CEE 16A → TrueCON»): "
-                + "выберите разъём и исполнение («папа»/«мама») на каждом конце — подпись соберётся "
-                + "автоматически. Также предлагаются вдобавок к встроенным при подписи связи схемы и при "
-                + "заведении разъёмов распределения, откуда их можно сохранить кнопкой «В библиотеку кабелей».");
-        return (JPanel) UiKit.dynamicSection("Кабели", listSectionBody(cableScroll, addRow, UiKit.vgap(4), hint));
+        addRow.add(propose);
+        String cableSharedTip = "Общие элементы редактируются только через админ-консоль";
+        cableList.addListSelectionListener(e -> {
+            CableType sel = cableList.getSelectedValue();
+            boolean shared = sel != null && model.isSharedCableType(sel.getId());
+            del.setEnabled(sel != null && !shared);
+            propose.setEnabled(sel != null && !shared);
+            String tip = shared ? cableSharedTip : null;
+            del.setToolTipText(tip);
+            propose.setToolTipText(tip);
+        });
+        return (JPanel) UiKit.dynamicSection("Кабели", listSectionBody(cableScroll, addRow));
+    }
+
+    // ---- каталоги доступных длин катушек кабеля (для автоспецификации в "Выходных данных") ----
+
+    private JPanel buildCableLengthProfileLibrary() {
+        cableLengthProfileList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        cableLengthProfileRenderer = new NamedRenderer<CableLengthProfile>(
+                CableLengthProfile::getName,
+                p -> {
+                    java.util.List<String> lens = new java.util.ArrayList<>();
+                    for (Double len : p.getAvailableLengthsM()) {
+                        lens.add(len == Math.floor(len) ? String.valueOf(len.intValue()) : String.valueOf(len));
+                    }
+                    return String.join(", ", lens) + " м · запас " + (p.getMarginPercent() == Math.floor(p.getMarginPercent())
+                            ? String.valueOf((int) p.getMarginPercent()) : String.valueOf(p.getMarginPercent())) + "%";
+                },
+                p -> model.isSharedCableLengthProfile(p.getId()));
+        cableLengthProfileList.setCellRenderer(cableLengthProfileRenderer);
+
+        JPanel addRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
+        JButton add = new JButton("+ Добавить каталог…");
+        add.addActionListener(e -> {
+            CableLengthProfile created = new CableLengthProfileDialog(topWindow(), null).showDialog();
+            if (created != null) {
+                tryRun(() -> model.addCableLengthProfile(created));
+            }
+        });
+        JButton edit = new JButton("Изменить");
+        edit.addActionListener(e -> {
+            CableLengthProfile sel = cableLengthProfileList.getSelectedValue();
+            if (sel != null) {
+                CableLengthProfile edited = new CableLengthProfileDialog(topWindow(), sel).showDialog();
+                if (edited != null) {
+                    tryRun(() -> model.updateCableLengthProfile(edited));
+                }
+            }
+        });
+        Runnable deleteSelectedCableLengthProfile = () -> {
+            CableLengthProfile sel = cableLengthProfileList.getSelectedValue();
+            if (sel != null && confirm("Удалить каталог длин «" + sel.getName() + "» из библиотеки?")) {
+                model.deleteCableLengthProfile(sel.getId());
+            }
+        };
+        JButton del = new JButton("Удалить");
+        del.addActionListener(e -> deleteSelectedCableLengthProfile.run());
+        UiKit.bindDeleteKey(cableLengthProfileList, deleteSelectedCableLengthProfile);
+        JButton propose = new JButton("Предложить…");
+        propose.addActionListener(e -> {
+            CableLengthProfile sel = cableLengthProfileList.getSelectedValue();
+            if (sel != null) ProposeDialog.show(topWindow(), settings, "CABLE_LENGTH_PROFILE", sel.getName(), sel);
+        });
+        addRow.add(add);
+        addRow.add(edit);
+        addRow.add(del);
+        addRow.add(propose);
+        String cableLengthSharedTip = "Общие элементы редактируются только через админ-консоль";
+        cableLengthProfileList.addListSelectionListener(e -> {
+            CableLengthProfile sel = cableLengthProfileList.getSelectedValue();
+            boolean shared = sel != null && model.isSharedCableLengthProfile(sel.getId());
+            edit.setEnabled(sel != null && !shared);
+            del.setEnabled(sel != null && !shared);
+            propose.setEnabled(sel != null && !shared);
+            String tip = shared ? cableLengthSharedTip : null;
+            edit.setToolTipText(tip);
+            del.setToolTipText(tip);
+            propose.setToolTipText(tip);
+        });
+        return (JPanel) UiKit.dynamicSection("Каталог длин кабелей", listSectionBody(cableLengthProfileScroll, addRow));
+    }
+
+    // ---- виды интерфейса (HDMI/DisplayPort/SDI/...) — общая справочная данные,
+    //      правится только через отдельную админ-консоль (Task #135/v2.0);
+    //      здесь — только просмотр + предложить новый вид ----
+
+    private JPanel buildInterfaceTypeSection() {
+        interfaceTypeList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        interfaceTypeRenderer = new NamedRenderer<InterfaceType>(
+                InterfaceType::getName,
+                t -> t.getVersions().isEmpty() ? "" : String.join(", ", t.getVersions()),
+                t -> model.isSharedInterfaceType(t.getId()));
+        interfaceTypeList.setCellRenderer(interfaceTypeRenderer);
+
+        JPanel addRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
+        JButton propose = new JButton("Предложить…");
+        propose.addActionListener(e -> {
+            InterfaceType sel = interfaceTypeList.getSelectedValue();
+            if (sel != null) ProposeDialog.show(topWindow(), settings, "INTERFACE", sel.getName(), sel);
+        });
+        addRow.add(propose);
+        interfaceTypeList.addListSelectionListener(e -> {
+            InterfaceType sel = interfaceTypeList.getSelectedValue();
+            boolean shared = sel != null && model.isSharedInterfaceType(sel.getId());
+            propose.setEnabled(sel != null && !shared);
+            propose.setToolTipText(shared ? "Уже входит в общую библиотеку" : null);
+        });
+        return (JPanel) UiKit.dynamicSection("Виды интерфейса", listSectionBody(interfaceTypeScroll, addRow));
     }
 
     // ---- оборудование сигнала: слева тип оборудования, справа его карты-шаблоны ----
@@ -508,7 +702,9 @@ public class LibrariesStagePanel extends JPanel {
         signalPresetList.setCellRenderer(new NamedRenderer<EquipmentPreset>(
                 EquipmentPreset::getName,
                 p -> (p.getDescription() == null || p.getDescription().isEmpty() ? "" : p.getDescription() + " · ")
-                        + "карт: " + p.getCards().size()));
+                        + "карт: " + p.getCards().size()
+                        + (p.getCompany() == null || p.getCompany().isEmpty() ? "" : " · Компания: " + p.getCompany()),
+                p -> model.isSharedEquipmentPreset(p.getId())));
         signalPresetScroll.setMinimumSize(new Dimension(180, 120));
 
         JPanel categoryPane = UiKit.vbox();
@@ -525,7 +721,7 @@ public class LibrariesStagePanel extends JPanel {
                     selectedOrFirstCategory(signalCategoryList)).showDialog();
             if (r != null) {
                 tryRun(() -> model.addEquipmentPreset(SchemaMode.SIGNAL, r.category(), r.name(), r.description(), null,
-                        r.customCategoryLabel()));
+                        r.customCategoryLabel(), r.company()));
             }
         });
         JButton edit = new JButton("Изменить");
@@ -535,7 +731,7 @@ public class LibrariesStagePanel extends JPanel {
             EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), model, sel).showDialog();
             if (r != null) {
                 tryRun(() -> model.updateEquipmentPreset(sel, SchemaMode.SIGNAL, r.category(), r.name(), r.description(),
-                        r.customCategoryLabel()));
+                        r.customCategoryLabel(), r.company()));
             }
         });
         Runnable deleteSelectedSignalPreset = () -> {
@@ -547,9 +743,15 @@ public class LibrariesStagePanel extends JPanel {
         JButton del = new JButton("Удалить");
         del.addActionListener(e -> deleteSelectedSignalPreset.run());
         UiKit.bindDeleteKey(signalPresetList, deleteSelectedSignalPreset);
+        JButton propose = new JButton("Предложить…");
+        propose.addActionListener(e -> {
+            EquipmentPreset sel = signalPresetList.getSelectedValue();
+            if (sel != null) ProposeDialog.show(topWindow(), settings, "EQUIPMENT", sel.getName(), sel);
+        });
         leftCrud.add(add);
         leftCrud.add(edit);
         leftCrud.add(del);
+        leftCrud.add(propose);
         left.add(leftCrud);
 
         signalCategoryList.addListSelectionListener(e -> {
@@ -616,13 +818,26 @@ public class LibrariesStagePanel extends JPanel {
         rightCrud.add(defaultLoadoutBtn);
         right.add(rightCrud);
         right.add(UiKit.vgap(6));
-        right.add(UiKit.muted("<html>Одинаковых карт в устройстве может быть несколько — их количество"
-                + " задаётся при добавлении узла в схему, а не здесь.</html>"));
 
+        String signalPresetSharedTip = "Общие элементы редактируются только через админ-консоль";
         signalPresetList.addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) {
                 refreshSignalCards();
             }
+            EquipmentPreset sel = signalPresetList.getSelectedValue();
+            boolean shared = sel != null && model.isSharedEquipmentPreset(sel.getId());
+            edit.setEnabled(sel != null && !shared);
+            del.setEnabled(sel != null && !shared);
+            propose.setEnabled(sel != null && !shared);
+            cardAdd.setEnabled(sel != null && !shared);
+            cardDel.setEnabled(sel != null && !shared);
+            defaultLoadoutBtn.setEnabled(sel != null && !shared);
+            String tip = shared ? signalPresetSharedTip : null;
+            edit.setToolTipText(tip);
+            del.setToolTipText(tip);
+            propose.setToolTipText(tip);
+            cardAdd.setToolTipText(tip);
+            cardDel.setToolTipText(tip);
         });
 
         JSplitPane presetsAndCards = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, right);
@@ -639,11 +854,7 @@ public class LibrariesStagePanel extends JPanel {
         // а BorderLayout/BoxLayout сами передают эту фактическую ширину вниз до
         // split, не требуя дублирующего предела здесь же.
 
-        JLabel hint = UiKit.muted("<html>Пресеты доступны при добавлении узла в общей схеме сигнала (категория"
-                + " узла подставляет сначала пресеты этой категории, затем — свой текст). При добавлении узла"
-                + " можно задать, сколько экземпляров каждой карты реально стоит в устройстве.</html>");
-        return (JPanel) UiKit.dynamicSection("Оборудование сигнала (пресеты для схемы)",
-                listSectionBody(split, UiKit.vgap(2), hint));
+        return (JPanel) UiKit.dynamicSection("Оборудование сигнала (пресеты для схемы)", listSectionBody(split));
     }
 
     private void refreshSignalCards() {
@@ -691,7 +902,7 @@ public class LibrariesStagePanel extends JPanel {
         ListSizing.fit(libList, libScroll, 2, 8, w);
         recapSection(cabinetsSection);
         ctrlLibRenderer.setFixedWidth(rw);
-        syncList(ctrlLibModel, model.getWorkspace().getControllerTypes());
+        syncList(ctrlLibModel, model.getControllerTypes());
         ListSizing.fit(ctrlLibList, ctrlLibScroll, 2, 6, w);
         recapSection(controllersSection);
         ListSizing.fit(powerCategoryList, powerCategoryScroll, EQUIPMENT_CATEGORIES.length,
@@ -708,6 +919,16 @@ public class LibrariesStagePanel extends JPanel {
         syncList(cableModel, model.getCableTypes());
         ListSizing.fit(cableList, cableScroll, 2, 6, w);
         recapSection(cableSection);
+
+        cableLengthProfileRenderer.setFixedWidth(rw);
+        syncList(cableLengthProfileModel, model.getCableLengthProfiles());
+        ListSizing.fit(cableLengthProfileList, cableLengthProfileScroll, 2, 6, w);
+        recapSection(cableLengthProfileSection);
+
+        interfaceTypeRenderer.setFixedWidth(rw);
+        syncList(interfaceTypeModel, model.getInterfaceTypes());
+        ListSizing.fit(interfaceTypeList, interfaceTypeScroll, 2, 6, w);
+        recapSection(interfaceTypeSection);
     }
 
     private List<EquipmentPreset> presetsForModeAndCategory(SchemaMode mode, SchemaNodeType category) {

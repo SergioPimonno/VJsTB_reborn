@@ -1,7 +1,11 @@
 package com.vjstb.ledscheme.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
+import com.vjstb.ledscheme.model.CableLengthProfile;
 import com.vjstb.ledscheme.model.CableType;
 import com.vjstb.ledscheme.model.CanvasPlacement;
 import com.vjstb.ledscheme.model.CardPort;
@@ -10,11 +14,15 @@ import com.vjstb.ledscheme.model.ControllerInstance;
 import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.EquipmentPreset;
 import com.vjstb.ledscheme.model.InterfaceType;
+import com.vjstb.ledscheme.model.ContentSection;
+import com.vjstb.ledscheme.model.Scenario;
+import com.vjstb.ledscheme.model.Library;
 import com.vjstb.ledscheme.model.LibraryBundle;
 import com.vjstb.ledscheme.model.MaskColorPreset;
 import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.Project;
+import com.vjstb.ledscheme.model.ProjectorInstance;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SchemaCard;
@@ -25,12 +33,16 @@ import com.vjstb.ledscheme.model.SchemaNodeType;
 import com.vjstb.ledscheme.model.ScreenMountType;
 import com.vjstb.ledscheme.model.SignalChain;
 import com.vjstb.ledscheme.model.Workspace;
+import com.vjstb.ledscheme.store.LibraryStore;
 import com.vjstb.ledscheme.store.WorkspaceStore;
+import com.vjstb.ledscheme.sync.LibrarySyncClient;
 import java.io.File;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
 
 /**
  * Центральное состояние приложения и все операции над данными. Держит рабочее
@@ -48,6 +60,7 @@ public class AppModel {
     private static final int UNDO_LIMIT = 100;
 
     private final WorkspaceStore store;
+    private final LibraryStore libraryStore;
     private Workspace workspace;
 
     private Project currentProject;
@@ -70,7 +83,9 @@ public class AppModel {
 
     public AppModel(WorkspaceStore store) {
         this.store = store;
+        this.libraryStore = new LibraryStore(new File(store.getWorkspaceFile().getParentFile(), "library.json"));
         this.workspace = store.load();
+        this.workspace.setLibrary(libraryStore.loadOrMigrate(store.getWorkspaceFile()));
         seedDefaultInterfaceTypesIfEmpty();
     }
 
@@ -116,6 +131,7 @@ public class AppModel {
 
     private void persist() {
         store.save(workspace);
+        libraryStore.save(workspace.getLibrary());
     }
 
     private void changed() {
@@ -133,8 +149,42 @@ public class AppModel {
         return store;
     }
 
+    /** Общая библиотека ("GTO") ++ личная (Task #135/v2.0) — см. class-javadoc
+     *  Library про разделение. Личная свободно редактируется через add/update/delete
+     *  ниже (всегда пишут только в workspace.getCabinetTypes()), общая — только
+     *  через синк (см. applyOne) или админ-консоль. */
     public List<CabinetType> getCabinetTypes() {
-        return workspace.getCabinetTypes();
+        List<CabinetType> union = new ArrayList<>(workspace.getSharedCabinetTypes());
+        union.addAll(workspace.getCabinetTypes());
+        return union;
+    }
+
+    public boolean isSharedCabinetType(String id) {
+        return id != null && workspace.getSharedCabinetTypes().stream().anyMatch(ct -> ct.getId().equals(id));
+    }
+
+    /** Все уже встречавшиеся значения поля "Компания" (кабинеты/контроллеры/пресеты
+     *  оборудования — физическая техника, см. class-javadoc CabinetType.company) —
+     *  для автодополнения в диалогах, без отдельного управляемого справочника
+     *  компаний. Отсортировано, без дублей и пустых значений. */
+    public List<String> getKnownCompanies() {
+        java.util.TreeSet<String> companies = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        for (CabinetType ct : getCabinetTypes()) {
+            addIfNotBlank(companies, ct.getCompany());
+        }
+        for (ControllerType ct : getControllerTypes()) {
+            addIfNotBlank(companies, ct.getCompany());
+        }
+        for (EquipmentPreset p : getEquipmentPresets()) {
+            addIfNotBlank(companies, p.getCompany());
+        }
+        return new ArrayList<>(companies);
+    }
+
+    private static void addIfNotBlank(java.util.Set<String> set, String value) {
+        if (value != null && !value.isBlank()) {
+            set.add(value.trim());
+        }
     }
 
     public List<Project> getProjects() {
@@ -252,7 +302,7 @@ public class AppModel {
     }
 
     private void requireUniqueName(String name, String ignoreId) {
-        for (CabinetType ct : workspace.getCabinetTypes()) {
+        for (CabinetType ct : getCabinetTypes()) {
             if (ct.getName().equalsIgnoreCase(name) && !ct.getId().equals(ignoreId)) {
                 throw new IllegalStateException("Кабинет с именем \"" + name + "\" уже есть в библиотеке");
             }
@@ -290,6 +340,17 @@ public class AppModel {
     }
 
     // ---- controller types (библиотека контроллеров, аналог SmartLCT) ----
+
+    /** Общая ++ личная — см. getCabinetTypes(). */
+    public List<ControllerType> getControllerTypes() {
+        List<ControllerType> union = new ArrayList<>(workspace.getSharedControllerTypes());
+        union.addAll(workspace.getControllerTypes());
+        return union;
+    }
+
+    public boolean isSharedControllerType(String id) {
+        return id != null && workspace.getSharedControllerTypes().stream().anyMatch(ct -> ct.getId().equals(id));
+    }
 
     public ControllerType addControllerType(ControllerType type) {
         requireUniqueControllerName(type.getName(), null);
@@ -357,7 +418,7 @@ public class AppModel {
     }
 
     private void requireUniqueControllerName(String name, String ignoreId) {
-        for (ControllerType ct : workspace.getControllerTypes()) {
+        for (ControllerType ct : getControllerTypes()) {
             if (ct.getName().equalsIgnoreCase(name) && !ct.getId().equals(ignoreId)) {
                 throw new IllegalStateException("Контроллер с именем \"" + name + "\" уже есть в библиотеке");
             }
@@ -530,7 +591,11 @@ public class AppModel {
         return null;
     }
 
-    private int portOffsetOf(Scene scene, ControllerInstance target) {
+    /** Смещение первого порта {@code target} в сквозной сценовой нумерации (см.
+     *  {@link #controllersInScene}) — публичный, т.к. нужен
+     *  {@link NovaLctControllerResolver} для контроллер-центричного экспорта, где
+     *  известен КОНКРЕТНЫЙ контроллер сразу, без промежуточного {@link Screen}. */
+    public int portOffsetOf(Scene scene, ControllerInstance target) {
         int offset = 0;
         for (ControllerInstance ci : controllersInScene(scene)) {
             if (ci == target) {
@@ -596,6 +661,33 @@ public class AppModel {
             currentScreen = null;
             undoStack.clear();
         }
+        changed();
+    }
+
+    /** Проект, скачанный из облачного архива (см. CloudProjectsDialog) — всегда
+     *  свежий id, а не id из архива, иначе скачивание того же облачного проекта
+     *  повторно (или на другой машине, где уже есть локальная копия) столкнулось
+     *  бы с существующим локальным id; вложенные id сцен/экранов внутри не трогаем. */
+    public Project importProject(Project incoming) {
+        incoming.setId(java.util.UUID.randomUUID().toString());
+        workspace.getProjects().add(incoming);
+        changed();
+        return incoming;
+    }
+
+    /** Проект только что впервые сохранён в облако (см. CloudProjectsDialog.upload) —
+     *  запоминаем id и ревизию локально, чтобы следующее сохранение уже слало
+     *  правильную baseRevision, а не создавало дубликат в облаке. */
+    public void linkProjectToCloud(Project p, String cloudId, int revision) {
+        p.setCloudId(cloudId);
+        p.setCloudRevision(revision);
+        changed();
+    }
+
+    /** Локальная копия обновлена после успешного сохранения/скачивания — новая
+     *  ревизия, на которой она теперь основана (см. class-javadoc Project.cloudRevision). */
+    public void updateProjectCloudRevision(Project p, int revision) {
+        p.setCloudRevision(revision);
         changed();
     }
 
@@ -717,14 +809,6 @@ public class AppModel {
         pushUndo();
         screen.setRefreshRateHz(refreshRateHz);
         screen.setColorBitDepth(colorBitDepth);
-        changed();
-    }
-
-    /** Цветовая пара чек-борда генерируемой маски экрана (Task #13/v1.6) — см.
-     *  MaskColorPreset. Не проходит через pushUndo() — чисто визуальная настройка
-     *  экспорта, не часть коммутации/геометрии, откатывать которую имеет смысл. */
-    public void setScreenMaskColorPreset(Screen screen, MaskColorPreset preset) {
-        screen.setMaskColorPreset(preset);
         changed();
     }
 
@@ -1109,7 +1193,7 @@ public class AppModel {
     }
 
     /** Запас (%) для проверки суммарной нагрузки этого силового узла (Task #86/#87) —
-     *  null сбрасывает на значение по умолчанию (см. PowerCalc.DEFAULT_DERATING_PERCENT). */
+     *  null сбрасывает на значение по умолчанию (см. PowerCalc.defaultDeratingPercentFor). */
     public void setSchemaNodeLoadDeratingPercent(SchemaNode node, Double percent) {
         node.setLoadDeratingPercent(percent);
         changed();
@@ -1117,13 +1201,20 @@ public class AppModel {
 
     // ---- пресеты оборудования (библиотека, для быстрой вставки узлов схемы) ----
 
+    /** Общая ++ личная — см. getCabinetTypes(). */
     public List<EquipmentPreset> getEquipmentPresets() {
-        return workspace.getEquipmentPresets();
+        List<EquipmentPreset> union = new ArrayList<>(workspace.getSharedEquipmentPresets());
+        union.addAll(workspace.getEquipmentPresets());
+        return union;
+    }
+
+    public boolean isSharedEquipmentPreset(String id) {
+        return id != null && workspace.getSharedEquipmentPresets().stream().anyMatch(p -> p.getId().equals(id));
     }
 
     public List<EquipmentPreset> presetsForCategory(SchemaMode mode, SchemaNodeType category) {
         List<EquipmentPreset> result = new ArrayList<>();
-        for (EquipmentPreset p : workspace.getEquipmentPresets()) {
+        for (EquipmentPreset p : getEquipmentPresets()) {
             if (p.getMode() == mode && p.getCategory() == category) {
                 result.add(p);
             }
@@ -1138,6 +1229,16 @@ public class AppModel {
 
     public EquipmentPreset addEquipmentPreset(SchemaMode mode, SchemaNodeType category, String name,
                                                String description, List<SchemaCard> cards, String customCategoryLabel) {
+        return addEquipmentPreset(mode, category, name, description, cards, customCategoryLabel, null);
+    }
+
+    /** {@code company} — только для физического оборудования, заводимого через
+     *  библиотечные диалоги (см. class-javadoc EquipmentPreset.company); вызов со
+     *  схемы (см. SchemaPanel — быстрое "сохранить как пресет") продолжает идти
+     *  через более короткую перегрузку выше, company там не задаётся. */
+    public EquipmentPreset addEquipmentPreset(SchemaMode mode, SchemaNodeType category, String name,
+                                               String description, List<SchemaCard> cards, String customCategoryLabel,
+                                               String company) {
         String trimmed = name == null ? "" : name.trim();
         if (trimmed.isEmpty()) {
             throw new IllegalArgumentException("Укажите название пресета");
@@ -1145,6 +1246,7 @@ public class AppModel {
         EquipmentPreset preset = new EquipmentPreset(mode, category, trimmed,
                 description == null ? "" : description.trim());
         preset.setCustomCategoryLabel(customCategoryLabel);
+        preset.setCompany(company);
         if (cards != null) {
             for (SchemaCard c : cards) {
                 preset.getCards().add(c.copy());
@@ -1162,6 +1264,11 @@ public class AppModel {
 
     public void updateEquipmentPreset(EquipmentPreset preset, SchemaMode mode, SchemaNodeType category, String name,
                                        String description, String customCategoryLabel) {
+        updateEquipmentPreset(preset, mode, category, name, description, customCategoryLabel, preset.getCompany());
+    }
+
+    public void updateEquipmentPreset(EquipmentPreset preset, SchemaMode mode, SchemaNodeType category, String name,
+                                       String description, String customCategoryLabel, String company) {
         String trimmed = name == null ? "" : name.trim();
         if (trimmed.isEmpty()) {
             throw new IllegalArgumentException("Укажите название пресета");
@@ -1169,6 +1276,7 @@ public class AppModel {
         preset.setMode(mode);
         preset.setCategory(category);
         preset.setName(trimmed);
+        preset.setCompany(company);
         preset.setDescription(description == null ? "" : description.trim());
         preset.setCustomCategoryLabel(customCategoryLabel);
         changed();
@@ -1181,13 +1289,20 @@ public class AppModel {
 
     // ---- библиотека кабелей/переходников (WireLabelDialog/PowerConnectorsConfigDialog) ----
 
+    /** Общая ++ личная — см. getCabinetTypes(). */
     public List<CableType> getCableTypes() {
-        return workspace.getCableTypes();
+        List<CableType> union = new ArrayList<>(workspace.getSharedCableTypes());
+        union.addAll(workspace.getCableTypes());
+        return union;
+    }
+
+    public boolean isSharedCableType(String id) {
+        return id != null && workspace.getSharedCableTypes().stream().anyMatch(c -> c.getId().equals(id));
     }
 
     public List<CableType> cableTypesForMode(SchemaMode mode) {
         List<CableType> result = new ArrayList<>();
-        for (CableType c : workspace.getCableTypes()) {
+        for (CableType c : getCableTypes()) {
             if (c.getMode() == mode) {
                 result.add(c);
             }
@@ -1203,7 +1318,7 @@ public class AppModel {
         if (trimmed.isEmpty()) {
             throw new IllegalArgumentException("Укажите подпись кабеля");
         }
-        for (CableType c : workspace.getCableTypes()) {
+        for (CableType c : getCableTypes()) {
             if (c.getMode() == mode && c.getLabel().equalsIgnoreCase(trimmed)) {
                 return c;
             }
@@ -1283,15 +1398,22 @@ public class AppModel {
 
     // ---- справочник видов интерфейса и их версий (InterfaceType) ----
 
+    /** Общая ++ личная — см. getCabinetTypes(). */
     public List<InterfaceType> getInterfaceTypes() {
-        return workspace.getInterfaceTypes();
+        List<InterfaceType> union = new ArrayList<>(workspace.getSharedInterfaceTypes());
+        union.addAll(workspace.getInterfaceTypes());
+        return union;
+    }
+
+    public boolean isSharedInterfaceType(String id) {
+        return id != null && workspace.getSharedInterfaceTypes().stream().anyMatch(t -> t.getId().equals(id));
     }
 
     public InterfaceType interfaceTypeByName(String name) {
         if (name == null) {
             return null;
         }
-        for (InterfaceType t : workspace.getInterfaceTypes()) {
+        for (InterfaceType t : getInterfaceTypes()) {
             if (t.getName().equalsIgnoreCase(name)) {
                 return t;
             }
@@ -1299,49 +1421,66 @@ public class AppModel {
         return null;
     }
 
-    public InterfaceType addInterfaceType(String name, List<String> versions) {
-        String trimmed = name == null ? "" : name.trim();
-        if (trimmed.isEmpty()) {
-            throw new IllegalArgumentException("Укажите название вида интерфейса");
+    // Добавление/изменение/удаление вида интерфейса — только через отдельную
+    // админ-консоль (ledscheme-admin, Task #135/v2.0), не отсюда: это общая
+    // справочная данные (как и остальные библиотеки), обычный клиент может только
+    // читать её и предлагать новый вид (см. ProposeDialog в LibrariesStagePanel).
+
+    // ---- каталоги доступных длин катушек кабеля (CableLengthProfile, для CableSpecCalc) ----
+
+    /** Общая ++ личная — см. getCabinetTypes(). */
+    public List<CableLengthProfile> getCableLengthProfiles() {
+        List<CableLengthProfile> union = new ArrayList<>(workspace.getSharedCableLengthProfiles());
+        union.addAll(workspace.getCableLengthProfiles());
+        return union;
+    }
+
+    public boolean isSharedCableLengthProfile(String id) {
+        return id != null && workspace.getSharedCableLengthProfiles().stream().anyMatch(p -> p.getId().equals(id));
+    }
+
+    /** Без учёта регистра — метка типа провода (см. CableLengthProfile.name) сравнивается
+     *  так же, как и {@code SchemaEdge.wireType}, который выбирается пользователем
+     *  из свободного текста/комбобокса в WireLabelDialog. */
+    public CableLengthProfile cableLengthProfileByName(String name) {
+        if (name == null) {
+            return null;
         }
-        InterfaceType t = new InterfaceType(trimmed, versions == null ? List.of() : versions);
-        workspace.getInterfaceTypes().add(t);
-        changed();
-        return t;
-    }
-
-    public void updateInterfaceType(InterfaceType type, String name, List<String> versions) {
-        String trimmed = name == null ? "" : name.trim();
-        if (trimmed.isEmpty()) {
-            throw new IllegalArgumentException("Укажите название вида интерфейса");
-        }
-        type.setName(trimmed);
-        type.setVersions(versions == null ? new ArrayList<>() : new ArrayList<>(versions));
-        changed();
-    }
-
-    public void deleteInterfaceType(InterfaceType type) {
-        workspace.getInterfaceTypes().remove(type);
-        changed();
-    }
-
-    /** Импорт: существующие по названию (без учёта регистра) обновляются, новые добавляются. */
-    public int importInterfaceLibrary(File file) {
-        List<InterfaceType> incoming = store.importList(file, InterfaceType.class);
-        for (InterfaceType inc : incoming) {
-            InterfaceType match = interfaceTypeByName(inc.getName());
-            if (match != null) {
-                match.setVersions(inc.getVersions());
-            } else {
-                workspace.getInterfaceTypes().add(inc);
+        for (CableLengthProfile p : getCableLengthProfiles()) {
+            if (p.getName().equalsIgnoreCase(name)) {
+                return p;
             }
         }
-        changed();
-        return incoming.size();
+        return null;
     }
 
-    public void exportInterfaceLibrary(File file) {
-        store.exportList(workspace.getInterfaceTypes(), file, "INTERFACE");
+    private void requireUniqueCableLengthProfileName(String name, String ignoreId) {
+        for (CableLengthProfile p : getCableLengthProfiles()) {
+            if (p.getName().equalsIgnoreCase(name) && !p.getId().equals(ignoreId)) {
+                throw new IllegalStateException("Каталог длин для «" + name + "» уже есть в библиотеке");
+            }
+        }
+    }
+
+    public CableLengthProfile addCableLengthProfile(CableLengthProfile profile) {
+        requireUniqueCableLengthProfileName(profile.getName(), null);
+        workspace.getCableLengthProfiles().add(profile);
+        changed();
+        return profile;
+    }
+
+    public void updateCableLengthProfile(CableLengthProfile edited) {
+        requireUniqueCableLengthProfileName(edited.getName(), edited.getId());
+        CableLengthProfile existing = getCableLengthProfiles().stream()
+                .filter(p -> p.getId().equals(edited.getId())).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Каталог длин не найден в библиотеке"));
+        existing.applyEditedValues(edited);
+        changed();
+    }
+
+    public void deleteCableLengthProfile(String id) {
+        workspace.getCableLengthProfiles().removeIf(p -> p.getId().equals(id));
+        changed();
     }
 
     /** Тип библиотеки, которым файл экспорта себя маркирует (Task #5) — null, если
@@ -1351,95 +1490,264 @@ public class AppModel {
         return store.detectKind(file);
     }
 
-    // ---- админ-редактируемые подкатегории оборудования (см. AdminDialog) ----
+    // ---- синхронизация библиотеки с сервером (см. sync.LibrarySyncClient) ----
+
+    private static final ObjectMapper SYNC_MAPPER = new ObjectMapper()
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+
+    public record LibrarySyncSummary(int added, int updated, int skippedDeleted) {
+    }
+
+    /** Применяет дельту, полученную от {@link LibrarySyncClient#fetchChanges}, к
+     *  локальной библиотеке. {@code dto.id()} (id записи на сервере) становится
+     *  ЕДИНСТВЕННЫМ id объекта локально — сервер всегда генерирует свой новый id
+     *  при создании записи, никак не связанный с id объекта, вложенного в
+     *  payloadJson на момент отправки (см. LibraryService.create на сервере),
+     *  поэтому перезапись id при получении — то, что делает повторную
+     *  синхронизацию ЭТОЙ ЖЕ записи идемпотентной (find-by-id находит её снова
+     *  вместо создания дубликата). Удалённые на сервере записи (deleted=true) в
+     *  этой версии НЕ удаляются локально — резко убирать элемент, на который
+     *  могут ссылаться экраны/цепочки сцены, слишком рискованно для тихого
+     *  фонового шага; такие записи просто пропускаются (см. skippedDeleted). */
+    public LibrarySyncSummary applyLibrarySyncItems(List<LibrarySyncClient.LibraryItemDto> items) {
+        int added = 0;
+        int updated = 0;
+        int skippedDeleted = 0;
+        for (LibrarySyncClient.LibraryItemDto dto : items) {
+            if (dto.deleted()) {
+                skippedDeleted++;
+                continue;
+            }
+            try {
+                Boolean wasAdded = switch (dto.kind()) {
+                    case "CABINET" -> applyOne(workspace.getSharedCabinetTypes(), workspace.getCabinetTypes(), dto,
+                            CabinetType.class, CabinetType::getId, CabinetType::setId, CabinetType::getName,
+                            this::migrateCabinetTypeReferences);
+                    case "CONTROLLER" -> applyOne(workspace.getSharedControllerTypes(), workspace.getControllerTypes(),
+                            dto, ControllerType.class, ControllerType::getId, ControllerType::setId, ControllerType::getName,
+                            this::migrateControllerTypeReferences);
+                    case "EQUIPMENT" -> applyOne(workspace.getSharedEquipmentPresets(), workspace.getEquipmentPresets(),
+                            dto, EquipmentPreset.class, EquipmentPreset::getId, EquipmentPreset::setId, EquipmentPreset::getName,
+                            NO_REFERENCE_MIGRATION);
+                    case "CABLE" -> applyOne(workspace.getSharedCableTypes(), workspace.getCableTypes(), dto,
+                            CableType.class, CableType::getId, CableType::setId, CableType::getLabel,
+                            NO_REFERENCE_MIGRATION);
+                    case "INTERFACE" -> applyOne(workspace.getSharedInterfaceTypes(), workspace.getInterfaceTypes(),
+                            dto, InterfaceType.class, InterfaceType::getId, InterfaceType::setId, InterfaceType::getName,
+                            NO_REFERENCE_MIGRATION);
+                    case "CABLE_LENGTH_PROFILE" -> applyOne(workspace.getSharedCableLengthProfiles(),
+                            workspace.getCableLengthProfiles(), dto, CableLengthProfile.class,
+                            CableLengthProfile::getId, CableLengthProfile::setId, CableLengthProfile::getName,
+                            NO_REFERENCE_MIGRATION);
+                    case "EQUIPMENT_CUSTOM_CATEGORY" -> applyCustomCategory(dto);
+                    case "GUIDE_TEXT" -> applySingletonSections(dto, workspace.getLibrary()::setGuideSections);
+                    case "ONBOARDING_TEXT" -> applySingletonSections(dto, workspace.getLibrary()::setOnboardingSections);
+                    case "INTERACTIVE_SCENARIOS" -> applySingletonScenarios(dto, workspace.getLibrary()::setInteractiveScenarios);
+                    case "EQUIPMENT_CATEGORY_LABELS" -> applyCategoryLabels(dto);
+                    case "CALC_DEFAULTS" -> applyCalcDefaults(dto);
+                    default -> null; // незнакомый вид -- задел на будущее, тихо пропускаем
+                };
+                if (wasAdded == null) {
+                    continue;
+                }
+                if (wasAdded) {
+                    added++;
+                } else {
+                    updated++;
+                }
+            } catch (JsonProcessingException malformedPayload) {
+                // Битый payloadJson одной записи не должен рушить синхронизацию остальных.
+            }
+        }
+        if (added > 0 || updated > 0) {
+            changed();
+        }
+        return new LibrarySyncSummary(added, updated, skippedDeleted);
+    }
+
+    /** Нет-оп для {@code referenceMigrator} у видов, на id которых нигде в
+     *  workspace не ссылаются (см. {@link #migrateCabinetTypeReferences} /
+     *  {@link #migrateControllerTypeReferences} — единственные виды, где такие
+     *  ссылки реально есть). */
+    private static final java.util.function.BiConsumer<String, String> NO_REFERENCE_MIGRATION = (oldId, newId) -> {
+    };
+
+    /** {@code sharedList} — куда пишет синхронизация (общая библиотека, "GTO"),
+     *  {@code personalList} — личная библиотека этого же вида: как только запись с
+     *  таким же именем (без учёта регистра) появляется в общей, она "продвигается" —
+     *  удаляется из личной, раз теперь это часть общей (Task #135/v2.0: "личная
+     *  библиотека у каждого нулевая" — так она естественно держится на нуле по мере
+     *  того, как предложения одобряются/админ заводит то же имя напрямую).
+     *  {@code referenceMigrator} вызывается (oldId, newId) для КАЖДОЙ продвигаемой
+     *  личной записи — переносит существующие ссылки на неё (например,
+     *  Screen.cabinetTypeId) на новый id общей записи, иначе они молча повисают
+     *  (реальный баг, найденный на живых данных пользователя: экраны переставали
+     *  считать мощность/вес и пропадали из прерига после синхронизации). */
+    private <T> Boolean applyOne(List<T> sharedList, List<T> personalList, LibrarySyncClient.LibraryItemDto dto,
+                                  Class<T> type, Function<T, String> idOf,
+                                  java.util.function.BiConsumer<T, String> idSetter, Function<T, String> nameOf,
+                                  java.util.function.BiConsumer<String, String> referenceMigrator)
+            throws JsonProcessingException {
+        T parsed = SYNC_MAPPER.readValue(dto.payloadJson(), type);
+        idSetter.accept(parsed, dto.id());
+        Boolean wasAdded = null;
+        for (int i = 0; i < sharedList.size(); i++) {
+            if (idOf.apply(sharedList.get(i)).equals(dto.id())) {
+                sharedList.set(i, parsed);
+                wasAdded = false;
+                break;
+            }
+        }
+        if (wasAdded == null) {
+            // Совпадения по id не нашлось — но эта же запись может уже существовать
+            // в общей библиотеке под ДРУГИМ id (например, массово залита на сервер
+            // через админ-консоль заново) — сверяем по имени (без учёта регистра),
+            // чтобы не завести дубликат в общей библиотеке, а "принять" id сервера.
+            String dtoName = nameOf.apply(parsed);
+            if (dtoName != null && !dtoName.isBlank()) {
+                for (int i = 0; i < sharedList.size(); i++) {
+                    String existingName = nameOf.apply(sharedList.get(i));
+                    if (existingName != null && existingName.equalsIgnoreCase(dtoName)) {
+                        sharedList.set(i, parsed);
+                        wasAdded = false;
+                        break;
+                    }
+                }
+            }
+        }
+        if (wasAdded == null) {
+            sharedList.add(parsed);
+            wasAdded = true;
+        }
+        // Продвижение: личная запись с тем же именем больше не нужна — но перед
+        // удалением переносим ссылки на неё на новый id общей записи (dto.id()).
+        String promotedName = nameOf.apply(parsed);
+        if (promotedName != null && !promotedName.isBlank()) {
+            List<String> promotedOldIds = new ArrayList<>();
+            personalList.removeIf(item -> {
+                if (promotedName.equalsIgnoreCase(nameOf.apply(item))) {
+                    promotedOldIds.add(idOf.apply(item));
+                    return true;
+                }
+                return false;
+            });
+            for (String oldId : promotedOldIds) {
+                if (oldId != null && !oldId.equals(dto.id())) {
+                    referenceMigrator.accept(oldId, dto.id());
+                }
+            }
+        }
+        return wasAdded;
+    }
+
+    /** Переносит {@link Screen#getCabinetTypeId()} и {@link CabinetInstance#getCabinetTypeId()}
+     *  по всем проектам/сценам/экранам workspace с {@code oldId} на {@code newId} —
+     *  см. javadoc {@link #applyOne}. */
+    private void migrateCabinetTypeReferences(String oldId, String newId) {
+        for (Project project : workspace.getProjects()) {
+            for (Scene scene : project.getScenes()) {
+                for (Screen screen : scene.getScreens()) {
+                    if (oldId.equals(screen.getCabinetTypeId())) {
+                        screen.setCabinetTypeId(newId);
+                    }
+                    for (CabinetInstance cabinet : screen.getCabinets()) {
+                        if (oldId.equals(cabinet.getCabinetTypeId())) {
+                            cabinet.setCabinetTypeId(newId);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** Переносит {@link ControllerInstance#getControllerTypeId()} по всем
+     *  проектам/сценам/экранам workspace с {@code oldId} на {@code newId} —
+     *  см. javadoc {@link #applyOne}. */
+    private void migrateControllerTypeReferences(String oldId, String newId) {
+        for (Project project : workspace.getProjects()) {
+            for (Scene scene : project.getScenes()) {
+                for (Screen screen : scene.getScreens()) {
+                    for (ControllerInstance controller : screen.getControllers()) {
+                        if (oldId.equals(controller.getControllerTypeId())) {
+                            controller.setControllerTypeId(newId);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private record CustomCategoryPayload(String name) {
+    }
+
+    private Boolean applyCustomCategory(LibrarySyncClient.LibraryItemDto dto) throws JsonProcessingException {
+        CustomCategoryPayload payload = SYNC_MAPPER.readValue(dto.payloadJson(), CustomCategoryPayload.class);
+        Map<String, String> byId = workspace.getServerCustomEquipmentCategoriesById();
+        boolean isNew = !byId.containsKey(dto.id());
+        byId.put(dto.id(), payload.name());
+        return isNew;
+    }
+
+    private record SectionsPayload(List<ContentSection> sections) {
+    }
+
+    private Boolean applySingletonSections(LibrarySyncClient.LibraryItemDto dto,
+                                            java.util.function.Consumer<List<ContentSection>> setter)
+            throws JsonProcessingException {
+        SectionsPayload payload = SYNC_MAPPER.readValue(dto.payloadJson(), SectionsPayload.class);
+        setter.accept(payload.sections() != null ? payload.sections() : List.of());
+        return true;
+    }
+
+    private record ScenariosPayload(List<Scenario> scenarios) {
+    }
+
+    private Boolean applySingletonScenarios(LibrarySyncClient.LibraryItemDto dto,
+                                             java.util.function.Consumer<List<Scenario>> setter)
+            throws JsonProcessingException {
+        ScenariosPayload payload = SYNC_MAPPER.readValue(dto.payloadJson(), ScenariosPayload.class);
+        setter.accept(payload.scenarios() != null ? payload.scenarios() : List.of());
+        return true;
+    }
+
+    private record CategoryLabelsPayload(Map<String, String> overrides) {
+    }
+
+    private Boolean applyCategoryLabels(LibrarySyncClient.LibraryItemDto dto) throws JsonProcessingException {
+        CategoryLabelsPayload payload = SYNC_MAPPER.readValue(dto.payloadJson(), CategoryLabelsPayload.class);
+        workspace.getLibrary().setServerEquipmentCategoryLabels(
+                payload.overrides() != null ? new java.util.LinkedHashMap<>(payload.overrides()) : new java.util.LinkedHashMap<>());
+        return true;
+    }
+
+    private record CalcDefaultsPayload(double voltageV, double cabinetConnectorDefaultAmps,
+                                        double defaultDeratingPercent, double distroDefaultDeratingPercent) {
+    }
+
+    private Boolean applyCalcDefaults(LibrarySyncClient.LibraryItemDto dto) throws JsonProcessingException {
+        CalcDefaultsPayload payload = SYNC_MAPPER.readValue(dto.payloadJson(), CalcDefaultsPayload.class);
+        PowerCalc.Defaults.apply(payload.voltageV(), payload.cabinetConnectorDefaultAmps(),
+                payload.defaultDeratingPercent(), payload.distroDefaultDeratingPercent());
+        return true;
+    }
+
+    // ---- подкатегории оборудования и метки встроенных категорий — общая
+    //      справочная данные, синхронизируется с сервера (Task #135/v2.0),
+    //      правится только через отдельную админ-консоль (ledscheme-admin) ----
 
     public List<String> getCustomEquipmentCategories() {
-        return workspace.getCustomEquipmentCategories();
+        return new java.util.ArrayList<>(workspace.getServerCustomEquipmentCategoriesById().values());
     }
-
-    /** Добавляет новую подкатегорию, если такой (без учёта регистра) ещё нет —
-     *  вызывается и из AdminDialog явно, и автоматически из EquipmentPresetDialog,
-     *  если инженер вписал новое название прямо там, не заходя в админку. */
-    public void addCustomEquipmentCategory(String name) {
-        String trimmed = name == null ? "" : name.trim();
-        if (trimmed.isEmpty()) {
-            return;
-        }
-        for (String c : workspace.getCustomEquipmentCategories()) {
-            if (c.equalsIgnoreCase(trimmed)) {
-                return;
-            }
-        }
-        workspace.getCustomEquipmentCategories().add(trimmed);
-        changed();
-    }
-
-    /** Переименовывает подкатегорию и обновляет ссылки на неё во всех пресетах —
-     *  иначе уже сохранённые пресеты остались бы со старым (несуществующим в
-     *  списке) названием, невидимым в дереве категорий библиотеки. */
-    public void renameCustomEquipmentCategory(String oldName, String newName) {
-        String trimmed = newName == null ? "" : newName.trim();
-        if (trimmed.isEmpty()) {
-            throw new IllegalArgumentException("Укажите название подкатегории");
-        }
-        List<String> categories = workspace.getCustomEquipmentCategories();
-        int idx = categories.indexOf(oldName);
-        if (idx < 0) {
-            throw new IllegalArgumentException("Подкатегория не найдена");
-        }
-        categories.set(idx, trimmed);
-        for (EquipmentPreset p : workspace.getEquipmentPresets()) {
-            if (oldName.equals(p.getCustomCategoryLabel())) {
-                p.setCustomCategoryLabel(trimmed);
-            }
-        }
-        changed();
-    }
-
-    /** Удаляет подкатегорию из списка — пресеты, ссылавшиеся на неё, НЕ трогаются
-     *  (остаются с этим же customCategoryLabel как "осиротевшим" текстом, снова
-     *  видимым просто под общим "Прочее оборудование", раз его больше нет в
-     *  списке — данные не теряются, просто перестают группироваться отдельно). */
-    public void deleteCustomEquipmentCategory(String name) {
-        workspace.getCustomEquipmentCategories().remove(name);
-        changed();
-    }
-
-    // ---- админ-редактируемая ПОДПИСЬ встроенных категорий верхнего уровня (см. AdminDialog) ----
 
     /** Подпись встроенной категории для отображения пользователю — переопределённая
-     *  админом (см. renameBuiltinEquipmentCategory), иначе стандартная
+     *  на сервере (см. Library.serverEquipmentCategoryLabels), иначе стандартная
      *  SchemaNodeType.getLabel(). Единая точка правды: ВСЯ UI-отрисовка названия
      *  категории (дерево библиотеки, комбобоксы выбора типа узла, подпись узла на
      *  холсте схемы) должна вызывать именно этот метод, а не category.getLabel()
-     *  напрямую — иначе переименование было бы видно не везде (см. П.12: реальная
-     *  просьба пользователя была не про подкатегории "Прочее", а именно про
-     *  встроенные категории вроде "Источник"/"Медиасервер"). */
+     *  напрямую — иначе переименование было бы видно не везде. */
     public String categoryLabel(SchemaNodeType type) {
-        String override = workspace.getEquipmentCategoryLabelOverrides().get(type.name());
+        String override = workspace.getServerEquipmentCategoryLabels().get(type.name());
         return override != null && !override.isEmpty() ? override : type.getLabel();
-    }
-
-    /** Переименовывает ПОДПИСЬ встроенной категории — сам enum-константа и всё,
-     *  что на неё ссылается по имени (пресеты, узлы схемы, цвет узла, де-рейтинг
-     *  DISTRO, особая обработка SCREEN — см. class-javadoc SchemaNodeType),
-     *  НЕ трогается: список категорий фиксирован, меняется только текст, который
-     *  видит пользователь. Существующие пресеты/узлы автоматически подхватят
-     *  новую подпись через categoryLabel() — им ничего обновлять не нужно, они
-     *  ссылаются на категорию по константе, а не по скопированному тексту. */
-    public void renameBuiltinEquipmentCategory(SchemaNodeType type, String newLabel) {
-        String trimmed = newLabel == null ? "" : newLabel.trim();
-        if (trimmed.isEmpty()) {
-            throw new IllegalArgumentException("Укажите название категории");
-        }
-        workspace.getEquipmentCategoryLabelOverrides().put(type.name(), trimmed);
-        changed();
-    }
-
-    /** Возвращает подпись встроенной категории обратно к значению по умолчанию. */
-    public void resetBuiltinEquipmentCategoryLabel(SchemaNodeType type) {
-        workspace.getEquipmentCategoryLabelOverrides().remove(type.name());
-        changed();
     }
 
     // ---- экспорт/импорт ВСЕХ библиотек разом ----
@@ -1704,6 +2012,29 @@ public class AppModel {
         changed();
     }
 
+    // ---- проекторы (калькулятор проектора, сцена-scoped, Task #135/v2.0) ----
+
+    public List<ProjectorInstance> projectorsForCurrentScene() {
+        return currentScene == null ? List.of() : currentScene.getProjectors();
+    }
+
+    public ProjectorInstance addProjector(ProjectorInstance p) {
+        if (currentScene == null) {
+            throw new IllegalStateException("Не выбрана сцена");
+        }
+        currentScene.getProjectors().add(p);
+        changed();
+        return p;
+    }
+
+    public void deleteProjector(String projectorId) {
+        if (currentScene == null) {
+            return;
+        }
+        currentScene.getProjectors().removeIf(p -> p.getId().equals(projectorId));
+        changed();
+    }
+
     public CanvasPlacement addScreenToCanvas(ContentCanvas canvas, String screenId, int x, int y) {
         for (CanvasPlacement p : canvas.getPlacements()) {
             if (p.getScreenId().equals(screenId)) {
@@ -1724,6 +2055,36 @@ public class AppModel {
 
     public void removePlacement(ContentCanvas canvas, String placementId) {
         canvas.getPlacements().removeIf(p -> p.getId().equals(placementId));
+        changed();
+    }
+
+    /** Настройка маски одного грида (размещённого на канвасе экрана) — имя-override,
+     *  цвет чек-борда, набор включённых элементов (см. class-javadoc CanvasPlacement/
+     *  PixelGridRenderer.GridRenderOptions). Не проходит через pushUndo() — чисто
+     *  визуальная настройка, тот же случай, что был у прежнего setScreenMaskColorPreset. */
+    public void updatePlacementMaskConfig(CanvasPlacement pl, String name, MaskColorPreset background,
+                                           boolean showGrid, boolean showRaster, boolean showIds,
+                                           boolean showCircle, boolean showCross, boolean showCorner,
+                                           boolean showLogo) {
+        pl.setName(name);
+        pl.setBackground(background);
+        pl.setShowGrid(showGrid);
+        pl.setShowRaster(showRaster);
+        pl.setShowIds(showIds);
+        pl.setShowCircle(showCircle);
+        pl.setShowCross(showCross);
+        pl.setShowCorner(showCorner);
+        pl.setShowLogo(showLogo);
+        changed();
+    }
+
+    /** Настройки подписи имени, общие для ВСЕХ гридов этого канваса (в отличие от
+     *  updatePlacementMaskConfig — per-грид). Тоже без pushUndo. */
+    public void updateCanvasMaskSettings(ContentCanvas canvas, boolean largeGridNames, Integer textColorRgb,
+                                          boolean dropShadow) {
+        canvas.setLargeGridNames(largeGridNames);
+        canvas.setTextColorRgb(textColorRgb);
+        canvas.setDropShadow(dropShadow);
         changed();
     }
 
@@ -2551,7 +2912,7 @@ public class AppModel {
         double load = powerChainLoadWatts(scene, chain);
         double ampRating = powerChainConnectorAmps(scene, chain);
         boolean capacityKnown = ampRating > 0;
-        double capacity = capacityKnown ? PowerCalc.capacityWatts(ampRating, PowerCalc.DISTRO_DEFAULT_DERATING_PERCENT) : 0;
+        double capacity = capacityKnown ? PowerCalc.capacityWatts(ampRating, PowerCalc.distroDefaultDeratingPercent()) : 0;
         boolean overloaded = capacityKnown && load > capacity;
         boolean acknowledged = !overloaded || (chain.getAcknowledgedOverloadWatts() != null
                 && chain.getAcknowledgedOverloadWatts() >= load);

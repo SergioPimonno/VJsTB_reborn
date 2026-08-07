@@ -303,6 +303,54 @@ public final class UiKit {
         });
     }
 
+    /** Оборачивает {@code view} так, чтобы внутри {@link javax.swing.JScrollPane} он
+     *  растягивался на всю высоту/ширину видимой области, а не садился на свой
+     *  preferred size, как обычный компонент — {@link JSplitPane} сам НЕ реализует
+     *  {@link javax.swing.Scrollable}, поэтому без этой обёртки JScrollPane даёт ему
+     *  только preferred-размер (сумму preferred-высот его потомков), а не реальную
+     *  высоту окна приложения. Из-за этого {@link #setInitialDividerOnShow} читал
+     *  заниженный {@code sp.getHeight()} при первом показе и «схлопывал» один из
+     *  потомков почти в 0 — баг-репорт: секция «Форма экрана» пропадала целиком и
+     *  появлялась крошечной только после того, как пользователь вручную тянул
+     *  соседний разделитель (это пересчитывало layout и попутно фиксировало
+     *  испорченную, близкую к 0, пропорцию). */
+    public static JComponent stretchToViewport(JComponent view) {
+        return new ViewportStretchPanel(view);
+    }
+
+    private static final class ViewportStretchPanel extends JPanel implements javax.swing.Scrollable {
+        ViewportStretchPanel(JComponent view) {
+            super(new BorderLayout());
+            setOpaque(false);
+            add(view, BorderLayout.CENTER);
+        }
+
+        @Override
+        public Dimension getPreferredScrollableViewportSize() {
+            return getPreferredSize();
+        }
+
+        @Override
+        public int getScrollableUnitIncrement(java.awt.Rectangle visibleRect, int orientation, int direction) {
+            return 16;
+        }
+
+        @Override
+        public int getScrollableBlockIncrement(java.awt.Rectangle visibleRect, int orientation, int direction) {
+            return 64;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportWidth() {
+            return true;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportHeight() {
+            return true;
+        }
+    }
+
     private static void applyInitialDivider(JSplitPane sp, double proportion) {
         boolean vertical = sp.getOrientation() == JSplitPane.VERTICAL_SPLIT;
         int total = vertical ? sp.getHeight() : sp.getWidth();

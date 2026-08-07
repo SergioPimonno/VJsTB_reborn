@@ -106,7 +106,7 @@ public class PowerStagePanel extends JPanel {
         // уже занятые кабинеты области просто выпадают из последовательности.
         this.canvas.setQuickConnectListener((rowStart, rowEnd, colStart, colEnd, screenX, screenY) ->
                 showQuickConnectMenu(rowStart, rowEnd, colStart, colEnd, screenX, screenY));
-        this.sceneOverview = new SceneCanvasPanel(model);
+        this.sceneOverview = new SceneCanvasPanel(model, settings);
         // "Показать все экраны сцены" был только для просмотра — весь смысл режима
         // (видеть всю сцену и осознанно распределять нагрузку) требует уметь
         // прописывать активный экран прямо отсюда, не переключаясь на одиночный вид.
@@ -125,7 +125,7 @@ public class PowerStagePanel extends JPanel {
         // Корнер-виджет (всегда видимый мини-обзор сцены в правом нижнем углу холста,
         // выключаемый в «Персонализации») — накладывается поверх canvasScroll через
         // JLayeredPane, а не встраивается в раскладку, чтобы не отнимать место у холста.
-        cornerPreview = new SceneCanvasPanel(model);
+        cornerPreview = new SceneCanvasPanel(model, settings);
         cornerPreview.setDetailMode(true, true, true);
         cornerPreviewHost = new JPanel(new BorderLayout());
         cornerPreviewHost.setBorder(BorderFactory.createLineBorder(Palette.BORDER));

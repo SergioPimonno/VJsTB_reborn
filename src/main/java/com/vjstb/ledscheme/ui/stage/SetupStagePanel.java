@@ -99,6 +99,8 @@ public class SetupStagePanel extends JPanel {
     private final JSplitPane leftSplit3;
     private final JSplitPane leftSplit2;
     private final JSplitPane leftSplitNav;
+    private final JSplitPane rightSplit;
+    private JSplitPane prerigSplit;
 
     public SetupStagePanel(AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings) {
         this.model = model;
@@ -130,21 +132,37 @@ public class SetupStagePanel extends JPanel {
         // жёстко сложенная колонка (vbox), из-за чего при небольшой высоте окна
         // «Форма экрана» уезжала за нижний край окна без возможности отдать ей
         // больше места за счёт «Прериг сцены» (баг-репорт).
-        prerigPreview = new com.vjstb.ledscheme.ui.SceneCanvasPanel(model);
+        prerigPreview = new com.vjstb.ledscheme.ui.SceneCanvasPanel(model, settings);
         prerigPreview.setShowRiggingPoints(true);
         prerigSection = buildPrerig();
         shapeEditor = new ShapeEditorPanel(model);
         shapeScroll = new JScrollPane(shapeEditor);
         shapeSection = buildShapeEditor();
-        JSplitPane rightSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, prerigSection, shapeSection);
+        // Одноразовая миграция: до фикса UiKit.stretchToViewport «Форма экрана» была
+        // жёстко зажата потолком 220px, поэтому у части пользователей могла осесть
+        // сильно перекошенная доля разделителя (например, 0.8 — руками растягивали
+        // «Прериг сцены», т.к. отдавать место «Форме экрана» сверх 220px всё равно
+        // было бессмысленно из-за потолка). Теперь потолка нет — сбрасываем один раз,
+        // дальше ручной выбор пользователя не трогаем (см. флаг ниже). Дефолт 0.58,
+        // не 0.5 — «Прериг сцены» (мини-схема раскладки) обычно нужнее просторнее,
+        // чем «Форма экрана» (баг-репорт: окно визуализации прерига слишком мелкое).
+        if (settings.getLayoutProportion("setup.prerigShape.migratedV2", 0) == 0) {
+            settings.setLayoutProportion("setup.prerigShape", 0.58);
+            settings.setLayoutProportion("setup.prerigShape.migratedV2", 1);
+        }
+        rightSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, prerigSection, shapeSection);
         rightSplit.setContinuousLayout(true);
-        rightSplit.setResizeWeight(0.6);
-        UiKit.persistentDivider(settings, "setup.prerigShape", rightSplit, 0.6);
+        rightSplit.setResizeWeight(0.5);
+        UiKit.persistentDivider(settings, "setup.prerigShape", rightSplit, 0.58);
 
         JScrollPane leftScroll = new JScrollPane(left);
         leftScroll.setBorder(null);
         leftScroll.getVerticalScrollBar().setUnitIncrement(16);
-        JScrollPane rightScroll = new JScrollPane(rightSplit);
+        // stretchToViewport(rightSplit) -- см. javadoc метода: без этой обёртки JSplitPane
+        // не растягивается на высоту окна внутри JScrollPane (сам не Scrollable), из-за
+        // чего «Прериг сцены»/«Форма экрана» вычисляли начальную долю разделителя от
+        // заниженной высоты и «Форма экрана» пропадала/появлялась крошечной (баг-репорт).
+        JScrollPane rightScroll = new JScrollPane(UiKit.stretchToViewport(rightSplit));
         rightScroll.setBorder(null);
         rightScroll.getVerticalScrollBar().setUnitIncrement(16);
 
@@ -380,13 +398,16 @@ public class SetupStagePanel extends JPanel {
         calcRiggingBtn.addActionListener(e -> calculateRiggingPoints());
         riggingArea.add(calcRiggingBtn);
         riggingArea.add(UiKit.vgap());
-        riggingArea.add(UiKit.muted("<html>Пересчитывает точки подвеса по формуле из риг-тех таблиц (по ширине экрана),"
-                + " рисует их на схеме выше и сохраняет схему отдельной картинкой.</html>"));
 
         // Разделитель, а не фиксированная высота (Task #7/v1.6, доработка) — тянуть
         // можно мышью за границу, «растягивая» окно прерига под текущую задачу
-        // (обзор всей сцены сразу или точная расстановка одного экрана).
-        JSplitPane prerigSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, canvasArea, riggingArea);
+        // (обзор всей сцены сразу или точная расстановка одного экрана). Поле (не
+        // локальная переменная) — doRebuild() явно перевосстанавливает его долю
+        // ПОСЛЕ rightSplit (см. там же) — иначе он вычисляет начальную позицию от
+        // ещё маленькой высоты prerigSection (тот же класс гонки, что и у самого
+        // rightSplit) и "запекает" сплюснутый холст навсегда (баг-репорт: окно
+        // визуализации прерига не растягивается по высоте, хотя место есть).
+        prerigSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, canvasArea, riggingArea);
         prerigSplit.setContinuousLayout(true);
         prerigSplit.setResizeWeight(1.0);
         UiKit.persistentDivider(settings, "setup.prerigCanvas", prerigSplit, 0.68);
@@ -466,8 +487,6 @@ public class SetupStagePanel extends JPanel {
         body.add(UiKit.vgap());
         body.add(UiKit.formRow("Глубина цвета, бит", pBitDepth));
         body.add(UiKit.vgap());
-        body.add(UiKit.muted("<html>Влияют на реальную ёмкость порта контроллера в пикселях"
-                + " (см. этап «Сигнал»).</html>"));
 
         // Единая кнопка «Применить» вместо 4 разных — несколько похожих кнопок
         // подряд только путали (какая из них что именно сохраняет).
@@ -516,7 +535,11 @@ public class SetupStagePanel extends JPanel {
         body.add(UiKit.vgap());
         shapeScroll.setBorder(javax.swing.BorderFactory.createLineBorder(Palette.BORDER));
         shapeScroll.setPreferredSize(new Dimension(200, 220));
-        shapeScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, 220));
+        // БЕЗ жёсткого максимума высоты (раньше был захардкожен потолок 220px) --
+        // тот потолок и был основной причиной бага «Форма экрана» не растёт даже
+        // когда rightSplit явно выделяет ей больше места, см. javadoc
+        // UiKit.stretchToViewport и комментарий у rightSplit в конструкторе.
+        shapeScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
         body.add(shapeScroll);
 
         return (JPanel) UiKit.section("Форма экрана", body);
@@ -574,6 +597,16 @@ public class SetupStagePanel extends JPanel {
             if ((hasScene && !screensWasVisible) || (scr != null && !paramsWasVisible)) {
                 UiKit.restoreDividerProportion(leftSplit3, settings, "setup.screensParams", 0.32);
             }
+            // prerigSection и shapeSection — тот же класс бага, что screensSection/
+            // paramsSection выше (оба потомки ОДНОГО rightSplit, оба могут стать видимы
+            // в этом же проходе — например, у нового проекта первый добавленный экран
+            // сразу делает истинными и hasScene, и scr != null): один вызов
+            // restoreDividerProportion на общий разделитель, не по одному на секцию
+            // (баг-репорт: «Форма экрана» не появляется, пока не потянуть разделитель
+            // руками, и «Прериг сцены» из-за того же не получает причитающуюся долю
+            // высоты автоматически).
+            boolean prerigWasVisible = prerigSection.isVisible();
+            boolean shapeWasVisible = shapeSection.isVisible();
             prerigSection.setVisible(hasScene);
             if (hasScene) {
                 syncList(screenModel, model.getCurrentScene().getScreens());
@@ -583,6 +616,17 @@ public class SetupStagePanel extends JPanel {
             }
 
             shapeSection.setVisible(scr != null);
+            if ((hasScene && !prerigWasVisible) || (scr != null && !shapeWasVisible)) {
+                UiKit.restoreDividerProportion(rightSplit, settings, "setup.prerigShape", 0.58);
+                // prerigSplit (холст vs точки подвеса ВНУТРИ "Прериг сцены") зависит от
+                // высоты prerigSection, которую только что поменял вызов выше — если
+                // восстановить его в ТОМ ЖЕ цикле EDT, он схватит ещё старую (маленькую)
+                // высоту и навсегда запомнит сплюснутый холст. Дополнительный
+                // invokeLater даёт restoreDividerProportion(rightSplit, ...) выше реально
+                // применить новую высоту первым.
+                SwingUtilities.invokeLater(() ->
+                        UiKit.restoreDividerProportion(prerigSplit, settings, "setup.prerigCanvas", 0.68));
+            }
             if (scr != null) {
                 pName.setText(scr.getName());
                 populateTypeCombo(pType, model.typeOf(scr));
@@ -604,10 +648,11 @@ public class SetupStagePanel extends JPanel {
         }
         shapeEditor.revalidate();
         shapeEditor.repaint();
-        // Явно на каждом разделителе, чьи дети (Сцены/Экраны/Параметры) только что
-        // поменяли видимость — иначе место под них не пересчитывается немедленно
-        // (revalidate() на верхнем this не всегда достаточен).
-        for (JSplitPane sp : new JSplitPane[]{leftSplit3, leftSplit2, leftSplitNav}) {
+        // Явно на каждом разделителе, чьи дети (Сцены/Экраны/Параметры/Прериг/Форма
+        // экрана) только что поменяли видимость — иначе место под них не
+        // пересчитывается немедленно (revalidate() на верхнем this не всегда
+        // достаточен).
+        for (JSplitPane sp : new JSplitPane[]{leftSplit3, leftSplit2, leftSplitNav, rightSplit, prerigSplit}) {
             sp.revalidate();
             sp.repaint();
         }

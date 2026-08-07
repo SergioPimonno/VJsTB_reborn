@@ -11,6 +11,7 @@ import com.vjstb.ledscheme.model.Workspace;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.ScreenLogic;
 import com.vjstb.ledscheme.service.ScreenStats;
+import com.vjstb.ledscheme.settings.SettingsManager;
 import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
 import java.awt.Color;
@@ -24,18 +25,66 @@ import java.io.IOException;
 import javax.imageio.ImageIO;
 
 /**
- * Генератор тестовых масок экрана (аналог Pixel Grid из Novastar/Colorlight):
- * растр в РЕАЛЬНОМ разрешении экрана с чередующейся по кабинетам заливкой,
- * мелкой пиксельной сеткой и номером кабинета в каждой ячейке — чтобы на месте
- * визуально проверить порядок/ориентацию модулей. В центре — крупная подпись
- * с названием экрана и разрешением для контентщиков.
+ * Генератор тестовых масок экрана (аналог Pixel Grid из Novastar/Colorlight, в духе
+ * стороннего инструмента PixL, показанного пользователем как референс): растр в
+ * РЕАЛЬНОМ разрешении экрана с чередующейся по кабинетам заливкой и настраиваемым
+ * набором элементов на грид (см. {@link GridRenderOptions}) — раньше сетка/растр/
+ * номера рисовались безусловно, теперь каждый включается отдельно per-грид (см.
+ * {@code CanvasPlacement}), а окружность/крест/уголковые метки/лого — новые
+ * элементы, которых раньше не было вовсе.
  */
 public final class PixelGridRenderer {
 
     private static final Color GRID_LINE = new Color(255, 255, 255, 40);
     private static final int GRID_STEP_PX = 16;
+    /** Жёлтый — чтобы не сливаться ни с белой сеткой/номерами, ни с фоном чек-борда. */
+    private static final Color MARK_COLOR = new Color(255, 221, 0, 230);
 
     private PixelGridRenderer() {
+    }
+
+    /** Что именно рисовать на маске одного грида (размещённого на канвасе экрана) —
+     *  собирается из {@link CanvasPlacement} (свои для КАЖДОГО грида: имя-override,
+     *  фон, какие элементы включены) и {@link ContentCanvas} (общие для ВСЕХ гридов
+     *  канваса: крупные имена/цвет текста/тень/лого). */
+    public record GridRenderOptions(String displayName, MaskColorPreset background,
+                                     boolean showGrid, boolean showRaster, boolean showIds,
+                                     boolean showCircle, boolean showCross, boolean showCorner,
+                                     boolean showLogo, boolean largeGridNames, Color textColor,
+                                     boolean dropShadow, BufferedImage logoImage) {
+
+        /** Лого берётся не с канваса, а из профиля пользователя (см.
+         *  {@link com.vjstb.ledscheme.settings.UserProfile#getMaskLogoImagePath()}) —
+         *  оно индивидуально для человека, который работает в приложении, а не для
+         *  конкретного канваса/проекта: настраивается один раз в «Предпочтениях» и
+         *  дальше автоматически применяется на любом гриде с включённым «Лого». */
+        public static GridRenderOptions of(Screen screen, CanvasPlacement pl, ContentCanvas canvas,
+                                            SettingsManager settings) {
+            String displayName = pl.getName() != null && !pl.getName().isBlank() ? pl.getName() : screen.getName();
+            Color textColor = canvas.getTextColorRgb() != null ? new Color(canvas.getTextColorRgb()) : Color.WHITE;
+            String logoPath = settings.activeProfile().getMaskLogoImagePath();
+            BufferedImage logo = null;
+            if (pl.isShowLogo() && logoPath != null) {
+                try {
+                    logo = ImageIO.read(new File(logoPath));
+                } catch (IOException | RuntimeException unreadableLogo) {
+                    logo = null;
+                }
+            }
+            return new GridRenderOptions(displayName, pl.getBackground(),
+                    pl.isShowGrid(), pl.isShowRaster(), pl.isShowIds(),
+                    pl.isShowCircle(), pl.isShowCross(), pl.isShowCorner(), pl.isShowLogo(),
+                    canvas.isLargeGridNames(), textColor, canvas.isDropShadow(), logo);
+        }
+
+        /** Для отдельного полноэкранного экспорта маски вне канваса (по сцене целиком,
+         *  см. VisualizationStagePanel.exportMasks) — прежнее поведение по умолчанию
+         *  (сетка+растр+номера, без новых элементов, без канваса). */
+        public static GridRenderOptions defaultForScreen(Screen screen) {
+            return new GridRenderOptions(screen.getName(), MaskColorPreset.NORMAL,
+                    true, true, true, false, false, false, false,
+                    false, Color.WHITE, false, null);
+        }
     }
 
     /** Позиция ячейки в НАТИВНЫХ пикселях маски — сеточная позиция плюс свободное
@@ -53,7 +102,8 @@ public final class PixelGridRenderer {
         return (int) Math.round(cab.getRowIndex() * cellH + dy);
     }
 
-    public static BufferedImage renderMask(Screen screen, CabinetType defaultType, Workspace workspace) {
+    public static BufferedImage renderMask(Screen screen, CabinetType defaultType, Workspace workspace,
+                                            GridRenderOptions opts) {
         ScreenStats stats = ScreenLogic.stats(screen, defaultType, workspace);
         int w = Math.max(1, stats.resolutionWidthPx());
         int h = Math.max(1, stats.resolutionHeightPx());
@@ -67,7 +117,6 @@ public final class PixelGridRenderer {
         int cellW = defaultType != null && screen.getCols() > 0 ? w / screen.getCols() : w;
         int cellH = defaultType != null && screen.getRows() > 0 ? h / screen.getRows() : h;
         Font cellFont = g2.getFont().deriveFont(Font.BOLD, Math.max(10f, Math.min(cellW, cellH) * 0.16f));
-        MaskColorPreset colorPreset = screen.getMaskColorPreset();
 
         for (CabinetInstance cab : screen.getCabinets()) {
             if (cab.isHidden()) {
@@ -76,36 +125,111 @@ public final class PixelGridRenderer {
             int x = cabX(cab, defaultType, cellW);
             int y = cabY(cab, defaultType, cellH);
 
-            g2.setColor(colorPreset.color((cab.getRowIndex() + cab.getColIndex()) % 2));
+            g2.setColor(opts.background().color((cab.getRowIndex() + cab.getColIndex()) % 2));
             g2.fillRect(x, y, cellW, cellH);
 
-            g2.setColor(GRID_LINE);
-            g2.setStroke(new BasicStroke(1f));
-            for (int gx = x; gx <= x + cellW; gx += GRID_STEP_PX) {
-                g2.drawLine(gx, y, gx, y + cellH);
-            }
-            for (int gy = y; gy <= y + cellH; gy += GRID_STEP_PX) {
-                g2.drawLine(x, gy, x + cellW, gy);
+            if (opts.showRaster()) {
+                g2.setColor(GRID_LINE);
+                g2.setStroke(new BasicStroke(1f));
+                for (int gx = x; gx <= x + cellW; gx += GRID_STEP_PX) {
+                    g2.drawLine(gx, y, gx, y + cellH);
+                }
+                for (int gy = y; gy <= y + cellH; gy += GRID_STEP_PX) {
+                    g2.drawLine(x, gy, x + cellW, gy);
+                }
             }
 
-            g2.setColor(new Color(255, 255, 255, 200));
-            g2.setStroke(new BasicStroke(2f));
-            g2.drawRect(x, y, cellW, cellH);
+            if (opts.showGrid()) {
+                g2.setColor(new Color(255, 255, 255, 200));
+                g2.setStroke(new BasicStroke(2f));
+                g2.drawRect(x, y, cellW, cellH);
+            }
 
-            g2.setColor(Color.WHITE);
-            g2.setFont(cellFont);
-            String label = cab.getDisplayRow() + "," + cab.getDisplayCol();
-            g2.drawString(label, x + 6, y + cellFont.getSize() + 4);
+            if (opts.showCircle()) {
+                drawCircleMark(g2, x, y, cellW, cellH);
+            }
+            if (opts.showCross()) {
+                drawCrossMark(g2, x, y, cellW, cellH);
+            }
+            if (opts.showCorner()) {
+                drawCornerMarks(g2, x, y, cellW, cellH);
+            }
+
+            if (opts.showIds()) {
+                g2.setColor(Color.WHITE);
+                g2.setFont(cellFont);
+                String label = cab.getDisplayRow() + "," + cab.getDisplayCol();
+                g2.drawString(label, x + 6, y + cellFont.getSize() + 4);
+            }
         }
 
-        drawCenterLabel(g2, w, h, screen.getName(), stats.resolutionWidthPx() + "×" + stats.resolutionHeightPx() + " px");
+        if (opts.showLogo() && opts.logoImage() != null) {
+            drawLogo(g2, w, h, opts.logoImage());
+        }
+
+        drawCenterLabel(g2, w, h, opts.displayName(),
+                stats.resolutionWidthPx() + "×" + stats.resolutionHeightPx() + " px", opts);
 
         g2.dispose();
         return img;
     }
 
-    private static void drawCenterLabel(Graphics2D g2, int w, int h, String name, String resolution) {
-        Font nameFont = g2.getFont().deriveFont(Font.BOLD, Math.max(18f, w * 0.045f));
+    /** Окружность, вписанная в ячейку кабинета — для физической выверки центровки. */
+    private static void drawCircleMark(Graphics2D g2, int x, int y, int cellW, int cellH) {
+        int d = (int) (Math.min(cellW, cellH) * 0.7);
+        int cx = x + cellW / 2 - d / 2;
+        int cy = y + cellH / 2 - d / 2;
+        g2.setColor(MARK_COLOR);
+        g2.setStroke(new BasicStroke(2f));
+        g2.drawOval(cx, cy, d, d);
+    }
+
+    /** Крест через центр ячейки — тот же физический смысл, что окружность. */
+    private static void drawCrossMark(Graphics2D g2, int x, int y, int cellW, int cellH) {
+        int len = (int) (Math.min(cellW, cellH) * 0.35);
+        int cx = x + cellW / 2;
+        int cy = y + cellH / 2;
+        g2.setColor(MARK_COLOR);
+        g2.setStroke(new BasicStroke(2f));
+        g2.drawLine(cx - len, cy, cx + len, cy);
+        g2.drawLine(cx, cy - len, cx, cy + len);
+    }
+
+    /** Уголковые метки по 4 углам ячейки (как рамка видоискателя) — тот же принцип,
+     *  что круг/крест, но по краям, а не по центру. */
+    private static void drawCornerMarks(Graphics2D g2, int x, int y, int cellW, int cellH) {
+        int len = (int) (Math.min(cellW, cellH) * 0.22);
+        g2.setColor(MARK_COLOR);
+        g2.setStroke(new BasicStroke(2f));
+        g2.drawLine(x, y, x + len, y);
+        g2.drawLine(x, y, x, y + len);
+        g2.drawLine(x + cellW, y, x + cellW - len, y);
+        g2.drawLine(x + cellW, y, x + cellW, y + len);
+        g2.drawLine(x, y + cellH, x + len, y + cellH);
+        g2.drawLine(x, y + cellH, x, y + cellH - len);
+        g2.drawLine(x + cellW, y + cellH, x + cellW - len, y + cellH);
+        g2.drawLine(x + cellW, y + cellH, x + cellW, y + cellH - len);
+    }
+
+    /** Лого — в правом нижнем углу экрана (не по центру, там уже подпись имени/
+     *  разрешения), масштаб ограничен ~12% меньшей стороны экрана. */
+    private static void drawLogo(Graphics2D g2, int w, int h, BufferedImage logo) {
+        int maxSize = (int) (Math.min(w, h) * 0.12);
+        if (maxSize <= 0 || logo.getWidth() <= 0 || logo.getHeight() <= 0) {
+            return;
+        }
+        double scale = Math.min((double) maxSize / logo.getWidth(), (double) maxSize / logo.getHeight());
+        int lw = Math.max(1, (int) (logo.getWidth() * scale));
+        int lh = Math.max(1, (int) (logo.getHeight() * scale));
+        int margin = Math.max(8, (int) (Math.min(w, h) * 0.015));
+        g2.drawImage(logo, w - lw - margin, h - lh - margin, lw, lh, null);
+    }
+
+    private static void drawCenterLabel(Graphics2D g2, int w, int h, String name, String resolution,
+                                         GridRenderOptions opts) {
+        float minNameSize = opts.largeGridNames() ? 26f : 18f;
+        float nameScale = opts.largeGridNames() ? 0.065f : 0.045f;
+        Font nameFont = g2.getFont().deriveFont(Font.BOLD, Math.max(minNameSize, w * nameScale));
         Font resFont = g2.getFont().deriveFont(Font.PLAIN, Math.max(13f, w * 0.028f));
         FontMetrics nameFm = g2.getFontMetrics(nameFont);
         FontMetrics resFm = g2.getFontMetrics(resFont);
@@ -127,19 +251,29 @@ public final class PixelGridRenderer {
         gb.drawRoundRect(boxX, boxY, boxW, boxH, 18, 18);
         gb.dispose();
 
-        g2.setColor(Color.WHITE);
+        int nameX = (w - nameW) / 2;
+        int nameY = boxY + 14 + nameFm.getAscent();
+        if (opts.dropShadow()) {
+            g2.setColor(new Color(0, 0, 0, 200));
+            g2.setFont(nameFont);
+            g2.drawString(name, nameX + 2, nameY + 2);
+        }
+        g2.setColor(opts.textColor());
         g2.setFont(nameFont);
-        g2.drawString(name, (w - nameW) / 2, boxY + 14 + nameFm.getAscent());
+        g2.drawString(name, nameX, nameY);
 
+        int resX = (w - resW) / 2;
+        int resY = boxY + 20 + nameFm.getHeight() + resFm.getAscent();
         g2.setColor(new Color(0xc0, 0xc8, 0xd0));
         g2.setFont(resFont);
-        g2.drawString(resolution, (w - resW) / 2, boxY + 20 + nameFm.getHeight() + resFm.getAscent());
+        g2.drawString(resolution, resX, resY);
     }
 
     /** Маска целого канваса (компоновки контента): чёрный кадр размером с канвас,
-     *  в него вклеены маски каждого размещённого экрана на своих позициях — так же
-     *  используется как основа под пресеты медиасерверов/Resolume. */
-    public static BufferedImage renderCanvasMask(ContentCanvas canvas, AppModel model) {
+     *  в него вклеены маски каждого размещённого экрана на своих позициях, каждая —
+     *  со своими настройками (см. {@link GridRenderOptions#of}) — так же используется
+     *  как основа под пресеты медиасерверов/Resolume. */
+    public static BufferedImage renderCanvasMask(ContentCanvas canvas, AppModel model, SettingsManager settings) {
         int w = Math.max(1, canvas.getWidthPx());
         int h = Math.max(1, canvas.getHeightPx());
         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
@@ -157,7 +291,8 @@ public final class PixelGridRenderer {
                 continue;
             }
             CabinetType type = model.typeOf(scr);
-            BufferedImage screenImg = renderMask(scr, type, model.getWorkspace());
+            GridRenderOptions opts = GridRenderOptions.of(scr, pl, canvas, settings);
+            BufferedImage screenImg = renderMask(scr, type, model.getWorkspace(), opts);
             g2.drawImage(screenImg, pl.getX(), pl.getY(), null);
 
             // Оффсет экрана в пикселях канваса — вместо общего названия/разрешения

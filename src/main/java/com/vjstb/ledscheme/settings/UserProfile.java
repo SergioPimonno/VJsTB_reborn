@@ -34,6 +34,17 @@ public class UserProfile {
      *  самого канваса, которые прилипают всегда). */
     private boolean canvasSnapToCenter = false;
 
+    /** Порог прилипания (px) — единый для всех трёх мест с Shift-перетаскиванием
+     *  и прилипанием (канвас «Генерация масок», кабинеты внутри экрана, узлы общей
+     *  схемы) — на каком расстоянии от цели начинает действовать притяжение. */
+    private int snapThresholdPx = 10;
+
+    /** Сила прилипания (0–100%) — насколько сильно притягивает курсор к найденной
+     *  в пределах порога цели: 100% — курсор жёстко прилипает точно к цели (как
+     *  было раньше, без этой настройки), меньше — курсор лишь частично «тянется»
+     *  к цели, не прилипая намертво (см. SnapMath.blend). */
+    private int snapStrengthPercent = 100;
+
     /** Коммутация через гнёзда разъёмов в общей схеме: если включено, соединение
      *  узлов в режиме «Соединение» цепляется за конкретный разъём (гнездо) карты
      *  оборудования, а не за узел целиком — так связь на схеме показывает, какой
@@ -79,6 +90,13 @@ public class UserProfile {
     /** Переназначенные горячие клавиши, по id {@link HotkeyAction}. Действие, для
      *  которого здесь нет записи, использует {@link HotkeyAction#getDefaultCombo()}. */
     private Map<String, KeyCombo> keyBindings = new LinkedHashMap<>();
+
+    /** Путь к файлу логотипа для маски «Генерация масок» (см.
+     *  PixelGridRenderer.GridRenderOptions) — индивидуален для пользователя (этого
+     *  профиля), настраивается один раз в «Предпочтениях» и дальше автоматически
+     *  применяется на любом гриде с включённым чекбоксом «Лого», в любом проекте —
+     *  не нужно выбирать файл заново на каждом канвасе. null — логотип не задан. */
+    private String maskLogoImagePath;
 
     public UserProfile() {
     }
@@ -171,6 +189,22 @@ public class UserProfile {
         this.canvasSnapToCenter = canvasSnapToCenter;
     }
 
+    public int getSnapThresholdPx() {
+        return snapThresholdPx;
+    }
+
+    public void setSnapThresholdPx(int snapThresholdPx) {
+        this.snapThresholdPx = snapThresholdPx;
+    }
+
+    public int getSnapStrengthPercent() {
+        return snapStrengthPercent;
+    }
+
+    public void setSnapStrengthPercent(int snapStrengthPercent) {
+        this.snapStrengthPercent = snapStrengthPercent;
+    }
+
     public boolean isSocketWiringEnabled() {
         return socketWiringEnabled;
     }
@@ -219,6 +253,14 @@ public class UserProfile {
         this.loadTrackingEnabled = loadTrackingEnabled;
     }
 
+    public String getMaskLogoImagePath() {
+        return maskLogoImagePath;
+    }
+
+    public void setMaskLogoImagePath(String maskLogoImagePath) {
+        this.maskLogoImagePath = maskLogoImagePath;
+    }
+
     public Map<String, KeyCombo> getKeyBindings() {
         return keyBindings;
     }
@@ -247,12 +289,15 @@ public class UserProfile {
         p.layout = new LinkedHashMap<>(layout);
         p.previewWidgetEnabled = previewWidgetEnabled;
         p.canvasSnapToCenter = canvasSnapToCenter;
+        p.snapThresholdPx = snapThresholdPx;
+        p.snapStrengthPercent = snapStrengthPercent;
         p.socketWiringEnabled = socketWiringEnabled;
         p.foolProofWiringEnabled = foolProofWiringEnabled;
         p.schemaScreensAsWiringDiagram = schemaScreensAsWiringDiagram;
         p.connectorDisplayMode = connectorDisplayMode;
         p.connectorsVertical = connectorsVertical;
         p.loadTrackingEnabled = loadTrackingEnabled;
+        p.maskLogoImagePath = maskLogoImagePath;
         p.keyBindings = new LinkedHashMap<>();
         for (Map.Entry<String, KeyCombo> en : keyBindings.entrySet()) {
             p.keyBindings.put(en.getKey(), en.getValue().copy());

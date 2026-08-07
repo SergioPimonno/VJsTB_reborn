@@ -219,7 +219,7 @@ public class SignalStagePanel extends JPanel {
             }
         });
 
-        this.sceneOverview = new SceneCanvasPanel(model);
+        this.sceneOverview = new SceneCanvasPanel(model, settings);
         // "Показать все экраны сцены" был только для просмотра — весь смысл режима
         // (видеть всю сцену и осознанно распределять нагрузку) требует уметь
         // прописывать активный экран прямо отсюда, не переключаясь на одиночный вид.
@@ -238,7 +238,7 @@ public class SignalStagePanel extends JPanel {
         // Корнер-виджет (всегда видимый мини-обзор сцены в правом нижнем углу холста,
         // выключаемый в «Персонализации») — накладывается поверх canvasScroll через
         // JLayeredPane, а не встраивается в раскладку, чтобы не отнимать место у холста.
-        cornerPreview = new SceneCanvasPanel(model);
+        cornerPreview = new SceneCanvasPanel(model, settings);
         cornerPreview.setDetailMode(true, false, true);
         cornerPreviewHost = new JPanel(new BorderLayout());
         cornerPreviewHost.setBorder(BorderFactory.createLineBorder(Palette.BORDER));
@@ -550,7 +550,7 @@ public class SignalStagePanel extends JPanel {
                 return;
             }
             ControllerType edited = new com.vjstb.ledscheme.ui.ControllerTypeDialog(
-                    javax.swing.SwingUtilities.getWindowAncestor(this), sel).showDialog();
+                    javax.swing.SwingUtilities.getWindowAncestor(this), model, sel).showDialog();
             if (edited != null) {
                 // Существующий образец в библиотеке остаётся нетронутым — правки
                 // создают НОВУЮ запись (см. Task #58), поэтому не переиспользуем id.
@@ -668,7 +668,7 @@ public class SignalStagePanel extends JPanel {
         boolean has = scr != null;
 
         DefaultComboBoxModel<ControllerType> ctrlModel = new DefaultComboBoxModel<>();
-        for (ControllerType ct : model.getWorkspace().getControllerTypes()) {
+        for (ControllerType ct : model.getControllerTypes()) {
             ctrlModel.addElement(ct);
         }
         controllerTypeCombo.setModel(ctrlModel);

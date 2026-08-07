@@ -58,7 +58,7 @@ public class MainFrame extends JFrame {
         signalStage = new SignalStagePanel(model, settings);
         visualizationStage = new VisualizationStagePanel(model, settings);
         outputStage = new OutputStagePanel(model, settings);
-        librariesStage = new LibrariesStagePanel(model);
+        librariesStage = new LibrariesStagePanel(model, settings);
 
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setSize(1360, 900);
@@ -86,7 +86,7 @@ public class MainFrame extends JFrame {
         javax.swing.JButton guideBtn = new javax.swing.JButton("📖 Руководство");
         guideBtn.setToolTipText("Как пользоваться: построение цепочек, контроллеры/порты, радиальное меню,"
                 + " коммутация через гнёзда, библиотека карт");
-        guideBtn.addActionListener(e -> new GuideDialog(this, settings).setVisible(true));
+        guideBtn.addActionListener(e -> new GuideDialog(this, model).setVisible(true));
         toolRow.add(undoButton);
         toolRow.add(guideBtn);
         toolRow.add(shortcutsBtn);

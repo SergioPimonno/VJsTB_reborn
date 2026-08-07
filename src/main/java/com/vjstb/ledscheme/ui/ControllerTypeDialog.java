@@ -1,6 +1,7 @@
 package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.model.ControllerType;
+import com.vjstb.ledscheme.service.AppModel;
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
@@ -36,18 +37,23 @@ public class ControllerTypeDialog extends JDialog {
     private final JTextField pixelsField = new JTextField();
     private final JTextField inputPortsField = new JTextField();
     private final JCheckBox loopPortCheck = new JCheckBox("Есть Loop-порт (например, HDMI loop у VX1000)");
+    private final JComboBox<String> companyField = new JComboBox<>();
     private boolean syncing;
 
     private ControllerType result;
 
-    public ControllerTypeDialog(Window owner, ControllerType existing) {
+    public ControllerTypeDialog(Window owner, AppModel model, ControllerType existing) {
         super(owner, existing == null ? "Новый контроллер" : "Редактирование контроллера", ModalityType.APPLICATION_MODAL);
         bandwidthCombo.setEditable(true);
+        companyField.setEditable(true);
+        companyField.setModel(new javax.swing.DefaultComboBoxModel<>(model.getKnownCompanies().toArray(new String[0])));
 
         JPanel form = new JPanel(new GridLayout(0, 2, 8, 6));
         form.setBorder(BorderFactory.createEmptyBorder(14, 14, 6, 14));
         form.add(new JLabel("Название/модель"));
         form.add(nameField);
+        form.add(new JLabel("Компания (владелец техники)"));
+        form.add(companyField);
         form.add(new JLabel("Производитель"));
         form.add(vendorField);
         form.add(new JLabel("Число портов вывода"));
@@ -69,6 +75,7 @@ public class ControllerTypeDialog extends JDialog {
 
         ControllerType src = existing != null ? existing : new ControllerType();
         nameField.setText(src.getName());
+        companyField.getEditor().setItem(src.getCompany() != null ? src.getCompany() : "");
         vendorField.setText(src.getVendor());
         portCountField.setText(String.valueOf(src.getPortCount()));
         bandwidthCombo.getEditor().setItem(UiKit.fmt(src.getPortBandwidthMbps()));
@@ -155,6 +162,8 @@ public class ControllerTypeDialog extends JDialog {
                 throw new IllegalArgumentException("Укажите название контроллера");
             }
             ct.setName(name);
+            String company = String.valueOf(companyField.getEditor().getItem()).trim();
+            ct.setCompany(company.isEmpty() ? null : company);
             ct.setVendor(vendorField.getText().trim());
             ct.setPortCount((int) parsePositive(portCountField.getText(), "Число портов"));
             ct.setPortBandwidthMbps(parsePositive(bandwidthField().getText(), "Пропускная способность порта"));

@@ -62,7 +62,7 @@ public class PowerConnectorsConfigDialog extends JDialog {
         /** Запас (%) по умолчанию для ЭТОГО конкретного узла (зависит от типа узла —
          *  см. PowerCalc.defaultDeratingPercentFor), пока явно не переопределён. */
         default double defaultDeratingPercent() {
-            return com.vjstb.ledscheme.service.PowerCalc.DEFAULT_DERATING_PERCENT;
+            return com.vjstb.ledscheme.service.PowerCalc.defaultDeratingPercent();
         }
     }
 

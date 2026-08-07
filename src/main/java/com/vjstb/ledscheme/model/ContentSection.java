@@ -1,10 +1,11 @@
-package com.vjstb.ledscheme.settings;
+package com.vjstb.ledscheme.model;
 
 /**
- * Один раздел редактируемого текстового контента приложения (Руководство,
- * шаги приветствия) — заголовок вкладки/шага + текст (HTML). Пользователь
- * переписывает эти разделы через {@link com.vjstb.ledscheme.ui.ContentEditorDialog},
- * не трогая исходный код.
+ * Один раздел текста Руководства/Приветствия — заголовок вкладки/шага + текст
+ * (HTML). Начиная с Task #135/v2.0 — общая справочная данные, редактируется
+ * только через отдельную админ-консоль (ledscheme-admin) и синхронизируется на
+ * клиент как часть {@link Library} (см. AppModel.applyLibrarySyncItems, кейсы
+ * GUIDE_TEXT/ONBOARDING_TEXT).
  */
 public class ContentSection {
 

@@ -23,6 +23,10 @@ public final class Palette {
     public static final Color MUTED = new Color(0x7d8590);
     /** Предупреждение о перегрузке (Task #81/#87) — фиксированный цвет, не персонализируется. */
     public static final Color WARN = new Color(0xf0883e);
+    /** Метка "общий элемент библиотеки" (см. NamedRenderer) — фиксированный цвет, НЕ
+     *  персонализируется (в отличие от ACCENT, который меняется профилем для цепочек/
+     *  схемы) — иначе смена личного акцента незаметно поменяла бы смысл этой метки. */
+    public static final Color LIBRARY_SHARED = new Color(0x58a6ff);
 
     private static final Color DEFAULT_ACCENT = new Color(0x58a6ff);
     private static final Color DEFAULT_PHASE_NONE = new Color(0x1c2128);

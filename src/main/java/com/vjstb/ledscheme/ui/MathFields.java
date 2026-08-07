@@ -13,6 +13,18 @@ import javax.swing.text.NumberFormatter;
  * Оборачивает СУЩЕСТВУЮЩИЙ {@link NumberFormatter} спиннера (не подменяет
  * поведение при потере фокуса своим слушателем — иначе штатный ревёрт формы
  * при некорректном тексте срабатывает раньше и текст не доходит до вычисления).
+ *
+ * <p>Пробуем {@link MathExpr} ПЕРВЫМ, не как fallback на исключение — баг-репорт:
+ * "208*8" тихо превращалось в 208 без всякой ошибки. Причина — {@code NumberFormat
+ * .parse(String)} (на чём построен {@link NumberFormatter}) не проверяет, что
+ * разобрана ВСЯ строка: он успешно парсит "208" из "208*8" и молча игнорирует
+ * хвост "*8", поэтому исходный {@code super.stringToValue(...)} никогда не бросает
+ * {@link ParseException} для такого текста, и ветка с {@link MathExpr} (раньше —
+ * только в catch) просто не срабатывала. {@link MathExpr#tryEval} сам проверяет
+ * полное совпадение до конца строки, поэтому безопасен как основной путь; на
+ * ЕГО отказ (например, уже отформатированное "3 328" с пробелом-разделителем
+ * разрядов, который MathExpr не понимает) — откат на исходный форматтер, как и
+ * раньше, чтобы не сломать перекоммит уже показанного значения.
  */
 public final class MathFields {
 
@@ -30,21 +42,17 @@ public final class MathFields {
         NumberFormatter wrapped = new NumberFormatter((java.text.NumberFormat) original.getFormat()) {
             @Override
             public Object stringToValue(String text) throws ParseException {
-                try {
-                    return super.stringToValue(text);
-                } catch (ParseException ex) {
-                    Double value = MathExpr.tryEval(text);
-                    if (value == null) {
-                        throw ex;
-                    }
+                Double value = MathExpr.tryEval(text);
+                if (value != null) {
                     Object converted = convert(value);
                     Comparable<Object> min = uncheckedComparable(getMinimum());
                     Comparable<Object> max = uncheckedComparable(getMaximum());
                     if ((min != null && min.compareTo(converted) > 0) || (max != null && max.compareTo(converted) < 0)) {
-                        throw ex;
+                        throw new ParseException("Значение вне диапазона: " + text, 0);
                     }
                     return converted;
                 }
+                return super.stringToValue(text);
             }
 
             private Object convert(double value) {

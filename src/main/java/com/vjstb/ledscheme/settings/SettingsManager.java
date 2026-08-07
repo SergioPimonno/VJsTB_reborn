@@ -52,6 +52,25 @@ public class SettingsManager {
         persist();
     }
 
+    public void setLibrarySyncGlobalSeq(long seq) {
+        settings.setLibrarySyncGlobalSeq(seq);
+        persist();
+    }
+
+    public void setAuthSession(String token, String username, String role) {
+        settings.setAuthToken(token);
+        settings.setAuthUsername(username);
+        settings.setAuthRole(role);
+        persist();
+    }
+
+    public void clearAuthSession() {
+        settings.setAuthToken(null);
+        settings.setAuthUsername(null);
+        settings.setAuthRole(null);
+        persist();
+    }
+
     public UserProfile createProfile(String name) {
         UserProfile p = new UserProfile();
         p.setName(name);
@@ -101,6 +120,16 @@ public class SettingsManager {
         persist();
     }
 
+    public void setSnapThresholdPx(int px) {
+        activeProfile().setSnapThresholdPx(px);
+        persist();
+    }
+
+    public void setSnapStrengthPercent(int percent) {
+        activeProfile().setSnapStrengthPercent(percent);
+        persist();
+    }
+
     public void setSocketWiringEnabled(boolean enabled) {
         activeProfile().setSocketWiringEnabled(enabled);
         persist();
@@ -131,6 +160,11 @@ public class SettingsManager {
         persist();
     }
 
+    public void setMaskLogoImagePath(String path) {
+        activeProfile().setMaskLogoImagePath(path);
+        persist();
+    }
+
     public KeyCombo bindingFor(HotkeyAction action) {
         return activeProfile().bindingFor(action);
     }
@@ -142,21 +176,6 @@ public class SettingsManager {
 
     public void resetBinding(HotkeyAction action) {
         activeProfile().getKeyBindings().remove(action.getId());
-        persist();
-    }
-
-    /** null — раздел не переписывался, показывать встроенный текст по умолчанию. */
-    public List<ContentSection> getCustomContent(String key) {
-        return settings.getCustomContent().get(key);
-    }
-
-    public void setCustomContent(String key, List<ContentSection> sections) {
-        settings.getCustomContent().put(key, sections);
-        persist();
-    }
-
-    public void resetCustomContent(String key) {
-        settings.getCustomContent().remove(key);
         persist();
     }
 
