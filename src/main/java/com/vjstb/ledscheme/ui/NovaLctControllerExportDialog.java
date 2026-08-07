@@ -87,11 +87,13 @@ public final class NovaLctControllerExportDialog {
         });
 
         JPanel panel = new JPanel(new BorderLayout(0, 8));
+        panel.setPreferredSize(new java.awt.Dimension(360, panel.getPreferredSize().height));
         panel.add(new JLabel("Контроллер для экспорта:"), BorderLayout.NORTH);
         panel.add(controllerCombo, BorderLayout.CENTER);
-        panel.add(new JLabel("<html><body style='width:320px'>Экспортирует ВСЁ, что расключено через выбранный"
-                + " контроллер, — с любого экрана сцены, а не только текущего."
-                + "</body></html>"), BorderLayout.SOUTH);
+        JLabel hint = new JLabel();
+        panel.add(hint, BorderLayout.SOUTH);
+        UiKit.bindHtmlWrapWidth(hint, panel, () -> "Экспортирует ВСЁ, что расключено через выбранный"
+                + " контроллер, — с любого экрана сцены, а не только текущего.");
 
         if (JOptionPane.showConfirmDialog(owner, panel, "Экспорт NovaLCT для контроллера",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE) != JOptionPane.OK_OPTION) {
@@ -194,8 +196,11 @@ public final class NovaLctControllerExportDialog {
         group.add(separateBtn);
 
         JPanel panel = new JPanel(new BorderLayout(0, 8));
-        panel.add(new JLabel("<html><body style='width:340px'>Контроллер обслуживает " + screenCount
-                + " экрана(ов) сразу — как собрать их в один файл NovaLCT?</body></html>"), BorderLayout.NORTH);
+        panel.setPreferredSize(new java.awt.Dimension(380, panel.getPreferredSize().height));
+        JLabel hint = new JLabel();
+        panel.add(hint, BorderLayout.NORTH);
+        UiKit.bindHtmlWrapWidth(hint, panel, () -> "Контроллер обслуживает " + screenCount
+                + " экрана(ов) сразу — как собрать их в один файл NovaLCT?");
         JPanel radios = new JPanel(new java.awt.GridLayout(0, 1));
         radios.add(combineBtn);
         radios.add(separateBtn);

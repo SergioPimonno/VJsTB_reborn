@@ -48,6 +48,8 @@ public class ScenarioPlayerDialog extends JDialog {
     private final JLabel stepCounter = new JLabel();
     private final JButton backBtn = new JButton("← Назад");
     private final JButton nextBtn = new JButton("Далее →");
+    private String currentBodyHtml = "";
+    private Runnable rewrapBody;
 
     public ScenarioPlayerDialog(Window owner, Scenario scenario) {
         super(owner, scenario.getTitle() == null || scenario.getTitle().isBlank()
@@ -65,6 +67,7 @@ public class ScenarioPlayerDialog extends JDialog {
         bodyScroll.setPreferredSize(new Dimension(640, 90));
         content.add(bodyScroll, BorderLayout.SOUTH);
         add(content, BorderLayout.CENTER);
+        rewrapBody = UiKit.bindHtmlWrapWidth(bodyLabel, bodyScroll, () -> currentBodyHtml);
 
         JPanel bottom = new JPanel(new BorderLayout(8, 0));
         bottom.setBorder(BorderFactory.createEmptyBorder(0, 12, 10, 12));
@@ -128,8 +131,8 @@ public class ScenarioPlayerDialog extends JDialog {
         stepIndex = index;
         ScenarioStep step = scenario.getSteps().get(index);
         stepView.setStep(step);
-        String html = step.getBodyHtml() != null ? step.getBodyHtml() : "";
-        bodyLabel.setText("<html><body style='width: 620px'>" + html + "</body></html>");
+        currentBodyHtml = step.getBodyHtml() != null ? step.getBodyHtml() : "";
+        rewrapBody.run();
         boolean isLast = index == scenario.getSteps().size() - 1;
         boolean mustClickHotspot = step.hasHotspot() && stepView.hasImage();
         backBtn.setEnabled(index > 0);
