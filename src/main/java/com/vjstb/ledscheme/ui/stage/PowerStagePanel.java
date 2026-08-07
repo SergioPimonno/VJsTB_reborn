@@ -174,7 +174,7 @@ public class PowerStagePanel extends JPanel {
                 // Питание не идёт через порты контроллера (см. PowerChain) — вместо
                 // этого autoConnect распределяет вводные кабинеты по свободным
                 // разъёмам уже добавленных на схему узлов «Распределение».
-                boolean autoConnect = settings.activeProfile().isSocketWiringEnabled()
+                boolean autoConnect = settings.activeProfile().isPowerSocketWiringEnabled()
                         && settings.activeProfile().isPowerChainEndpointSocketsEnabled();
                 model.autoPopulateSchema(SchemaMode.POWER, autoConnect);
             }

@@ -35,7 +35,8 @@ public class PreferencesDialog extends JDialog {
     private JCheckBox canvasSnapToCenterCheck;
     private JSpinner snapThresholdSpinner;
     private JSpinner snapStrengthSpinner;
-    private JCheckBox socketWiringCheck;
+    private JCheckBox signalSocketWiringCheck;
+    private JCheckBox powerSocketWiringCheck;
     private JCheckBox signalChainEndpointSocketsCheck;
     private JCheckBox powerChainEndpointSocketsCheck;
     private JCheckBox signalSchemaAutoPopulateCheck;
@@ -132,18 +133,31 @@ public class PreferencesDialog extends JDialog {
         JPanel body = UiKit.vbox();
         body.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        socketWiringCheck = new JCheckBox("Линия связи цепляется за конкретный разъём, а не за блок целиком",
-                settings.activeProfile().isSocketWiringEnabled());
-        socketWiringCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
-        socketWiringCheck.setToolTipText("Включено — конец линии привязывается к нужному разъёму/гнезду карты,"
+        signalSocketWiringCheck = new JCheckBox(
+                "Сигнал: линия связи цепляется за конкретный разъём, а не за блок целиком",
+                settings.activeProfile().isSignalSocketWiringEnabled());
+        signalSocketWiringCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        signalSocketWiringCheck.setToolTipText("Включено — конец линии привязывается к нужному разъёму/гнезду карты,"
                 + " с проверкой числа свободных линий на нём. Выключено — линия просто соединяет два блока"
                 + " оборудования целиком, разъёмы в блоках — только справочная информация о комплектации. Открывает"
-                + " настройки ниже, работающие только вместе с этим режимом.");
-        socketWiringCheck.addActionListener(e -> {
-            settings.setSocketWiringEnabled(socketWiringCheck.isSelected());
+                + " настройки ниже, работающие только вместе с этим режимом (для схемы сигнала). Отдельная настройка"
+                + " от питания ниже.");
+        signalSocketWiringCheck.addActionListener(e -> {
+            settings.setSignalSocketWiringEnabled(signalSocketWiringCheck.isSelected());
             applySocketDependentEnablement();
         });
-        body.add(socketWiringCheck);
+        body.add(signalSocketWiringCheck);
+
+        powerSocketWiringCheck = new JCheckBox(
+                "Питание: линия связи цепляется за конкретный разъём, а не за блок целиком",
+                settings.activeProfile().isPowerSocketWiringEnabled());
+        powerSocketWiringCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        powerSocketWiringCheck.setToolTipText("То же самое, но для схемы питания — отдельная настройка.");
+        powerSocketWiringCheck.addActionListener(e -> {
+            settings.setPowerSocketWiringEnabled(powerSocketWiringCheck.isSelected());
+            applySocketDependentEnablement();
+        });
+        body.add(powerSocketWiringCheck);
 
         foolProofWiringCheck = new JCheckBox("«Защита от дурака» (нельзя соединять вход со входом и выход с выходом)",
                 settings.activeProfile().isFoolProofWiringEnabled());
@@ -321,19 +335,21 @@ public class PreferencesDialog extends JDialog {
         return (JPanel) UiKit.section("Генерация масок", body);
     }
 
-    /** signal/powerChainEndpointSocketsCheck и signal/powerSchemaAutoPopulateCheck
-     *  работают только вместе с socketWiringCheck (без него общая схема не различает
-     *  конкретные гнёзда/порты вообще) — недоступны для включения, пока он выключен,
-     *  чтобы не создавать видимость рабочей настройки там, где она молча ничего не
-     *  даёт. Уже включённое состояние при выключении мастер-переключателя не
-     *  сбрасывается автоматически — только становится недоступным для изменения,
+    /** signalChainEndpointSocketsCheck/signalSchemaAutoPopulateCheck работают только
+     *  вместе со СВОИМ signalSocketWiringCheck (без него общая схема сигнала не
+     *  различает конкретные гнёзда/порты вообще) — и точно так же power-варианты со
+     *  своим powerSocketWiringCheck — недоступны для включения, пока их мастер
+     *  выключен, чтобы не создавать видимость рабочей настройки там, где она молча
+     *  ничего не даёт. Уже включённое состояние при выключении мастер-переключателя
+     *  не сбрасывается автоматически — только становится недоступным для изменения,
      *  пока мастер снова не включат. */
     private void applySocketDependentEnablement() {
-        boolean enabled = socketWiringCheck.isSelected();
-        signalChainEndpointSocketsCheck.setEnabled(enabled);
-        powerChainEndpointSocketsCheck.setEnabled(enabled);
-        signalSchemaAutoPopulateCheck.setEnabled(enabled);
-        powerSchemaAutoPopulateCheck.setEnabled(enabled);
+        boolean signalEnabled = signalSocketWiringCheck.isSelected();
+        signalChainEndpointSocketsCheck.setEnabled(signalEnabled);
+        signalSchemaAutoPopulateCheck.setEnabled(signalEnabled);
+        boolean powerEnabled = powerSocketWiringCheck.isSelected();
+        powerChainEndpointSocketsCheck.setEnabled(powerEnabled);
+        powerSchemaAutoPopulateCheck.setEnabled(powerEnabled);
     }
 
     private void refresh() {
@@ -341,7 +357,8 @@ public class PreferencesDialog extends JDialog {
         canvasSnapToCenterCheck.setSelected(settings.activeProfile().isCanvasSnapToCenter());
         snapThresholdSpinner.setValue(settings.activeProfile().getSnapThresholdPx());
         snapStrengthSpinner.setValue(settings.activeProfile().getSnapStrengthPercent());
-        socketWiringCheck.setSelected(settings.activeProfile().isSocketWiringEnabled());
+        signalSocketWiringCheck.setSelected(settings.activeProfile().isSignalSocketWiringEnabled());
+        powerSocketWiringCheck.setSelected(settings.activeProfile().isPowerSocketWiringEnabled());
         foolProofWiringCheck.setSelected(settings.activeProfile().isFoolProofWiringEnabled());
         schemaScreensAsWiringCheck.setSelected(settings.activeProfile().isSchemaScreensAsWiringDiagram());
         signalChainEndpointSocketsCheck.setSelected(settings.activeProfile().isSignalChainEndpointSocketsEnabled());
