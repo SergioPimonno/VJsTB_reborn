@@ -77,6 +77,15 @@ public final class SchemeRenderer {
         return offY + (int) Math.round(cab.getRowIndex() * cellH + dy);
     }
 
+    /** Экранный прямоугольник ячейки кабинета целиком — та же геометрия, что cabX/cabY
+     *  (см. их javadoc), но сразу прямоугольником, для мест, которым нужна вся ячейка,
+     *  а не только угол (например, отметить кабинет-«гнездо» подключения на общей
+     *  схеме — см. SchemaCanvasPanel). */
+    public static java.awt.Rectangle cabinetScreenRect(CabinetInstance cab, CabinetType type, int cellW, int cellH,
+            int offX, int offY) {
+        return new java.awt.Rectangle(cabX(cab, type, cellW, offX), cabY(cab, type, cellH, offY), cellW, cellH);
+    }
+
     /** То же, но с указанием workspace — тогда для ячеек с переопределённым типом
      *  метка формы (форма кабинета) рисуется по фактическому типу ячейки.
      *  powerChains/signalChains — цепочки ВСЕЙ СЦЕНЫ этого экрана (не только его

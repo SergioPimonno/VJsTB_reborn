@@ -1087,6 +1087,33 @@ class AppModelTest {
     }
 
     @Test
+    void schemaEdgeCanAnchorToChainEndpointCabinetSocket(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+        model.selectScreen(screen);
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+        model.addPowerChain(1, List.of(ids.get(0), ids.get(1)));
+
+        SchemaNode source = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SOURCE, "Щит А1", 0, 0, null);
+        SchemaNode screenNode = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SCREEN, screen.getName(),
+                200, 0, screen.getId());
+
+        SchemaEdge edge = model.addSchemaEdge(SchemaMode.POWER, source.getId(), null, null,
+                screenNode.getId(), null, ids.get(0), null);
+        assertNull(edge.getFromCabinetInstanceId());
+        assertEquals(ids.get(0), edge.getToCabinetInstanceId());
+        assertNull(edge.getToPortId(), "Кабинет-гнездо и CardPort-гнездо — разные оси, обе не заданы одновременно");
+
+        // Ссылка на кабинет переживает copy() (см. SchemaEdge.copy) — важно для
+        // undo/redo и клонирования сцены, где рёбра копируются целиком.
+        SchemaEdge copied = edge.copy();
+        assertEquals(ids.get(0), copied.getToCabinetInstanceId());
+    }
+
+    @Test
     void structuredWireLabelComposesAndFeedsSpec(@TempDir Path dir) {
         AppModel model = freshModel(dir);
         CabinetType type = model.addCabinetType(sampleType());
