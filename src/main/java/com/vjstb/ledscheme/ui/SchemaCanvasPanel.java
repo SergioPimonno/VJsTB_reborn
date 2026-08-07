@@ -226,7 +226,7 @@ public class SchemaCanvasPanel extends JPanel {
                         repaint();
                         return;
                     }
-                    boolean socketMode = settings.activeProfile().isSocketWiringEnabled();
+                    boolean socketMode = settings.activeProfile().isSocketWiringEnabled(mode);
                     SocketHit socketHit = socketMode ? socketAt(mp) : null;
                     if (socketHit != null) {
                         if (connectPendingId == null) {
@@ -443,7 +443,7 @@ public class SchemaCanvasPanel extends JPanel {
                         hoveredCabinetSocket = cabinetHover;
                         repaint();
                     }
-                    SocketHit hover = cabinetHover == null && settings.activeProfile().isSocketWiringEnabled()
+                    SocketHit hover = cabinetHover == null && settings.activeProfile().isSocketWiringEnabled(mode)
                             ? socketAt(mp) : null;
                     if (!java.util.Objects.equals(hover, hoveredSocket)) {
                         hoveredSocket = hover;
@@ -800,7 +800,16 @@ public class SchemaCanvasPanel extends JPanel {
      *  линия больше не бьёт в геометрический центр блока (что выглядело так, будто
      *  линия "протыкает" блок насквозь), а обрезается по границе прямоугольника —
      *  точке излома на пересечении луча "центр → противоположный конец связи (или
-     *  первая/последняя точка излома пользователя)" с рамкой узла. */
+     *  первая/последняя точка излома пользователя)" с рамкой узла.
+     *  <p>Перпендикулярный сдвиг НЕ применяется, если у связи ТОЧНЫЙ якорь на ОБОИХ
+     *  концах (гнездо кабинета или конкретный CardPort с обеих сторон) — тогда все
+     *  связи, ссылающиеся на одну и ту же пару гнёзд (например, несколько кабинетов
+     *  экрана, автоматически подключённых к одной и той же группе «6×CEE 16A» —
+     *  см. AppModel#autoPopulateSchema), должны визуально сходиться РОВНО в эту
+     *  группу, а не веером расходиться в стороны (баг-репорт) — сдвиг остаётся
+     *  только для старых связей «узел-узел» без выбранных гнёзд ни на одном конце,
+     *  где он и был изначально задуман (несколько разных физических кабелей между
+     *  одной парой блоков оборудования, которым иначе физически негде разойтись). */
     private double[] endpointsFor(SchemaEdge edge) {
         SchemaNode a = nodeById(edge.getFromNodeId());
         SchemaNode b = nodeById(edge.getToNodeId());
@@ -839,7 +848,7 @@ public class SchemaCanvasPanel extends JPanel {
             bx = p[0];
             by = p[1];
         }
-        int[] slot = edgeSlot(edge);
+        int[] slot = aSocket != null && bSocket != null ? new int[]{0, 1} : edgeSlot(edge);
         int idx = slot[0], total = slot[1];
         if (total > 1) {
             double dx = bx - ax, dy = by - ay;
@@ -1958,7 +1967,7 @@ public class SchemaCanvasPanel extends JPanel {
      *  Preferences). Чисто наложение поверх уже нарисованной миниатюры — сама миниатюра
      *  не меняется, никакой новой геометрии кроме уже вычисленной {@code g}. */
     private void drawChainEndpointSockets(Graphics2D g2, SchemaNode n, ThumbGeometry g) {
-        if (!settings.activeProfile().isSocketWiringEnabled()
+        if (!settings.activeProfile().isSocketWiringEnabled(mode)
                 || !settings.activeProfile().isChainEndpointSocketsEnabled(mode)) {
             return;
         }
@@ -1998,7 +2007,7 @@ public class SchemaCanvasPanel extends JPanel {
     }
 
     private CabinetSocketHit cabinetSocketAt(Point p) {
-        if (!settings.activeProfile().isSocketWiringEnabled()
+        if (!settings.activeProfile().isSocketWiringEnabled(mode)
                 || !settings.activeProfile().isChainEndpointSocketsEnabled(mode)) {
             return null;
         }

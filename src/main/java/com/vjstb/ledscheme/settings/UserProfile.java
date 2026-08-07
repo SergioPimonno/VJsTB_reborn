@@ -45,16 +45,22 @@ public class UserProfile {
      *  к цели, не прилипая намертво (см. SnapMath.blend). */
     private int snapStrengthPercent = 100;
 
-    /** Коммутация через гнёзда разъёмов в общей схеме: если включено, соединение
-     *  узлов в режиме «Соединение» цепляется за конкретный разъём (гнездо) карты
-     *  оборудования, а не за узел целиком — так связь на схеме показывает, какой
-     *  именно разъём с каким соединён. Выключено по умолчанию — обычное соединение
-     *  «узел-узел» продолжает работать как раньше. */
-    private boolean socketWiringEnabled = false;
+    /** Коммутация через гнёзда разъёмов в общей схеме СИГНАЛА: если включено,
+     *  соединение узлов в режиме «Соединение» цепляется за конкретный разъём
+     *  (гнездо) карты оборудования, а не за узел целиком — так связь на схеме
+     *  показывает, какой именно разъём с каким соединён. Выключено по умолчанию —
+     *  обычное соединение «узел-узел» продолжает работать как раньше. Отдельная
+     *  настройка от {@link #powerSocketWiringEnabled} — режимы схем устроены
+     *  по-разному, инженеру может быть нужен режим гнёзд только для одного из них. */
+    private boolean signalSocketWiringEnabled = false;
+
+    /** То же самое для схемы ПИТАНИЯ — см. {@link #signalSocketWiringEnabled}
+     *  (та же идея, отдельная настройка). */
+    private boolean powerSocketWiringEnabled = false;
 
     /** Использовать вводные кабинеты цепочек СИГНАЛА как гнёзда подключения на общей
-     *  схеме — независимо от {@link #socketWiringEnabled} (та решает, цепляется ли
-     *  связь за конкретное гнездо ВООБЩЕ; эта — какие гнёзда доступны). Вводной
+     *  схеме — независимо от {@link #signalSocketWiringEnabled} (та решает,
+     *  цепляется ли связь за конкретное гнездо ВООБЩЕ; эта — какие гнёзда доступны). Вводной
      *  кабинет основной цепочки, и ДОПОЛНИТЕЛЬНО последний кабинет той же цепочки,
      *  если для порта задан резерв (см. {@code AppModel.chainEndpointSocketCabinetIds}).
      *  Гнёзда видны только поверх миниатюры расключения экрана (см.
@@ -80,7 +86,7 @@ public class UserProfile {
      *  настройка от {@link #powerSchemaAutoPopulateEnabled} — расключение сигнала и
      *  питания устроено принципиально по-разному (контроллеры с реальными портами
      *  vs произвольные «проходные» щиты), инженеру может быть нужно только одно из
-     *  двух. Доступно только когда включён {@link #socketWiringEnabled} (см.
+     *  двух. Доступно только когда включён {@link #signalSocketWiringEnabled} (см.
      *  PreferencesDialog — без него общая схема не различает конкретные гнёзда/порты
      *  вообще). Выключено по умолчанию. */
     private boolean signalSchemaAutoPopulateEnabled = false;
@@ -93,11 +99,12 @@ public class UserProfile {
      *  «Распределение» (щиты/проходные), максимально заполняя каждый по очереди,
      *  прежде чем переходить к следующему — новые узлы автоматически не создаются
      *  (см. AppModel#autoPopulateSchema). Доступно только когда включён
-     *  {@link #socketWiringEnabled}. Выключено по умолчанию. */
+     *  {@link #powerSocketWiringEnabled}. Выключено по умолчанию. */
     private boolean powerSchemaAutoPopulateEnabled = false;
 
-    /** "Защита от дурака" в общей схеме: если включено, соединение через гнёзда
-     *  разъёмов (см. socketWiringEnabled) запрещает связывать ВХОД со ВХОДОМ или
+    /** "Защита от дурака" в общей схеме (обе схемы, общая настройка): если включено,
+     *  соединение через гнёзда разъёмов (см. signal/powerSocketWiringEnabled)
+     *  запрещает связывать ВХОД со ВХОДОМ или
      *  ВЫХОД с ВЫХОДОМ (сравнение {@link com.vjstb.ledscheme.model.CardPort#getDirection()}
      *  на обоих концах) — такое соединение физически бессмысленно. Включено по
      *  умолчанию — типичная ошибка новичка, защита не мешает опытному инженеру,
@@ -116,8 +123,8 @@ public class UserProfile {
      *  настройка от {@link #powerConnectorDisplayMode} — на практике у сигнала
      *  отдельные разъёмы карты используют довольно часто (расключение по конкретным
      *  Ethernet-портам), у питания — редко (обычно достаточно группы «N×разъём»).
-     *  Независимая ось от {@link #socketWiringEnabled} — та решает, цепляется ли линия
-     *  связи за конкретное гнездо; эта — как гнёзда рисуются, см.
+     *  Независимая ось от {@link #signalSocketWiringEnabled} — та решает, цепляется ли
+     *  линия связи за конкретное гнездо; эта — как гнёзда рисуются, см.
      *  {@link ConnectorDisplayMode}. */
     private ConnectorDisplayMode signalConnectorDisplayMode = ConnectorDisplayMode.GROUPED;
 
@@ -260,12 +267,27 @@ public class UserProfile {
         this.snapStrengthPercent = snapStrengthPercent;
     }
 
-    public boolean isSocketWiringEnabled() {
-        return socketWiringEnabled;
+    public boolean isSignalSocketWiringEnabled() {
+        return signalSocketWiringEnabled;
     }
 
-    public void setSocketWiringEnabled(boolean socketWiringEnabled) {
-        this.socketWiringEnabled = socketWiringEnabled;
+    public void setSignalSocketWiringEnabled(boolean signalSocketWiringEnabled) {
+        this.signalSocketWiringEnabled = signalSocketWiringEnabled;
+    }
+
+    public boolean isPowerSocketWiringEnabled() {
+        return powerSocketWiringEnabled;
+    }
+
+    public void setPowerSocketWiringEnabled(boolean powerSocketWiringEnabled) {
+        this.powerSocketWiringEnabled = powerSocketWiringEnabled;
+    }
+
+    /** Режим коммутации через гнёзда для {@code mode} — удобный маршрутизатор, см.
+     *  {@link #getConnectorDisplayMode(com.vjstb.ledscheme.model.SchemaMode)}. */
+    public boolean isSocketWiringEnabled(com.vjstb.ledscheme.model.SchemaMode mode) {
+        return mode == com.vjstb.ledscheme.model.SchemaMode.POWER
+                ? isPowerSocketWiringEnabled() : isSignalSocketWiringEnabled();
     }
 
     public boolean isSignalChainEndpointSocketsEnabled() {
@@ -403,7 +425,8 @@ public class UserProfile {
         p.canvasSnapToCenter = canvasSnapToCenter;
         p.snapThresholdPx = snapThresholdPx;
         p.snapStrengthPercent = snapStrengthPercent;
-        p.socketWiringEnabled = socketWiringEnabled;
+        p.signalSocketWiringEnabled = signalSocketWiringEnabled;
+        p.powerSocketWiringEnabled = powerSocketWiringEnabled;
         p.signalChainEndpointSocketsEnabled = signalChainEndpointSocketsEnabled;
         p.powerChainEndpointSocketsEnabled = powerChainEndpointSocketsEnabled;
         p.signalSchemaAutoPopulateEnabled = signalSchemaAutoPopulateEnabled;

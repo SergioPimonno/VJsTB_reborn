@@ -130,8 +130,13 @@ public class SettingsManager {
         persist();
     }
 
-    public void setSocketWiringEnabled(boolean enabled) {
-        activeProfile().setSocketWiringEnabled(enabled);
+    public void setSignalSocketWiringEnabled(boolean enabled) {
+        activeProfile().setSignalSocketWiringEnabled(enabled);
+        persist();
+    }
+
+    public void setPowerSocketWiringEnabled(boolean enabled) {
+        activeProfile().setPowerSocketWiringEnabled(enabled);
         persist();
     }
 
