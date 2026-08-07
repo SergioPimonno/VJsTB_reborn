@@ -1962,7 +1962,7 @@ public class SchemaCanvasPanel extends JPanel {
                 || !settings.activeProfile().isChainEndpointSocketsEnabled()) {
             return;
         }
-        Set<String> socketIds = model.chainEndpointSocketCabinetIds(g.screen());
+        Set<String> socketIds = model.chainEndpointSocketCabinetIds(mode, g.screen());
         if (socketIds.isEmpty()) {
             return;
         }
@@ -2010,7 +2010,7 @@ public class SchemaCanvasPanel extends JPanel {
             if (g == null) {
                 continue;
             }
-            Set<String> socketIds = model.chainEndpointSocketCabinetIds(g.screen());
+            Set<String> socketIds = model.chainEndpointSocketCabinetIds(mode, g.screen());
             for (String cabId : socketIds) {
                 CabinetInstance cab = g.screen().cabinetById(cabId);
                 if (cab == null) {

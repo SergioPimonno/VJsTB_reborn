@@ -1846,12 +1846,13 @@ class AppModelTest {
         // Сигнал без резерва: только вводной кабинет основной цепочки — гнездо.
         model.addSignalChain(2, false, List.of(ids.get(2), ids.get(3)));
 
-        var noBackup = model.chainEndpointSocketCabinetIds(screen);
-        assertEquals(2, noBackup.size());
-        assertTrue(noBackup.contains(ids.get(0)));
-        assertFalse(noBackup.contains(ids.get(1)), "Конечный (не вводной) кабинет силовой цепочки — не гнездо");
-        assertTrue(noBackup.contains(ids.get(2)));
-        assertFalse(noBackup.contains(ids.get(3)));
+        // Режимы НЕ смешиваются (баг-репорт: на общей схеме питания появлялось лишнее
+        // гнездо от сигнальной цепочки того же экрана, и наоборот) — схема питания
+        // видит ТОЛЬКО силовой вводной кабинет, схема сигнала — ТОЛЬКО сигнальный.
+        var power = model.chainEndpointSocketCabinetIds(SchemaMode.POWER, screen);
+        assertEquals(java.util.Set.of(ids.get(0)), power);
+        var signal = model.chainEndpointSocketCabinetIds(SchemaMode.SIGNAL, screen);
+        assertEquals(java.util.Set.of(ids.get(2)), signal);
 
         // Порт 2 получает резерв — порт 5. Резервный порт заблокирован для собственной
         // РУЧНОЙ цепочки (см. addSignalChainRejectsReservedBackupPortDirectly) — в
@@ -1860,7 +1861,9 @@ class AppModelTest {
         // множество, что и без резерва (при появлении в будущем способа физически
         // расключить резервный порт отдельными кабинетами, этот тест должен вырасти).
         model.setSignalBackupPortLink(2, 5);
-        var withBackup = model.chainEndpointSocketCabinetIds(screen);
-        assertEquals(noBackup, withBackup, "Пустая цепочка-заглушка резервного порта не добавляет гнёзд");
+        var signalWithBackup = model.chainEndpointSocketCabinetIds(SchemaMode.SIGNAL, screen);
+        assertEquals(signal, signalWithBackup, "Пустая цепочка-заглушка резервного порта не добавляет гнёзд");
+        assertEquals(power, model.chainEndpointSocketCabinetIds(SchemaMode.POWER, screen),
+                "Назначение сигнального резерва не должно влиять на гнёзда питания");
     }
 }
