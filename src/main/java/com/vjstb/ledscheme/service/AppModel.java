@@ -1398,11 +1398,29 @@ public class AppModel {
 
     // ---- справочник видов интерфейса и их версий (InterfaceType) ----
 
-    /** Общая ++ личная — см. getCabinetTypes(). */
+    /** Общая ++ личная — см. getCabinetTypes(). Дедуплицирует по имени (без учёта
+     *  регистра/пробелов по краям) — иначе личный дефолт (см.
+     *  {@link #seedDefaultInterfaceTypesIfEmpty}) и одноимённая запись, пришедшая
+     *  синком в общую библиотеку, показывались бы в списке ОБА СРАЗУ, если синк
+     *  не "продвинул" личную (например, из-за лишнего пробела в имени на
+     *  сервере — {@link #applyOne} сверяет имя без учёта регистра, но раньше не
+     *  обрезал пробелы). Общая запись побеждает при совпадении имени. */
     public List<InterfaceType> getInterfaceTypes() {
         List<InterfaceType> union = new ArrayList<>(workspace.getSharedInterfaceTypes());
-        union.addAll(workspace.getInterfaceTypes());
+        java.util.Set<String> seenNames = new java.util.HashSet<>();
+        for (InterfaceType t : union) {
+            seenNames.add(normalizedName(t.getName()));
+        }
+        for (InterfaceType t : workspace.getInterfaceTypes()) {
+            if (seenNames.add(normalizedName(t.getName()))) {
+                union.add(t);
+            }
+        }
         return union;
+    }
+
+    private static String normalizedName(String name) {
+        return name == null ? "" : name.trim().toLowerCase(java.util.Locale.ROOT);
     }
 
     public boolean isSharedInterfaceType(String id) {
@@ -1421,10 +1439,19 @@ public class AppModel {
         return null;
     }
 
-    // Добавление/изменение/удаление вида интерфейса — только через отдельную
+    /** Удаляет ЛИЧНЫЙ вид интерфейса (общие — только через админ-консоль, см.
+     *  ниже); безопасно вызывать с id общей записи — removeIf просто ничего не
+     *  найдёт в личном списке, т.к. общие туда не попадают. */
+    public void deleteInterfaceType(String id) {
+        workspace.getInterfaceTypes().removeIf(t -> t.getId().equals(id));
+        changed();
+    }
+
+    // Добавление/изменение вида интерфейса — только через отдельную
     // админ-консоль (ledscheme-admin, Task #135/v2.0), не отсюда: это общая
     // справочная данные (как и остальные библиотеки), обычный клиент может только
-    // читать её и предлагать новый вид (см. ProposeDialog в LibrariesStagePanel).
+    // читать её, удалять свои личные записи и предлагать новый вид (см.
+    // ProposeDialog в LibrariesStagePanel).
 
     // ---- каталоги доступных длин катушек кабеля (CableLengthProfile, для CableSpecCalc) ----
 
@@ -1495,7 +1522,7 @@ public class AppModel {
     private static final ObjectMapper SYNC_MAPPER = new ObjectMapper()
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
 
-    public record LibrarySyncSummary(int added, int updated, int skippedDeleted) {
+    public record LibrarySyncSummary(int added, int updated, int deleted, int skippedDeleted) {
     }
 
     /** Применяет дельту, полученную от {@link LibrarySyncClient#fetchChanges}, к
@@ -1505,17 +1532,26 @@ public class AppModel {
      *  payloadJson на момент отправки (см. LibraryService.create на сервере),
      *  поэтому перезапись id при получении — то, что делает повторную
      *  синхронизацию ЭТОЙ ЖЕ записи идемпотентной (find-by-id находит её снова
-     *  вместо создания дубликата). Удалённые на сервере записи (deleted=true) в
-     *  этой версии НЕ удаляются локально — резко убирать элемент, на который
-     *  могут ссылаться экраны/цепочки сцены, слишком рискованно для тихого
-     *  фонового шага; такие записи просто пропускаются (см. skippedDeleted). */
+     *  вместо создания дубликата). Удалённые на сервере записи (deleted=true) —
+     *  см. {@link #applyDeletion} — удаляются локально из общей библиотеки, КРОМЕ
+     *  случая, когда вид ссылается на реальные данные сцены (CABINET/CONTROLLER)
+     *  И хотя бы один экран/цепочка сцены на неё ссылается: тогда запись остаётся,
+     *  чтобы не обрушить расчёты уже вставленных экранов тихим фоновым шагом
+     *  (см. skippedDeleted; баг-репорт: "ROE 7mm new" — тестовая запись, удалённая
+     *  на сервере, годами не пропадала из личной копии клиента при повторных
+     *  синках, раз ничего не ссылалось — теперь пропадает). */
     public LibrarySyncSummary applyLibrarySyncItems(List<LibrarySyncClient.LibraryItemDto> items) {
         int added = 0;
         int updated = 0;
+        int deletedCount = 0;
         int skippedDeleted = 0;
         for (LibrarySyncClient.LibraryItemDto dto : items) {
             if (dto.deleted()) {
-                skippedDeleted++;
+                if (applyDeletion(dto)) {
+                    deletedCount++;
+                } else {
+                    skippedDeleted++;
+                }
                 continue;
             }
             try {
@@ -1559,10 +1595,84 @@ public class AppModel {
                 // Битый payloadJson одной записи не должен рушить синхронизацию остальных.
             }
         }
-        if (added > 0 || updated > 0) {
+        if (added > 0 || updated > 0 || deletedCount > 0) {
             changed();
         }
-        return new LibrarySyncSummary(added, updated, skippedDeleted);
+        return new LibrarySyncSummary(added, updated, deletedCount, skippedDeleted);
+    }
+
+    /** Обрабатывает {@code dto.deleted()==true}: удаляет запись из ОБЩЕЙ библиотеки
+     *  соответствующего вида, если она там есть. Для CABINET/CONTROLLER — только
+     *  если ни один экран/кабинет/контроллер локально на неё НЕ ссылается (см.
+     *  {@link #isCabinetTypeReferenced}/{@link #isControllerTypeReferenced}) —
+     *  иначе тихий фоновый синк молча обнулил бы мощность/вес живых экранов.
+     *  Остальные виды (EQUIPMENT/CABLE/INTERFACE/CABLE_LENGTH_PROFILE) нигде в
+     *  workspace по id не хранятся (см. migrate*References — там же обоснование),
+     *  поэтому удаляются безусловно. Возвращает false (запись остаётся,
+     *  учитывается в skippedDeleted), если её не было локально, или она есть, но
+     *  защищена ссылкой. */
+    private boolean applyDeletion(LibrarySyncClient.LibraryItemDto dto) {
+        return switch (dto.kind()) {
+            case "CABINET" -> removeSharedIfUnreferenced(workspace.getSharedCabinetTypes(), dto.id(),
+                    CabinetType::getId, this::isCabinetTypeReferenced);
+            case "CONTROLLER" -> removeSharedIfUnreferenced(workspace.getSharedControllerTypes(), dto.id(),
+                    ControllerType::getId, this::isControllerTypeReferenced);
+            case "EQUIPMENT" -> workspace.getSharedEquipmentPresets().removeIf(p -> p.getId().equals(dto.id()));
+            case "CABLE" -> workspace.getSharedCableTypes().removeIf(c -> c.getId().equals(dto.id()));
+            case "INTERFACE" -> workspace.getSharedInterfaceTypes().removeIf(t -> t.getId().equals(dto.id()));
+            case "CABLE_LENGTH_PROFILE" ->
+                    workspace.getSharedCableLengthProfiles().removeIf(p -> p.getId().equals(dto.id()));
+            default -> false; // остальные виды (тексты/сценарии/параметры) не поддерживают удаление синком
+        };
+    }
+
+    private <T> boolean removeSharedIfUnreferenced(List<T> sharedList, String id, Function<T, String> idOf,
+                                                     java.util.function.Predicate<String> isReferenced) {
+        T found = null;
+        for (T item : sharedList) {
+            if (idOf.apply(item).equals(id)) {
+                found = item;
+                break;
+            }
+        }
+        if (found == null || isReferenced.test(id)) {
+            return false;
+        }
+        sharedList.remove(found);
+        return true;
+    }
+
+    private boolean isCabinetTypeReferenced(String id) {
+        for (Project project : workspace.getProjects()) {
+            for (Scene scene : project.getScenes()) {
+                for (Screen screen : scene.getScreens()) {
+                    if (id.equals(screen.getCabinetTypeId())) {
+                        return true;
+                    }
+                    for (CabinetInstance cabinet : screen.getCabinets()) {
+                        if (id.equals(cabinet.getCabinetTypeId())) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean isControllerTypeReferenced(String id) {
+        for (Project project : workspace.getProjects()) {
+            for (Scene scene : project.getScenes()) {
+                for (Screen screen : scene.getScreens()) {
+                    for (ControllerInstance controller : screen.getControllers()) {
+                        if (id.equals(controller.getControllerTypeId())) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     /** Нет-оп для {@code referenceMigrator} у видов, на id которых нигде в
@@ -1607,7 +1717,7 @@ public class AppModel {
             if (dtoName != null && !dtoName.isBlank()) {
                 for (int i = 0; i < sharedList.size(); i++) {
                     String existingName = nameOf.apply(sharedList.get(i));
-                    if (existingName != null && existingName.equalsIgnoreCase(dtoName)) {
+                    if (existingName != null && existingName.trim().equalsIgnoreCase(dtoName.trim())) {
                         sharedList.set(i, parsed);
                         wasAdded = false;
                         break;
@@ -1625,7 +1735,8 @@ public class AppModel {
         if (promotedName != null && !promotedName.isBlank()) {
             List<String> promotedOldIds = new ArrayList<>();
             personalList.removeIf(item -> {
-                if (promotedName.equalsIgnoreCase(nameOf.apply(item))) {
+                String itemName = nameOf.apply(item);
+                if (itemName != null && promotedName.trim().equalsIgnoreCase(itemName.trim())) {
                     promotedOldIds.add(idOf.apply(item));
                     return true;
                 }

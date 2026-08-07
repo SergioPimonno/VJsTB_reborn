@@ -15,6 +15,7 @@ import com.vjstb.ledscheme.model.CardPort;
 import com.vjstb.ledscheme.model.ContentCanvas;
 import com.vjstb.ledscheme.model.ControllerInstance;
 import com.vjstb.ledscheme.model.ControllerType;
+import com.vjstb.ledscheme.model.InterfaceType;
 import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.Project;
@@ -1688,5 +1689,117 @@ class AppModelTest {
         assertTrue(model.getWorkspace().getControllerTypes().isEmpty(), "личная запись должна быть продвинута (удалена)");
         assertEquals("srv-ctrl-1", controller.getControllerTypeId(),
                 "ссылка контроллера должна перенестись на новый id общей записи, а не остаться повисшей на старом личном id");
+    }
+
+    @Test
+    void getInterfaceTypesDedupesSharedAndPersonalByName(@TempDir Path dir) {
+        // Регрессия на реальный баг: freshModel сеет личные дефолты (HDMI/
+        // DisplayPort/... — см. seedDefaultInterfaceTypesIfEmpty), и если синк
+        // приносит с сервера общую запись с ТЕМ ЖЕ именем, но её точное
+        // совпадение по имени не сработало при "продвижении" (например, из-за
+        // лишнего пробела на конце — на практике так и произошло у пользователя),
+        // личная запись оставалась висеть — и getInterfaceTypes() показывал её
+        // ДВАЖДЫ (общую + личную). Список должен схлопывать такие дубли по имени.
+        AppModel model = freshModel(dir);
+        long hdmiBefore = model.getInterfaceTypes().stream().filter(t -> t.getName().equalsIgnoreCase("HDMI")).count();
+        assertEquals(1, hdmiBefore, "личный дефолт HDMI должен быть один");
+
+        model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-hdmi", "INTERFACE", "HDMI",
+                "{\"name\":\"HDMI\",\"versions\":[\"1.4\",\"2.0\",\"2.1\"]}", 1, false)));
+
+        List<InterfaceType> hdmiEntries = model.getInterfaceTypes().stream()
+                .filter(t -> t.getName().equalsIgnoreCase("HDMI")).toList();
+        assertEquals(1, hdmiEntries.size(), "после синка в списке должна остаться только одна запись HDMI, не две");
+        assertEquals("srv-hdmi", hdmiEntries.get(0).getId(), "должна остаться общая (продвинутая) запись");
+    }
+
+    @Test
+    void applyOnePromotionMatchesNameIgnoringSurroundingWhitespace(@TempDir Path dir) {
+        // Раньше сверка имени при "продвижении" личной записи не обрезала
+        // пробелы (equalsIgnoreCase без trim) — запись с лишним пробелом на
+        // сервере ("HDMI ") не "продвигала" личную "HDMI", и обе оставались в
+        // объединённом списке одновременно. Теперь сверка обрезает пробелы.
+        AppModel model = freshModel(dir);
+        model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-hdmi", "INTERFACE", "HDMI ",
+                "{\"name\":\"HDMI \",\"versions\":[\"1.4\",\"2.0\",\"2.1\"]}", 1, false)));
+
+        boolean personalHdmiStillPresent = model.getWorkspace().getInterfaceTypes().stream()
+                .anyMatch(t -> t.getName().trim().equalsIgnoreCase("HDMI"));
+        assertFalse(personalHdmiStillPresent, "личная запись HDMI должна быть продвинута несмотря на пробел в имени с сервера");
+    }
+
+    @Test
+    void deleteInterfaceTypeRemovesOnlyPersonalEntry(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        int before = model.getWorkspace().getInterfaceTypes().size();
+        InterfaceType hdmi = model.getInterfaceTypes().stream()
+                .filter(t -> t.getName().equalsIgnoreCase("HDMI")).findFirst().orElseThrow();
+
+        model.deleteInterfaceType(hdmi.getId());
+
+        assertEquals(before - 1, model.getWorkspace().getInterfaceTypes().size());
+        assertTrue(model.getInterfaceTypes().stream().noneMatch(t -> t.getName().equalsIgnoreCase("HDMI")));
+    }
+
+    @Test
+    void librarySyncRemovesUnreferencedSharedCabinetTypeWhenServerDeletesIt(@TempDir Path dir) {
+        // Регрессия на реальный баг-репорт: тестовая запись ("ROE 7mm new"),
+        // удалённая на сервере, годами не пропадала из общей библиотеки клиента
+        // при повторных синках — deleted=true просто пропускался безусловно.
+        // Если запись НИЧЕМ локально не используется, синк теперь должен убрать
+        // её из общей библиотеки, а не хранить вечно.
+        AppModel model = freshModel(dir);
+        model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-roe", "CABINET", "ROE 7mm new", "{\"name\":\"ROE 7mm new\"}", 5, false)));
+        assertEquals(1, model.getWorkspace().getSharedCabinetTypes().size());
+
+        AppModel.LibrarySyncSummary summary = model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-roe", "CABINET", "ROE 7mm new", "{\"name\":\"ROE 7mm new\"}", 6, true)));
+
+        assertEquals(1, summary.deleted());
+        assertEquals(0, summary.skippedDeleted());
+        assertTrue(model.getWorkspace().getSharedCabinetTypes().isEmpty());
+    }
+
+    @Test
+    void librarySyncKeepsSharedCabinetTypeDeletionIfScreenStillReferencesIt(@TempDir Path dir) {
+        // То же удаление, но экран сцены реально использует этот тип кабинета —
+        // синк не должен обрушивать его мощность/вес тихим фоновым шагом
+        // (тот же класс бага, что чинили для "продвижения" — см.
+        // librarySyncMigratesScreenCabinetTypeReferenceWhenPersonalTypeIsPromoted).
+        AppModel model = freshModel(dir);
+        model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-roe", "CABINET", "ROE 7mm new", "{\"name\":\"ROE 7mm new\",\"widthMm\":600,\"heightMm\":600,"
+                        + "\"resolutionWidth\":80,\"resolutionHeight\":80,\"powerConsumptionW\":250,\"weightKg\":10}",
+                5, false)));
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        model.addScreen("E", "srv-roe", 2, 3, 0, 0);
+
+        AppModel.LibrarySyncSummary summary = model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-roe", "CABINET", "ROE 7mm new", "{\"name\":\"ROE 7mm new\"}", 6, true)));
+
+        assertEquals(0, summary.deleted());
+        assertEquals(1, summary.skippedDeleted());
+        assertEquals(1, model.getWorkspace().getSharedCabinetTypes().size(),
+                "запись должна остаться — на неё ссылается реальный экран");
+    }
+
+    @Test
+    void librarySyncAlwaysRemovesDeletedInterfaceTypeRegardlessOfUsage(@TempDir Path dir) {
+        // Виды интерфейса нигде в workspace по id не хранятся (в отличие от
+        // CABINET/CONTROLLER) — для них удаление безусловно безопасно.
+        AppModel model = freshModel(dir);
+        model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-hdmi2", "INTERFACE", "HDMI 2.2", "{\"name\":\"HDMI 2.2\"}", 5, false)));
+        assertEquals(1, model.getWorkspace().getSharedInterfaceTypes().size());
+
+        AppModel.LibrarySyncSummary summary = model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-hdmi2", "INTERFACE", "HDMI 2.2", "{\"name\":\"HDMI 2.2\"}", 6, true)));
+
+        assertEquals(1, summary.deleted());
+        assertTrue(model.getWorkspace().getSharedInterfaceTypes().isEmpty());
     }
 }

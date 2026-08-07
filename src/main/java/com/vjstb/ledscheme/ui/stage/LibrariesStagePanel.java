@@ -135,7 +135,7 @@ public class LibrariesStagePanel extends JPanel {
         // числом при сборке — иначе при широком окне остаётся пустое место, а при
         // узком содержимое вылезает за край (Task #100, повторный баг-репорт).
         exportImportSection = (javax.swing.JComponent) UiKit.section(
-                "Экспорт / импорт библиотек",
+                "Экспорт / импорт личных библиотек",
                 new com.vjstb.ledscheme.ui.LibraryExportImportPanel(model));
         cabinetsSection = buildLibrary();
         controllersSection = buildControllerLibrary();
@@ -660,8 +660,9 @@ public class LibrariesStagePanel extends JPanel {
     }
 
     // ---- виды интерфейса (HDMI/DisplayPort/SDI/...) — общая справочная данные,
-    //      правится только через отдельную админ-консоль (Task #135/v2.0);
-    //      здесь — только просмотр + предложить новый вид ----
+    //      добавление/изменение — только через отдельную админ-консоль
+    //      (Task #135/v2.0); отсюда — просмотр, удаление СВОИХ личных записей
+    //      (например, дублей/черновиков) и предложить новый вид ----
 
     private JPanel buildInterfaceTypeSection() {
         interfaceTypeList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
@@ -672,16 +673,30 @@ public class LibrariesStagePanel extends JPanel {
         interfaceTypeList.setCellRenderer(interfaceTypeRenderer);
 
         JPanel addRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
+        Runnable deleteSelectedInterfaceType = () -> {
+            InterfaceType sel = interfaceTypeList.getSelectedValue();
+            if (sel != null && confirm("Удалить вид интерфейса «" + sel.getName() + "» из личной библиотеки?")) {
+                model.deleteInterfaceType(sel.getId());
+            }
+        };
+        JButton del = new JButton("Удалить");
+        del.addActionListener(e -> deleteSelectedInterfaceType.run());
+        UiKit.bindDeleteKey(interfaceTypeList, deleteSelectedInterfaceType);
         JButton propose = new JButton("Предложить…");
         propose.addActionListener(e -> {
             InterfaceType sel = interfaceTypeList.getSelectedValue();
             if (sel != null) ProposeDialog.show(topWindow(), settings, "INTERFACE", sel.getName(), sel);
         });
+        addRow.add(del);
         addRow.add(propose);
+        String sharedTip = "Общие элементы редактируются только через админ-консоль";
         interfaceTypeList.addListSelectionListener(e -> {
             InterfaceType sel = interfaceTypeList.getSelectedValue();
             boolean shared = sel != null && model.isSharedInterfaceType(sel.getId());
+            del.setEnabled(sel != null && !shared);
             propose.setEnabled(sel != null && !shared);
+            String tip = shared ? sharedTip : null;
+            del.setToolTipText(tip);
             propose.setToolTipText(shared ? "Уже входит в общую библиотеку" : null);
         });
         return (JPanel) UiKit.dynamicSection("Виды интерфейса", listSectionBody(interfaceTypeScroll, addRow));

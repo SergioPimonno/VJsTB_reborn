@@ -78,10 +78,12 @@ public class LibrarySyncDialog extends JDialog {
                     if (result.latestGlobalSeq() > since) {
                         settings.setLibrarySyncGlobalSeq(result.latestGlobalSeq());
                     }
-                    if (summary.added() == 0 && summary.updated() == 0) {
+                    if (summary.added() == 0 && summary.updated() == 0 && summary.deleted() == 0) {
                         status.setText("Библиотека уже актуальна.");
                     } else {
-                        status.setText("Добавлено: " + summary.added() + ", обновлено: " + summary.updated() + ".");
+                        String deletedPart = summary.deleted() > 0 ? ", удалено: " + summary.deleted() : "";
+                        status.setText("Добавлено: " + summary.added() + ", обновлено: " + summary.updated()
+                                + deletedPart + ".");
                     }
                 } catch (Exception ex) {
                     status.setText("Не удалось синхронизировать: " + rootMessage(ex));
