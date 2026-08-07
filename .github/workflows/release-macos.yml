@@ -42,6 +42,19 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      - name: SSH-агент для ledscheme-model (приватный репозиторий)
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.LEDSCHEME_MODEL_DEPLOY_KEY }}
+
+      - name: Собрать и установить ledscheme-model в локальный m2
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+          git clone --depth 1 git@github.com:SergioPimonno/ledscheme-model.git /tmp/ledscheme-model
+          cd /tmp/ledscheme-model
+          mvn -q -DskipTests install
+
       - name: Собрать jar
         run: mvn -q -DskipTests package
 

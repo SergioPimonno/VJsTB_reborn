@@ -1,0 +1,89 @@
+name: Release Linux build
+
+# Собирает нативный .deb для Linux (с встроенным Java-рантаймом — пользователю
+# не нужно ставить Java отдельно) и прикладывает его к существующему GitHub
+# Release с указанным тегом. jpackage умеет собирать только под ту ОС, на
+# которой запущен, поэтому linux-сборка обязательно идёт на ubuntu-latest
+# раннере, а не локально (разработка ведётся на Windows).
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Тег релиза, к которому прикладывать .deb (например v2.0)'
+        required: true
+        default: 'v2.0'
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux-deb:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Определить тег
+        id: ver
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ver.outputs.tag }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: SSH-агент для ledscheme-model (приватный репозиторий)
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.LEDSCHEME_MODEL_DEPLOY_KEY }}
+
+      - name: Собрать и установить ledscheme-model в локальный m2
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+          git clone --depth 1 git@github.com:SergioPimonno/ledscheme-model.git /tmp/ledscheme-model
+          cd /tmp/ledscheme-model
+          mvn -q -DskipTests install
+
+      - name: Собрать jar
+        run: mvn -q -DskipTests package
+
+      - name: Подготовить вход для jpackage
+        run: |
+          mkdir -p dist-input
+          cp target/led-scheme.jar dist-input/led-scheme.jar
+
+      - name: Собрать .deb (jpackage, со встроенным рантаймом)
+        run: |
+          jpackage \
+            --type deb \
+            --input dist-input \
+            --dest dist \
+            --name "LED Scheme Designer" \
+            --main-jar led-scheme.jar \
+            --main-class com.vjstb.ledscheme.App \
+            --app-version "${{ steps.ver.outputs.version }}" \
+            --vendor "VJsTB" \
+            --linux-package-name "led-scheme-designer" \
+            --linux-shortcut
+
+      - name: Загрузить .deb в релиз
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DEB=$(find dist -name '*.deb' | head -n1)
+          mv "$DEB" "dist/LED-Scheme-Designer-${{ steps.ver.outputs.tag }}-linux.deb"
+          gh release upload "${{ steps.ver.outputs.tag }}" \
+            "dist/LED-Scheme-Designer-${{ steps.ver.outputs.tag }}-linux.deb" \
+            --repo "${{ github.repository }}" \
+            --clobber
