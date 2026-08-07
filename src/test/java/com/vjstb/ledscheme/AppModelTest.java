@@ -1871,4 +1871,122 @@ class AppModelTest {
         assertEquals(power, model.chainEndpointSocketCabinetIds(SchemaMode.POWER, screen),
                 "Назначение сигнального резерва не должно влиять на гнёзда питания");
     }
+
+    @Test
+    void autoPopulateSchemaAddsOnlyWiredScreensAndUsedControllersWithoutDuplicating(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen wired = model.addScreen("Wired", type.getId(), 2, 2, 0, 0);
+        Screen unwired = model.addScreen("Unwired", type.getId(), 2, 2, 1000, 0);
+        model.selectScreen(wired);
+
+        ControllerType used = new ControllerType();
+        used.setName("Used");
+        used.setPortCount(4);
+        used = model.addControllerType(used);
+        ControllerInstance usedCi = model.addControllerToScreen(wired, used.getId());
+
+        ControllerType unusedType = new ControllerType();
+        unusedType.setName("Unused");
+        unusedType.setPortCount(4);
+        unusedType = model.addControllerType(unusedType);
+        model.addControllerToScreen(wired, unusedType.getId());
+
+        List<String> ids = wired.getCabinets().stream().map(CabinetInstance::getId).toList();
+        model.addSignalChain(1, false, List.of(ids.get(0)));
+
+        model.autoPopulateSchema(SchemaMode.SIGNAL, false);
+
+        List<SchemaNode> nodes = model.schemaNodesForCurrentScene(SchemaMode.SIGNAL);
+        assertTrue(nodes.stream().anyMatch(n -> n.getType() == SchemaNodeType.SCREEN
+                && wired.getId().equals(n.getScreenRefId())), "Расключенный экран должен появиться в схеме");
+        assertTrue(nodes.stream().noneMatch(n -> n.getType() == SchemaNodeType.SCREEN
+                        && unwired.getId().equals(n.getScreenRefId())),
+                "Нерасключенный экран не должен появиться");
+        assertTrue(nodes.stream().anyMatch(n -> n.getType() == SchemaNodeType.CONTROLLER
+                && usedCi.getId().equals(n.getControllerInstanceRefId())),
+                "Использованный (с прописанным портом) контроллер должен появиться");
+        assertEquals(1, nodes.stream().filter(n -> n.getType() == SchemaNodeType.CONTROLLER).count(),
+                "Неиспользованный контроллер добавляться не должен");
+
+        // Ручное добавление узла того же экрана до автозаполнения — повторный вызов
+        // не должен плодить дубли ни для него, ни для уже добавленного контроллера.
+        model.autoPopulateSchema(SchemaMode.SIGNAL, false);
+        assertEquals(2, model.schemaNodesForCurrentScene(SchemaMode.SIGNAL).size(),
+                "Повторный вызов не должен создавать дублирующиеся узлы");
+    }
+
+    @Test
+    void autoPopulateSchemaConnectsCabinetSocketsToMatchingControllerPortGroupWhenRequested(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 3, 3, 0, 0);
+        model.selectScreen(screen);
+
+        // Модульный контроллер из 2 карт (4 + 2 порта) — резерв порта 2 (карта 1)
+        // назначен на порт 5 (карта 2), проверяет попадание в РАЗНЫЕ группы портов.
+        ControllerType h = new ControllerType();
+        h.setName("H2");
+        h.getCards().add(new SchemaCard("Карта 1", List.of(new CardPort("RJ45", PortDirection.OUT, 4))));
+        h.getCards().add(new SchemaCard("Карта 2", List.of(new CardPort("RJ45", PortDirection.OUT, 2))));
+        h = model.addControllerType(h);
+        model.addControllerToScreen(screen, h.getId());
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+        model.addSignalChain(2, false, List.of(ids.get(0), ids.get(1)));
+        model.setSignalBackupPortLink(2, 5);
+
+        model.autoPopulateSchema(SchemaMode.SIGNAL, true);
+
+        List<SchemaEdge> edges = model.schemaEdgesForCurrentScene(SchemaMode.SIGNAL);
+        assertEquals(2, edges.size(), "По одной связи на основной вход и на резервный (другая карта)");
+
+        SchemaNode controllerNode = model.schemaNodesForCurrentScene(SchemaMode.SIGNAL).stream()
+                .filter(n -> n.getType() == SchemaNodeType.CONTROLLER).findFirst().orElseThrow();
+        String card1PortId = controllerNode.getCards().get(0).getPorts().get(0).getId();
+        String card2PortId = controllerNode.getCards().get(1).getPorts().get(0).getId();
+
+        assertTrue(edges.stream().anyMatch(e -> ids.get(0).equals(e.getFromCabinetInstanceId())
+                        && card1PortId.equals(e.getToPortId())),
+                "Вводной кабинет основного порта 2 должен соединиться с картой 1");
+        assertTrue(edges.stream().anyMatch(e -> ids.get(1).equals(e.getFromCabinetInstanceId())
+                        && card2PortId.equals(e.getToPortId())),
+                "Последний кабинет цепочки (резерв, порт 5) должен соединиться с картой 2");
+
+        // Повторный вызов — без дублей связей.
+        model.autoPopulateSchema(SchemaMode.SIGNAL, true);
+        assertEquals(2, model.schemaEdgesForCurrentScene(SchemaMode.SIGNAL).size());
+    }
+
+    @Test
+    void autoPopulateSchemaForPowerAddsOnlyScreensNeverControllersOrEdges(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+        model.selectScreen(screen);
+
+        ControllerType ct = new ControllerType();
+        ct.setName("Any");
+        ct.setPortCount(4);
+        ct = model.addControllerType(ct);
+        model.addControllerToScreen(screen, ct.getId());
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+        model.addPowerChain(1, List.of(ids.get(0)));
+
+        // autoConnectSockets=true передан ошибочно/на всякий случай — у питания нет
+        // портов контроллера, поэтому эффекта быть не должно.
+        model.autoPopulateSchema(SchemaMode.POWER, true);
+
+        List<SchemaNode> nodes = model.schemaNodesForCurrentScene(SchemaMode.POWER);
+        assertEquals(1, nodes.size());
+        assertEquals(SchemaNodeType.SCREEN, nodes.get(0).getType());
+        assertTrue(model.schemaEdgesForCurrentScene(SchemaMode.POWER).isEmpty());
+    }
 }

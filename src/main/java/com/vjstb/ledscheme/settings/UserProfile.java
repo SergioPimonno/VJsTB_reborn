@@ -64,6 +64,18 @@ public class UserProfile {
      *  Выключено по умолчанию. */
     private boolean chainEndpointSocketsEnabled = false;
 
+    /** Автозаполнение общей схемы: при переходе с расключения экрана на общую
+     *  схему автоматически добавляет узлы уже расключенных экранов и (для сигнала)
+     *  использованных контроллеров сцены, которых там ещё нет — без ручного
+     *  добавления каждого узла из панели «Добавить узел». Если ВДОБАВОК включено
+     *  {@link #chainEndpointSocketsEnabled} — также проводит связи от гнёзд
+     *  вводных/резервных кабинетов к соответствующей группе портов узла-контроллера,
+     *  которому эта цепочка прописана (см. AppModel#autoPopulateSchema). Доступно
+     *  только когда включён {@link #socketWiringEnabled} (см. PreferencesDialog —
+     *  без него общая схема не различает конкретные гнёзда/порты вообще).
+     *  Выключено по умолчанию. */
+    private boolean schemaAutoPopulateEnabled = false;
+
     /** "Защита от дурака" в общей схеме: если включено, соединение через гнёзда
      *  разъёмов (см. socketWiringEnabled) запрещает связывать ВХОД со ВХОДОМ или
      *  ВЫХОД с ВЫХОДОМ (сравнение {@link com.vjstb.ledscheme.model.CardPort#getDirection()}
@@ -233,6 +245,14 @@ public class UserProfile {
         this.chainEndpointSocketsEnabled = chainEndpointSocketsEnabled;
     }
 
+    public boolean isSchemaAutoPopulateEnabled() {
+        return schemaAutoPopulateEnabled;
+    }
+
+    public void setSchemaAutoPopulateEnabled(boolean schemaAutoPopulateEnabled) {
+        this.schemaAutoPopulateEnabled = schemaAutoPopulateEnabled;
+    }
+
     public boolean isFoolProofWiringEnabled() {
         return foolProofWiringEnabled;
     }
@@ -313,6 +333,7 @@ public class UserProfile {
         p.snapStrengthPercent = snapStrengthPercent;
         p.socketWiringEnabled = socketWiringEnabled;
         p.chainEndpointSocketsEnabled = chainEndpointSocketsEnabled;
+        p.schemaAutoPopulateEnabled = schemaAutoPopulateEnabled;
         p.foolProofWiringEnabled = foolProofWiringEnabled;
         p.schemaScreensAsWiringDiagram = schemaScreensAsWiringDiagram;
         p.connectorDisplayMode = connectorDisplayMode;

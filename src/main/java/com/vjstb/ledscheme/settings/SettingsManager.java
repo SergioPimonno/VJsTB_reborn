@@ -140,6 +140,11 @@ public class SettingsManager {
         persist();
     }
 
+    public void setSchemaAutoPopulateEnabled(boolean enabled) {
+        activeProfile().setSchemaAutoPopulateEnabled(enabled);
+        persist();
+    }
+
     public void setFoolProofWiringEnabled(boolean enabled) {
         activeProfile().setFoolProofWiringEnabled(enabled);
         persist();

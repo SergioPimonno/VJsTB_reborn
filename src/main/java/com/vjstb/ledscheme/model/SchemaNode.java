@@ -22,6 +22,13 @@ public class SchemaNode {
     private double height = 56;
     /** Для type == SCREEN: id реального экрана сцены, с которым связан узел. */
     private String screenRefId;
+    /** Для type == CONTROLLER, только когда узел заведён автозаполнением (см.
+     *  AppModel#autoPopulateSchema): id реального ControllerInstance сцены, чью
+     *  комплектацию карт зеркалит этот узел — по нему автозаполнение находит узел
+     *  повторно (не создаёт дублей при повторном переходе на схему) и определяет,
+     *  к какой группе портов автоматически подвести связь от гнезда кабинета.
+     *  null — узел добавлен вручную, с реальным контроллером не связан. */
+    private String controllerInstanceRefId;
     /** Комплектация карт ввода/вывода (медиасерверы/видеопроцессоры вроде Barco E2,
      *  PixelHue Q8): у type == SERVER/CONTROLLER задаёт реальное число видео I/O. */
     private List<SchemaCard> cards = new ArrayList<>();
@@ -121,6 +128,14 @@ public class SchemaNode {
         this.screenRefId = screenRefId;
     }
 
+    public String getControllerInstanceRefId() {
+        return controllerInstanceRefId;
+    }
+
+    public void setControllerInstanceRefId(String controllerInstanceRefId) {
+        this.controllerInstanceRefId = controllerInstanceRefId;
+    }
+
     public List<SchemaCard> getCards() {
         return cards;
     }
@@ -156,6 +171,7 @@ public class SchemaNode {
         n.width = width;
         n.height = height;
         n.screenRefId = screenRefId;
+        n.controllerInstanceRefId = controllerInstanceRefId;
         n.cards = new ArrayList<>();
         for (SchemaCard c : cards) {
             n.cards.add(c.copy());
