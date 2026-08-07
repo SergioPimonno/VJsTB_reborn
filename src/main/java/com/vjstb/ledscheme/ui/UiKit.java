@@ -3,6 +3,7 @@ package com.vjstb.ledscheme.ui;
 import com.vjstb.ledscheme.settings.SettingsManager;
 import java.awt.BorderLayout;
 import java.awt.Component;
+import java.awt.Container;
 import java.awt.Dimension;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -202,6 +203,44 @@ public final class UiKit {
             }
             int wrapPx = Math.max(100, w - 24);
             label.setText("<html><body style='width:" + wrapPx + "px'>" + rawHtmlSupplier.get() + "</body></html>");
+        };
+        widthSource.addComponentListener(new java.awt.event.ComponentAdapter() {
+            @Override
+            public void componentResized(java.awt.event.ComponentEvent e) {
+                rewrap.run();
+            }
+        });
+        SwingUtilities.invokeLater(rewrap);
+        return rewrap;
+    }
+
+    /** То же, что {@link #bindHtmlWrapWidth(JLabel, JComponent, java.util.function.Supplier)},
+     *  но дополнительно подгоняет ВЫСОТУ {@code heightTarget} под фактическую высоту
+     *  перенесённого текста (в пределах {@code minHeight}..{@code maxHeight}) — вместо
+     *  того чтобы прятать лишние строки за скроллбаром внутри тесной фиксированной
+     *  области (баг-репорт: подпись шага сценария нечитаема — «скроллбар не пойдёт,
+     *  нужен перенос по ширине окна»). Скролл внутри {@code heightTarget} (если это
+     *  {@link javax.swing.JScrollPane}) остаётся как аварийный запас на случай текста
+     *  длиннее {@code maxHeight} — в норме, для разумно коротких подписей, не нужен. */
+    public static Runnable bindHtmlWrapWidthAndHeight(JLabel label, JComponent widthSource, JComponent heightTarget,
+            int minHeight, int maxHeight, java.util.function.Supplier<String> rawHtmlSupplier) {
+        Runnable rewrap = () -> {
+            int w = widthSource.getWidth();
+            if (w <= 0) {
+                return;
+            }
+            int wrapPx = Math.max(100, w - 24);
+            label.setText("<html><body style='width:" + wrapPx + "px'>" + rawHtmlSupplier.get() + "</body></html>");
+            int textHeight = label.getPreferredSize().height;
+            int h = Math.max(minHeight, Math.min(maxHeight, textHeight + 16));
+            java.awt.Dimension current = heightTarget.getPreferredSize();
+            if (current.height != h) {
+                heightTarget.setPreferredSize(new Dimension(current.width, h));
+                Container parent = heightTarget.getParent();
+                if (parent != null) {
+                    parent.revalidate();
+                }
+            }
         };
         widthSource.addComponentListener(new java.awt.event.ComponentAdapter() {
             @Override
