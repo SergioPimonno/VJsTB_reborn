@@ -178,6 +178,41 @@ public final class UiKit {
         return l;
     }
 
+    /** Перевязывает HTML-содержимое {@code label} к ТЕКУЩЕЙ ширине {@code widthSource}
+     *  при каждом изменении размера — в отличие от {@link #wrapHtml} (годится только
+     *  для узких боковых колонок фиксированной ширины), это для body-текста в
+     *  РЕСАЙЗИМЫХ диалогах: захардкоженная «width: Npx» подгонка под ширину только НА
+     *  МОМЕНТ создания диалога — при ресайзе пользователем текст либо обрезается/
+     *  вылезает за границу (диалог уже, чем Npx), либо остаётся немотивированно узким
+     *  посреди широкого диалога (баг-репорт: текст шага сценария вылезал за край окна
+     *  после ресайза). {@code rawHtmlSupplier} отдаёт HTML БЕЗ внешней обёртки
+     *  <html><body> — оборачивание берёт на себя этот метод. {@code widthSource} —
+     *  компонент, чья РЕАЛЬНО доступная ширина важна (например, JScrollPane/вьюпорт,
+     *  в котором лежит label), а не сам label — его собственная ширина следует за
+     *  (растущим) preferred size, а не за фактически выделенным местом.
+     *  <p>Возвращает сам rewrap-{@code Runnable} — вызывающий код дёргает его вручную
+     *  при смене содержимого (например, переход на другой шаг сценария/другую секцию
+     *  руководства), а не только при ресайзе. */
+    public static Runnable bindHtmlWrapWidth(JLabel label, JComponent widthSource,
+            java.util.function.Supplier<String> rawHtmlSupplier) {
+        Runnable rewrap = () -> {
+            int w = widthSource.getWidth();
+            if (w <= 0) {
+                return;
+            }
+            int wrapPx = Math.max(100, w - 24);
+            label.setText("<html><body style='width:" + wrapPx + "px'>" + rawHtmlSupplier.get() + "</body></html>");
+        };
+        widthSource.addComponentListener(new java.awt.event.ComponentAdapter() {
+            @Override
+            public void componentResized(java.awt.event.ComponentEvent e) {
+                rewrap.run();
+            }
+        });
+        SwingUtilities.invokeLater(rewrap);
+        return rewrap;
+    }
+
     public static String fmt(double v) {
         if (v == Math.rint(v)) {
             return String.valueOf((long) v);

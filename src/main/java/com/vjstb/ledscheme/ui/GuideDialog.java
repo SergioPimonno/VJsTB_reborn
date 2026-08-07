@@ -249,11 +249,12 @@ public class GuideDialog extends JDialog {
     private JScrollPane section(String html) {
         JPanel body = new JPanel(new BorderLayout());
         body.setBorder(BorderFactory.createEmptyBorder(12, 14, 12, 14));
-        JLabel label = new JLabel("<html><body style='width: 460px'>" + html + "</body></html>");
+        JLabel label = new JLabel();
         body.add(label, BorderLayout.NORTH);
         JScrollPane scroll = new JScrollPane(body);
         scroll.setBorder(BorderFactory.createEmptyBorder());
         scroll.getVerticalScrollBar().setUnitIncrement(16);
+        UiKit.bindHtmlWrapWidth(label, scroll, () -> html);
         return scroll;
     }
 }
