@@ -170,10 +170,13 @@ public class PowerStagePanel extends JPanel {
         viewGroup.add(schemaViewBtn);
         chainViewBtn.addActionListener(e -> viewCards.show(viewContainer, VIEW_CHAIN));
         schemaViewBtn.addActionListener(e -> {
-            if (settings.activeProfile().isSchemaAutoPopulateEnabled()) {
-                // Питание не идёт через порты контроллера (см. PowerChain) — только
-                // узлы уже расключенных экранов, без гнёзд/автосвязей.
-                model.autoPopulateSchema(SchemaMode.POWER, false);
+            if (settings.activeProfile().isPowerSchemaAutoPopulateEnabled()) {
+                // Питание не идёт через порты контроллера (см. PowerChain) — вместо
+                // этого autoConnect распределяет вводные кабинеты по свободным
+                // разъёмам уже добавленных на схему узлов «Распределение».
+                boolean autoConnect = settings.activeProfile().isSocketWiringEnabled()
+                        && settings.activeProfile().isChainEndpointSocketsEnabled();
+                model.autoPopulateSchema(SchemaMode.POWER, autoConnect);
             }
             viewCards.show(viewContainer, VIEW_SCHEMA);
         });

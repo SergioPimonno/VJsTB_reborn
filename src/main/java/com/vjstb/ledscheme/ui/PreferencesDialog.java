@@ -37,7 +37,8 @@ public class PreferencesDialog extends JDialog {
     private JSpinner snapStrengthSpinner;
     private JCheckBox socketWiringCheck;
     private JCheckBox chainEndpointSocketsCheck;
-    private JCheckBox schemaAutoPopulateCheck;
+    private JCheckBox signalSchemaAutoPopulateCheck;
+    private JCheckBox powerSchemaAutoPopulateCheck;
     private JCheckBox foolProofWiringCheck;
     private JCheckBox schemaScreensAsWiringCheck;
     private JCheckBox connectorDisplayModeCheck;
@@ -205,21 +206,40 @@ public class PreferencesDialog extends JDialog {
                 settings.setChainEndpointSocketsEnabled(chainEndpointSocketsCheck.isSelected()));
         body.add(chainEndpointSocketsCheck);
 
-        schemaAutoPopulateCheck = new JCheckBox(
-                "Автозаполнение: при переходе на общую схему добавлять расключенные экраны"
+        signalSchemaAutoPopulateCheck = new JCheckBox(
+                "Автозаполнение сигнала: при переходе на общую схему добавлять расключенные экраны"
                         + " и использованные контроллеры",
-                settings.activeProfile().isSchemaAutoPopulateEnabled());
-        schemaAutoPopulateCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
-        schemaAutoPopulateCheck.setToolTipText("Включено — при переключении с «Расключение экрана» на «Общая схема»"
-                + " уже расключенные экраны и (для сигнала) использованные контроллеры сцены автоматически"
-                + " появляются в схеме, если их там ещё нет — не нужно добавлять их вручную по одному. Если ВДОБАВОК"
-                + " включено «вводные кабинеты цепочек — тоже гнёзда подключения» выше — гнёзда экранов"
-                + " автоматически соединяются с соответствующими портами использованных контроллеров. Уже"
-                + " добавленные вручную узлы и связи не трогает, повторный переход дублей не создаёт. Доступно"
-                + " только при включённой настройке «линия цепляется за конкретный разъём» в группе «Соединения» выше.");
-        schemaAutoPopulateCheck.addActionListener(e ->
-                settings.setSchemaAutoPopulateEnabled(schemaAutoPopulateCheck.isSelected()));
-        body.add(schemaAutoPopulateCheck);
+                settings.activeProfile().isSignalSchemaAutoPopulateEnabled());
+        signalSchemaAutoPopulateCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        signalSchemaAutoPopulateCheck.setToolTipText("Включено — при переключении с «Расключение экрана» на «Общая"
+                + " схема» уже расключенные экраны и использованные контроллеры сцены автоматически появляются в"
+                + " схеме сигнала, если их там ещё нет (контроллер зеркалит реальную комплектацию карт) — не нужно"
+                + " добавлять их вручную по одному. Если ВДОБАВОК включено «вводные кабинеты цепочек — тоже гнёзда"
+                + " подключения» выше — гнёзда экранов автоматически соединяются с соответствующими портами"
+                + " использованных контроллеров. Уже добавленные вручную узлы и связи не трогает, повторный переход"
+                + " дублей не создаёт. Доступно только при включённой настройке «линия цепляется за конкретный"
+                + " разъём» в группе «Соединения» выше.");
+        signalSchemaAutoPopulateCheck.addActionListener(e ->
+                settings.setSignalSchemaAutoPopulateEnabled(signalSchemaAutoPopulateCheck.isSelected()));
+        body.add(signalSchemaAutoPopulateCheck);
+
+        powerSchemaAutoPopulateCheck = new JCheckBox(
+                "Автозаполнение питания: при переходе на общую схему добавлять расключенные экраны"
+                        + " и заполнять «проходные»",
+                settings.activeProfile().isPowerSchemaAutoPopulateEnabled());
+        powerSchemaAutoPopulateCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        powerSchemaAutoPopulateCheck.setToolTipText("Включено — при переключении с «Расключение экрана» на «Общая"
+                + " схема» уже расключенные экраны автоматически появляются в схеме питания, если их там ещё нет."
+                + " У питания нет понятия контроллера — вместо этого, если ВДОБАВОК включено «вводные кабинеты"
+                + " цепочек — тоже гнёзда подключения» выше, вводные кабинеты распределяются по СВОБОДНЫМ разъёмам"
+                + " уже добавленных на схему узлов типа «Распределение» (щиты/проходные), максимально заполняя"
+                + " каждый по очереди, прежде чем переходить к следующему — новые такие узлы не создаются, их нужно"
+                + " разместить на схеме заранее. Уже добавленные вручную узлы и связи не трогает, повторный переход"
+                + " дублей не создаёт. Доступно только при включённой настройке «линия цепляется за конкретный"
+                + " разъём» в группе «Соединения» выше.");
+        powerSchemaAutoPopulateCheck.addActionListener(e ->
+                settings.setPowerSchemaAutoPopulateEnabled(powerSchemaAutoPopulateCheck.isSelected()));
+        body.add(powerSchemaAutoPopulateCheck);
 
         return (JPanel) UiKit.section("Общая схема — узлы и автозаполнение", body);
     }
@@ -275,16 +295,18 @@ public class PreferencesDialog extends JDialog {
         return (JPanel) UiKit.section("Генерация масок", body);
     }
 
-    /** chainEndpointSocketsCheck/schemaAutoPopulateCheck работают только вместе с
-     *  socketWiringCheck (без него общая схема не различает конкретные гнёзда/порты
-     *  вообще) — недоступны для включения, пока он выключен, чтобы не создавать
-     *  видимость рабочей настройки там, где она молча ничего не даёт. Уже включённое
-     *  состояние при выключении мастер-переключателя не сбрасывается автоматически —
-     *  только становится недоступным для изменения, пока мастер снова не включат. */
+    /** chainEndpointSocketsCheck/signalSchemaAutoPopulateCheck/powerSchemaAutoPopulateCheck
+     *  работают только вместе с socketWiringCheck (без него общая схема не различает
+     *  конкретные гнёзда/порты вообще) — недоступны для включения, пока он выключен,
+     *  чтобы не создавать видимость рабочей настройки там, где она молча ничего не
+     *  даёт. Уже включённое состояние при выключении мастер-переключателя не
+     *  сбрасывается автоматически — только становится недоступным для изменения,
+     *  пока мастер снова не включат. */
     private void applySocketDependentEnablement() {
         boolean enabled = socketWiringCheck.isSelected();
         chainEndpointSocketsCheck.setEnabled(enabled);
-        schemaAutoPopulateCheck.setEnabled(enabled);
+        signalSchemaAutoPopulateCheck.setEnabled(enabled);
+        powerSchemaAutoPopulateCheck.setEnabled(enabled);
     }
 
     private void refresh() {
@@ -296,7 +318,8 @@ public class PreferencesDialog extends JDialog {
         foolProofWiringCheck.setSelected(settings.activeProfile().isFoolProofWiringEnabled());
         schemaScreensAsWiringCheck.setSelected(settings.activeProfile().isSchemaScreensAsWiringDiagram());
         chainEndpointSocketsCheck.setSelected(settings.activeProfile().isChainEndpointSocketsEnabled());
-        schemaAutoPopulateCheck.setSelected(settings.activeProfile().isSchemaAutoPopulateEnabled());
+        signalSchemaAutoPopulateCheck.setSelected(settings.activeProfile().isSignalSchemaAutoPopulateEnabled());
+        powerSchemaAutoPopulateCheck.setSelected(settings.activeProfile().isPowerSchemaAutoPopulateEnabled());
         applySocketDependentEnablement();
         connectorDisplayModeCheck.setSelected(
                 settings.activeProfile().getConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL);

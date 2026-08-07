@@ -1015,6 +1015,44 @@ public class AppModel {
         }
     }
 
+    /** Целевой размер одной ячейки-кабинета (px) на миниатюре расключения узла
+     *  общей схемы — ориентир для {@link #autoFitScreenNode}, не связан с реальными
+     *  константами отрисовки в SchemaCanvasPanel (та сама вписывает миниатюру в
+     *  ЛЮБОЙ заданный размер узла) — здесь достаточно приблизительного, но читаемого
+     *  стартового размера, который пользователь при желании подправит перетаскиванием. */
+    private static final double SCREEN_THUMB_TARGET_CELL_PX = 22;
+    /** Запас под заголовок узла/строку-подпись снизу миниатюры (см.
+     *  SchemaCanvasPanel.PORT_ROWS_TOP_OFFSET и .drawControllerSummaryBar) — не
+     *  обязан совпадать пиксель-в-пиксель, только чтобы сетка не обрезалась. */
+    private static final double SCREEN_THUMB_HEADER_PAD = 46;
+    private static final double SCREEN_THUMB_MIN_WIDTH = 140;
+
+    /** Растягивает свежедобавленный узел-ссылку на экран (см. {@link #autoPopulateSchema})
+     *  до размера, в котором миниатюра его расключения (см.
+     *  {@link com.vjstb.ledscheme.settings.UserProfile#isSchemaScreensAsWiringDiagram()})
+     *  реально читаема — дефолтный размер нового узла (175×56, см. конструктор
+     *  {@link SchemaNode}) рассчитан на компактный блок оборудования без деталей,
+     *  для сетки кабинетов этого мало (сжимается до нечитаемой полоски). Как и
+     *  {@link #autoFitNodeToPorts} — только РАСТЯГИВАЕТ, не уменьшает то, что
+     *  пользователь уже подстроил вручную крупнее. Без данных о типе кабинета/сетке
+     *  экрана — no-op (не должно происходить для настоящего экрана сцены). */
+    private void autoFitScreenNode(SchemaNode node, Screen scr) {
+        CabinetType t = typeOf(scr);
+        if (t == null || t.getWidthMm() <= 0 || t.getHeightMm() <= 0 || scr.getCols() <= 0 || scr.getRows() <= 0) {
+            return;
+        }
+        double cellW = SCREEN_THUMB_TARGET_CELL_PX;
+        double cellH = cellW * (t.getHeightMm() / t.getWidthMm());
+        double neededW = Math.max(SCREEN_THUMB_MIN_WIDTH, scr.getCols() * cellW + 8);
+        double neededH = scr.getRows() * cellH + SCREEN_THUMB_HEADER_PAD;
+        if (node.getWidth() < neededW) {
+            node.setWidth(neededW);
+        }
+        if (node.getHeight() < neededH) {
+            node.setHeight(neededH);
+        }
+    }
+
     public void updateSchemaNode(SchemaNode node, String label, SchemaNodeType type, String screenRefId) {
         node.setLabel(label);
         node.setType(type);
@@ -2930,22 +2968,25 @@ public class AppModel {
     }
 
     /** Предзаполнение общей схемы РЕЖИМА {@code mode} (см.
-     *  {@link com.vjstb.ledscheme.settings.UserProfile#isSchemaAutoPopulateEnabled()}) —
+     *  {@link com.vjstb.ledscheme.settings.UserProfile#isSignalSchemaAutoPopulateEnabled()}/
+     *  {@link com.vjstb.ledscheme.settings.UserProfile#isPowerSchemaAutoPopulateEnabled()}) —
      *  вызывается UI при переходе с расключения экрана на общую схему: добавляет
      *  узлы уже расключенных экранов (хоть один кабинет занят цепочкой этого режима)
      *  и, для {@link SchemaMode#SIGNAL}, использованных контроллеров сцены (чей порт
      *  реально прописан хотя бы одной цепочкой — основным или резервным). Не трогает
      *  узлы, уже присутствующие в схеме (сравнение по {@code screenRefId}/
-     *  {@code controllerInstanceRefId}) — повторный вызов не создаёт дублей. У
-     *  питания нет понятия контроллера (см. {@link PowerChain}) — для
-     *  {@link SchemaMode#POWER} добавляются только экраны, {@code autoConnectSockets}
-     *  игнорируется.
-     *  {@code autoConnectSockets} — дополнительно провести связи от гнёзд вводных/
+     *  {@code controllerInstanceRefId}) — повторный вызов не создаёт дублей.
+     *  {@code autoConnectSockets} — вызывающая сторона (UI) передаёт true, только
+     *  если у пользователя включены ОБА нужных переключателя (socketWiringEnabled и
+     *  chainEndpointSocketsEnabled): сама модель не имеет доступа к настройкам
+     *  профиля. Для {@link SchemaMode#SIGNAL} — проводит связи от гнёзд вводных/
      *  резервных кабинетов к соответствующей группе портов узла-контроллера, которому
-     *  прописана эта цепочка (см. {@link #autoConnectChainEndpoint}) — вызывающая
-     *  сторона (UI) передаёт true, только если у пользователя включены ОБА нужных
-     *  переключателя (socketWiringEnabled и chainEndpointSocketsEnabled): сама модель
-     *  не имеет доступа к настройкам профиля. */
+     *  прописана эта цепочка (см. {@link #autoConnectChainEndpoint}). У питания нет
+     *  понятия контроллера (см. {@link PowerChain}) — для {@link SchemaMode#POWER}
+     *  вместо этого вводные кабинеты распределяются по свободным разъёмам уже
+     *  существующих на схеме узлов типа {@link SchemaNodeType#DISTRO} (щиты/проходные),
+     *  максимально заполняя каждый по очереди (см.
+     *  {@link #autoConnectPowerChainEndpoints}) — новые такие узлы НЕ создаются. */
     public void autoPopulateSchema(SchemaMode mode, boolean autoConnectSockets) {
         if (currentScene == null) {
             return;
@@ -2968,11 +3009,19 @@ public class AppModel {
             int count = nodes.size();
             SchemaNode node = addSchemaNode(mode, SchemaNodeType.SCREEN, scr.getName(),
                     40 + (count % 6) * 170, 40 + (count / 6) * 130, scr.getId());
+            // Дефолтный размер узла (175×56) слишком мал для читаемой миниатюры
+            // расключения (см. schemaScreensAsWiringDiagram) — вручную добавленный
+            // узел пользователь обычно сразу растягивает мышью сам, а автозаполнение
+            // должно давать сразу читаемый результат без этого шага.
+            autoFitScreenNode(node, scr);
             nodes.add(node);
             screenNodesByScreenId.put(scr.getId(), node);
         }
 
-        if (mode != SchemaMode.SIGNAL) {
+        if (mode == SchemaMode.POWER) {
+            if (autoConnectSockets) {
+                autoConnectPowerChainEndpoints(screenNodesByScreenId);
+            }
             return;
         }
         for (ControllerInstance ci : controllersInScene(currentScene)) {
@@ -3127,6 +3176,79 @@ public class AppModel {
         }
         addSchemaEdge(SchemaMode.SIGNAL, screenNode.getId(), null, cabinetId, controllerNode.getId(), toPortId,
                 null, null);
+    }
+
+    /** Распределяет вводные кабинеты ВСЕХ силовых цепочек сцены по свободным
+     *  разъёмам уже существующих на схеме узлов типа {@link SchemaNodeType#DISTRO}
+     *  (щиты/проходные) — см. {@link #autoPopulateSchema}. Узлы перебираются в
+     *  порядке их добавления на схему (см. {@code currentScene.getSchemaNodes()}),
+     *  разъёмы внутри узла — в порядке {@link SchemaNode#getPowerConnectors()}: узел
+     *  заполняется МАКСИМАЛЬНО, прежде чем перейти к следующему (см.
+     *  {@link #autoConnectPowerCabinetToDistro}) — не равномерно "размазывается" по
+     *  всем сразу. Кабинетам, которым не хватило свободных разъёмов ни на одном узле
+     *  (щитов на схеме ещё нет или их ёмкость исчерпана), связь не проводится — новые
+     *  узлы «Распределение» автоматически НЕ создаются, инженер размещает их сам. */
+    private void autoConnectPowerChainEndpoints(Map<String, SchemaNode> screenNodesByScreenId) {
+        List<SchemaNode> distroNodes = new ArrayList<>();
+        for (SchemaNode n : currentScene.getSchemaNodes()) {
+            if (n.getMode() == SchemaMode.POWER && n.getType() == SchemaNodeType.DISTRO) {
+                distroNodes.add(n);
+            }
+        }
+        if (distroNodes.isEmpty()) {
+            return;
+        }
+        for (PowerChain c : currentScene.getPowerChains()) {
+            List<String> ids = c.getCabinetInstanceIds();
+            if (ids.isEmpty()) {
+                continue;
+            }
+            autoConnectPowerCabinetToDistro(screenNodesByScreenId, distroNodes, ids.get(0));
+        }
+    }
+
+    /** Проводит связь от гнезда кабинета {@code cabinetId} к первому СВОБОДНОМУ
+     *  выходному разъёму среди {@code distroNodes} (по порядку, см.
+     *  {@link #autoConnectPowerChainEndpoints}) — молча ничего не делает, если узел-
+     *  экран ещё не добавлен в схему, у кабинета уже есть связь силовой схемы (любая,
+     *  не обязательно к тому же разъёму — идемпотентность при повторных вызовах
+     *  {@link #autoPopulateSchema}, а не «размазывать» перевызовом заново) или
+     *  свободных разъёмов не осталось нигде. */
+    private void autoConnectPowerCabinetToDistro(Map<String, SchemaNode> screenNodesByScreenId,
+                                                  List<SchemaNode> distroNodes, String cabinetId) {
+        Screen owner = screenOfCabinet(currentScene, cabinetId);
+        if (owner == null) {
+            return;
+        }
+        SchemaNode screenNode = screenNodesByScreenId.get(owner.getId());
+        if (screenNode == null) {
+            return;
+        }
+        for (SchemaEdge e : currentScene.getSchemaEdges()) {
+            if (e.getMode() == SchemaMode.POWER
+                    && (cabinetId.equals(e.getFromCabinetInstanceId()) || cabinetId.equals(e.getToCabinetInstanceId()))) {
+                return;
+            }
+        }
+        for (SchemaNode distro : distroNodes) {
+            for (CardPort p : distro.getPowerConnectors()) {
+                if (p.getDirection() == PortDirection.IN) {
+                    continue;
+                }
+                int used = 0;
+                for (SchemaEdge e : currentScene.getSchemaEdges()) {
+                    if (e.getMode() == SchemaMode.POWER
+                            && (p.getId().equals(e.getFromPortId()) || p.getId().equals(e.getToPortId()))) {
+                        used++;
+                    }
+                }
+                if (used < p.getCount()) {
+                    addSchemaEdge(SchemaMode.POWER, screenNode.getId(), null, cabinetId, distro.getId(), p.getId(),
+                            null, null);
+                    return;
+                }
+            }
+        }
     }
 
     /** Локальный (в пределах контроллера, 1-based, только среди ВЫХОДНЫХ портов — та

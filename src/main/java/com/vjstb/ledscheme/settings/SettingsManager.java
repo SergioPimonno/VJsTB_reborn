@@ -140,8 +140,13 @@ public class SettingsManager {
         persist();
     }
 
-    public void setSchemaAutoPopulateEnabled(boolean enabled) {
-        activeProfile().setSchemaAutoPopulateEnabled(enabled);
+    public void setSignalSchemaAutoPopulateEnabled(boolean enabled) {
+        activeProfile().setSignalSchemaAutoPopulateEnabled(enabled);
+        persist();
+    }
+
+    public void setPowerSchemaAutoPopulateEnabled(boolean enabled) {
+        activeProfile().setPowerSchemaAutoPopulateEnabled(enabled);
         persist();
     }
 

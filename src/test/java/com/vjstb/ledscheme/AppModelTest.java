@@ -1963,7 +1963,7 @@ class AppModelTest {
     }
 
     @Test
-    void autoPopulateSchemaForPowerAddsOnlyScreensNeverControllersOrEdges(@TempDir Path dir) {
+    void autoPopulateSchemaForPowerAddsOnlyScreensNeverControllers(@TempDir Path dir) {
         AppModel model = freshModel(dir);
         CabinetType type = model.addCabinetType(sampleType());
         model.selectProject(model.addProject("P"));
@@ -1980,13 +1980,80 @@ class AppModelTest {
         List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
         model.addPowerChain(1, List.of(ids.get(0)));
 
-        // autoConnectSockets=true передан ошибочно/на всякий случай — у питания нет
-        // портов контроллера, поэтому эффекта быть не должно.
+        // Ни одного узла «Распределение» на схеме ещё нет — автосвязи заводить некуда,
+        // у питания нет портов контроллера в принципе (см. addSchemaNodeForController).
         model.autoPopulateSchema(SchemaMode.POWER, true);
 
         List<SchemaNode> nodes = model.schemaNodesForCurrentScene(SchemaMode.POWER);
         assertEquals(1, nodes.size());
         assertEquals(SchemaNodeType.SCREEN, nodes.get(0).getType());
         assertTrue(model.schemaEdgesForCurrentScene(SchemaMode.POWER).isEmpty());
+    }
+
+    @Test
+    void autoPopulateSchemaForPowerFillsExistingDistroConnectorsInOrderWithoutCreatingNewNodes(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+        model.selectScreen(screen);
+
+        // Первая проходная — 1 свободный разъём, вторая — 2 (заполняются по очереди,
+        // ПЕРВАЯ — до упора, прежде чем переходить ко второй).
+        SchemaNode distro1 = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "Проходная 1", 0, 0, null);
+        CardPort d1p1 = model.addPowerConnectorToNode(distro1, "CEE 16A", PortDirection.OUT, 1);
+        SchemaNode distro2 = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "Проходная 2", 300, 0, null);
+        CardPort d2p1 = model.addPowerConnectorToNode(distro2, "CEE 16A", PortDirection.OUT, 1);
+        CardPort d2p2 = model.addPowerConnectorToNode(distro2, "CEE 16A", PortDirection.OUT, 1);
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+        model.addPowerChain(1, List.of(ids.get(0)));
+        model.addPowerChain(2, List.of(ids.get(1)));
+        model.addPowerChain(3, List.of(ids.get(2)));
+
+        model.autoPopulateSchema(SchemaMode.POWER, true);
+
+        List<SchemaEdge> edges = model.schemaEdgesForCurrentScene(SchemaMode.POWER);
+        assertEquals(3, edges.size());
+        assertTrue(edges.stream().anyMatch(e -> ids.get(0).equals(e.getFromCabinetInstanceId())
+                        && d1p1.getId().equals(e.getToPortId())),
+                "Первый вводной кабинет занимает единственный разъём первой проходной");
+        assertTrue(edges.stream().anyMatch(e -> ids.get(1).equals(e.getFromCabinetInstanceId())
+                        && d2p1.getId().equals(e.getToPortId())),
+                "Проходная 1 уже занята — второй кабинет уходит на первый разъём проходной 2");
+        assertTrue(edges.stream().anyMatch(e -> ids.get(2).equals(e.getFromCabinetInstanceId())
+                && d2p2.getId().equals(e.getToPortId())));
+        assertTrue(model.schemaNodesForCurrentScene(SchemaMode.POWER).stream()
+                .noneMatch(n -> n.getType() == SchemaNodeType.CONTROLLER));
+
+        // Повторный вызов — без дублей связей, новые проходные не создаются.
+        model.autoPopulateSchema(SchemaMode.POWER, true);
+        assertEquals(3, model.schemaEdgesForCurrentScene(SchemaMode.POWER).size());
+        assertEquals(2, model.schemaNodesForCurrentScene(SchemaMode.POWER).stream()
+                .filter(n -> n.getType() == SchemaNodeType.DISTRO).count());
+    }
+
+    @Test
+    void autoPopulateSchemaForPowerLeavesEntryUnconnectedWhenDistroCapacityExhausted(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+        model.selectScreen(screen);
+
+        SchemaNode distro = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "Проходная", 0, 0, null);
+        model.addPowerConnectorToNode(distro, "CEE 16A", PortDirection.OUT, 1);
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+        model.addPowerChain(1, List.of(ids.get(0)));
+        model.addPowerChain(2, List.of(ids.get(1)));
+
+        model.autoPopulateSchema(SchemaMode.POWER, true);
+
+        assertEquals(1, model.schemaEdgesForCurrentScene(SchemaMode.POWER).size(),
+                "Разъёмов на всех проходных не хватает на обе цепочки — вторая остаётся неподключённой,"
+                        + " новый узел не создаётся");
     }
 }

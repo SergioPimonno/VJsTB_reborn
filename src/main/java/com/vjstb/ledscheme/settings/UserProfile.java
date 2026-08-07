@@ -64,17 +64,32 @@ public class UserProfile {
      *  Выключено по умолчанию. */
     private boolean chainEndpointSocketsEnabled = false;
 
-    /** Автозаполнение общей схемы: при переходе с расключения экрана на общую
-     *  схему автоматически добавляет узлы уже расключенных экранов и (для сигнала)
+    /** Автозаполнение общей схемы СИГНАЛА: при переходе с расключения экрана на
+     *  общую схему автоматически добавляет узлы уже расключенных экранов и
      *  использованных контроллеров сцены, которых там ещё нет — без ручного
-     *  добавления каждого узла из панели «Добавить узел». Если ВДОБАВОК включено
+     *  добавления каждого узла из панели «Добавить узел», зеркаля РЕАЛЬНУЮ
+     *  комплектацию карт контроллера. Если ВДОБАВОК включено
      *  {@link #chainEndpointSocketsEnabled} — также проводит связи от гнёзд
      *  вводных/резервных кабинетов к соответствующей группе портов узла-контроллера,
-     *  которому эта цепочка прописана (см. AppModel#autoPopulateSchema). Доступно
-     *  только когда включён {@link #socketWiringEnabled} (см. PreferencesDialog —
-     *  без него общая схема не различает конкретные гнёзда/порты вообще).
-     *  Выключено по умолчанию. */
-    private boolean schemaAutoPopulateEnabled = false;
+     *  которому эта цепочка прописана (см. AppModel#autoPopulateSchema). Отдельная
+     *  настройка от {@link #powerSchemaAutoPopulateEnabled} — расключение сигнала и
+     *  питания устроено принципиально по-разному (контроллеры с реальными портами
+     *  vs произвольные «проходные» щиты), инженеру может быть нужно только одно из
+     *  двух. Доступно только когда включён {@link #socketWiringEnabled} (см.
+     *  PreferencesDialog — без него общая схема не различает конкретные гнёзда/порты
+     *  вообще). Выключено по умолчанию. */
+    private boolean signalSchemaAutoPopulateEnabled = false;
+
+    /** Автозаполнение общей схемы ПИТАНИЯ — см. {@link #signalSchemaAutoPopulateEnabled}
+     *  (та же идея, отдельная настройка). Добавляет только узлы расключенных экранов —
+     *  у питания нет понятия контроллера (см. {@code PowerChain}). Если ВДОБАВОК
+     *  включено {@link #chainEndpointSocketsEnabled} — распределяет вводные кабинеты
+     *  цепочек по СВОБОДНЫМ разъёмам уже существующих на схеме узлов типа
+     *  «Распределение» (щиты/проходные), максимально заполняя каждый по очереди,
+     *  прежде чем переходить к следующему — новые узлы автоматически не создаются
+     *  (см. AppModel#autoPopulateSchema). Доступно только когда включён
+     *  {@link #socketWiringEnabled}. Выключено по умолчанию. */
+    private boolean powerSchemaAutoPopulateEnabled = false;
 
     /** "Защита от дурака" в общей схеме: если включено, соединение через гнёзда
      *  разъёмов (см. socketWiringEnabled) запрещает связывать ВХОД со ВХОДОМ или
@@ -245,12 +260,20 @@ public class UserProfile {
         this.chainEndpointSocketsEnabled = chainEndpointSocketsEnabled;
     }
 
-    public boolean isSchemaAutoPopulateEnabled() {
-        return schemaAutoPopulateEnabled;
+    public boolean isSignalSchemaAutoPopulateEnabled() {
+        return signalSchemaAutoPopulateEnabled;
     }
 
-    public void setSchemaAutoPopulateEnabled(boolean schemaAutoPopulateEnabled) {
-        this.schemaAutoPopulateEnabled = schemaAutoPopulateEnabled;
+    public void setSignalSchemaAutoPopulateEnabled(boolean signalSchemaAutoPopulateEnabled) {
+        this.signalSchemaAutoPopulateEnabled = signalSchemaAutoPopulateEnabled;
+    }
+
+    public boolean isPowerSchemaAutoPopulateEnabled() {
+        return powerSchemaAutoPopulateEnabled;
+    }
+
+    public void setPowerSchemaAutoPopulateEnabled(boolean powerSchemaAutoPopulateEnabled) {
+        this.powerSchemaAutoPopulateEnabled = powerSchemaAutoPopulateEnabled;
     }
 
     public boolean isFoolProofWiringEnabled() {
@@ -333,7 +356,8 @@ public class UserProfile {
         p.snapStrengthPercent = snapStrengthPercent;
         p.socketWiringEnabled = socketWiringEnabled;
         p.chainEndpointSocketsEnabled = chainEndpointSocketsEnabled;
-        p.schemaAutoPopulateEnabled = schemaAutoPopulateEnabled;
+        p.signalSchemaAutoPopulateEnabled = signalSchemaAutoPopulateEnabled;
+        p.powerSchemaAutoPopulateEnabled = powerSchemaAutoPopulateEnabled;
         p.foolProofWiringEnabled = foolProofWiringEnabled;
         p.schemaScreensAsWiringDiagram = schemaScreensAsWiringDiagram;
         p.connectorDisplayMode = connectorDisplayMode;
