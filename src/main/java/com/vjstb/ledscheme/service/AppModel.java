@@ -2909,7 +2909,7 @@ public class AppModel {
     }
 
     /** Id кабинетов этого экрана, которые считаются «гнёздами подключения» на общей
-     *  схеме РЕЖИМА {@code mode} (см. {@link com.vjstb.ledscheme.settings.UserProfile#isChainEndpointSocketsEnabled()})
+     *  схеме РЕЖИМА {@code mode} (см. {@link com.vjstb.ledscheme.settings.UserProfile#isChainEndpointSocketsEnabled(SchemaMode)})
      *  — для {@link SchemaMode#POWER}: вводной (первый в {@code cabinetInstanceIds})
      *  кабинет каждой силовой цепочки сцены; для {@link SchemaMode#SIGNAL}: вводной
      *  кабинет основной цепочки, плюс, если у неё задан резервный порт, вводной
@@ -2986,7 +2986,14 @@ public class AppModel {
      *  вместо этого вводные кабинеты распределяются по свободным разъёмам уже
      *  существующих на схеме узлов типа {@link SchemaNodeType#DISTRO} (щиты/проходные),
      *  максимально заполняя каждый по очереди (см.
-     *  {@link #autoConnectPowerChainEndpoints}) — новые такие узлы НЕ создаются. */
+     *  {@link #autoConnectPowerChainEndpoints}) — новые такие узлы НЕ создаются.
+     *  <p>Автосоединение проводится ТОЛЬКО для узлов-экранов, которых не было в схеме
+     *  ДО этого вызова (см. {@code freshlyAddedScreenIds} ниже) — то есть ровно один
+     *  раз, в момент первого появления блока экрана на общей схеме. Для уже
+     *  присутствовавших узлов новые связи не проводятся, даже если у них появился
+     *  новый непрописанный порт/кабинет: инженер мог сознательно разорвать
+     *  автосвязь и оставить порт свободным — молчаливое автозаполнение на каждый
+     *  последующий переход стёрло бы это решение (баг-репорт). */
     public void autoPopulateSchema(SchemaMode mode, boolean autoConnectSockets) {
         if (currentScene == null) {
             return;
@@ -3002,6 +3009,7 @@ public class AppModel {
             }
         }
 
+        Set<String> freshlyAddedScreenIds = new HashSet<>();
         for (Screen scr : currentScene.getScreens()) {
             if (screenNodesByScreenId.containsKey(scr.getId()) || !isScreenWiredFor(mode, scr)) {
                 continue;
@@ -3016,11 +3024,12 @@ public class AppModel {
             autoFitScreenNode(node, scr);
             nodes.add(node);
             screenNodesByScreenId.put(scr.getId(), node);
+            freshlyAddedScreenIds.add(scr.getId());
         }
 
         if (mode == SchemaMode.POWER) {
             if (autoConnectSockets) {
-                autoConnectPowerChainEndpoints(screenNodesByScreenId);
+                autoConnectPowerChainEndpoints(screenNodesByScreenId, freshlyAddedScreenIds);
             }
             return;
         }
@@ -3043,11 +3052,11 @@ public class AppModel {
                 continue;
             }
             if (c.getPortNumber() != null) {
-                autoConnectChainEndpoint(screenNodesByScreenId, controllerNodesByInstanceId, ids.get(0),
-                        c.getPortNumber());
+                autoConnectChainEndpoint(screenNodesByScreenId, controllerNodesByInstanceId, freshlyAddedScreenIds,
+                        ids.get(0), c.getPortNumber());
             }
             if (c.getBackupPortNumber() != null) {
-                autoConnectChainEndpoint(screenNodesByScreenId, controllerNodesByInstanceId,
+                autoConnectChainEndpoint(screenNodesByScreenId, controllerNodesByInstanceId, freshlyAddedScreenIds,
                         ids.get(ids.size() - 1), c.getBackupPortNumber());
             }
         }
@@ -3134,14 +3143,16 @@ public class AppModel {
     /** Проводит связь от гнезда кабинета {@code cabinetId} (узел-экран, которому он
      *  принадлежит, ищется по факту через {@link #screenOfCabinet}) к группе портов
      *  узла-контроллера, которому прописан {@code globalPort} — молча ничего не
-     *  делает, если соответствующие узлы ещё не добавлены в схему, порт вне карт
-     *  контроллера (fiber/неизвестный тип) или такая же связь уже существует
-     *  (идемпотентность при повторных вызовах {@link #autoPopulateSchema}). */
+     *  делает, если экран НЕ входит в {@code freshlyAddedScreenIds} (см.
+     *  {@link #autoPopulateSchema} — автосоединение только при первом появлении
+     *  блока экрана), соответствующие узлы ещё не добавлены в схему, порт вне карт
+     *  контроллера (fiber/неизвестный тип) или такая же связь уже существует. */
     private void autoConnectChainEndpoint(Map<String, SchemaNode> screenNodesByScreenId,
                                            Map<String, SchemaNode> controllerNodesByInstanceId,
+                                           Set<String> freshlyAddedScreenIds,
                                            String cabinetId, int globalPort) {
         Screen owner = screenOfCabinet(currentScene, cabinetId);
-        if (owner == null) {
+        if (owner == null || !freshlyAddedScreenIds.contains(owner.getId())) {
             return;
         }
         SchemaNode screenNode = screenNodesByScreenId.get(owner.getId());
@@ -3178,17 +3189,19 @@ public class AppModel {
                 null, null);
     }
 
-    /** Распределяет вводные кабинеты ВСЕХ силовых цепочек сцены по свободным
-     *  разъёмам уже существующих на схеме узлов типа {@link SchemaNodeType#DISTRO}
-     *  (щиты/проходные) — см. {@link #autoPopulateSchema}. Узлы перебираются в
-     *  порядке их добавления на схему (см. {@code currentScene.getSchemaNodes()}),
-     *  разъёмы внутри узла — в порядке {@link SchemaNode#getPowerConnectors()}: узел
-     *  заполняется МАКСИМАЛЬНО, прежде чем перейти к следующему (см.
-     *  {@link #autoConnectPowerCabinetToDistro}) — не равномерно "размазывается" по
-     *  всем сразу. Кабинетам, которым не хватило свободных разъёмов ни на одном узле
-     *  (щитов на схеме ещё нет или их ёмкость исчерпана), связь не проводится — новые
-     *  узлы «Распределение» автоматически НЕ создаются, инженер размещает их сам. */
-    private void autoConnectPowerChainEndpoints(Map<String, SchemaNode> screenNodesByScreenId) {
+    /** Распределяет вводные кабинеты силовых цепочек СВЕЖЕДОБАВЛЕННЫХ узлов-экранов
+     *  (см. {@code freshlyAddedScreenIds}, {@link #autoPopulateSchema} — автосвязь
+     *  только при первом появлении блока экрана) по свободным разъёмам уже
+     *  существующих на схеме узлов типа {@link SchemaNodeType#DISTRO} (щиты/проходные).
+     *  Узлы перебираются в порядке их добавления на схему (см.
+     *  {@code currentScene.getSchemaNodes()}): узел заполняется МАКСИМАЛЬНО, прежде
+     *  чем перейти к следующему (см. {@link #autoConnectPowerCabinetToDistro}) — не
+     *  равномерно "размазывается" по всем сразу. Кабинетам, которым не хватило
+     *  свободных разъёмов ни на одном узле (щитов на схеме ещё нет или их ёмкость
+     *  исчерпана), связь не проводится — новые узлы «Распределение» автоматически
+     *  НЕ создаются, инженер размещает их сам. */
+    private void autoConnectPowerChainEndpoints(Map<String, SchemaNode> screenNodesByScreenId,
+                                                 Set<String> freshlyAddedScreenIds) {
         List<SchemaNode> distroNodes = new ArrayList<>();
         for (SchemaNode n : currentScene.getSchemaNodes()) {
             if (n.getMode() == SchemaMode.POWER && n.getType() == SchemaNodeType.DISTRO) {
@@ -3203,21 +3216,26 @@ public class AppModel {
             if (ids.isEmpty()) {
                 continue;
             }
-            autoConnectPowerCabinetToDistro(screenNodesByScreenId, distroNodes, ids.get(0));
+            autoConnectPowerCabinetToDistro(screenNodesByScreenId, freshlyAddedScreenIds, distroNodes, ids.get(0));
         }
     }
 
-    /** Проводит связь от гнезда кабинета {@code cabinetId} к первому СВОБОДНОМУ
-     *  выходному разъёму среди {@code distroNodes} (по порядку, см.
-     *  {@link #autoConnectPowerChainEndpoints}) — молча ничего не делает, если узел-
-     *  экран ещё не добавлен в схему, у кабинета уже есть связь силовой схемы (любая,
-     *  не обязательно к тому же разъёму — идемпотентность при повторных вызовах
-     *  {@link #autoPopulateSchema}, а не «размазывать» перевызовом заново) или
-     *  свободных разъёмов не осталось нигде. */
+    /** Проводит связь от гнезда кабинета {@code cabinetId} к СВОБОДНОМУ разъёму
+     *  ОСНОВНОЙ группы (см. {@link #dominantOutputConnectorType}) среди
+     *  {@code distroNodes} (по порядку, см. {@link #autoConnectPowerChainEndpoints}) —
+     *  молча ничего не делает, если экран НЕ входит в {@code freshlyAddedScreenIds},
+     *  узел-экран ещё не добавлен в схему, у кабинета уже есть связь силовой схемы
+     *  или свободных разъёмов основной группы не осталось нигде. Разъёмы ДРУГОГО
+     *  типа/номинала на том же узле (например, одиночный запасной транзитный CEE 32A
+     *  рядом с основным банком 6×CEE 16A) сознательно пропускаются целиком — не
+     *  годятся кабинету экрана физически, в приоритете аналогичный разъём на
+     *  СЛЕДУЮЩЕЙ проходной, а не случайный несовместимый разъём на этой же
+     *  (баг-репорт). */
     private void autoConnectPowerCabinetToDistro(Map<String, SchemaNode> screenNodesByScreenId,
+                                                  Set<String> freshlyAddedScreenIds,
                                                   List<SchemaNode> distroNodes, String cabinetId) {
         Screen owner = screenOfCabinet(currentScene, cabinetId);
-        if (owner == null) {
+        if (owner == null || !freshlyAddedScreenIds.contains(owner.getId())) {
             return;
         }
         SchemaNode screenNode = screenNodesByScreenId.get(owner.getId());
@@ -3231,24 +3249,54 @@ public class AppModel {
             }
         }
         for (SchemaNode distro : distroNodes) {
+            String dominantType = dominantOutputConnectorType(distro);
+            if (dominantType == null) {
+                continue;
+            }
             for (CardPort p : distro.getPowerConnectors()) {
-                if (p.getDirection() == PortDirection.IN) {
+                if (p.getDirection() == PortDirection.IN || !dominantType.equals(p.getConnectorType())) {
                     continue;
                 }
-                int used = 0;
-                for (SchemaEdge e : currentScene.getSchemaEdges()) {
-                    if (e.getMode() == SchemaMode.POWER
-                            && (p.getId().equals(e.getFromPortId()) || p.getId().equals(e.getToPortId()))) {
-                        used++;
-                    }
-                }
-                if (used < p.getCount()) {
+                if (countPowerEdgesForPort(p.getId()) < p.getCount()) {
                     addSchemaEdge(SchemaMode.POWER, screenNode.getId(), null, cabinetId, distro.getId(), p.getId(),
                             null, null);
                     return;
                 }
             }
         }
+    }
+
+    /** Тип разъёма ОСНОВНОЙ группы узла — тот, у которого наибольшая ёмкость
+     *  ({@code count}) среди ВЫХОДНЫХ разъёмов узла (при равенстве — первый по
+     *  порядку); null — у узла вообще нет выходных разъёмов. Реальная проходная —
+     *  это в первую очередь банк из N одинаковых розеток (например, 6×CEE 16A),
+     *  а не единственный запасной разъём другого номинала/типа для транзита —
+     *  см. {@link #autoConnectPowerCabinetToDistro}. */
+    private String dominantOutputConnectorType(SchemaNode distro) {
+        CardPort best = null;
+        for (CardPort p : distro.getPowerConnectors()) {
+            if (p.getDirection() == PortDirection.IN) {
+                continue;
+            }
+            if (best == null || p.getCount() > best.getCount()) {
+                best = p;
+            }
+        }
+        return best != null ? best.getConnectorType() : null;
+    }
+
+    /** Число связей силовой схемы (в любом направлении), уже ссылающихся на разъём
+     *  {@code portId} — используется для проверки остатка ёмкости группы разъёмов
+     *  (см. {@link CardPort#getCount()}). */
+    private int countPowerEdgesForPort(String portId) {
+        int used = 0;
+        for (SchemaEdge e : currentScene.getSchemaEdges()) {
+            if (e.getMode() == SchemaMode.POWER
+                    && (portId.equals(e.getFromPortId()) || portId.equals(e.getToPortId()))) {
+                used++;
+            }
+        }
+        return used;
     }
 
     /** Локальный (в пределах контроллера, 1-based, только среди ВЫХОДНЫХ портов — та

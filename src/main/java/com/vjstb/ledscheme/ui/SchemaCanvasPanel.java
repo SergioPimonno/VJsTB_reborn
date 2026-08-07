@@ -1080,7 +1080,7 @@ public class SchemaCanvasPanel extends JPanel {
         // (см. WireLabelDialog(..., forceSingleCable)). Проверяем именно эту связь, а не
         // узел целиком — связь без привязки к гнезду (fromPortId/toPortId оба null)
         // продолжает работать как обычная связь узел-узел, режим на неё не влияет.
-        boolean forceSingleCable = settings.activeProfile().getConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL
+        boolean forceSingleCable = settings.activeProfile().getConnectorDisplayMode(mode) == ConnectorDisplayMode.INDIVIDUAL
                 && (edge.getFromPortId() != null || edge.getToPortId() != null);
         WireLabelDialog dlg = new WireLabelDialog(SwingUtilities.getWindowAncestor(this), model, mode, edge,
                 hints, lockedType, maxCount, maxCountReason, settings.activeProfile().isFoolProofWiringEnabled(),
@@ -1959,7 +1959,7 @@ public class SchemaCanvasPanel extends JPanel {
      *  не меняется, никакой новой геометрии кроме уже вычисленной {@code g}. */
     private void drawChainEndpointSockets(Graphics2D g2, SchemaNode n, ThumbGeometry g) {
         if (!settings.activeProfile().isSocketWiringEnabled()
-                || !settings.activeProfile().isChainEndpointSocketsEnabled()) {
+                || !settings.activeProfile().isChainEndpointSocketsEnabled(mode)) {
             return;
         }
         Set<String> socketIds = model.chainEndpointSocketCabinetIds(mode, g.screen());
@@ -1999,7 +1999,7 @@ public class SchemaCanvasPanel extends JPanel {
 
     private CabinetSocketHit cabinetSocketAt(Point p) {
         if (!settings.activeProfile().isSocketWiringEnabled()
-                || !settings.activeProfile().isChainEndpointSocketsEnabled()) {
+                || !settings.activeProfile().isChainEndpointSocketsEnabled(mode)) {
             return null;
         }
         for (SchemaNode n : nodes()) {
@@ -2122,7 +2122,7 @@ public class SchemaCanvasPanel extends JPanel {
         // Модель не меняется — все N строк по-прежнему ссылаются на один и тот же
         // CardPort.getId(), занятость конкретного гнезда определяется на лету по
         // порядку уже существующих SchemaEdge с этим portId (см. socketPosition).
-        boolean individual = settings.activeProfile().getConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL;
+        boolean individual = settings.activeProfile().getConnectorDisplayMode(mode) == ConnectorDisplayMode.INDIVIDUAL;
         boolean vertical = settings.activeProfile().isConnectorsVertical();
         List<SocketRect> rects = new ArrayList<>();
         String prevCardId = null;
@@ -2383,7 +2383,7 @@ public class SchemaCanvasPanel extends JPanel {
             // «N×Тип» на КАЖДОЙ из них было бы неверно (выглядело бы так, будто в
             // каждой строке ещё N разъёмов), поэтому вместо этого — тип и номер
             // конкретного гнезда среди развёрнутых.
-            boolean expandedRow = settings.activeProfile().getConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL
+            boolean expandedRow = settings.activeProfile().getConnectorDisplayMode(mode) == ConnectorDisplayMode.INDIVIDUAL
                     && port.getCount() > 1 && port.getDirection() != PortDirection.IN_OUT;
             String label = expandedRow ? port.getConnectorType() + " #" + (r.slotIndex() + 1)
                     : port.getCount() + "×" + port.getConnectorType();

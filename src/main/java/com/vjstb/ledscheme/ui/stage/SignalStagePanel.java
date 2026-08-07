@@ -285,7 +285,7 @@ public class SignalStagePanel extends JPanel {
         schemaViewBtn.addActionListener(e -> {
             if (settings.activeProfile().isSignalSchemaAutoPopulateEnabled()) {
                 boolean autoConnect = settings.activeProfile().isSocketWiringEnabled()
-                        && settings.activeProfile().isChainEndpointSocketsEnabled();
+                        && settings.activeProfile().isSignalChainEndpointSocketsEnabled();
                 model.autoPopulateSchema(SchemaMode.SIGNAL, autoConnect);
             }
             viewCards.show(viewContainer, VIEW_SCHEMA);

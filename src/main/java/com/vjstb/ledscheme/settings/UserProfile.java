@@ -52,24 +52,29 @@ public class UserProfile {
      *  «узел-узел» продолжает работать как раньше. */
     private boolean socketWiringEnabled = false;
 
-    /** Использовать кабинеты, которыми начинаются цепочки расключения, как гнёзда
-     *  подключения на общей схеме — независимо от {@link #socketWiringEnabled} (та
-     *  решает, цепляется ли связь за конкретное гнездо ВООБЩЕ; эта — какие гнёзда
-     *  доступны). Для питания — только вводной кабинет каждой {@code PowerChain}
-     *  (первый в {@code cabinetInstanceIds}); для сигнала — вводной кабинет основной
-     *  цепочки, и ДОПОЛНИТЕЛЬНО вводной кабинет резервной цепочки, если для этого
-     *  порта задан резерв (см. {@code AppModel.isPortReservedAsBackup}/
-     *  {@code signalChainByPort}). Гнёзда видны только поверх миниатюры расключения
-     *  экрана (см. {@link #schemaScreensAsWiringDiagram}) — не отдельная визуализация.
-     *  Выключено по умолчанию. */
-    private boolean chainEndpointSocketsEnabled = false;
+    /** Использовать вводные кабинеты цепочек СИГНАЛА как гнёзда подключения на общей
+     *  схеме — независимо от {@link #socketWiringEnabled} (та решает, цепляется ли
+     *  связь за конкретное гнездо ВООБЩЕ; эта — какие гнёзда доступны). Вводной
+     *  кабинет основной цепочки, и ДОПОЛНИТЕЛЬНО последний кабинет той же цепочки,
+     *  если для порта задан резерв (см. {@code AppModel.chainEndpointSocketCabinetIds}).
+     *  Гнёзда видны только поверх миниатюры расключения экрана (см.
+     *  {@link #schemaScreensAsWiringDiagram}) — не отдельная визуализация. Отдельная
+     *  настройка от {@link #powerChainEndpointSocketsEnabled} — режимы схем
+     *  устроены по-разному (см. {@link #signalSchemaAutoPopulateEnabled}), инженеру
+     *  может быть нужен режим гнёзд только для одного из них. Выключено по умолчанию. */
+    private boolean signalChainEndpointSocketsEnabled = false;
+
+    /** То же самое для схемы ПИТАНИЯ — см. {@link #signalChainEndpointSocketsEnabled}
+     *  (та же идея, отдельная настройка). Вводной (первый в {@code cabinetInstanceIds})
+     *  кабинет каждой {@code PowerChain}. */
+    private boolean powerChainEndpointSocketsEnabled = false;
 
     /** Автозаполнение общей схемы СИГНАЛА: при переходе с расключения экрана на
      *  общую схему автоматически добавляет узлы уже расключенных экранов и
      *  использованных контроллеров сцены, которых там ещё нет — без ручного
      *  добавления каждого узла из панели «Добавить узел», зеркаля РЕАЛЬНУЮ
      *  комплектацию карт контроллера. Если ВДОБАВОК включено
-     *  {@link #chainEndpointSocketsEnabled} — также проводит связи от гнёзд
+     *  {@link #signalChainEndpointSocketsEnabled} — также проводит связи от гнёзд
      *  вводных/резервных кабинетов к соответствующей группе портов узла-контроллера,
      *  которому эта цепочка прописана (см. AppModel#autoPopulateSchema). Отдельная
      *  настройка от {@link #powerSchemaAutoPopulateEnabled} — расключение сигнала и
@@ -83,8 +88,8 @@ public class UserProfile {
     /** Автозаполнение общей схемы ПИТАНИЯ — см. {@link #signalSchemaAutoPopulateEnabled}
      *  (та же идея, отдельная настройка). Добавляет только узлы расключенных экранов —
      *  у питания нет понятия контроллера (см. {@code PowerChain}). Если ВДОБАВОК
-     *  включено {@link #chainEndpointSocketsEnabled} — распределяет вводные кабинеты
-     *  цепочек по СВОБОДНЫМ разъёмам уже существующих на схеме узлов типа
+     *  включено {@link #powerChainEndpointSocketsEnabled} — распределяет вводные
+     *  кабинеты цепочек по СВОБОДНЫМ разъёмам уже существующих на схеме узлов типа
      *  «Распределение» (щиты/проходные), максимально заполняя каждый по очереди,
      *  прежде чем переходить к следующему — новые узлы автоматически не создаются
      *  (см. AppModel#autoPopulateSchema). Доступно только когда включён
@@ -106,16 +111,27 @@ public class UserProfile {
      *  Применяется и к живому редактору схемы, и к экспорту пакета документации. */
     private boolean schemaScreensAsWiringDiagram = false;
 
-    /** Как рисовать разъёмы на блоке узла общей схемы — группой по типу (как было,
-     *  по умолчанию) или каждый физический разъём отдельным гнездом. Независимая ось
-     *  от {@link #socketWiringEnabled} — та решает, цепляется ли линия связи за
-     *  конкретное гнездо; эта — как гнёзда рисуются, см. {@link ConnectorDisplayMode}. */
-    private ConnectorDisplayMode connectorDisplayMode = ConnectorDisplayMode.GROUPED;
+    /** Как рисовать разъёмы на блоке узла общей схемы СИГНАЛА — группой по типу (как
+     *  было, по умолчанию) или каждый физический разъём отдельным гнездом. Отдельная
+     *  настройка от {@link #powerConnectorDisplayMode} — на практике у сигнала
+     *  отдельные разъёмы карты используют довольно часто (расключение по конкретным
+     *  Ethernet-портам), у питания — редко (обычно достаточно группы «N×разъём»).
+     *  Независимая ось от {@link #socketWiringEnabled} — та решает, цепляется ли линия
+     *  связи за конкретное гнездо; эта — как гнёзда рисуются, см.
+     *  {@link ConnectorDisplayMode}. */
+    private ConnectorDisplayMode signalConnectorDisplayMode = ConnectorDisplayMode.GROUPED;
+
+    /** Как рисовать разъёмы на блоке узла общей схемы ПИТАНИЯ — см.
+     *  {@link #signalConnectorDisplayMode} (та же идея, отдельная настройка). */
+    private ConnectorDisplayMode powerConnectorDisplayMode = ConnectorDisplayMode.GROUPED;
 
     /** Ориентация разъёмов на блоке узла общей схемы (Task #2/v1.6, часть 2): false
      *  (по умолчанию) — гнёзда у левого/правого края, строки сверху вниз, как раньше;
      *  true — гнёзда у верхнего/нижнего края, строки колонками слева направо. Тоже
-     *  независимая ось — сочетается с любым {@link #connectorDisplayMode}. */
+     *  независимая ось — сочетается с любым режимом отображения разъёмов, общая для
+     *  обеих схем (в отличие от {@link #signalConnectorDisplayMode}/
+     *  {@link #powerConnectorDisplayMode} — тут разница между сигналом и питанием
+     *  не так значима, отдельные настройки не нужны). */
     private boolean connectorsVertical = false;
 
     /** Контроль электрической/сигнальной нагрузки (Task #80/#81/#86/#87): сравнение
@@ -252,12 +268,27 @@ public class UserProfile {
         this.socketWiringEnabled = socketWiringEnabled;
     }
 
-    public boolean isChainEndpointSocketsEnabled() {
-        return chainEndpointSocketsEnabled;
+    public boolean isSignalChainEndpointSocketsEnabled() {
+        return signalChainEndpointSocketsEnabled;
     }
 
-    public void setChainEndpointSocketsEnabled(boolean chainEndpointSocketsEnabled) {
-        this.chainEndpointSocketsEnabled = chainEndpointSocketsEnabled;
+    public void setSignalChainEndpointSocketsEnabled(boolean signalChainEndpointSocketsEnabled) {
+        this.signalChainEndpointSocketsEnabled = signalChainEndpointSocketsEnabled;
+    }
+
+    public boolean isPowerChainEndpointSocketsEnabled() {
+        return powerChainEndpointSocketsEnabled;
+    }
+
+    public void setPowerChainEndpointSocketsEnabled(boolean powerChainEndpointSocketsEnabled) {
+        this.powerChainEndpointSocketsEnabled = powerChainEndpointSocketsEnabled;
+    }
+
+    /** Режим гнёзд подключения для {@code mode} — удобный маршрутизатор, см.
+     *  {@link #getConnectorDisplayMode(com.vjstb.ledscheme.model.SchemaMode)}. */
+    public boolean isChainEndpointSocketsEnabled(com.vjstb.ledscheme.model.SchemaMode mode) {
+        return mode == com.vjstb.ledscheme.model.SchemaMode.POWER
+                ? isPowerChainEndpointSocketsEnabled() : isSignalChainEndpointSocketsEnabled();
     }
 
     public boolean isSignalSchemaAutoPopulateEnabled() {
@@ -292,12 +323,30 @@ public class UserProfile {
         this.schemaScreensAsWiringDiagram = schemaScreensAsWiringDiagram;
     }
 
-    public ConnectorDisplayMode getConnectorDisplayMode() {
-        return connectorDisplayMode != null ? connectorDisplayMode : ConnectorDisplayMode.GROUPED;
+    public ConnectorDisplayMode getSignalConnectorDisplayMode() {
+        return signalConnectorDisplayMode != null ? signalConnectorDisplayMode : ConnectorDisplayMode.GROUPED;
     }
 
-    public void setConnectorDisplayMode(ConnectorDisplayMode connectorDisplayMode) {
-        this.connectorDisplayMode = connectorDisplayMode != null ? connectorDisplayMode : ConnectorDisplayMode.GROUPED;
+    public void setSignalConnectorDisplayMode(ConnectorDisplayMode signalConnectorDisplayMode) {
+        this.signalConnectorDisplayMode = signalConnectorDisplayMode != null
+                ? signalConnectorDisplayMode : ConnectorDisplayMode.GROUPED;
+    }
+
+    public ConnectorDisplayMode getPowerConnectorDisplayMode() {
+        return powerConnectorDisplayMode != null ? powerConnectorDisplayMode : ConnectorDisplayMode.GROUPED;
+    }
+
+    public void setPowerConnectorDisplayMode(ConnectorDisplayMode powerConnectorDisplayMode) {
+        this.powerConnectorDisplayMode = powerConnectorDisplayMode != null
+                ? powerConnectorDisplayMode : ConnectorDisplayMode.GROUPED;
+    }
+
+    /** Режим отображения разъёмов для {@code mode} — удобный маршрутизатор для
+     *  UI-кода вроде SchemaCanvasPanel, у которого уже есть конкретный SchemaMode
+     *  и не хочется дублировать if/else на каждом месте вызова. */
+    public ConnectorDisplayMode getConnectorDisplayMode(com.vjstb.ledscheme.model.SchemaMode mode) {
+        return mode == com.vjstb.ledscheme.model.SchemaMode.POWER
+                ? getPowerConnectorDisplayMode() : getSignalConnectorDisplayMode();
     }
 
     public boolean isConnectorsVertical() {
@@ -355,12 +404,14 @@ public class UserProfile {
         p.snapThresholdPx = snapThresholdPx;
         p.snapStrengthPercent = snapStrengthPercent;
         p.socketWiringEnabled = socketWiringEnabled;
-        p.chainEndpointSocketsEnabled = chainEndpointSocketsEnabled;
+        p.signalChainEndpointSocketsEnabled = signalChainEndpointSocketsEnabled;
+        p.powerChainEndpointSocketsEnabled = powerChainEndpointSocketsEnabled;
         p.signalSchemaAutoPopulateEnabled = signalSchemaAutoPopulateEnabled;
         p.powerSchemaAutoPopulateEnabled = powerSchemaAutoPopulateEnabled;
         p.foolProofWiringEnabled = foolProofWiringEnabled;
         p.schemaScreensAsWiringDiagram = schemaScreensAsWiringDiagram;
-        p.connectorDisplayMode = connectorDisplayMode;
+        p.signalConnectorDisplayMode = signalConnectorDisplayMode;
+        p.powerConnectorDisplayMode = powerConnectorDisplayMode;
         p.connectorsVertical = connectorsVertical;
         p.loadTrackingEnabled = loadTrackingEnabled;
         p.maskLogoImagePath = maskLogoImagePath;

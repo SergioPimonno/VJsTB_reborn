@@ -36,12 +36,14 @@ public class PreferencesDialog extends JDialog {
     private JSpinner snapThresholdSpinner;
     private JSpinner snapStrengthSpinner;
     private JCheckBox socketWiringCheck;
-    private JCheckBox chainEndpointSocketsCheck;
+    private JCheckBox signalChainEndpointSocketsCheck;
+    private JCheckBox powerChainEndpointSocketsCheck;
     private JCheckBox signalSchemaAutoPopulateCheck;
     private JCheckBox powerSchemaAutoPopulateCheck;
     private JCheckBox foolProofWiringCheck;
     private JCheckBox schemaScreensAsWiringCheck;
-    private JCheckBox connectorDisplayModeCheck;
+    private JCheckBox signalConnectorDisplayModeCheck;
+    private JCheckBox powerConnectorDisplayModeCheck;
     private JCheckBox connectorsVerticalCheck;
     private JCheckBox loadTrackingCheck;
     private JLabel maskLogoPathLabel;
@@ -152,18 +154,29 @@ public class PreferencesDialog extends JDialog {
                 settings.setFoolProofWiringEnabled(foolProofWiringCheck.isSelected()));
         body.add(foolProofWiringCheck);
 
-        connectorDisplayModeCheck = new JCheckBox(
-                "Показывать каждый разъём карты отдельным гнездом (не группой по типу)",
-                settings.activeProfile().getConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL);
-        connectorDisplayModeCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
-        connectorDisplayModeCheck.setToolTipText("Выключено — разъёмы одного типа на карте показаны одной строкой"
-                + " «N×Тип» (как раньше). Включено — та же группа рисуется N отдельными строками-гнёздами, каждое —"
-                + " своя точка подключения, для наглядного расключения многоканального оборудования по отдельным"
-                + " линиям. Независимо от настройки «линия цепляется за конкретный разъём» выше — та решает, ЧТО"
-                + " соединяет линия, эта — КАК разъёмы нарисованы.");
-        connectorDisplayModeCheck.addActionListener(e -> settings.setConnectorDisplayMode(
-                connectorDisplayModeCheck.isSelected() ? ConnectorDisplayMode.INDIVIDUAL : ConnectorDisplayMode.GROUPED));
-        body.add(connectorDisplayModeCheck);
+        signalConnectorDisplayModeCheck = new JCheckBox(
+                "Сигнал: показывать каждый разъём карты отдельным гнездом (не группой по типу)",
+                settings.activeProfile().getSignalConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL);
+        signalConnectorDisplayModeCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        signalConnectorDisplayModeCheck.setToolTipText("Выключено — разъёмы одного типа на карте показаны одной"
+                + " строкой «N×Тип» (как раньше). Включено — та же группа рисуется N отдельными строками-гнёздами,"
+                + " каждое — своя точка подключения, для наглядного расключения многоканального оборудования по"
+                + " отдельным линиям. Отдельная настройка от питания ниже — для сигнала отдельные разъёмы карты"
+                + " используют довольно часто. Независимо от настройки «линия цепляется за конкретный разъём»"
+                + " выше — та решает, ЧТО соединяет линия, эта — КАК разъёмы нарисованы.");
+        signalConnectorDisplayModeCheck.addActionListener(e -> settings.setSignalConnectorDisplayMode(
+                signalConnectorDisplayModeCheck.isSelected() ? ConnectorDisplayMode.INDIVIDUAL : ConnectorDisplayMode.GROUPED));
+        body.add(signalConnectorDisplayModeCheck);
+
+        powerConnectorDisplayModeCheck = new JCheckBox(
+                "Питание: показывать каждый разъём щита отдельным гнездом (не группой по типу)",
+                settings.activeProfile().getPowerConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL);
+        powerConnectorDisplayModeCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        powerConnectorDisplayModeCheck.setToolTipText("То же самое, но для схемы питания — отдельная настройка,"
+                + " т.к. для питания отдельные вводные используют редко (обычно хватает группы «N×разъём»).");
+        powerConnectorDisplayModeCheck.addActionListener(e -> settings.setPowerConnectorDisplayMode(
+                powerConnectorDisplayModeCheck.isSelected() ? ConnectorDisplayMode.INDIVIDUAL : ConnectorDisplayMode.GROUPED));
+        body.add(powerConnectorDisplayModeCheck);
 
         connectorsVerticalCheck = new JCheckBox(
                 "Гнёзда разъёмов у верхнего/нижнего края блока (не у левого/правого)",
@@ -193,18 +206,29 @@ public class PreferencesDialog extends JDialog {
                 settings.setSchemaScreensAsWiringDiagram(schemaScreensAsWiringCheck.isSelected()));
         body.add(schemaScreensAsWiringCheck);
 
-        chainEndpointSocketsCheck = new JCheckBox(
-                "Вводные кабинеты цепочек — тоже гнёзда подключения",
-                settings.activeProfile().isChainEndpointSocketsEnabled());
-        chainEndpointSocketsCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
-        chainEndpointSocketsCheck.setToolTipText("Включено — на миниатюре расключения экрана (см. настройку выше)"
-                + " вводной кабинет каждой силовой цепочки, а для сигнала — вводной кабинет основной цепочки и,"
-                + " если задан резерв, последний кабинет той же цепочки — становятся гнёздами: к ним можно"
-                + " подвести линию на общей схеме, как к обычному разъёму. Доступно только при включённой"
+        signalChainEndpointSocketsCheck = new JCheckBox(
+                "Сигнал: вводные кабинеты цепочек — тоже гнёзда подключения",
+                settings.activeProfile().isSignalChainEndpointSocketsEnabled());
+        signalChainEndpointSocketsCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        signalChainEndpointSocketsCheck.setToolTipText("Включено — на миниатюре расключения экрана (см. настройку"
+                + " выше) вводной кабинет основной сигнальной цепочки и, если задан резерв, последний кабинет той же"
+                + " цепочки — становятся гнёздами: к ним можно подвести линию на общей схеме, как к обычному"
+                + " разъёму. Отдельная настройка от питания ниже. Доступно только при включённой настройке «линия"
+                + " цепляется за конкретный разъём» в группе «Соединения» выше.");
+        signalChainEndpointSocketsCheck.addActionListener(e ->
+                settings.setSignalChainEndpointSocketsEnabled(signalChainEndpointSocketsCheck.isSelected()));
+        body.add(signalChainEndpointSocketsCheck);
+
+        powerChainEndpointSocketsCheck = new JCheckBox(
+                "Питание: вводные кабинеты цепочек — тоже гнёзда подключения",
+                settings.activeProfile().isPowerChainEndpointSocketsEnabled());
+        powerChainEndpointSocketsCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        powerChainEndpointSocketsCheck.setToolTipText("То же самое, но для схемы питания — отдельная настройка:"
+                + " вводной кабинет каждой силовой цепочки становится гнездом. Доступно только при включённой"
                 + " настройке «линия цепляется за конкретный разъём» в группе «Соединения» выше.");
-        chainEndpointSocketsCheck.addActionListener(e ->
-                settings.setChainEndpointSocketsEnabled(chainEndpointSocketsCheck.isSelected()));
-        body.add(chainEndpointSocketsCheck);
+        powerChainEndpointSocketsCheck.addActionListener(e ->
+                settings.setPowerChainEndpointSocketsEnabled(powerChainEndpointSocketsCheck.isSelected()));
+        body.add(powerChainEndpointSocketsCheck);
 
         signalSchemaAutoPopulateCheck = new JCheckBox(
                 "Автозаполнение сигнала: при переходе на общую схему добавлять расключенные экраны"
@@ -214,11 +238,11 @@ public class PreferencesDialog extends JDialog {
         signalSchemaAutoPopulateCheck.setToolTipText("Включено — при переключении с «Расключение экрана» на «Общая"
                 + " схема» уже расключенные экраны и использованные контроллеры сцены автоматически появляются в"
                 + " схеме сигнала, если их там ещё нет (контроллер зеркалит реальную комплектацию карт) — не нужно"
-                + " добавлять их вручную по одному. Если ВДОБАВОК включено «вводные кабинеты цепочек — тоже гнёзда"
-                + " подключения» выше — гнёзда экранов автоматически соединяются с соответствующими портами"
+                + " добавлять их вручную по одному. Если ВДОБАВОК включено «Сигнал: вводные кабинеты цепочек — тоже"
+                + " гнёзда подключения» выше — гнёзда экранов автоматически соединяются с соответствующими портами"
                 + " использованных контроллеров. Уже добавленные вручную узлы и связи не трогает, повторный переход"
-                + " дублей не создаёт. Доступно только при включённой настройке «линия цепляется за конкретный"
-                + " разъём» в группе «Соединения» выше.");
+                + " дублей не создаёт, а разорванную вручную связь не восстанавливает. Доступно только при"
+                + " включённой настройке «линия цепляется за конкретный разъём» в группе «Соединения» выше.");
         signalSchemaAutoPopulateCheck.addActionListener(e ->
                 settings.setSignalSchemaAutoPopulateEnabled(signalSchemaAutoPopulateCheck.isSelected()));
         body.add(signalSchemaAutoPopulateCheck);
@@ -230,13 +254,15 @@ public class PreferencesDialog extends JDialog {
         powerSchemaAutoPopulateCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
         powerSchemaAutoPopulateCheck.setToolTipText("Включено — при переключении с «Расключение экрана» на «Общая"
                 + " схема» уже расключенные экраны автоматически появляются в схеме питания, если их там ещё нет."
-                + " У питания нет понятия контроллера — вместо этого, если ВДОБАВОК включено «вводные кабинеты"
-                + " цепочек — тоже гнёзда подключения» выше, вводные кабинеты распределяются по СВОБОДНЫМ разъёмам"
-                + " уже добавленных на схему узлов типа «Распределение» (щиты/проходные), максимально заполняя"
-                + " каждый по очереди, прежде чем переходить к следующему — новые такие узлы не создаются, их нужно"
-                + " разместить на схеме заранее. Уже добавленные вручную узлы и связи не трогает, повторный переход"
-                + " дублей не создаёт. Доступно только при включённой настройке «линия цепляется за конкретный"
-                + " разъём» в группе «Соединения» выше.");
+                + " У питания нет понятия контроллера — вместо этого, если ВДОБАВОК включено «Питание: вводные"
+                + " кабинеты цепочек — тоже гнёзда подключения» выше, вводные кабинеты распределяются по СВОБОДНЫМ"
+                + " разъёмам уже добавленных на схему узлов типа «Распределение» (щиты/проходные) — только разъёмы"
+                + " ОСНОВНОГО (самого ёмкого) типа узла, разъёмы другого номинала/типа на том же узле пропускаются —"
+                + " максимально заполняя каждый по очереди, прежде чем переходить к следующему. Новые такие узлы не"
+                + " создаются, их нужно разместить на схеме заранее. Уже добавленные вручную узлы и связи не"
+                + " трогает, повторный переход дублей не создаёт, а разорванную вручную связь не восстанавливает."
+                + " Доступно только при включённой настройке «линия цепляется за конкретный разъём» в группе"
+                + " «Соединения» выше.");
         powerSchemaAutoPopulateCheck.addActionListener(e ->
                 settings.setPowerSchemaAutoPopulateEnabled(powerSchemaAutoPopulateCheck.isSelected()));
         body.add(powerSchemaAutoPopulateCheck);
@@ -295,7 +321,7 @@ public class PreferencesDialog extends JDialog {
         return (JPanel) UiKit.section("Генерация масок", body);
     }
 
-    /** chainEndpointSocketsCheck/signalSchemaAutoPopulateCheck/powerSchemaAutoPopulateCheck
+    /** signal/powerChainEndpointSocketsCheck и signal/powerSchemaAutoPopulateCheck
      *  работают только вместе с socketWiringCheck (без него общая схема не различает
      *  конкретные гнёзда/порты вообще) — недоступны для включения, пока он выключен,
      *  чтобы не создавать видимость рабочей настройки там, где она молча ничего не
@@ -304,7 +330,8 @@ public class PreferencesDialog extends JDialog {
      *  пока мастер снова не включат. */
     private void applySocketDependentEnablement() {
         boolean enabled = socketWiringCheck.isSelected();
-        chainEndpointSocketsCheck.setEnabled(enabled);
+        signalChainEndpointSocketsCheck.setEnabled(enabled);
+        powerChainEndpointSocketsCheck.setEnabled(enabled);
         signalSchemaAutoPopulateCheck.setEnabled(enabled);
         powerSchemaAutoPopulateCheck.setEnabled(enabled);
     }
@@ -317,12 +344,15 @@ public class PreferencesDialog extends JDialog {
         socketWiringCheck.setSelected(settings.activeProfile().isSocketWiringEnabled());
         foolProofWiringCheck.setSelected(settings.activeProfile().isFoolProofWiringEnabled());
         schemaScreensAsWiringCheck.setSelected(settings.activeProfile().isSchemaScreensAsWiringDiagram());
-        chainEndpointSocketsCheck.setSelected(settings.activeProfile().isChainEndpointSocketsEnabled());
+        signalChainEndpointSocketsCheck.setSelected(settings.activeProfile().isSignalChainEndpointSocketsEnabled());
+        powerChainEndpointSocketsCheck.setSelected(settings.activeProfile().isPowerChainEndpointSocketsEnabled());
         signalSchemaAutoPopulateCheck.setSelected(settings.activeProfile().isSignalSchemaAutoPopulateEnabled());
         powerSchemaAutoPopulateCheck.setSelected(settings.activeProfile().isPowerSchemaAutoPopulateEnabled());
         applySocketDependentEnablement();
-        connectorDisplayModeCheck.setSelected(
-                settings.activeProfile().getConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL);
+        signalConnectorDisplayModeCheck.setSelected(
+                settings.activeProfile().getSignalConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL);
+        powerConnectorDisplayModeCheck.setSelected(
+                settings.activeProfile().getPowerConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL);
         connectorsVerticalCheck.setSelected(settings.activeProfile().isConnectorsVertical());
         loadTrackingCheck.setSelected(settings.activeProfile().isLoadTrackingEnabled());
         String logoPath = settings.activeProfile().getMaskLogoImagePath();
