@@ -93,21 +93,6 @@ public class OutputStagePanel extends JPanel {
         generate.addActionListener(e -> generate());
         body.add(generate);
 
-        body.add(UiKit.vgap(10));
-        body.add(UiKit.muted("<html>Для каждой сцены проекта в её собственной папке будут созданы подпапки"
-                + " «Сила», «Сигнал» и «Маски». В «Сила»/«Сигнал» — JPEG-схема каждого экрана сцены, общая схема"
-                + " «Все экраны сцены» (по ней видно цепочки, идущие через пару экранов — на схеме одного экрана"
-                + " это не видно), а также нарисованная блок-схема площадки («Общая схема питания/сигнала» из"
-                + " редактора) — узлы экранов рисуются блоком или уменьшённой схемой расключения, смотря по"
-                + " переключателю в Персонализации. В «Маски» — тестовые маски (Pixel Grid) всех экранов и канвасов"
-                + " сцены. Плюс два текстовых файла на весь проект: <b>«…_отчёт.txt»</b> — итоговые суммарные цифры"
-                + " (нагрузка, вес), затем разбор по сценам/экранам (состав, разрешение/габариты, мощность/вес,"
-                + " точек подвеса) — без цепочек; <b>«…_спецификация.txt»</b> — только количество используемого"
-                + " оборудования: кабинеты по типам, оборудование общей схемы по типу узла (щиты/дистрибьюторы/"
-                + "контроллеры/медиасерверы/конвертеры и т.д.), спецификация коммутации (провода/линии,"
-                + " подписанные N×тип на стрелках общих схем — с метражом для питания).</html>"));
-        body.add(UiKit.vgap(10));
-        body.add(UiKit.muted("Пресеты под медиасерверы (Resolume и т.п.) — на этапе «Генерация масок», отдельной кнопкой."));
         body.add(javax.swing.Box.createVerticalGlue());
 
         return body;
@@ -271,7 +256,8 @@ public class OutputStagePanel extends JPanel {
                             new File(signalFolder, OutputPaths.sanitize(scr.getName()) + ".jpg"));
                     jpegCount++;
 
-                    BufferedImage maskImg = PixelGridRenderer.renderMask(scr, type, model.getWorkspace());
+                    BufferedImage maskImg = PixelGridRenderer.renderMask(scr, type, model.getWorkspace(),
+                            PixelGridRenderer.GridRenderOptions.defaultForScreen(scr));
                     PixelGridRenderer.writePng(maskImg,
                             new File(masksFolder, OutputPaths.sanitize(scr.getName()) + "_Маска.png"));
                     maskCount++;
@@ -285,7 +271,7 @@ public class OutputStagePanel extends JPanel {
                 // не генерируем лишний файл.
                 if (scene.getScreens().size() > 1) {
                     for (boolean power : new boolean[]{true, false}) {
-                        SceneCanvasPanel overview = new SceneCanvasPanel(model);
+                        SceneCanvasPanel overview = new SceneCanvasPanel(model, settings);
                         overview.setDetailMode(true, power, false);
                         Dimension size = overview.getPreferredSize();
                         BufferedImage img = overview.renderImage(size.width, size.height);
@@ -318,7 +304,7 @@ public class OutputStagePanel extends JPanel {
                 }
 
                 for (ContentCanvas c : scene.getCanvases()) {
-                    BufferedImage img = PixelGridRenderer.renderCanvasMask(c, model);
+                    BufferedImage img = PixelGridRenderer.renderCanvasMask(c, model, settings);
                     PixelGridRenderer.writePng(img,
                             new File(masksFolder, "Канвас_" + OutputPaths.sanitize(c.getName()) + ".png"));
                     maskCount++;
@@ -422,7 +408,36 @@ public class OutputStagePanel extends JPanel {
         }
         sb.append('\n');
 
+        sb.append(buildProjectorSpec(project));
         sb.append(buildWiringSpec(project));
+        return sb.toString();
+    }
+
+    /** Спецификация проекторов, экспортированных из «Калькулятора проектора» (Task
+     *  #135/v2.0) — независимо от графа общей схемы (см. class-javadoc
+     *  ui.ProjectorCalculatorDialog: калькулятор самостоятельный). */
+    private String buildProjectorSpec(Project project) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("=== ПРОЕКТОРЫ ===\n");
+        boolean any = false;
+        for (Scene scene : project.getScenes()) {
+            for (com.vjstb.ledscheme.model.ProjectorInstance p : scene.getProjectors()) {
+                any = true;
+                com.vjstb.ledscheme.service.ProjectorCalc.ImageSize size =
+                        new com.vjstb.ledscheme.service.ProjectorCalc.ImageSize(p.getImageWidthM(), p.getImageHeightM());
+                double lux = com.vjstb.ledscheme.service.ProjectorCalc.screenIlluminanceLux(
+                        p.getAnsiLumens(), p.getScreenGain(), size);
+                sb.append(String.format("  [%s] %s — %s ANSI лм · объектив %s (%.2f–%.2f) · throw %.2f м ·"
+                                + " экран %.2f×%.2f м · %.0f лк%n",
+                        scene.getName(), p.getLabel(), UiKit.fmt(p.getAnsiLumens()), p.getLensName(),
+                        p.getLensMinThrowRatio(), p.getLensMaxThrowRatio(), p.getThrowDistanceM(),
+                        p.getImageWidthM(), p.getImageHeightM(), lux));
+            }
+        }
+        if (!any) {
+            sb.append("(в проекте нет добавленных проекторов)\n");
+        }
+        sb.append('\n');
         return sb.toString();
     }
 
@@ -430,8 +445,8 @@ public class OutputStagePanel extends JPanel {
      *  на стрелках общих схем питания/сигнала всех сцен проекта — сгруппированы по типу,
      *  для питания также суммируется метраж (N линий × длина каждой). */
     private String buildWiringSpec(Project project) {
-        java.util.LinkedHashMap<String, double[]> powerWires = new java.util.LinkedHashMap<>();
-        java.util.LinkedHashMap<String, double[]> signalWires = new java.util.LinkedHashMap<>();
+        java.util.LinkedHashMap<String, java.util.List<double[]>> powerWires = new java.util.LinkedHashMap<>();
+        java.util.LinkedHashMap<String, java.util.List<double[]>> signalWires = new java.util.LinkedHashMap<>();
         int totalEdges = 0;
         int structuredEdges = 0;
 
@@ -442,13 +457,10 @@ public class OutputStagePanel extends JPanel {
                     continue;
                 }
                 structuredEdges++;
-                java.util.LinkedHashMap<String, double[]> target =
+                java.util.LinkedHashMap<String, java.util.List<double[]>> target =
                         edge.getMode() == com.vjstb.ledscheme.model.SchemaMode.POWER ? powerWires : signalWires;
-                double[] agg = target.computeIfAbsent(edge.getWireType(), k -> new double[2]);
-                agg[0] += edge.getWireCount();
-                if (edge.getLengthM() != null) {
-                    agg[1] += edge.getWireCount() * edge.getLengthM();
-                }
+                target.computeIfAbsent(edge.getWireType(), k -> new java.util.ArrayList<>())
+                        .add(new double[]{edge.getLengthM() != null ? edge.getLengthM() : 0, edge.getWireCount()});
             }
         }
 
@@ -460,16 +472,11 @@ public class OutputStagePanel extends JPanel {
         } else {
             if (!powerWires.isEmpty()) {
                 sb.append("Питание:\n");
-                for (var e : powerWires.entrySet()) {
-                    String lenPart = e.getValue()[1] > 0 ? " · " + UiKit.fmt(e.getValue()[1]) + " м суммарно" : "";
-                    sb.append(String.format("  %s — %s лин.%s%n", e.getKey(), UiKit.fmt(e.getValue()[0]), lenPart));
-                }
+                appendWireTypeLines(sb, powerWires);
             }
             if (!signalWires.isEmpty()) {
                 sb.append("Сигнал:\n");
-                for (var e : signalWires.entrySet()) {
-                    sb.append(String.format("  %s — %s лин.%n", e.getKey(), UiKit.fmt(e.getValue()[0])));
-                }
+                appendWireTypeLines(sb, signalWires);
             }
             if (totalEdges > structuredEdges) {
                 sb.append("(").append(totalEdges - structuredEdges)
@@ -478,6 +485,42 @@ public class OutputStagePanel extends JPanel {
         }
         sb.append('\n');
         return sb.toString();
+    }
+
+    /** Для каждого типа провода: если в библиотеке есть каталог длин катушек с таким же
+     *  именем (см. model.CableLengthProfile), фактическая длина каждой связи округляется
+     *  вверх до ближайшей доступной длины (с запасом) и линии группируются по итоговой
+     *  длине; иначе — прежнее поведение (просто количество линий и суммарный метраж). */
+    private void appendWireTypeLines(StringBuilder sb,
+            java.util.LinkedHashMap<String, java.util.List<double[]>> byWireType) {
+        for (var e : byWireType.entrySet()) {
+            String wireType = e.getKey();
+            java.util.List<double[]> lines = e.getValue();
+            double totalCount = 0;
+            double totalLength = 0;
+            for (double[] l : lines) {
+                totalCount += l[1];
+                totalLength += l[0] * l[1];
+            }
+            com.vjstb.ledscheme.model.CableLengthProfile profile = model.cableLengthProfileByName(wireType);
+            if (profile == null) {
+                String lenPart = totalLength > 0 ? " · " + UiKit.fmt(totalLength) + " м суммарно" : "";
+                sb.append(String.format("  %s — %s лин.%s%n", wireType, UiKit.fmt(totalCount), lenPart));
+                continue;
+            }
+            com.vjstb.ledscheme.service.CableSpecCalc.Breakdown breakdown =
+                    com.vjstb.ledscheme.service.CableSpecCalc.breakdown(lines, profile);
+            sb.append("  ").append(wireType).append(" — ").append(UiKit.fmt(totalCount)).append(" лин.:\n");
+            for (var byLen : breakdown.countByRoundedLengthM().entrySet()) {
+                sb.append("    ").append(UiKit.fmt(byLen.getKey())).append(" м × ").append(byLen.getValue())
+                        .append(" шт.\n");
+            }
+            if (breakdown.uncoveredCount() > 0) {
+                sb.append("    ! ").append(breakdown.uncoveredCount())
+                        .append(" лин. не покрываются доступными длинами каталога «").append(wireType)
+                        .append("» — нужна сплайсовка либо докупка бухт\n");
+            }
+        }
     }
 
     private void openFolder(File dir) {

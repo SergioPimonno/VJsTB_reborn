@@ -18,6 +18,13 @@ public class ContentCanvas {
     private int widthPx = 1920;
     private int heightPx = 1080;
     private List<CanvasPlacement> placements = new ArrayList<>();
+    /** Общие для ВСЕХ гридов этого канваса настройки подписи имени (см.
+     *  PixelGridRenderer.GridRenderOptions) — в отличие от фона/чекбоксов, которые
+     *  у каждого CanvasPlacement свои. */
+    private boolean largeGridNames;
+    /** null — белый (прежнее поведение по умолчанию). */
+    private Integer textColorRgb;
+    private boolean dropShadow;
 
     public ContentCanvas() {
     }
@@ -62,6 +69,30 @@ public class ContentCanvas {
         this.placements = placements;
     }
 
+    public boolean isLargeGridNames() {
+        return largeGridNames;
+    }
+
+    public void setLargeGridNames(boolean largeGridNames) {
+        this.largeGridNames = largeGridNames;
+    }
+
+    public Integer getTextColorRgb() {
+        return textColorRgb;
+    }
+
+    public void setTextColorRgb(Integer textColorRgb) {
+        this.textColorRgb = textColorRgb;
+    }
+
+    public boolean isDropShadow() {
+        return dropShadow;
+    }
+
+    public void setDropShadow(boolean dropShadow) {
+        this.dropShadow = dropShadow;
+    }
+
     public ContentCanvas copy() {
         ContentCanvas c = new ContentCanvas();
         c.id = id;
@@ -72,6 +103,9 @@ public class ContentCanvas {
         for (CanvasPlacement p : placements) {
             c.placements.add(p.copy());
         }
+        c.largeGridNames = largeGridNames;
+        c.textColorRgb = textColorRgb;
+        c.dropShadow = dropShadow;
         return c;
     }
 }

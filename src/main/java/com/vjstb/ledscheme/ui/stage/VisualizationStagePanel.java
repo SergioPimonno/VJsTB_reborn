@@ -1,5 +1,7 @@
 package com.vjstb.ledscheme.ui.stage;
 
+import com.vjstb.ledscheme.model.CabinetType;
+import com.vjstb.ledscheme.model.CanvasPlacement;
 import com.vjstb.ledscheme.model.ContentCanvas;
 import com.vjstb.ledscheme.model.MaskColorPreset;
 import com.vjstb.ledscheme.model.Project;
@@ -11,11 +13,13 @@ import com.vjstb.ledscheme.ui.ContextBar;
 import com.vjstb.ledscheme.ui.OutputPaths;
 import com.vjstb.ledscheme.ui.Palette;
 import com.vjstb.ledscheme.ui.PixelGridRenderer;
+import com.vjstb.ledscheme.ui.PreferencesDialog;
 import com.vjstb.ledscheme.ui.ResolumePresetExporter;
 import com.vjstb.ledscheme.ui.UiKit;
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Dimension;
-import java.awt.GridLayout;
+import java.awt.FlowLayout;
 import java.awt.Image;
 import java.awt.image.BufferedImage;
 import java.io.File;
@@ -25,9 +29,12 @@ import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.DefaultCellEditor;
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
+import javax.swing.JColorChooser;
 import javax.swing.JComboBox;
 import javax.swing.JDialog;
 import javax.swing.JFileChooser;
@@ -37,53 +44,62 @@ import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.JSplitPane;
+import javax.swing.JTable;
 import javax.swing.JTextField;
+import javax.swing.ListSelectionModel;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingUtilities;
+import javax.swing.table.AbstractTableModel;
 
 /**
  * Этап «Генерация масок»: канвасы — виртуальные выходные кадры для компоновки
  * контента, в которых экраны размещаются на пиксельных позициях (как Advanced
- * Output в Resolume). Отсюда же — экспорт тестовых масок (экраны + канвасы целиком)
- * и отдельными кнопками — пресеты под конкретный медиасервер. Раскладка сцены по
- * координатам (мм) переехала в мини-превью прерига (Сетап) и корнер-виджет
- * Питание/Сигнал — здесь она больше не дублируется.
+ * Output в Resolume). Таблица «гридов» ниже холста (в духе референсного PixL) —
+ * по одной строке на каждый РАЗМЕЩЁННЫЙ на текущем канвасе экран (не отдельная
+ * сущность и без выбора типа кабинета — тип уже известен из самого экрана,
+ * заданного на «Сетапе»); каждая строка настраивает СВОЙ грид независимо: имя,
+ * цвет чек-борда и какие элементы маски рисовать. Отсюда же — экспорт тестовых
+ * масок (экраны + канвасы целиком) и отдельными кнопками — пресеты под конкретный
+ * медиасервер. Раскладка сцены по координатам (мм) переехала в мини-превью
+ * прерига (Сетап) и корнер-виджет Питание/Сигнал — здесь она больше не дублируется.
  */
 public class VisualizationStagePanel extends JPanel {
 
-    private static final int SIDE_WIDTH = 300;
-
     private final AppModel model;
+    private final com.vjstb.ledscheme.settings.SettingsManager settings;
     private final CanvasEditorPanel canvasEditor;
+    private final PlacementsTableModel placementsTableModel = new PlacementsTableModel();
+    private final JTable placementsTable = new JTable(placementsTableModel);
 
     private File chosenFolder;
     private final JTextField folderField = new JTextField();
     private final JComboBox<ContentCanvas> canvasCombo = new JComboBox<>();
     private final JComboBox<Screen> addScreenCombo = new JComboBox<>();
-    private final JComboBox<Screen> maskColorScreenCombo = new JComboBox<>();
-    private final JComboBox<MaskColorPreset> maskColorPresetCombo = new JComboBox<>(MaskColorPreset.values());
+
+    private final JCheckBox largeGridNamesCheck = new JCheckBox("Крупные имена гридов");
+    private final JCheckBox dropShadowCheck = new JCheckBox("Тень текста");
+    private final JButton textColorBtn = new JButton("Цвет текста…");
+    private Color currentTextColor = Color.WHITE;
+    /** Подавляет обратные вызовы в AppModel при программной синхронизации контролов
+     *  глобальных настроек маски под смену выбранного канваса (см. syncCanvasMaskSettingsControls) —
+     *  тот же приём, что раньше использовался для комбобокса цвета маски экрана. */
+    private boolean syncingCanvasMaskControls;
+
     private ContentCanvas currentCanvas;
-    /** Подавляет обратный вызов model.setScreenMaskColorPreset при программной
-     *  синхронизации maskColorPresetCombo под смену выбранного экрана (см.
-     *  syncMaskColorPresetCombo) — иначе просто переключение экрана в комбобоксе
-     *  без намерения менять цвет вызывало бы «изменение» модели вхолостую. */
-    private boolean syncingMaskColorCombo;
 
     public VisualizationStagePanel(AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings) {
         this.model = model;
+        this.settings = settings;
         this.canvasEditor = new CanvasEditorPanel(model, settings);
         canvasEditor.setOnChanged(this::refreshCanvasSide);
 
         setLayout(new BorderLayout());
 
         JPanel canvasSide = buildCanvasSide();
-        JScrollPane canvasSideScroll = new JScrollPane(canvasSide);
-        canvasSideScroll.setBorder(null);
-        canvasSideScroll.setMinimumSize(new Dimension(180, 100));
-        JSplitPane canvasSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, canvasEditor, canvasSideScroll);
+        JSplitPane canvasSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, canvasEditor, canvasSide);
         canvasSplit.setContinuousLayout(true);
-        canvasSplit.setResizeWeight(1.0);
-        UiKit.persistentDivider(settings, "visualization.canvasSplit", canvasSplit, 1.0 - (SIDE_WIDTH + 20) / 1360.0);
+        canvasSplit.setResizeWeight(0.62);
+        UiKit.persistentDivider(settings, "visualization.canvasSplitV", canvasSplit, 0.62);
 
         JPanel top = new JPanel(new BorderLayout());
         top.add(new ContextBar(model, false), BorderLayout.NORTH);
@@ -97,8 +113,14 @@ public class VisualizationStagePanel extends JPanel {
     // ---- канвасы ----
 
     private JPanel buildCanvasSide() {
-        JPanel body = UiKit.vboxFixedWidth(SIDE_WIDTH);
+        JPanel body = new JPanel(new BorderLayout());
         body.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
+
+        JPanel controls = new JPanel();
+        controls.setLayout(new BoxLayout(controls, BoxLayout.Y_AXIS));
+        body.add(controls, BorderLayout.NORTH);
+        body.add(buildPlacementsTablePanel(), BorderLayout.CENTER);
+        body.add(buildExportPanel(), BorderLayout.SOUTH);
 
         canvasCombo.setRenderer(new javax.swing.DefaultListCellRenderer() {
             @Override
@@ -114,22 +136,24 @@ public class VisualizationStagePanel extends JPanel {
         canvasCombo.addActionListener(e -> {
             currentCanvas = (ContentCanvas) canvasCombo.getSelectedItem();
             canvasEditor.setCanvas(currentCanvas);
+            syncCanvasMaskSettingsControls();
+            placementsTableModel.fireTableDataChanged();
         });
-        body.add(UiKit.section("Канвас", canvasCombo));
-        body.add(UiKit.vgap(8));
 
-        JPanel newForm = new JPanel(new GridLayout(0, 2, 4, 4));
-        JTextField nameField = new JTextField("Резолюм 1080p");
+        JPanel canvasRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        canvasRow.add(new JLabel("Канвас:"));
+        canvasRow.add(canvasCombo);
+        JTextField nameField = new JTextField("Резолюм 1080p", 14);
         JSpinner wSpin = new JSpinner(new SpinnerNumberModel(1920, 1, 16384, 1));
         JSpinner hSpin = new JSpinner(new SpinnerNumberModel(1080, 1, 16384, 1));
-        newForm.add(new JLabel("Название"));
-        newForm.add(nameField);
-        newForm.add(new JLabel("Ширина, px"));
-        newForm.add(wSpin);
         com.vjstb.ledscheme.ui.MathFields.enableExpressions(wSpin);
-        newForm.add(new JLabel("Высота, px"));
-        newForm.add(hSpin);
         com.vjstb.ledscheme.ui.MathFields.enableExpressions(hSpin);
+        canvasRow.add(new JLabel("Имя"));
+        canvasRow.add(nameField);
+        canvasRow.add(new JLabel("Ширина, px"));
+        canvasRow.add(wSpin);
+        canvasRow.add(new JLabel("Высота, px"));
+        canvasRow.add(hSpin);
         JButton addCanvasBtn = new JButton("+ Новый канвас");
         addCanvasBtn.addActionListener(e -> {
             try {
@@ -141,7 +165,7 @@ public class VisualizationStagePanel extends JPanel {
                 JOptionPane.showMessageDialog(this, ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
             }
         });
-        JButton resizeBtn = new JButton("Применить размер/имя к выбранному");
+        JButton resizeBtn = new JButton("Применить размер/имя");
         resizeBtn.addActionListener(e -> {
             if (currentCanvas == null) return;
             model.updateCanvas(currentCanvas, nameField.getText().trim(),
@@ -156,15 +180,11 @@ public class VisualizationStagePanel extends JPanel {
                 currentCanvas = null;
             }
         });
-        body.add(newForm);
-        body.add(UiKit.vgap(6));
-        body.add(addCanvasBtn);
-        body.add(UiKit.vgap(4));
-        body.add(resizeBtn);
-        body.add(UiKit.vgap(4));
-        body.add(deleteCanvasBtn);
+        canvasRow.add(addCanvasBtn);
+        canvasRow.add(resizeBtn);
+        canvasRow.add(deleteCanvasBtn);
+        controls.add(canvasRow);
 
-        body.add(UiKit.vgap(14));
         addScreenCombo.setRenderer(new javax.swing.DefaultListCellRenderer() {
             @Override
             public java.awt.Component getListCellRendererComponent(javax.swing.JList<?> list, Object value,
@@ -183,52 +203,62 @@ public class VisualizationStagePanel extends JPanel {
                 model.addScreenToCanvas(currentCanvas, sel.getId(), 0, 0);
             }
         });
-        body.add(UiKit.section("Добавить экран в канвас", addScreenCombo));
-        body.add(UiKit.vgap(6));
-        body.add(addScreenBtn);
-
-        JButton removeSelectedBtn = new JButton("Убрать выбранный экран из канваса");
-        removeSelectedBtn.addActionListener(e -> canvasEditor.deleteSelected());
-        body.add(UiKit.vgap(10));
-        body.add(removeSelectedBtn);
-
-        body.add(UiKit.vgap(14));
-        maskColorScreenCombo.setRenderer(new javax.swing.DefaultListCellRenderer() {
-            @Override
-            public java.awt.Component getListCellRendererComponent(javax.swing.JList<?> list, Object value,
-                    int index, boolean isSelected, boolean cellHasFocus) {
-                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
-                if (value instanceof Screen s) {
-                    setText(s.getName());
-                }
-                return this;
-            }
-        });
-        maskColorScreenCombo.addActionListener(e -> syncMaskColorPresetCombo());
-        maskColorPresetCombo.addActionListener(e -> {
-            if (syncingMaskColorCombo) {
+        JButton removeSelectedBtn = new JButton("Убрать выбранный грид (строку) из канваса");
+        removeSelectedBtn.addActionListener(e -> {
+            int row = placementsTable.getSelectedRow();
+            if (currentCanvas == null || row < 0 || row >= currentCanvas.getPlacements().size()) {
                 return;
             }
-            Screen sel = (Screen) maskColorScreenCombo.getSelectedItem();
-            MaskColorPreset preset = (MaskColorPreset) maskColorPresetCombo.getSelectedItem();
-            if (sel != null && preset != null) {
-                model.setScreenMaskColorPreset(sel, preset);
+            CanvasPlacement pl = currentCanvas.getPlacements().get(row);
+            model.removePlacement(currentCanvas, pl.getId());
+        });
+        JPanel placeRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        placeRow.add(new JLabel("Добавить экран:"));
+        placeRow.add(addScreenCombo);
+        placeRow.add(addScreenBtn);
+        placeRow.add(removeSelectedBtn);
+        controls.add(placeRow);
+
+        textColorBtn.addActionListener(e -> {
+            Color chosen = JColorChooser.showDialog(this, "Цвет имени грида", currentTextColor);
+            if (chosen != null) {
+                currentTextColor = chosen;
+                pushCanvasMaskSettings();
             }
         });
-        body.add(UiKit.section("Экран для цвета маски", maskColorScreenCombo));
-        body.add(UiKit.vgap(6));
-        body.add(UiKit.section("Цвет маски (чек-борд)", maskColorPresetCombo));
-        body.add(UiKit.vgap(6));
-        body.add(UiKit.muted("<html>Различать экраны по цвету маски при объединении в канвас — например,"
-                + " левый Red/Gray, центральный Green/Gray, правый Blue/Gray.</html>"));
+        largeGridNamesCheck.addActionListener(e -> pushCanvasMaskSettings());
+        dropShadowCheck.addActionListener(e -> pushCanvasMaskSettings());
+        JButton logoPrefsBtn = new JButton("Логотип маски (в «Предпочтениях»)…");
+        logoPrefsBtn.addActionListener(e -> new PreferencesDialog(
+                SwingUtilities.getWindowAncestor(this), settings).setVisible(true));
+        JPanel maskGlobalsRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        maskGlobalsRow.add(largeGridNamesCheck);
+        maskGlobalsRow.add(dropShadowCheck);
+        maskGlobalsRow.add(textColorBtn);
+        maskGlobalsRow.add(logoPrefsBtn);
+        controls.add(maskGlobalsRow);
 
-        body.add(UiKit.vgap(10));
-        body.add(UiKit.muted("<html>Канвас — виртуальный выходной кадр (как Advanced Output в Resolume)."
-                + " Разрешение настраивается как разрешение сигнала; экраны внутри перетаскиваются мышью"
-                + " (с зажатым Shift — прилипание к краям других экранов, краям канваса и, опционально,"
-                + " к центру — см. «Персонализация») — так задаётся компоновка контента.</html>"));
+        return body;
+    }
 
-        body.add(UiKit.vgap(14));
+    private JPanel buildPlacementsTablePanel() {
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setBorder(BorderFactory.createEmptyBorder(6, 0, 6, 0));
+        placementsTable.setRowHeight(22);
+        placementsTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        placementsTable.getColumnModel().getColumn(8)
+                .setCellEditor(new DefaultCellEditor(new JComboBox<>(MaskColorPreset.values())));
+        JScrollPane scroll = new JScrollPane(placementsTable);
+        scroll.setPreferredSize(new Dimension(200, 180));
+        panel.add(scroll, BorderLayout.CENTER);
+        return panel;
+    }
+
+    private JPanel buildExportPanel() {
+        JPanel body = new JPanel();
+        body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
+
+        body.add(UiKit.vgap(4));
         JPanel folderRow = new JPanel(new BorderLayout(6, 0));
         folderField.setEditable(false);
         JButton chooseFolderBtn = new JButton("Папка…");
@@ -237,35 +267,47 @@ public class VisualizationStagePanel extends JPanel {
         folderRow.add(chooseFolderBtn, BorderLayout.EAST);
         body.add(UiKit.section("Папка для масок/пресетов", folderRow));
 
-        body.add(UiKit.vgap(10));
+        JPanel exportRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
         JButton exportMasks = new JButton("Экспорт масок (экраны + канвасы)…");
         exportMasks.addActionListener(e -> exportMasks());
-        body.add(exportMasks);
-        body.add(UiKit.vgap(6));
-        body.add(UiKit.muted("<html>Тестовая маска (Pixel Grid) для каждого экрана сцены и для каждого канваса"
-                + " целиком — чередующаяся заливка, пиксельная сетка, номера кабинетов, подписи.</html>"));
-
-        body.add(UiKit.vgap(14));
         JButton exportResolume = new JButton("Экспорт под Resolume…");
         exportResolume.addActionListener(e -> exportResolumePreset());
-        body.add(exportResolume);
-        body.add(UiKit.vgap(6));
-        body.add(UiKit.muted(
-                "<html>XML «Screen Setup» (Advanced Output) — по одному файлу на канвас текущей сцены, готов"
-                        + " к прямому импорту в Resolume. Маска НЕ генерируется этой кнопкой.</html>"));
-
-        body.add(UiKit.vgap(10));
         JButton exportAfterEffects = new JButton("Экспорт под After Effects… (скоро)");
         exportAfterEffects.setEnabled(false);
         exportAfterEffects.setToolTipText("Появится после получения образца формата от пользователя");
-        body.add(exportAfterEffects);
-        body.add(UiKit.vgap(6));
-        body.add(UiKit.muted(
-                "<html>Заготовлено, но пока неактивно — пришлите образец проекта/скрипта After Effects,"
-                        + " и кнопка будет доделана и включена.</html>"));
-        body.add(javax.swing.Box.createVerticalGlue());
+        exportRow.add(exportMasks);
+        exportRow.add(exportResolume);
+        exportRow.add(exportAfterEffects);
+        body.add(exportRow);
 
         return body;
+    }
+
+    private void pushCanvasMaskSettings() {
+        if (syncingCanvasMaskControls || currentCanvas == null) {
+            return;
+        }
+        model.updateCanvasMaskSettings(currentCanvas, largeGridNamesCheck.isSelected(),
+                currentTextColor != null ? currentTextColor.getRGB() : null,
+                dropShadowCheck.isSelected());
+    }
+
+    /** Подставляет в контролы глобальных настроек маски значения ВЫБРАННОГО канваса —
+     *  без этого они всегда показывали бы состояние по умолчанию, даже если у канваса
+     *  уже что-то настроено (тот же приём, что раньше был у mask-цвета экрана). */
+    private void syncCanvasMaskSettingsControls() {
+        syncingCanvasMaskControls = true;
+        if (currentCanvas != null) {
+            largeGridNamesCheck.setSelected(currentCanvas.isLargeGridNames());
+            dropShadowCheck.setSelected(currentCanvas.isDropShadow());
+            currentTextColor = currentCanvas.getTextColorRgb() != null
+                    ? new Color(currentCanvas.getTextColorRgb()) : Color.WHITE;
+        } else {
+            largeGridNamesCheck.setSelected(false);
+            dropShadowCheck.setSelected(false);
+            currentTextColor = Color.WHITE;
+        }
+        syncingCanvasMaskControls = false;
     }
 
     private void refreshCanvasSide() {
@@ -281,6 +323,8 @@ public class VisualizationStagePanel extends JPanel {
             canvasCombo.setSelectedItem(currentCanvas);
         }
         canvasEditor.setCanvas(currentCanvas);
+        syncCanvasMaskSettingsControls();
+        placementsTableModel.fireTableDataChanged();
 
         DefaultComboBoxModel<Screen> sm = new DefaultComboBoxModel<>();
         Scene scene = model.getCurrentScene();
@@ -291,19 +335,6 @@ public class VisualizationStagePanel extends JPanel {
         }
         addScreenCombo.setModel(sm);
 
-        DefaultComboBoxModel<Screen> maskSm = new DefaultComboBoxModel<>();
-        if (scene != null) {
-            for (Screen s : scene.getScreens()) {
-                maskSm.addElement(s);
-            }
-        }
-        Screen prevMaskSel = (Screen) maskColorScreenCombo.getSelectedItem();
-        maskColorScreenCombo.setModel(maskSm);
-        if (prevMaskSel != null && scene != null && scene.getScreens().contains(prevMaskSel)) {
-            maskColorScreenCombo.setSelectedItem(prevMaskSel);
-        }
-        syncMaskColorPresetCombo();
-
         if (chosenFolder == null) {
             Project project = model.getCurrentProject();
             folderField.setText(project != null
@@ -312,14 +343,131 @@ public class VisualizationStagePanel extends JPanel {
         }
     }
 
-    /** Подставляет в maskColorPresetCombo текущий пресет ВЫБРАННОГО в
-     *  maskColorScreenCombo экрана — без этого пикер всегда показывал бы значение
-     *  по умолчанию (первое в enum), даже если у экрана уже выбран другой пресет. */
-    private void syncMaskColorPresetCombo() {
-        Screen sel = (Screen) maskColorScreenCombo.getSelectedItem();
-        syncingMaskColorCombo = true;
-        maskColorPresetCombo.setSelectedItem(sel != null ? sel.getMaskColorPreset() : MaskColorPreset.NORMAL);
-        syncingMaskColorCombo = false;
+    private Screen screenById(String id) {
+        Scene scene = model.getCurrentScene();
+        if (scene == null || id == null) {
+            return null;
+        }
+        for (Screen s : scene.getScreens()) {
+            if (s.getId().equals(id)) {
+                return s;
+            }
+        }
+        return null;
+    }
+
+    /** Таблица «гридов» текущего канваса в духе референсного PixL — одна строка на
+     *  каждый {@link CanvasPlacement} (уже размещённый на канвасе экран, см. class
+     *  javadoc). Читает данные напрямую из currentCanvas.getPlacements() (без своего
+     *  снимка), поэтому fireTableDataChanged() после любого внешнего изменения модели
+     *  (см. refreshCanvasSide, подписан на model.addListener) — единственное, что
+     *  нужно для актуальности; правки самой таблицы идут через AppModel-мутаторы,
+     *  которые тоже вызывают model.addListener и приходят сюда тем же путём. */
+    private final class PlacementsTableModel extends AbstractTableModel {
+        private final String[] columns = {
+                "Экран", "Кабинет X,px", "Кабинет Y,px", "Колонн", "Строк",
+                "X,px", "Y,px", "Имя", "Фон",
+                "Сетка", "Растр", "Номера", "Круг", "Крест", "Угол", "Лого"
+        };
+
+        private List<CanvasPlacement> placements() {
+            return currentCanvas != null ? currentCanvas.getPlacements() : List.of();
+        }
+
+        @Override
+        public int getRowCount() {
+            return placements().size();
+        }
+
+        @Override
+        public int getColumnCount() {
+            return columns.length;
+        }
+
+        @Override
+        public String getColumnName(int col) {
+            return columns[col];
+        }
+
+        @Override
+        public Class<?> getColumnClass(int col) {
+            return switch (col) {
+                case 1, 2, 3, 4, 5, 6 -> Integer.class;
+                case 8 -> MaskColorPreset.class;
+                case 9, 10, 11, 12, 13, 14, 15 -> Boolean.class;
+                default -> String.class;
+            };
+        }
+
+        @Override
+        public boolean isCellEditable(int row, int col) {
+            return col >= 5;
+        }
+
+        @Override
+        public Object getValueAt(int row, int col) {
+            CanvasPlacement pl = placements().get(row);
+            Screen scr = screenById(pl.getScreenId());
+            CabinetType type = scr != null ? model.typeOf(scr) : null;
+            return switch (col) {
+                case 0 -> scr != null ? scr.getName() : "?";
+                case 1 -> type != null ? type.getResolutionWidth() : 0;
+                case 2 -> type != null ? type.getResolutionHeight() : 0;
+                case 3 -> scr != null ? scr.getCols() : 0;
+                case 4 -> scr != null ? scr.getRows() : 0;
+                case 5 -> pl.getX();
+                case 6 -> pl.getY();
+                case 7 -> pl.getName() != null ? pl.getName() : "";
+                case 8 -> pl.getBackground();
+                case 9 -> pl.isShowGrid();
+                case 10 -> pl.isShowRaster();
+                case 11 -> pl.isShowIds();
+                case 12 -> pl.isShowCircle();
+                case 13 -> pl.isShowCross();
+                case 14 -> pl.isShowCorner();
+                case 15 -> pl.isShowLogo();
+                default -> null;
+            };
+        }
+
+        @Override
+        public void setValueAt(Object value, int row, int col) {
+            CanvasPlacement pl = placements().get(row);
+            switch (col) {
+                case 5 -> model.movePlacement(pl, (Integer) value, pl.getY());
+                case 6 -> model.movePlacement(pl, pl.getX(), (Integer) value);
+                case 7 -> {
+                    String name = value == null || ((String) value).isBlank() ? null : (String) value;
+                    model.updatePlacementMaskConfig(pl, name, pl.getBackground(), pl.isShowGrid(), pl.isShowRaster(),
+                            pl.isShowIds(), pl.isShowCircle(), pl.isShowCross(), pl.isShowCorner(), pl.isShowLogo());
+                }
+                case 8 -> model.updatePlacementMaskConfig(pl, pl.getName(), (MaskColorPreset) value, pl.isShowGrid(),
+                        pl.isShowRaster(), pl.isShowIds(), pl.isShowCircle(), pl.isShowCross(), pl.isShowCorner(),
+                        pl.isShowLogo());
+                case 9 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.getBackground(), (Boolean) value,
+                        pl.isShowRaster(), pl.isShowIds(), pl.isShowCircle(), pl.isShowCross(), pl.isShowCorner(),
+                        pl.isShowLogo());
+                case 10 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.getBackground(), pl.isShowGrid(),
+                        (Boolean) value, pl.isShowIds(), pl.isShowCircle(), pl.isShowCross(), pl.isShowCorner(),
+                        pl.isShowLogo());
+                case 11 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.getBackground(), pl.isShowGrid(),
+                        pl.isShowRaster(), (Boolean) value, pl.isShowCircle(), pl.isShowCross(), pl.isShowCorner(),
+                        pl.isShowLogo());
+                case 12 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.getBackground(), pl.isShowGrid(),
+                        pl.isShowRaster(), pl.isShowIds(), (Boolean) value, pl.isShowCross(), pl.isShowCorner(),
+                        pl.isShowLogo());
+                case 13 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.getBackground(), pl.isShowGrid(),
+                        pl.isShowRaster(), pl.isShowIds(), pl.isShowCircle(), (Boolean) value, pl.isShowCorner(),
+                        pl.isShowLogo());
+                case 14 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.getBackground(), pl.isShowGrid(),
+                        pl.isShowRaster(), pl.isShowIds(), pl.isShowCircle(), pl.isShowCross(), (Boolean) value,
+                        pl.isShowLogo());
+                case 15 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.getBackground(), pl.isShowGrid(),
+                        pl.isShowRaster(), pl.isShowIds(), pl.isShowCircle(), pl.isShowCross(), pl.isShowCorner(),
+                        (Boolean) value);
+                default -> { }
+            }
+        }
     }
 
     private File resolveFolder() {
@@ -361,14 +509,15 @@ public class VisualizationStagePanel extends JPanel {
         try {
             for (Scene scene : project.getScenes()) {
                 for (Screen scr : scene.getScreens()) {
-                    com.vjstb.ledscheme.model.CabinetType type = model.typeOf(scr);
-                    BufferedImage img = PixelGridRenderer.renderMask(scr, type, model.getWorkspace());
+                    CabinetType type = model.typeOf(scr);
+                    BufferedImage img = PixelGridRenderer.renderMask(scr, type, model.getWorkspace(),
+                            PixelGridRenderer.GridRenderOptions.defaultForScreen(scr));
                     String fname = OutputPaths.sanitize(scene.getName()) + "_" + OutputPaths.sanitize(scr.getName())
                             + "_Маска.png";
                     images.add(new NamedImage(fname, img));
                 }
                 for (ContentCanvas c : scene.getCanvases()) {
-                    BufferedImage img = PixelGridRenderer.renderCanvasMask(c, model);
+                    BufferedImage img = PixelGridRenderer.renderCanvasMask(c, model, settings);
                     String fname = OutputPaths.sanitize(scene.getName()) + "_канвас_" + OutputPaths.sanitize(c.getName()) + ".png";
                     images.add(new NamedImage(fname, img));
                 }
@@ -500,7 +649,7 @@ public class VisualizationStagePanel extends JPanel {
         });
         JButton cancel = new JButton("Отмена");
         cancel.addActionListener(e -> dlg.dispose());
-        JPanel buttons = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 8, 8));
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 8));
         buttons.add(cancel);
         buttons.add(save);
 

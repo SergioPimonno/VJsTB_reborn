@@ -2,6 +2,7 @@ package com.vjstb.ledscheme.service;
 
 import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
+import com.vjstb.ledscheme.model.ControllerInstance;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SignalChain;
@@ -16,44 +17,162 @@ import java.util.Map;
 
 /**
  * Экспорт шаблона расключения ОДНОГО экрана в бинарный формат NovaLCT (.scr) —
- * зеркало {@link NovaLctScrParser} в обратную сторону. BEST-EFFORT: как и парсер,
- * пишет только те поля, что уверенно установлены дифференциальным анализом
- * образцов. Файл, сгенерированный этим классом, ни разу не проверялся импортом
- * в настоящий NovaLCT — прежде чем полагаться на результат в проде, нужно
- * протестировать его на реальном ПО (сначала на тестовом контроллере, не на
- * боевой инсталляции).
+ * зеркало {@link NovaLctScrParser} в обратную сторону.
+ *
+ * <p><b>Standard Screen — статус: ПОЛНОСТЬЮ РЕШЕНО.</b> Формат реверс-инжинирен
+ * ДО ПОСЛЕДНЕГО БАЙТА: побайтовое сравнение контролируемых образцов (различающихся
+ * ровно одним параметром каждый — карта/порт/размер кабинета/координата экрана)
+ * ПЛЮС дизассемблирование (ildasm) реального
+ * {@code Nova.LCT.GigabitSystem.HWConfigAccessor.Accessors.CommonInfoAccessor.
+ * SoftWareSpaceAnalyser} из установленной у пользователя NovaLCT дало 100%
+ * побайтовое совпадение с РЕАЛЬНЫМИ файлами NovaLCT — и на тривиальном 1×1 экране,
+ * и на сложном 4×3 с непростой (не построчной) цепочкой на 11 кабинетов. Обе
+ * контрольные суммы (простая сумма байт, не CRC — см. комментарии у их вычисления
+ * в {@link #writeStandardCore}), порядок кабинетных записей (COLUMN-MAJOR, см.
+ * {@link #orderedCells}) и номер "Receiving Card" пропущенной ячейки (0,0)
+ * (см. {@code originSeq} в {@link #writeStandardCore}) — всё подтверждено. Пользователь
+ * подтвердил успешную загрузку сгенерированного файла в реальную NovaLCT (Load
+ * from File) с полностью правильным порядком расключения всех кабинетов.
+ *
+ * <p><b>Complex Screen — статус: ПОЛНОСТЬЮ РЕШЕНО.</b> Раньше считался best-effort
+ * (один образец, заголовок понят лишь частично, чек-сумма не найдена) — оказалось
+ * ошибочно: декомпиляция (ildasm) реального
+ * {@code Nova.LCT.GigabitSystem.HWConfigAccessor.Accessors.CommonInfoAccessor.
+ * SoftWareSpaceAnalyser.ScreenInfoToArray1600} показала, что это ТОТ ЖЕ метод,
+ * что строит и Standard Screen (оба — разные типы {@code ILEDDisplayInfo} в одном
+ * общем контейнере), и делит с ним всю преамбулу/обе контрольные суммы/
+ * {@link #TAIL_FOOTER}. Подтверждено побайтово ДВУМЯ реальными файлами NovaLCT
+ * (экран 4×6, 24 приёмных карты, нижний ряд 128×64, отличаются ровно одним
+ * Ethernet-портом) — см. {@link #writeComplex} и
+ * {@code NovaLctComplexScrWriterTest}. Единственное НЕ проверенное реальным
+ * образцом — {@code XInPort}/{@code YInPort} (в обоих образцах 0, назначение для
+ * ненулевых значений неизвестно) и порядок карт при НЕСКОЛЬКИХ цепочках/портах на
+ * одном Complex-экране (образец содержал ровно одну цепочку).
  *
  * <p>NovaLCT реально использует ДВЕ структурно разные раскладки байт под одним
- * и тем же расширением .scr (подтверждено побайтовым разбором реального образца
- * Complex Screen, присланного пользователем):
+ * и тем же расширением .scr:
  * <ul>
  *   <li><b>Standard Screen</b> ({@link #writeStandard}) — ровная прямоугольная
  *   сетка одинаковых кабинетов, каждый адресуется ПАРОЙ (row,col), 17-байтная
- *   запись с 6-байтовым якорем {@code 00 80 00 80 00 01} (см. javadoc парсера,
- *   собран по 6 образцам этого варианта). Кабинет (row=0,col=0) в разобранных
- *   образцах ни разу не хранился отдельной записью — этот метод повторяет то же
- *   самое ТОЛЬКО если у этой ячейки вообще есть разрешимая цепочка.</li>
+ *   запись с 6-байтовым якорем (см. {@link #buildAnchor}). Кабинет (row=0,col=0)
+ *   в разобранных образцах ни разу не хранился отдельной записью — этот метод
+ *   повторяет то же самое ТОЛЬКО если у этой ячейки вообще есть разрешимая
+ *   цепочка.</li>
  *   <li><b>Complex Screen</b> ({@link #writeComplex}) — произвольные (в т.ч.
  *   разного размера/неровно расположенные) прямоугольники, каждый кабинет несёт
- *   ЯВНЫЕ пиксельные X/Y/Width/Height — НЕТ ни 6-байтового якоря, ни JSON-
- *   маркера простого формата вовсе (проверено прямым поиском по байтам образца —
- *   их там просто нет). Разобран по ОДНОМУ образцу (один экран, один порт,
- *   7 карт) — заголовок цепочки перед первой записью понят лишь частично
- *   (уверенно установлено только количество записей, остальные поля — лучшие
- *   догадки, см. комментарии в самом методе), многопортовые/многоэкранные
- *   Complex Screen файлы вообще не проверялись. Выбор формата — автоматический
- *   (см. {@link #write}), по факту, ровная ли сетка у экрана.</li>
+ *   ЯВНЫЕ пиксельные X/Y/Width/Height, а также СВОЙ card/port/seq (см. javadoc
+ *   метода) — 16-байтная запись без 6-байтового якоря Standard-формата. Выбор
+ *   формата — автоматический (см. {@link #write}), по факту, ровная ли сетка
+ *   у экрана.</li>
  * </ul>
  */
 public final class NovaLctScrWriter {
 
     private static final byte[] MAGIC = {'D', 'S', 'C', 'I'};
-    private static final byte[] ANCHOR = {0x00, (byte) 0x80, 0x00, (byte) 0x80, 0x00, 0x01};
+
+    /** 6-байтовый "якорь" перед каждой кабинетной записью И перед хвостовым JSON —
+     *  ИЗНАЧАЛЬНО считался фиксированной константой {@code 00 80 00 80 00 01}
+     *  (собрано по образцам с кабинетом 128×128) — ОШИБОЧНО: контролируемый образец
+     *  с кабинетом 250×250 показал якорь {@code 00 FA 00 FA 00 01} (0xFA=250) —
+     *  байты 1 и 3 это ШИРИНА и ВЫСОТА кабинета в пикселях (при <256 — старший байт
+     *  0, т.е. фактически однобайтовое значение с нулевым префиксом, не classic
+     *  LE16), а не константа 128. Байт 5 (флаг) — считался 0x01 при 0 записей и 0xFF
+     *  при их наличии (по одному старому образцу 4×2/7 записей) — ОПРОВЕРГНУТО
+     *  более надёжным новым образцом (4×3, 11 записей со сложной цепочкой,
+     *  сверено побайтово): там байт = 0x01 ВО ВСЕХ 11 записях И в хвосте. Похоже,
+     *  этот байт — просто константа 0x01 всегда, а прежнее "0xFF" было ошибкой
+     *  чтения/анализа того старого образца. */
+    private static byte[] buildAnchor(int cabinetWidthPx, int cabinetHeightPx) {
+        return new byte[]{
+                0x00, (byte) (cabinetWidthPx & 0xff),
+                0x00, (byte) (cabinetHeightPx & 0xff),
+                0x00, 0x01,
+        };
+    }
+
+    /** Постоянный 173-байтный "хвост после хвоста" — ПОСЛЕ JSON warp-маркера, а не
+     *  сразу после последней кабинетной записи (это отдельный, ранее вообще
+     *  не замеченный блок: предыдущий анализ ошибочно считал, что файл кончается
+     *  сразу после {@code "]"} JSON-массива). Побайтово идентичен в обоих образцах
+     *  (1×1 пустой экран и 4×2 сетка) — при том, что итоговая длина файла и
+     *  позиция JSON у них совершенно разные — т.е. это чистая константа
+     *  фиксированной длины, не зависящая от содержимого экрана. Первый экспорт
+     *  этим writer'ом (без этого блока — файл получался на 173 байта короче
+     *  реального) реальный NovaLCT отклонил как "Failed to load screen information
+     *  file!" — этот пропуск, скорее всего, и был основной причиной. */
+    private static final byte[] TAIL_FOOTER = buildTailFooter();
+
+    private static byte[] buildTailFooter() {
+        byte[] f = new byte[173];
+        f[0] = (byte) 0xea;
+        f[1] = 0x03;
+        f[2] = (byte) 0xe7;
+        f[132] = 0x01;
+        f[134] = 0x01;
+        f[136] = 0x01;
+        f[137] = (byte) 0xe4;
+        return f;
+    }
+
+    /** Длина преамбулы ОДНОЭКРАННОГО Standard Screen файла (от начала MAGIC до
+     *  первого 6-байтового якоря записи/хвоста) — подтверждено ПОБАЙТОВЫМ сравнением
+     *  двух реальных образцов (1×1 пустой экран и 4×2 сетка): несмотря на радикально
+     *  разный размер экрана и итоговую длину файла (587 vs 706 байт), это смещение
+     *  ТОЧНО совпало в обоих (0x154) — преамбула фиксированного размера, не растёт
+     *  с числом кабинетов. Из её 340 байт 328 оказались побитово идентичны в обоих
+     *  образцах (см. HEADER_* поля ниже для расшифрованных полей внутри неё). */
+    private static final int HEADER_LEN = 0x154;
 
     private NovaLctScrWriter() {
     }
 
-    private record Rec(int row, int col, int card, int port, int seq) {
+    /** Пакетно-видимый (не private) — переиспользуется {@link NovaLctControllerResolver}/
+     *  {@link NovaLctCombineHelper} для сборки контроллер-центричного экспорта без
+     *  привязки к одному {@link Screen}.
+     *
+     * <p><b>{@code card = 0xFF (255)}</b> — ПОДТВЕРЖДЁННЫЙ (не догадка) сентинел
+     * "blank"/"нет платы": найден побайтовым разбором реального файла NovaLCT
+     * ({@code 111.scr}, прислан пользователем, сохранён самой NovaLCT из
+     * конфигурации "несколько экранов одного типа кабинета внутри границ одного
+     * NovaLCT-экрана" — ровно та же реальная задача, что решает
+     * {@link NovaLctCombineHelper#combine}). Остальные поля такой записи (port/seq)
+     * пишутся по той же формуле, что и обычная запись — значения не важны, т.к. у
+     * записи нет реальной платы (см. {@link NovaLctCombineHelper#combine}). */
+    record Rec(int row, int col, int card, int port, int seq) {
+    }
+
+    /** Ключ ячейки сетки для контроллер-центричной сборки (см. {@link #writeStandardCore},
+     *  {@link NovaLctCombineHelper}) — тот же (col,row), что и в {@link Rec}, но как
+     *  самостоятельный ключ карты, не завязанный на конкретный {@link CabinetInstance}
+     *  одного экрана. */
+    record CellKey(int col, int row) {
+    }
+
+    /** Контроллер-центричная версия {@link #hasUnwiredCabinets} — true, если на
+     *  КАКОМ-ЛИБО из экранов, затронутых {@code controller} (см.
+     *  {@link NovaLctControllerResolver#resolve}), есть видимый кабинет, которого
+     *  нет среди резолвнутых для ЭТОГО контроллера записей. Кабинет, реально
+     *  расключённый через ДРУГОЙ контроллер той же сцены (экран может делить
+     *  контроллеры), тоже попадёт в это предупреждение — по сути "этот контроллер
+     *  не покрывает весь экран целиком", что для пользователя достаточно честная
+     *  формулировка без отдельного различения причины. */
+    public static boolean hasUnwiredCabinetsForController(Scene scene, ControllerInstance controller,
+                                                           AppModel model) {
+        List<NovaLctControllerResolver.CabinetRec> recs = NovaLctControllerResolver.resolve(scene, controller, model);
+        Map<Screen, java.util.Set<CellKey>> byScreen = new HashMap<>();
+        for (NovaLctControllerResolver.CabinetRec r : recs) {
+            byScreen.computeIfAbsent(r.sourceScreen(), s -> new java.util.HashSet<>()).add(new CellKey(r.col(), r.row()));
+        }
+        for (Map.Entry<Screen, java.util.Set<CellKey>> entry : byScreen.entrySet()) {
+            Screen screen = entry.getKey();
+            java.util.Set<CellKey> wired = entry.getValue();
+            for (CabinetInstance cab : screen.getCabinets()) {
+                if (!cab.isHidden() && !wired.contains(new CellKey(cab.getColIndex(), cab.getRowIndex()))) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /** true, если хотя бы один видимый кабинет экрана не входит ни в одну сигнальную
@@ -113,85 +232,536 @@ public final class NovaLctScrWriter {
         return defaultType == null || !ScreenLogic.isUniformRectangularGrid(screen, defaultType, workspace);
     }
 
+    /** Контроллер-центричный экспорт — все кабинеты, резолвнутые
+     *  {@link NovaLctControllerResolver} для {@code controller} (с ЛЮБОГО экрана
+     *  сцены), объединяются в ОДНУ виртуальную Standard Screen сетку по пиксельной
+     *  геометрии {@code canvas} (см. {@link NovaLctCombineHelper}). Если резолвер
+     *  вернул кабинеты РОВНО одного экрана — вызывающему коду (диалогу) выгоднее
+     *  звонить в уже подтверждённый {@link #write(Screen, Scene, Workspace)}
+     *  напрямую, а не сюда (см. {@code NovaLctControllerExportDialog}) — этот метод
+     *  не проверяет вырожденный случай сам, чтобы не тянуть сюда лишнюю логику
+     *  выбора одноэкранного/canvas-based пути. */
+    public static byte[] writeStandardCombined(NovaLctCombineHelper.CombineResult combined) {
+        return writeStandardCore(combined.cols(), combined.rows(), combined.cabW(), combined.cabH(), 0,
+                combined.cells());
+    }
+
     /** Standard Screen — ровная прямоугольная сетка, row/col-адресация (см.
-     *  class-javadoc). */
+     *  class-javadoc). Тонкая обёртка над {@link #writeStandardCore}: резолвит
+     *  цепочки ОДНОГО экрана в {@code Map<CellKey,Rec>} и вызывает общее ядро —
+     *  сохранена ради обратной совместимости существующего вызывающего кода
+     *  ({@link #write}), само ядро экрана не знает. */
     private static byte[] writeStandard(Screen screen, Scene scene, Workspace workspace) {
         Map<String, Rec> byCabinetId = resolve(screen, scene, workspace);
+        Map<CellKey, Rec> byCell = new HashMap<>();
+        for (Rec r : byCabinetId.values()) {
+            byCell.put(new CellKey(r.col(), r.row()), r);
+        }
+        CabinetType defaultType = workspace != null ? workspace.cabinetTypeById(screen.getCabinetTypeId()) : null;
+        int cabW = defaultType != null ? defaultType.getResolutionWidth() : 128;
+        int cabH = defaultType != null ? defaultType.getResolutionHeight() : 128;
+        return writeStandardCore(screen.getCols(), screen.getRows(), cabW, cabH, 0, byCell);
+    }
 
-        CabinetInstance origin = screen.cabinetAt(0, 0);
-        String originId = origin != null ? origin.getId() : null;
+    /** Ядро сборки Standard Screen — не знает про {@link Screen}/{@link Scene}/
+     *  {@link Workspace}, работает только с уже разрешённой сеткой (col,row)→{@link Rec}.
+     *  Переиспользуется и одноэкранным {@link #writeStandard} (через {@code byCell}
+     *  из {@link #resolve}), и контроллер-центричным экспортом
+     *  ({@link NovaLctControllerResolver}/{@link NovaLctCombineHelper}) — байтовый
+     *  вывод для уже подтверждённого одноэкранного случая должен оставаться
+     *  ИДЕНТИЧНЫМ тому, что было до выделения этого метода (см. golden-тест
+     *  {@code NovaLctScrWriterTest}).
+     *
+     *  @param screenX координата экрана на общем виртуальном холсте NovaLCT (поле
+     *                 "Coordinate: X" в Screen Configuration) — 0 для одноэкранного
+     *                 экспорта (в модели такого понятия нет, экран экспортируется
+     *                 независимо); для объединённого контроллер-центричного экспорта
+     *                 тоже 0 (объединённая сетка сама по себе — единственный "экран"
+     *                 с точки зрения NovaLCT). */
+    static byte[] writeStandardCore(int cols, int rows, int cabW, int cabH, int screenX,
+                                     Map<CellKey, Rec> cellsByKey) {
+        CellKey originKey = new CellKey(0, 0);
 
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        writeBytes(out, MAGIC);
+        // Число реально записываемых 17-байтных записей нужно ЗАРАНЕЕ (до самого
+        // цикла записи), чтобы посчитать смещение хвоста (trailerOffset) для полей
+        // заголовка, зависящих от него (см. HEADER_LEN javadoc) — origin(0,0)
+        // никогда не хранится отдельной записью (см. class-javadoc), поэтому не
+        // учитывается, даже если у него есть цепочка. Порядок обхода — COLUMN-MAJOR
+        // (см. javadoc у самого цикла записи ниже) — здесь для подсчёта порядок не
+        // важен, но проходим той же функцией orderedCells(...), чтобы не держать
+        // два места, знающих про порядок обхода сетки.
+        int recordCount = 0;
+        for (CellKey k : orderedCells(cols, rows)) {
+            if (!k.equals(originKey) && cellsByKey.containsKey(k)) {
+                recordCount++;
+            }
+        }
+        int trailerOffset = HEADER_LEN + recordCount * 17;
 
-        // Заголовок единственного экрана — 17 байт БЕЗ якоря (см. NovaLctScrParser:
-        // индекс первой записи-кабинета минус 17 = начало этого заголовка). Между
-        // MAGIC и заголовком в реальных файлах, вероятно, есть ещё не расшифрованный
-        // блок (версия/контрольная сумма) — мы его не пишем вовсе, т.к. ни его размер,
-        // ни содержимое не установлены ни одним из разобранных образцов.
-        writeU16(out, 0); // неизвестно
-        writeU16(out, screen.getCols());
-        writeU16(out, screen.getRows());
-        for (int i = 0; i < 11; i++) {
-            out.write(0); // неизвестно
+        // Sending Card / Ethernet Port экрана (0-based, как везде в этом классе) —
+        // нужны для поля 0xb8 заголовка (см. ниже). Экран Standard-раскладки на
+        // практике расключается ОДНИМ портом целиком — берём card/port ЛЮБОЙ уже
+        // разрешённой записи (первая по COLUMN-MAJOR обходу, а не первая попавшаяся
+        // из HashMap — детерминировано, важно для контроллеров с несколькими
+        // картами/портами на разных ячейках одной объединённой сетки), т.к. в
+        // подтверждённых одноэкранных образцах это всегда один и тот же порт для
+        // всех кабинетов экрана — там разницы нет; если сетка вообще не расключена,
+        // используем 0/0 (Sending Card 1 / Port 1 — дефолт NovaLCT). Пропускаем
+        // BLANK-записи (card=0xFF, см. javadoc {@link Rec} про подтверждённый по
+        // реальному 111.scr сентинел "нет платы") — иначе экран, у которого
+        // первая по обходу ячейка оказалась blank-дырой (например, самый левый
+        // из объединённых экранов короче остальных), ошибочно получил бы в
+        // заголовке "Sending Card 256".
+        int firstCard = 0;
+        int firstPort = 0;
+        for (CellKey k : orderedCells(cols, rows)) {
+            Rec r = cellsByKey.get(k);
+            if (r != null && r.card() != 255) {
+                firstCard = r.card();
+                firstPort = r.port();
+                break;
+            }
+        }
+        // Seq кабинета (0,0) — он единственный, для кого 17-байтная запись НЕ
+        // пишется (см. class-javadoc), поэтому NovaLCT должна как-то узнать его
+        // "Receiving Card" номер иначе — оказалось, что это ПРЯМО поле 0x14b
+        // заголовка (см. ниже), а НЕ производная от cols/rows, как считалось раньше
+        // (то совпадение было случайным на 2 из 3 проверенных образцов). Подтверждено
+        // ТОЧНО на 3 образцах: 0, 3 и 2 — во всех случаях 0x14b буквально равно seq
+        // кабинета (0,0) (0, если он вообще не расключён). Раскрыто по репорту
+        // пользователя о неверном номере ИМЕННО у ячейки (0,0) после реального
+        // импорта в NovaLCT остального 11-кабинетного экрана без единой ошибки.
+        int originSeq = 0;
+        Rec originRec = cellsByKey.get(originKey);
+        if (originRec != null) {
+            originSeq = originRec.seq();
         }
 
-        for (CabinetInstance cab : screen.getCabinets()) {
-            if (cab.isHidden()) {
-                continue;
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+
+        // Фиксированная 340-байтная преамбула ОДНОЭКРАННОГО файла, ВКЛЮЧАЯ MAGIC в
+        // начале (см. HEADER_LEN javadoc) — все смещения ниже АБСОЛЮТНЫЕ (от начала
+        // файла), поэтому весь блок собирается в одном массиве, а не отдельно от
+        // MAGIC (легко перепутать при вычитании 4 байт MAGIC вручную — так и
+        // произошло при первой попытке, поймано побайтовой сверкой с образцами).
+        // Расшифровано побайтовым сравнением образцов И дизассемблированным кодом
+        // самой NovaLCT (см. комментарий у контрольной суммы ниже, после сборки
+        // тела файла): смещение 0x06 — LE32-длина секции "DVI info" (128 байт,
+        // константа, пока в LED Scheme Designer нет настроек DVI/графики), смещение
+        // 0x0a — LE32-длина секции "screen info" (=растёт на 17 байт за кабинетную
+        // запись — это ЗНАЧЕНИЕ, а не совпадение с прежней формулой "trailerOffset-
+        // 108": screenInfoLen = trailerOffset-108 тождественно верно алгебраически).
+        // Поле 0x04 (контрольная сумма) заполняется позже, после того как известна
+        // полная секция screen info (см. ниже).
+        byte[] header = new byte[HEADER_LEN];
+        System.arraycopy(MAGIC, 0, header, 0, MAGIC.length);
+        putU16(header, 0x06, 0x0080); // LE32 длины DVI info (128), верхние 2 байта нулевые
+        putU16(header, 0x0a, trailerOffset - 108); // LE32 длины screen info, верхние 2 байта нулевые
+        putU16(header, 0x0e, 0x00ad); // константа во всех образцах
+        header[0x36] = (byte) 0xe9; header[0x37] = 0x03; header[0x38] = (byte) 0xfc; // константа
+        header[0x3a] = 0x01; header[0x3b] = 0x01; header[0x3c] = (byte) 0x90;
+        header[0x3d] = 0x06; header[0x3e] = 0x60; header[0x3f] = 0x04; // константа
+        header[0xb6] = (byte) 0xee; header[0xb7] = 0x03; // константа (тег перед полем 0xb8)
+        // 0xb8 — ВЛОЖЕННАЯ контрольная сумма секции "screen info" (см. class-javadoc
+        // про декомпилированный SCREEN_HEADERINFO_CRC=2, относительно начала секции
+        // screen info на 0xb6): sum(body[0xBA : конец секции]) mod 65536, конец секции
+        // = конец хвостового JSON (см. вычисление ниже, после сборки всего тела).
+        // РАНЬШЕ считалась простой линейной функцией параметров экрана — это было
+        // совпадением, верным только для образцов с 0 записей (там сумма реально
+        // сводится к нескольким ненулевым полям). Заполняется нулём здесь, патчится
+        // ниже.
+        putU16(header, 0xd2, trailerOffset - 176); // подтверждено на 2 образцах
+        header[0x13a] = 0x01; // константа
+        header[0x13b] = (byte) ((trailerOffset - 313) & 0xff); // подтверждено на 2 образцах
+        header[0x13f] = 0x01; // константа
+        header[0x141] = (byte) (screenX & 0xff); // X-координата экрана — подтверждено на 1 образце
+        putU16(header, 0x145, cols);
+        putU16(header, 0x147, rows);
+        header[0x149] = (byte) (firstCard & 0xff); // Sending Card (0-based) — подтверждено на 2 образцах
+        header[0x14a] = (byte) (firstPort & 0xff); // Ethernet Port (0-based) — подтверждено на 2 образцах
+        putU16(header, 0x14b, originSeq); // seq кабинета (0,0) — см. комментарий выше
+        header[0x14d] = (byte) (screenX & 0xff); // дубль X-координаты — подтверждено на 1 образце
+        writeBytes(out, header);
+
+        byte[] anchor = buildAnchor(cabW, cabH);
+        writeCabinetRecords(out, anchor, cols, rows, cabW, cabH, cellsByKey);
+
+        // Завершающий блок warp-искажений (в терминах декомпилированного оригинала —
+        // хвост секции "screen info"): тот же 6-байтовый якорь (см. buildAnchor), что
+        // и у записей кабинетов, затем LE16-длина JSON-текста в байтах, затем сам
+        // JSON. Схема объекта — 4 угловые точки (x1..x4/y1..y4).
+        String json = "[{\"si\":0,\"x1\":0,\"y1\":0,\"x2\":0,\"y2\":0,\"x3\":0,\"y3\":0,\"x4\":0,\"y4\":0}]";
+        byte[] jsonBytes = json.getBytes(StandardCharsets.US_ASCII);
+        writeBytes(out, anchor);
+        writeU16(out, jsonBytes.length);
+        writeBytes(out, jsonBytes);
+
+        // ДВЕ контрольные суммы — ОБЕ расшифрованы дизассемблированием (ildasm)
+        // реального Nova.LCT.GigabitSystem.HWConfigAccessor.Accessors.CommonInfoAccessor
+        // (.SoftWareSpaceAnalyser.CaculateCRC — простая СУММА байт, не полиномиальный
+        // CRC) из установленной у пользователя NovaLCT, ПЕРЕПРОВЕРЕНЫ побайтово на
+        // 9 образцах (включая 2-экранный и сложный 4×3/11-записей файлы):
+        //  1) 0xb8 — ВЛОЖЕННАЯ сумма секции "screen info" (от абсолютного 0xBA —
+        //     сразу после её 4-байтного мини-заголовка версия+сумма — до конца этой
+        //     же секции, т.е. до конца JSON, который уже накоплен в out).
+        //  2) 0x04 — сумма ВСЕГО файла от смещения 6 до конца JSON (то же самое "до
+        //     конца", но от смещения 6 — ВКЛЮЧАЕТ уже пропатченные байты 0xb8/0xb9).
+        // Патчить нужно СТРОГО в этом порядке (сначала 0xb8, потом 0x04), т.к. сумма
+        // для 0x04 включает байты самого 0xb8. Ни одна сумма не включает финальный
+        // блок параметров коррекции (TAIL_FOOTER) — тот идёт уже после и не входит
+        // ни в одну из них.
+        byte[] body = out.toByteArray();
+        int innerChecksum = 0;
+        for (int i = 0xba; i < body.length; i++) {
+            innerChecksum = (innerChecksum + (body[i] & 0xff)) & 0xffff;
+        }
+        body[0xb8] = (byte) (innerChecksum & 0xff);
+        body[0xb9] = (byte) ((innerChecksum >> 8) & 0xff);
+        int checksum = 0;
+        for (int i = 6; i < body.length; i++) {
+            checksum = (checksum + (body[i] & 0xff)) & 0xffff;
+        }
+        body[4] = (byte) (checksum & 0xff);
+        body[5] = (byte) ((checksum >> 8) & 0xff);
+
+        ByteArrayOutputStream result = new ByteArrayOutputStream();
+        writeBytes(result, body);
+        writeBytes(result, TAIL_FOOTER);
+
+        return result.toByteArray();
+    }
+
+    /** Пишет 17-байтные кабинетные записи в COLUMN-MAJOR порядке, пропуская origin
+     *  (0,0) (см. class-javadoc) — вынесено из {@link #writeStandardCore} в
+     *  отдельный метод, ПЕРЕИСПОЛЬЗУЕМЫЙ мультиэкранным best-effort писателем
+     *  {@link #writeStandardMultiScreen} (там записи каждого экрана идут в этом
+     *  же формате, только сами экраны, в отличие от одноэкранного случая, не
+     *  делят один общий header — см. javadoc метода). */
+    private static void writeCabinetRecords(ByteArrayOutputStream out, byte[] anchor, int cols, int rows,
+                                             int cabW, int cabH, Map<CellKey, Rec> cellsByKey) {
+        CellKey originKey = new CellKey(0, 0);
+        for (CellKey k : orderedCells(cols, rows)) {
+            if (k.equals(originKey)) {
+                continue; // см. class-javadoc
             }
-            Rec r = byCabinetId.get(cab.getId());
+            Rec r = cellsByKey.get(k);
             if (r == null) {
                 continue; // не расключён ни в одну сигнальную цепочку - нечего писать
             }
-            if (cab.getId().equals(originId)) {
-                continue; // см. class-javadoc
-            }
-            writeBytes(out, ANCHOR);
+            writeBytes(out, anchor);
             out.write(r.card() & 0xff);
             out.write(r.port() & 0xff);
             writeU16(out, r.seq());
-            // Предположительно дублирующая координата "×128" (см. javadoc парсера) —
-            // НЕ подтверждено ни одним образцом, парсер сам их не читает.
-            writeU16(out, r.col() * 128);
-            writeU16(out, r.row() * 128);
+            // Дублирующая координата — на образце с кабинетом 128×128 равнялась
+            // col*128/row*128; после того как ширина/высота якоря оказались НЕ
+            // константой 128, а реальным размером кабинета (см. buildAnchor javadoc),
+            // разумно считать, что и здесь используется реальный cabW/cabH, а не
+            // литеральные 128 — но образца с НЕквадратным/не-128 кабинетом И реальными
+            // записями (не только пустым 1×1) пока не было, так что это по аналогии,
+            // не подтверждено напрямую.
+            writeU16(out, r.col() * cabW);
+            writeU16(out, r.row() * cabH);
             out.write(r.col() & 0xff);
             out.write(0); // неизвестно
             out.write(r.row() & 0xff);
         }
-
-        // Завершающий JSON-маркер warp-искажений — в образцах координаты всегда были
-        // нулевыми, а полная схема полей NovaLCT не установлена; пишем минимально
-        // правдоподобный объект — этого достаточно, чтобы парсер (свой и, будем
-        // надеяться, оригинальный NovaLCT) нашёл конец данных экрана по маркеру.
-        String json = "[{\"si\":0,\"x1\":0,\"y1\":0,\"x2\":0,\"y2\":0}]";
-        writeBytes(out, json.getBytes(StandardCharsets.US_ASCII));
-
-        return out.toByteArray();
     }
 
-    private record ComplexRec(int x, int y, int w, int h) {
+    /** Один NovaLCT-"экран" внутри мультиэкранного файла (см. {@link #writeStandardMultiScreen}) —
+     *  в отличие от {@link NovaLctCombineHelper.CombineResult}, где несколько экранов
+     *  СЛИВАЮТСЯ в одну сетку, здесь каждый остаётся отдельным экраном со своим
+     *  cols/rows/card/port, просто упакованным в тот же файл. */
+    public record ScreenBlock(int cols, int rows, int cabW, int cabH, int screenXPx, Map<CellKey, Rec> cells) {
     }
+
+    /** <b>BEST-EFFORT, НЕ ПОДТВЕРЖДЕНО реальной загрузкой</b> — мультиэкранный
+     *  Standard Screen (несколько экранов В ОДНОМ .scr файле), в отличие от
+     *  {@link #writeStandardCore}/{@link #writeStandardCombined}, разобранных и
+     *  подтверждённых на 100%. Пользователь восстановил {@code 2scr.scr} (реальный
+     *  2-экранный образец, ранее считавшийся утраченным) из Корзины — байтовый
+     *  разбор ЭТОГО метода актуализирован под него ниже, но сам образец описывает
+     *  ДВА ПУСТЫХ (0 кабинетных записей, placeholder-подобные cols=100/rows=0)
+     *  экрана — т.е. подтверждает только СТРУКТУРУ контейнера (границы блоков,
+     *  несколько числовых полей заголовка/хвоста), но НЕ семантику полей внутри
+     *  компактного блока доп. экрана (см. "НЕ известно" ниже) и НЕ поведение с
+     *  реальными кабинетными записями на экране 1+. Нужен свежий образец с
+     *  РЕАЛЬНЫМИ (непустыми) экранами 1+ для полной проверки.
+     *
+     *  <p><b>Подтверждено побайтово по {@code 2scr.scr} (N=2, оба экрана пустые):</b>
+     *  <ul>
+     *    <li>Экран 0 — обычный полный 340-байтный заголовок + записи, как в
+     *    {@link #writeStandardCore} (то же {@code HEADER_LEN}).</li>
+     *    <li>Каждый следующий экран (1..N-1) — компактный 31-байтный блок вместо
+     *    полного заголовка: 4 нулевых байта (позиция подтверждена точно), затем тот
+     *    же 6-байтный якорь ширина/высота/флаг (см. {@link #buildAnchor}), затем
+     *    ровно 21 байт (позиция и длина подтверждены точно, содержимое — нет, см.
+     *    "НЕ известно").</li>
+     *    <li>ОДИН общий JSON-массив warp-искажений на весь файл — по объекту на
+     *    экран ({@code {"si":0,...},{"si":1,...}}), а не JSON на экран.</li>
+     *    <li>Заголовок {@code SCREENCOUNT} (абсолютно 0x13A, декомпилированный
+     *    {@code ScreenInfoRelativeAddress.SCREENCOUNT=0x84} относительно 0xB6) —
+     *    РЕАЛЬНОЕ число экранов (2 в образце), а не всегда 1.</li>
+     *    <li>{@code 0x0e} (ранее считался константой {@code 0x00ad}, т.к. во ВСЕХ
+     *    однoэкранных образцах она такой и была) — на самом деле это ДЛИНА хвостового
+     *    блока коррекции (см. {@link #buildMultiScreenTailFooter}): {@code 133+40×N}
+     *    ({@code 0x00ad}=173 для N=1 — то же самое числовое совпадение и скрывало
+     *    истинный смысл поля все предыдущие образцы).</li>
+     *    <li>{@code 0xd2} = (смещение начала ИТОГОВОГО общего якоря+JSON, т.е. после
+     *    заголовка+записей экрана 0 И всех компактных блоков+записей экранов 1..N-1)
+     *    {@code − 176} — формула, выведенная ещё до получения {@code 2scr.scr}, при
+     *    сверке совпала ТОЧНО (195 в образце).</li>
+     *    <li>{@code 0x13b} — ПЕРЕСМОТРЕНО: не от суммарного смещения (это была
+     *    ошибочная догадка, дававшая 58 вместо реальных 27), а от {@code trailerOffset
+     *    ТОЛЬКО ЭКРАНА 0} (как в {@link #writeStandardCore}) {@code − 313} — то же
+     *    самое, просто для экрана 0 персонально, а не для секции целиком.</li>
+     *    <li>{@code 0x0a} — ПЕРЕСМОТРЕНО: не {@code finalTrailerOffset − 108} (давало
+     *    263 вместо реальных 328), а (смещение начала ХВОСТОВОГО блока коррекции,
+     *    т.е. конец итогового JSON) {@code − 0xB6} (=182, абсолютное начало секции
+     *    "screen info") — для N=1 это алгебраически то же самое число, что и старая
+     *    формула (совпадение и скрывало ошибку), для N=2 отличается.</li>
+     *    <li>Хвостовой блок коррекции (см. {@link #buildMultiScreenTailFooter}):
+     *    длина {@code 133+40×N} (213 для N=2, ТОЧНО); байты [2:4] (LE16)
+     *    {@code = 231×N} (462=0x1CE для N=2, ТОЧНО; для N=1 это то же самое число,
+     *    что и старая захардкоженная константа 0xE7=231, тоже скрывавшая формулу);
+     *    байт[132] {@code = N} (было захардкожено 1); паттерн {@code (1,_,1,0xE4)} в
+     *    относительных позициях {@code (134,_,136,137)} у экрана 0 ПОВТОРЯЕТСЯ со
+     *    сдвигом {@code +40} для каждого экрана 1..N-1 (в образце — ровно один раз,
+     *    на позициях 174/176/177).</li>
+     *  </ul>
+     *
+     *  <p><b>НЕ известно</b> (образец слишком "пустой", чтобы это прояснить):
+     *  точная семантика 21-байтного блока доп. экрана — реальные значения в
+     *  {@code 2scr.scr} (card=1,port=0,originSeq=1,cols=100,rows=0 у ЭКРАНА 0, а не
+     *  у компактного блока) выглядят как NovaLCT-плейсхолдеры для ещё не заполненного
+     *  экрана, а не осмысленные данные, так что подгонка формулы под НИХ была бы
+     *  самообманом — ниже 21-байтный блок по-прежнему собран ПО АНАЛОГИИ с хвостом
+     *  0x13a..0x14d одноэкранного заголовка (та же длина ~20-21 байт), но это
+     *  остаётся ДОГАДКОЙ; формула хвостового блока для N&gt;2 (экстраполяция по 2
+     *  точкам N=1,2); поведение при НЕПУСТЫХ дополнительных экранах вообще.
+     *
+     *  <p>Это единственный экспортный путь класса, который НИКОГДА не должен
+     *  включаться в UI без явного, более строгого предупреждения, чем у Complex
+     *  Screen (см. {@code NovaLctControllerExportDialog}) — пока пользователь не
+     *  подтвердит реальной загрузкой в NovaLCT хотя бы один сгенерированный этим
+     *  методом файл. */
+    public static byte[] writeStandardMultiScreen(List<ScreenBlock> screens) {
+        if (screens == null || screens.isEmpty()) {
+            throw new IllegalArgumentException("Нужен хотя бы один экран");
+        }
+        int screenCount = screens.size();
+        CellKey originKey = new CellKey(0, 0);
+
+        int[] recordCounts = new int[screenCount];
+        int[] firstCards = new int[screenCount];
+        int[] firstPorts = new int[screenCount];
+        int[] originSeqs = new int[screenCount];
+        for (int i = 0; i < screenCount; i++) {
+            ScreenBlock s = screens.get(i);
+            int rc = 0;
+            int fc = 0;
+            int fp = 0;
+            boolean found = false;
+            for (CellKey k : orderedCells(s.cols(), s.rows())) {
+                Rec r = s.cells().get(k);
+                if (!k.equals(originKey) && r != null) {
+                    rc++;
+                }
+                if (r != null && !found) {
+                    fc = r.card();
+                    fp = r.port();
+                    found = true;
+                }
+            }
+            recordCounts[i] = rc;
+            firstCards[i] = fc;
+            firstPorts[i] = fp;
+            Rec originRec = s.cells().get(originKey);
+            originSeqs[i] = originRec != null ? originRec.seq() : 0;
+        }
+
+        // Смещение начала ИТОГОВОГО общего якоря+JSON (после заголовка+записей экрана
+        // 0 И всех компактных блоков+записей экранов 1..N-1) -- используется для 0xd2
+        // (подтверждено точно по 2scr.scr, см. javadoc).
+        int finalTrailerOffset = HEADER_LEN + recordCounts[0] * 17;
+        for (int i = 1; i < screenCount; i++) {
+            finalTrailerOffset += 4 + 6 + 21 + recordCounts[i] * 17;
+        }
+        // trailerOffset ТОЛЬКО экрана 0 (как в writeStandardCore) -- используется для
+        // 0x13b (подтверждено точно по 2scr.scr: НЕ суммарный, см. javadoc).
+        int screen0TrailerOffset = HEADER_LEN + recordCounts[0] * 17;
+
+        // JSON собирается ЗАРАНЕЕ (а не в потоке записи), чтобы знать его длину для
+        // 0x0a (см. ниже) ДО того, как заголовок уже записан в out.
+        StringBuilder jsonBuilder = new StringBuilder("[");
+        for (int i = 0; i < screenCount; i++) {
+            if (i > 0) {
+                jsonBuilder.append(',');
+            }
+            jsonBuilder.append("{\"si\":").append(i)
+                    .append(",\"x1\":0,\"y1\":0,\"x2\":0,\"y2\":0,\"x3\":0,\"y3\":0,\"x4\":0,\"y4\":0}");
+        }
+        jsonBuilder.append(']');
+        byte[] jsonBytes = jsonBuilder.toString().getBytes(StandardCharsets.US_ASCII);
+        // Смещение начала хвостового блока коррекции (= конец итогового JSON) --
+        // используется для 0x0a (подтверждено точно по 2scr.scr, см. javadoc).
+        int footerStart = finalTrailerOffset + 6 + 2 + jsonBytes.length;
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+
+        ScreenBlock s0 = screens.get(0);
+        byte[] header = new byte[HEADER_LEN];
+        System.arraycopy(MAGIC, 0, header, 0, MAGIC.length);
+        putU16(header, 0x06, 0x0080);
+        putU16(header, 0x0a, footerStart - 0xb6);
+        putU16(header, 0x0e, 133 + 40 * screenCount); // длина хвостового блока -- см. javadoc
+        header[0x36] = (byte) 0xe9; header[0x37] = 0x03; header[0x38] = (byte) 0xfc;
+        header[0x3a] = 0x01; header[0x3b] = 0x01; header[0x3c] = (byte) 0x90;
+        header[0x3d] = 0x06; header[0x3e] = 0x60; header[0x3f] = 0x04;
+        header[0xb6] = (byte) 0xee; header[0xb7] = 0x03;
+        putU16(header, 0xd2, finalTrailerOffset - 176);
+        header[0x13a] = (byte) (screenCount & 0xff); // SCREENCOUNT -- см. javadoc выше
+        header[0x13b] = (byte) ((screen0TrailerOffset - 313) & 0xff); // см. javadoc
+        header[0x13f] = 0x01;
+        header[0x141] = (byte) (s0.screenXPx() & 0xff);
+        putU16(header, 0x145, s0.cols());
+        putU16(header, 0x147, s0.rows());
+        header[0x149] = (byte) (firstCards[0] & 0xff);
+        header[0x14a] = (byte) (firstPorts[0] & 0xff);
+        putU16(header, 0x14b, originSeqs[0]);
+        header[0x14d] = (byte) (s0.screenXPx() & 0xff);
+        writeBytes(out, header);
+
+        byte[] anchor0 = buildAnchor(s0.cabW(), s0.cabH());
+        writeCabinetRecords(out, anchor0, s0.cols(), s0.rows(), s0.cabW(), s0.cabH(), s0.cells());
+
+        for (int i = 1; i < screenCount; i++) {
+            ScreenBlock s = screens.get(i);
+            // 4 нулевых байта -- назначение неизвестно, см. javadoc метода.
+            out.write(0); out.write(0); out.write(0); out.write(0);
+            byte[] anchor = buildAnchor(s.cabW(), s.cabH());
+            writeBytes(out, anchor);
+            // ~21 байт по аналогии с хвостом 0x13a..0x14d однoэкранного заголовка --
+            // НЕ подтверждено, см. javadoc метода.
+            byte[] tail = new byte[21];
+            tail[5] = 0x01; // по аналогии с header[0x13f]
+            tail[7] = (byte) (s.screenXPx() & 0xff); // по аналогии с header[0x141]
+            tail[11] = (byte) (s.cols() & 0xff);
+            tail[12] = (byte) ((s.cols() >> 8) & 0xff); // header[0x145]
+            tail[13] = (byte) (s.rows() & 0xff);
+            tail[14] = (byte) ((s.rows() >> 8) & 0xff); // header[0x147]
+            tail[15] = (byte) (firstCards[i] & 0xff); // header[0x149]
+            tail[16] = (byte) (firstPorts[i] & 0xff); // header[0x14a]
+            tail[17] = (byte) (originSeqs[i] & 0xff);
+            tail[18] = (byte) ((originSeqs[i] >> 8) & 0xff); // header[0x14b]
+            tail[19] = (byte) (s.screenXPx() & 0xff); // header[0x14d] дубль
+            writeBytes(out, tail);
+            writeCabinetRecords(out, anchor, s.cols(), s.rows(), s.cabW(), s.cabH(), s.cells());
+        }
+
+        ScreenBlock last = screens.get(screenCount - 1);
+        byte[] finalAnchor = buildAnchor(last.cabW(), last.cabH());
+        // jsonBytes уже собран выше (нужен был заранее для footerStart/0x0a).
+        writeBytes(out, finalAnchor);
+        writeU16(out, jsonBytes.length);
+        writeBytes(out, jsonBytes);
+
+        byte[] body = out.toByteArray();
+        int innerChecksum = 0;
+        for (int i = 0xba; i < body.length; i++) {
+            innerChecksum = (innerChecksum + (body[i] & 0xff)) & 0xffff;
+        }
+        body[0xb8] = (byte) (innerChecksum & 0xff);
+        body[0xb9] = (byte) ((innerChecksum >> 8) & 0xff);
+        int checksum = 0;
+        for (int i = 6; i < body.length; i++) {
+            checksum = (checksum + (body[i] & 0xff)) & 0xffff;
+        }
+        body[4] = (byte) (checksum & 0xff);
+        body[5] = (byte) ((checksum >> 8) & 0xff);
+
+        ByteArrayOutputStream result = new ByteArrayOutputStream();
+        writeBytes(result, body);
+        writeBytes(result, buildMultiScreenTailFooter(screenCount));
+        return result.toByteArray();
+    }
+
+    /** Длина {@code 133+40×N} и байты [2:4]/[132]/[134,136,137] (+ повтор на +40 за
+     *  экран) — ВСЕ подтверждены точно по реальному {@code 2scr.scr} (N=2, см.
+     *  javadoc {@link #writeStandardMultiScreen}). Только содержимое "своего" 40-байтного
+     *  куска экранов 1..N-1 ЗА ВЫЧЕТОМ этого повторяющегося паттерна остаётся
+     *  неизвестным (нули как наименее рискованная заглушка). */
+    private static byte[] buildMultiScreenTailFooter(int screenCount) {
+        byte[] f = new byte[133 + 40 * screenCount];
+        f[0] = (byte) 0xea;
+        f[1] = 0x03;
+        int tag = 231 * screenCount; // подтверждено точно: 231 для N=1, 462 для N=2
+        f[2] = (byte) (tag & 0xff);
+        f[3] = (byte) ((tag >> 8) & 0xff);
+        f[132] = (byte) (screenCount & 0xff); // подтверждено точно: N, не всегда 1
+        f[134] = 0x01;
+        f[136] = 0x01;
+        f[137] = (byte) 0xe4;
+        for (int i = 1; i < screenCount; i++) {
+            f[134 + 40 * i] = 0x01;
+            f[136 + 40 * i] = 0x01;
+            f[137 + 40 * i] = (byte) 0xe4;
+        }
+        return f;
+    }
+
+    private record ComplexCard(int x, int y, int w, int h, int card, int port, int seq) {
+    }
+
+    /** Длина преамбулы Complex Screen (от начала MAGIC до байта {@code Type} —
+     *  см. {@link #writeComplex}) — ПОДТВЕРЖДЕНО побайтово декомпиляцией
+     *  {@code SoftWareSpaceAnalyser.ScreenInfoToArray1600} (реальный метод NovaLCT,
+     *  дизассемблирован через ildasm) И сверкой с двумя реальными файлами
+     *  ({@code ether1.scr}/{@code ether2.scr}, 4×6 экран, нижний ряд кабинетов
+     *  128×64, отличаются РОВНО одним Ethernet-портом — оба совпали побайтово). */
+    private static final int COMPLEX_HEADER_LEN = 0x13f;
 
     /** Complex Screen — произвольные прямоугольники, явные пиксельные X/Y/Width/
-     *  Height на кабинет (см. class-javadoc). Разобран по ОДНОМУ образцу (1 экран,
-     *  1 порт/цепочка, 7 приёмных карт неровной формы — включая одну карту вдвое
-     *  выше соседних) — сверено с таблицей "Receiving Card Settings" реального
-     *  NovaLCT для этого образца координата-в-координату (X/Y/Width/Height каждой
-     *  из 7 карт совпали ТОЧНО). Заголовок цепочки понят лишь ЧАСТИЧНО — см.
-     *  комментарии по ходу метода про то, что подтверждено, а что — догадка.
-     *  Многопортовые/многоэкранные Complex Screen файлы вообще не проверялись. */
+     *  Height на кабинет (см. class-javadoc). <b>Статус: ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО</b> —
+     *  раньше (best-effort, по одному образцу) считалось, что у Complex Screen нет
+     *  вовсе никакого заголовка/чек-суммы; декомпиляция реального метода
+     *  {@code Nova.LCT.GigabitSystem.HWConfigAccessor.Accessors.CommonInfoAccessor.
+     *  SoftWareSpaceAnalyser.ScreenInfoToArray1600} (тот же метод, что строит и
+     *  Standard Screen — оба формата суть разные ТИПЫ одного общего контейнера
+     *  {@code ILEDDisplayInfo}) показала, что Complex Screen делит РОВНО ТУ ЖЕ
+     *  340-с-лишним-байтную преамбулу/чек-сумму/{@link #TAIL_FOOTER}, что и Standard —
+     *  отличается только "тело" после байта {@code Type}. Побайтово сверено с
+     *  ДВУМЯ реальными файлами (см. {@link #COMPLEX_HEADER_LEN}) — экран 4×6,
+     *  24 приёмные карты (нижний ряд 128×64), 100% совпадение, включая обе
+     *  контрольные суммы.
+     *
+     * <p>16-байтная запись на карту (порядок ПОДТВЕРЖДЁН декомпиляцией и сверкой):
+     * <pre>
+     * +0  SenderIndex  (1 байт)  -- Sending Card, 0-based
+     * +1  PortIndex    (1 байт)  -- Ethernet Port, 0-based (ПОДТВЕРЖДЕНО: единственное
+     *                               различие между ether1.scr/ether2.scr)
+     * +2  ConnectIndex (u16 LE)  -- порядковый номер карты В ЦЕПОЧКЕ (см. {@code seq}
+     *                               везде в этом классе) -- 0,1,2,... по порядку
+     *                               расключения; при НЕСКОЛЬКИХ цепочках на одном
+     *                               Complex-экране считается per-chain (по аналогии
+     *                               со Standard) -- этот случай НЕ проверен реальным
+     *                               образцом (образец содержал ровно одну цепочку)
+     * +4  X             (u16 LE) -- ПОДТВЕРЖДЕНО побайтово (StartX в Receiving Card Settings)
+     * +6  Y             (u16 LE) -- ПОДТВЕРЖДЕНО (StartY)
+     * +8  XInPort       (u16 LE) -- в обоих образцах 0 (одна область на порт) -- НЕ
+     *                               проверено для случая нескольких областей на один
+     *                               физический порт (daisy-chain внутри порта)
+     * +10 YInPort       (u16 LE) -- аналогично, 0 в образцах
+     * +12 Width         (u16 LE) -- ПОДТВЕРЖДЕНО
+     * +14 Height        (u16 LE) -- ПОДТВЕРЖДЕНО
+     * </pre>
+     * перед записями -- 6-байтный заголовок блока: {@code Type}(1)=2 (ПОДТВЕРЖДЕНО;
+     * у Standard в этой же позиции было 1 -- т.е. это тип {@code ILEDDisplayInfo},
+     * общий для обоих форматов), {@code VirtualMode}(1)=0 (в образцах всегда 0 --
+     * назначение ненулевых значений неизвестно), {@code Count}(u32 LE) = число карт. */
     private static byte[] writeComplex(Screen screen, Scene scene, Workspace workspace, CabinetType defaultType) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        writeBytes(out, MAGIC);
-        // Намеренно НИКАКОЙ преамбулы между MAGIC и первым блоком цепочки: в
-        // образце там было заведомо больше сотни байт неопознанного содержимого
-        // (возможно версия/контрольная сумма/общие калибровочные поля), но мы не
-        // знаем ни его реальной длины в общем случае, ни смысла — фабриковать
-        // конкретное число байт, подсмотренное в ОДНОМ образце, значило бы делать
-        // вид, что мы знаем то, чего на самом деле не знаем.
         int nativeCellW = defaultType.getResolutionWidth();
         int nativeCellH = defaultType.getResolutionHeight();
+        List<ComplexCard> cards = new ArrayList<>();
         List<SignalChain> chains = scene != null ? scene.getSignalChains() : List.of();
         for (SignalChain chain : chains) {
             Integer port = chain.getPortNumber();
@@ -202,7 +772,7 @@ public final class NovaLctScrWriter {
             if (cardPort == null) {
                 continue;
             }
-            List<ComplexRec> records = new ArrayList<>();
+            int seq = 0;
             for (String id : chain.getCabinetInstanceIds()) {
                 CabinetInstance cab = screen.cabinetById(id);
                 if (cab == null || cab.isHidden()) {
@@ -215,48 +785,86 @@ public final class NovaLctScrWriter {
                         + ScreenLogic.offsetPx(cab.getOffsetYMm(), nativeCellH, defaultType.getHeightMm()));
                 int w = eff != null ? eff.getResolutionWidth() : nativeCellW;
                 int h = eff != null ? eff.getResolutionHeight() : nativeCellH;
-                records.add(new ComplexRec(x, y, w, h));
-            }
-            if (records.isEmpty()) {
-                continue;
-            }
-            // Заголовок цепочки (перед первой записью-картой) — в образце занимал
-            // 15 байт. Байт[7] = количество записей (7 в образце, 7 карт) —
-            // ЕДИНСТВЕННОЕ поле здесь, чьё назначение подтверждено уверенно (ровно
-            // совпало с числом карт цепочки). Байт[0] = локальный порт НА карте
-            // (card/port из ScreenLogic.cardAndLocalPort) и байты[2-3] = индекс
-            // карты (LE16) — правдоподобные, но НЕ независимо подтверждённые догадки
-            // (в разобранном образце было "Sending Card 1, Port 1", что совместимо
-            // с этой раскладкой, но с одним образцом это не более чем совпадение
-            // могло быть проверено). Остальные байты заголовка — нули-заглушки.
-            out.write((cardPort[1] + 1) & 0xff);
-            out.write(0);
-            writeU16(out, cardPort[0]);
-            out.write(0);
-            out.write(0);
-            out.write(0);
-            out.write(records.size() & 0xff);
-            for (int i = 0; i < 7; i++) {
-                out.write(0);
-            }
-            int seq = 0;
-            for (ComplexRec r : records) {
+                cards.add(new ComplexCard(x, y, w, h, cardPort[0], cardPort[1], seq));
                 seq++;
-                writeU16(out, r.x());
-                writeU16(out, r.y());
-                writeU16(out, r.x()); // дубль X -- см. javadoc парсера про такую же пару в Standard-формате
-                writeU16(out, r.y()); // дубль Y
-                writeU16(out, r.w());
-                writeU16(out, r.h());
-                writeU16(out, 0); // неизвестно
-                writeU16(out, seq); // "Receiving Card" 1-based -- подтверждено сверкой с образцом
             }
         }
-        // В образце после последней записи шёл литерал "[]" (пустой массив warp-
-        // искажений) — в отличие от Standard-формата, здесь НЕТ JSON-маркера
-        // "[{\"si\":..." вовсе (проверено прямым поиском по байтам образца).
-        writeBytes(out, "[]".getBytes(StandardCharsets.US_ASCII));
-        return out.toByteArray();
+
+        int recordsEnd = COMPLEX_HEADER_LEN + 6 + cards.size() * 16;
+        byte[] json = "[]".getBytes(StandardCharsets.US_ASCII);
+        int endOfJson = recordsEnd + 2 + json.length;
+
+        byte[] header = new byte[COMPLEX_HEADER_LEN];
+        System.arraycopy(MAGIC, 0, header, 0, MAGIC.length);
+        putU16(header, 0x06, 0x0080);
+        putU16(header, 0x0a, endOfJson - 0xb6);
+        putU16(header, 0x0e, 133 + 40); // длина TAIL_FOOTER -- один экран, см. javadoc TAIL_FOOTER
+        header[0x36] = (byte) 0xe9; header[0x37] = 0x03; header[0x38] = (byte) 0xfc;
+        header[0x3a] = 0x01; header[0x3b] = 0x01; header[0x3c] = (byte) 0x90;
+        header[0x3d] = 0x06; header[0x3e] = 0x60; header[0x3f] = 0x04;
+        header[0xb6] = (byte) 0xee; header[0xb7] = 0x03;
+        putU16(header, 0xd2, recordsEnd - 0xb6);
+        header[0x13a] = 0x01; // SCREENCOUNT -- 1 экран
+        putU16(header, 0x13b, 6 + cards.size() * 16); // SCREENLENINFOADDR -- длина Complex-блока (LE16, ПОДТВЕРЖДЕНО)
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeBytes(out, header);
+        out.write(2); // Type -- ПОДТВЕРЖДЕНО (Complex/IrRegular)
+        out.write(0); // VirtualMode -- 0 в обоих образцах
+        writeU16(out, cards.size());
+        writeU16(out, 0); // старшие 2 байта Count (LE32) -- 0, пока карт < 65536
+
+        for (ComplexCard c : cards) {
+            out.write(c.card() & 0xff);
+            out.write(c.port() & 0xff);
+            writeU16(out, c.seq());
+            writeU16(out, c.x());
+            writeU16(out, c.y());
+            writeU16(out, 0); // XInPort -- см. javadoc метода
+            writeU16(out, 0); // YInPort
+            writeU16(out, c.w());
+            writeU16(out, c.h());
+        }
+
+        writeU16(out, json.length);
+        writeBytes(out, json);
+
+        byte[] body = out.toByteArray();
+        int innerChecksum = 0;
+        for (int i = 0xba; i < body.length; i++) {
+            innerChecksum = (innerChecksum + (body[i] & 0xff)) & 0xffff;
+        }
+        body[0xb8] = (byte) (innerChecksum & 0xff);
+        body[0xb9] = (byte) ((innerChecksum >> 8) & 0xff);
+        int checksum = 0;
+        for (int i = 6; i < body.length; i++) {
+            checksum = (checksum + (body[i] & 0xff)) & 0xffff;
+        }
+        body[4] = (byte) (checksum & 0xff);
+        body[5] = (byte) ((checksum >> 8) & 0xff);
+
+        ByteArrayOutputStream result = new ByteArrayOutputStream();
+        writeBytes(result, body);
+        writeBytes(result, TAIL_FOOTER);
+        return result.toByteArray();
+    }
+
+    /** Ячейки сетки cols×rows в COLUMN-MAJOR порядке (столбец 0 сверху вниз, затем
+     *  столбец 1, и т.д.) — именно в таком порядке реальная NovaLCT пишет
+     *  17-байтные записи Standard Screen (подтверждено побайтовым сравнением с
+     *  реальным образцом 4×3 со сложной цепочкой: наши записи совпадали побайтово
+     *  с реальными, но шли в другом порядке — row-major). Обобщено от прежнего
+     *  {@code orderedCabinets(Screen)} до чистой функции без {@link Screen} —
+     *  переиспользуется контроллер-центричным экспортом ({@link #writeStandardCore}
+     *  вызывается и с объединённой сеткой нескольких экранов, не только с одним). */
+    private static List<CellKey> orderedCells(int cols, int rows) {
+        List<CellKey> ordered = new ArrayList<>();
+        for (int col = 0; col < cols; col++) {
+            for (int row = 0; row < rows; row++) {
+                ordered.add(new CellKey(col, row));
+            }
+        }
+        return ordered;
     }
 
     private static void writeBytes(ByteArrayOutputStream out, byte[] b) {
@@ -266,5 +874,10 @@ public final class NovaLctScrWriter {
     private static void writeU16(ByteArrayOutputStream out, int v) {
         out.write(v & 0xff);
         out.write((v >> 8) & 0xff);
+    }
+
+    private static void putU16(byte[] buf, int offset, int v) {
+        buf[offset] = (byte) (v & 0xff);
+        buf[offset + 1] = (byte) ((v >> 8) & 0xff);
     }
 }

@@ -1,9 +1,7 @@
 package com.vjstb.ledscheme.settings;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 /** Корневой объект пользовательских настроек: список профилей + активный. */
 public class AppSettings {
@@ -14,10 +12,16 @@ public class AppSettings {
      *  false по умолчанию (в т.ч. для старых файлов настроек, сохранённых до появления
      *  этого поля — тур покажется один раз и им же). Доступен повторно из Настроек. */
     private boolean onboardingCompleted = false;
-    /** Пользовательский текст «Руководства»/шагов приветствия (см. ContentEditorDialog),
-     *  ключ — "guide"/"onboarding" — отсутствие ключа означает «показывать встроенный
-     *  текст по умолчанию» (ничего не переписывалось). */
-    private Map<String, List<ContentSection>> customContent = new HashMap<>();
+    /** Курсор последней успешной синхронизации библиотеки с сервером (см.
+     *  sync.LibrarySyncClient/AppModel.applyLibrarySyncItems) — 0 означает "ещё ни
+     *  разу не синхронизировались", тогда сервер отдаёт всю библиотеку целиком. */
+    private long librarySyncGlobalSeq = 0;
+    /** Сессия входа на сервер (см. sync.AuthClient/ui.AccountDialog) — все три null,
+     *  если пользователь не входил в аккаунт; нужна только для отправки предложений
+     *  в общую библиотеку, чтение библиотеки анонимно и токена не требует. */
+    private String authToken;
+    private String authUsername;
+    private String authRole;
 
     public String getActiveProfileId() {
         return activeProfileId;
@@ -43,11 +47,35 @@ public class AppSettings {
         this.onboardingCompleted = onboardingCompleted;
     }
 
-    public Map<String, List<ContentSection>> getCustomContent() {
-        return customContent;
+    public long getLibrarySyncGlobalSeq() {
+        return librarySyncGlobalSeq;
     }
 
-    public void setCustomContent(Map<String, List<ContentSection>> customContent) {
-        this.customContent = customContent;
+    public void setLibrarySyncGlobalSeq(long librarySyncGlobalSeq) {
+        this.librarySyncGlobalSeq = librarySyncGlobalSeq;
+    }
+
+    public String getAuthToken() {
+        return authToken;
+    }
+
+    public void setAuthToken(String authToken) {
+        this.authToken = authToken;
+    }
+
+    public String getAuthUsername() {
+        return authUsername;
+    }
+
+    public void setAuthUsername(String authUsername) {
+        this.authUsername = authUsername;
+    }
+
+    public String getAuthRole() {
+        return authRole;
+    }
+
+    public void setAuthRole(String authRole) {
+        this.authRole = authRole;
     }
 }

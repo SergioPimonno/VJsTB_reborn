@@ -30,7 +30,7 @@ public class App {
                 MainFrame frame = new MainFrame(model, settings);
                 frame.setVisible(true);
                 if (!settings.isOnboardingCompleted()) {
-                    new OnboardingDialog(frame, settings).setVisible(true);
+                    new OnboardingDialog(frame, model, settings).setVisible(true);
                 }
             } catch (RuntimeException ex) {
                 JOptionPane.showMessageDialog(null,

@@ -3,7 +3,8 @@ package com.vjstb.ledscheme.ui;
 import com.formdev.flatlaf.FlatDarkLaf;
 import com.formdev.flatlaf.FlatLightLaf;
 import com.vjstb.ledscheme.AppInfo;
-import com.vjstb.ledscheme.settings.ContentSection;
+import com.vjstb.ledscheme.model.ContentSection;
+import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.settings.SettingsManager;
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
@@ -33,19 +34,34 @@ import javax.swing.UIManager;
  */
 public class OnboardingDialog extends JDialog {
 
-    private static final String CONTENT_KEY = "onboarding";
-    private static final String[] STEPS = {"welcome", "theme", "personalization"};
+    private static final String[] STEPS = {"welcome", "workflow", "theme", "personalization"};
 
-    /** Только шаги «welcome» и «personalization» — текст (заголовок+тело), полностью
-     *  переписываемый через ContentEditorDialog. Шаг «theme» с переключателями темы
-     *  оформления остаётся функциональным/не редактируемым как текст. */
+    /** Шаги «welcome»/«workflow»/«personalization» — текст (заголовок+тело), общая
+     *  справочная данные (Task #135/v2.0), редактируется только через отдельную
+     *  админ-консоль (ledscheme-admin), см. GuideDialog. Шаг «theme» с переключателями
+     *  темы оформления остаётся функциональным/не редактируемым как текст. */
     private static final List<ContentSection> DEFAULT_SECTIONS = List.of(
             new ContentSection("LED Scheme Designer v" + AppInfo.VERSION,
-                    "Приложение для проектирования схем коммутации LED-экранов и видеосопровождения: "
-                    + "проекты → сцены → экраны → LED cabinets, библиотека оборудования, схемы расключения "
-                    + "питания и сигнала."
-                    + "<br><br>Этот короткий тур поможет настроить пару вещей перед началом работы — его можно "
-                    + "пропустить и открыть заново в любой момент через «Настройки → Показать приветствие снова…»."),
+                    "Приложение для проектирования схем коммутации LED-экранов и видеосопровождения — от "
+                    + "структуры сцены до итогового пакета документации."
+                    + "<br><br>Этот тур в несколько шагов покажет общий порядок работы и где что искать — его "
+                    + "можно пропустить и открыть заново в любой момент через «Настройки → Показать приветствие "
+                    + "снова…»."),
+            new ContentSection("Как устроена работа",
+                    "Работа строится сверху вниз: <b>Проект → Сцена → Экран → LED cabinets</b>. Дальше — пять "
+                    + "этапов вверху окна, обычно в этом порядке:"
+                    + "<br><br><b>Сетап</b> — создаёте экраны, задаёте их сетку и тип кабинета, настраиваете форму "
+                    + "(в т.ч. неровную) и монтаж. Здесь же — прериг: сводка по весу/мощности и точки подвеса."
+                    + "<br><br><b>Питание</b> — расключаете экраны на силовые цепочки, следите за нагрузкой "
+                    + "(авто-расчёт по разъёму/автомату)."
+                    + "<br><br><b>Сигнал</b> — контроллеры и их порты, сигнальные цепочки на кабинеты, резервные "
+                    + "линии."
+                    + "<br><br><b>Генерация масок</b> — превью и экспорт масок под контент; здесь же канвас для "
+                    + "точной раскладки нескольких экранов под один видеовыход."
+                    + "<br><br><b>Вывод</b> — итоговый пакет документации: схемы, спецификации, экспорт в "
+                    + "NovaLCT/Resolume."
+                    + "<br><br><b>Библиотеки</b> — не этап по порядку, а общий склад: типы кабинетов/контроллеров, "
+                    + "пресеты оборудования, кабели — доступен на любом шаге."),
             new ContentSection("Остальная персонализация",
                     "В верхнем меню «Персонализация» — три независимых окна:"
                     + "<br>· <b>Цвета и профили</b> — цвета фаз питания/сигнальных цепочек, несколько именованных "
@@ -63,17 +79,20 @@ public class OnboardingDialog extends JDialog {
     private final JButton back = new JButton("Назад");
     private final JButton next = new JButton("Далее");
     private final JButton finish = new JButton("Готово");
+    private final AppModel model;
     private final SettingsManager settings;
     private javax.swing.JScrollPane welcomePanel;
+    private javax.swing.JScrollPane workflowPanel;
     private javax.swing.JScrollPane personalizationPanel;
     private int step = 0;
 
-    public OnboardingDialog(Window owner, SettingsManager settings) {
+    public OnboardingDialog(Window owner, AppModel model, SettingsManager settings) {
         super(owner, "Добро пожаловать", ModalityType.APPLICATION_MODAL);
+        this.model = model;
         this.settings = settings;
 
         rebuildTextSteps();
-        cardsPanel.add(scrollWrap(buildThemeStep(owner)), STEPS[1]);
+        cardsPanel.add(scrollWrap(buildThemeStep(owner)), STEPS[2]);
 
         JPanel content = new JPanel(new BorderLayout());
         content.add(cardsPanel, BorderLayout.CENTER);
@@ -103,12 +122,12 @@ public class OnboardingDialog extends JDialog {
     }
 
     private List<ContentSection> sections() {
-        List<ContentSection> custom = settings.getCustomContent(CONTENT_KEY);
-        return custom != null && custom.size() == DEFAULT_SECTIONS.size() ? custom : DEFAULT_SECTIONS;
+        List<ContentSection> synced = model.getWorkspace().getLibrary().getOnboardingSections();
+        return synced != null && synced.size() == DEFAULT_SECTIONS.size() ? synced : DEFAULT_SECTIONS;
     }
 
-    /** Пересобирает ТОЛЬКО текстовые шаги (welcome/personalization) — «theme» с
-     *  переключателями темы строится один раз в конструкторе и не трогается при
+    /** Пересобирает ТОЛЬКО текстовые шаги (welcome/workflow/personalization) — «theme»
+     *  с переключателями темы строится один раз в конструкторе и не трогается при
      *  редактировании текста. CardLayout.add с уже занятым именем не убирает
      *  СТАРЫЙ компонент из контейнера сам — убираем его явно, иначе он остаётся
      *  осиротевшим потомком cardsPanel при каждом повторном редактировании. */
@@ -120,23 +139,17 @@ public class OnboardingDialog extends JDialog {
         welcomePanel = scrollWrap(step(s.get(0).getTitle(), s.get(0).getBodyHtml()));
         cardsPanel.add(welcomePanel, STEPS[0]);
 
+        if (workflowPanel != null) {
+            cardsPanel.remove(workflowPanel);
+        }
+        workflowPanel = scrollWrap(step(s.get(1).getTitle(), s.get(1).getBodyHtml()));
+        cardsPanel.add(workflowPanel, STEPS[1]);
+
         if (personalizationPanel != null) {
             cardsPanel.remove(personalizationPanel);
         }
-        personalizationPanel = scrollWrap(step(s.get(1).getTitle(), s.get(1).getBodyHtml()));
-        cardsPanel.add(personalizationPanel, STEPS[2]);
-    }
-
-    /** Открывает редактор текста приветствия — вызывается из AdminDialog
-     *  (Инструменты → «Админ-режим…» → «Тексты»), больше не из кнопки в самом туре. */
-    public void openEditor() {
-        ContentEditorDialog dlg = new ContentEditorDialog(this, "Редактировать текст приветствия", sections(),
-                DEFAULT_SECTIONS, saved -> {
-                    settings.setCustomContent(CONTENT_KEY, saved);
-                    rebuildTextSteps();
-                    cards.show(cardsPanel, STEPS[step]);
-                });
-        dlg.setVisible(true);
+        personalizationPanel = scrollWrap(step(s.get(2).getTitle(), s.get(2).getBodyHtml()));
+        cardsPanel.add(personalizationPanel, STEPS[3]);
     }
 
     private void goTo(int newStep) {

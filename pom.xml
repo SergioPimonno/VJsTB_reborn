@@ -27,6 +27,15 @@
     </properties>
 
     <dependencies>
+        <!-- Общие доменные POJO для видов общей библиотеки (см. ledscheme-model) —
+             нужно один раз собрать `mvn install` в этом соседнем проекте перед
+             сборкой этого. -->
+        <dependency>
+            <groupId>com.vjstb.ledscheme</groupId>
+            <artifactId>ledscheme-model</artifactId>
+            <version>0.1.0</version>
+        </dependency>
+
         <!-- JSON-хранение проектов и библиотеки -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>

@@ -12,6 +12,13 @@ public class Project {
     private long createdAt = System.currentTimeMillis();
     private long updatedAt = System.currentTimeMillis();
     private List<Scene> scenes = new ArrayList<>();
+    /** Привязка к общему командному облачному хранилищу (см. sync.ProjectArchiveClient
+     *  / ui.CloudProjectsDialog) — null, пока проект не сохранён в облако ни разу.
+     *  cloudRevision — ревизия, на которой основана ЭТА локальная копия (обязательна
+     *  для следующего сохранения: сервер отклонит его, если кто-то уже сохранил более
+     *  новую ревизию — "принудительный" контроль версий, без тихой перезаписи). */
+    private String cloudId;
+    private Integer cloudRevision;
 
     public Project() {
     }
@@ -66,5 +73,21 @@ public class Project {
 
     public void setScenes(List<Scene> scenes) {
         this.scenes = scenes;
+    }
+
+    public String getCloudId() {
+        return cloudId;
+    }
+
+    public void setCloudId(String cloudId) {
+        this.cloudId = cloudId;
+    }
+
+    public Integer getCloudRevision() {
+        return cloudRevision;
+    }
+
+    public void setCloudRevision(Integer cloudRevision) {
+        this.cloudRevision = cloudRevision;
     }
 }

@@ -25,13 +25,13 @@ public class MainMenuBar extends JMenuBar {
     private HotkeysDialog hotkeysDialog;
 
     public MainMenuBar(JFrame owner, AppModel model, SettingsManager settings, Runnable onShowShortcuts) {
-        add(buildSettingsMenu(owner, settings));
+        add(buildSettingsMenu(owner, model, settings));
         add(buildToolsMenu(owner, model, settings));
         add(buildPersonalizationMenu(owner, settings));
         add(buildHelpMenu(onShowShortcuts));
     }
 
-    private JMenu buildSettingsMenu(JFrame owner, SettingsManager settings) {
+    private JMenu buildSettingsMenu(JFrame owner, AppModel model, SettingsManager settings) {
         JMenu menu = new JMenu("Настройки");
 
         JMenuItem reportBug = new JMenuItem("Сообщить о баге…");
@@ -39,12 +39,23 @@ public class MainMenuBar extends JMenuBar {
         menu.add(reportBug);
 
         JMenuItem onboarding = new JMenuItem("Показать приветствие снова…");
-        onboarding.addActionListener(e -> new OnboardingDialog(owner, settings).setVisible(true));
+        onboarding.addActionListener(e -> new OnboardingDialog(owner, model, settings).setVisible(true));
         menu.add(onboarding);
+
+        JMenuItem scenarios = new JMenuItem("Интерактивные примеры…");
+        scenarios.addActionListener(e ->
+                ScenarioListDialog.show(owner, model.getWorkspace().getLibrary().getInteractiveScenarios()));
+        menu.add(scenarios);
 
         JMenuItem update = new JMenuItem("Обновить версию…");
         update.addActionListener(e -> com.vjstb.ledscheme.ui.UpdateDialog.show(owner));
         menu.add(update);
+
+        JMenuItem account = new JMenuItem("Аккаунт…");
+        account.setToolTipText("Вход/регистрация — нужны только для отправки предложений в общую библиотеку,"
+                + " чтение библиотеки анонимно");
+        account.addActionListener(e -> AccountDialog.show(owner, settings));
+        menu.add(account);
 
         menu.addSeparator();
         JMenuItem version = new JMenuItem("Версия: " + AppInfo.VERSION);
@@ -71,25 +82,46 @@ public class MainMenuBar extends JMenuBar {
     private JMenu buildToolsMenu(JFrame owner, AppModel model, SettingsManager settings) {
         JMenu menu = new JMenu("Инструменты");
 
-        JMenuItem exportImportLib = new JMenuItem("Экспорт/импорт библиотек…");
-        exportImportLib.addActionListener(e -> {
-            javax.swing.JDialog dlg = new javax.swing.JDialog(owner, "Экспорт/импорт библиотек", true);
-            dlg.getContentPane().add(new LibraryExportImportPanel(model));
-            dlg.pack();
-            dlg.setLocationRelativeTo(owner);
-            dlg.setVisible(true);
-        });
-        menu.add(exportImportLib);
+        JMenuItem librarySync = new JMenuItem("Синхронизировать библиотеку…");
+        librarySync.setToolTipText("Забрать обновления общей библиотеки с сервера — анонимно, только чтение"
+                + " (первый шаг синхронизации клиент-сервер, без входа в аккаунт)");
+        librarySync.addActionListener(e -> LibrarySyncDialog.show(owner, model, settings));
+        menu.add(librarySync);
+
+        JMenuItem moderation = new JMenuItem("Модерация предложений…");
+        moderation.setToolTipText("Список предложений в общую библиотеку, ожидающих решения — нужна роль"
+                + " модератора/админа (Настройки → Аккаунт…)");
+        moderation.addActionListener(e -> ModerationDialog.show(owner, settings));
+        menu.add(moderation);
+
+        JMenuItem cloudProjects = new JMenuItem("Облачные проекты…");
+        cloudProjects.setToolTipText("Загрузить/скачать свои проекты целиком на сервер — нужен вход в аккаунт"
+                + " (Настройки → Аккаунт…), но подойдёт любая роль");
+        cloudProjects.addActionListener(e -> CloudProjectsDialog.show(owner, model, settings));
+        menu.add(cloudProjects);
 
         // Импорт из NovaLCT (.scr) временно отключён из меню — формат разобран лишь
         // частично (см. NovaLctScrParser/NovaLctImportDialog), доработка в следующих
         // версиях. Классы намеренно оставлены нетронутыми для продолжения работы.
 
-        // Экспорт шаблона NovaLCT (.scr) — тоже временно отключён из меню: реальный
-        // NovaLCT отвечает "Failed to load screen information file!" на файлы ОБОИХ
-        // сгенерированных вариантов (Standard и Complex Screen), т.е. реверс-инжиниринг
-        // формата (см. NovaLctScrWriter) пока недостаточен для рабочего экспорта.
-        // Классы намеренно оставлены нетронутыми для продолжения работы.
+        // Единственный пункт экспорта в NovaLCT — контроллер-центричный
+        // (NovaLctControllerExportDialog): старый, привязанный к одному экрану
+        // (NovaLctExportDialog), убран из меню и удалён — этот пункт полностью его
+        // покрывает (если контроллер трогает ровно один экран, идёт тем же прямым
+        // путём NovaLctScrWriter.write, см. class-javadoc диалога), плюс умеет
+        // несколько экранов сразу (LCTPresetMaster). И Standard, и Complex Screen
+        // полностью реверс-инжинирены (декомпиляция + побайтовое совпадение с
+        // реальными файлами NovaLCT).
+        JMenuItem novaLctControllerExport = new JMenuItem("Экспорт NovaLCT для контроллера…");
+        novaLctControllerExport.addActionListener(e ->
+                com.vjstb.ledscheme.ui.NovaLctControllerExportDialog.showExportFlow(owner, model));
+        menu.add(novaLctControllerExport);
+
+        JMenuItem cabinetConfig = new JMenuItem("Скачать конфиг приёмной карты…");
+        cabinetConfig.setToolTipText("Файл настроек приёмной карты NovaLCT (.rcfgx) для типа кабинета —"
+                + " по герцовке и требуемой яркости, из общей библиотеки на сервере");
+        cabinetConfig.addActionListener(e -> CabinetConfigPickerDialog.show(owner, model));
+        menu.add(cabinetConfig);
 
         JMenuItem videoTiming = new JMenuItem("Калькулятор видеотайминга…");
         videoTiming.setToolTipText("Расчёт частоты пикселей (VESA CVT/CVT-RB/CVT-RBv2) и проверка, помещается ли"
@@ -98,12 +130,12 @@ public class MainMenuBar extends JMenuBar {
         videoTiming.addActionListener(e -> new VideoTimingCalculatorDialog(owner).setVisible(true));
         menu.add(videoTiming);
 
-        menu.addSeparator();
-        JMenuItem admin = new JMenuItem("Админ-режим…");
-        admin.setToolTipText("Справочник видов интерфейса/версий, подкатегории оборудования, тексты"
-                + " Руководства/Приветствия — заготовка под будущую серверную интеграцию");
-        admin.addActionListener(e -> new AdminDialog(owner, model, settings).setVisible(true));
-        menu.add(admin);
+        JMenuItem projectorCalc = new JMenuItem("Калькулятор проектора…");
+        projectorCalc.setToolTipText("Расчёт требуемого throw ratio объектива, диапазона дистанции и"
+                + " освещённости экрана по ANSI-люменам/gain — с экспортом проектора в спецификацию проекта");
+        projectorCalc.addActionListener(e ->
+                new com.vjstb.ledscheme.ui.ProjectorCalculatorDialog(owner, model).setVisible(true));
+        menu.add(projectorCalc);
 
         return menu;
     }

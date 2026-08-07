@@ -1,93 +1,157 @@
 package com.vjstb.ledscheme.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Корневой контейнер данных приложения: библиотека кабинетов + проекты.
- * Сериализуется целиком в локальный JSON-файл.
+ * Корневой контейнер данных приложения: проекты пользователя. Сериализуется в
+ * локальный JSON-файл (см. store.WorkspaceStore) отдельно от общей библиотеки
+ * (см. {@link Library}/store.LibraryStore) — разделение нужно для будущей
+ * синхронизации библиотеки с сервером (v2.0) независимо от проектов.
+ *
+ * <p>Библиотечные геттеры/сеттеры ниже сохранены с прежними сигнатурами и просто
+ * делегируют во внутренний {@link #library} — это позволяет всему остальному
+ * коду (UI/рендеринг/экспорт), который годами обращался к
+ * {@code workspace.getCabinetTypes()}/{@code cabinetTypeById()} напрямую,
+ * продолжать работать без изменений после разделения хранения на два файла.
+ * Jackson определяет сериализуемые свойства по ИМЕНАМ get/set-методов, а не по
+ * полям — поэтому одного {@code @JsonIgnore} на поле {@link #library} мало:
+ * делегирующие методы всё равно создают для Jackson свойства "cabinetTypes" и
+ * т.д. Явно перечисляем их в {@link JsonIgnoreProperties}, иначе они снова
+ * попадут в workspace.json прямо через геттеры, в обход поля.
  */
+@JsonIgnoreProperties({"cabinetTypes", "controllerTypes", "equipmentPresets", "cableTypes", "interfaceTypes",
+        "cableLengthProfiles",
+        "sharedCabinetTypes", "sharedControllerTypes", "sharedEquipmentPresets", "sharedCableTypes",
+        "sharedInterfaceTypes", "sharedCableLengthProfiles",
+        "customEquipmentCategories", "equipmentCategoryLabelOverrides"})
 public class Workspace {
 
-    private List<CabinetType> cabinetTypes = new ArrayList<>();
-    /** Библиотека типов контроллеров (аналог SmartLCT: модель, число портов, лимит на порт). */
-    private List<ControllerType> controllerTypes = new ArrayList<>();
-    /** Библиотека пресетов оборудования (медиасерверы/видеопроцессоры/конвертеры и т.д.)
-     *  для быстрой вставки узлов общей схемы. */
-    private List<EquipmentPreset> equipmentPresets = new ArrayList<>();
-    /** Библиотека пользовательских кабелей/переходников (например «CEE 16A →
-     *  TrueCON») — дополняет встроенные пресеты в WireLabelDialog/PowerConnectorsConfigDialog. */
-    private List<CableType> cableTypes = new ArrayList<>();
-    /** Справочник видов интерфейса (HDMI/DisplayPort/SDI/...) и их версий — общий
-     *  для карт оборудования, кабелей и подписи связи схемы (см. InterfaceType). */
-    private List<InterfaceType> interfaceTypes = new ArrayList<>();
-    /** Админ-редактируемые подкатегории оборудования под "Прочее оборудование" —
-     *  см. EquipmentPreset.customCategoryLabel/AdminDialog. */
-    private List<String> customEquipmentCategories = new ArrayList<>();
-    /** Переопределение ПОДПИСИ встроенной категории оборудования (см. SchemaNodeType),
-     *  ключ — имя константы enum (SOURCE, DISTRO, ...), значение — новый текст,
-     *  который видит пользователь (см. AppModel.categoryLabel). Сам список категорий
-     *  фиксирован — сюда попадают только переименованные, остальные просто
-     *  отсутствуют в карте и используют SchemaNodeType.getLabel() как есть. */
-    private Map<String, String> equipmentCategoryLabelOverrides = new LinkedHashMap<>();
+    @JsonIgnore
+    private Library library = new Library();
     private List<Project> projects = new ArrayList<>();
 
+    public Library getLibrary() {
+        return library;
+    }
+
+    public void setLibrary(Library library) {
+        this.library = library == null ? new Library() : library;
+    }
+
     public List<CabinetType> getCabinetTypes() {
-        return cabinetTypes;
+        return library.getCabinetTypes();
     }
 
     public void setCabinetTypes(List<CabinetType> cabinetTypes) {
-        this.cabinetTypes = cabinetTypes;
+        library.setCabinetTypes(cabinetTypes);
     }
 
     public List<ControllerType> getControllerTypes() {
-        return controllerTypes;
+        return library.getControllerTypes();
     }
 
     public void setControllerTypes(List<ControllerType> controllerTypes) {
-        this.controllerTypes = controllerTypes;
+        library.setControllerTypes(controllerTypes);
     }
 
     public List<EquipmentPreset> getEquipmentPresets() {
-        return equipmentPresets;
+        return library.getEquipmentPresets();
     }
 
     public void setEquipmentPresets(List<EquipmentPreset> equipmentPresets) {
-        this.equipmentPresets = equipmentPresets;
+        library.setEquipmentPresets(equipmentPresets);
     }
 
     public List<CableType> getCableTypes() {
-        return cableTypes;
+        return library.getCableTypes();
     }
 
     public void setCableTypes(List<CableType> cableTypes) {
-        this.cableTypes = cableTypes;
+        library.setCableTypes(cableTypes);
     }
 
     public List<InterfaceType> getInterfaceTypes() {
-        return interfaceTypes;
+        return library.getInterfaceTypes();
     }
 
     public void setInterfaceTypes(List<InterfaceType> interfaceTypes) {
-        this.interfaceTypes = interfaceTypes;
+        library.setInterfaceTypes(interfaceTypes);
     }
 
-    public List<String> getCustomEquipmentCategories() {
-        return customEquipmentCategories;
+    public List<CableLengthProfile> getCableLengthProfiles() {
+        return library.getCableLengthProfiles();
     }
 
-    public void setCustomEquipmentCategories(List<String> customEquipmentCategories) {
-        this.customEquipmentCategories = customEquipmentCategories;
+    public void setCableLengthProfiles(List<CableLengthProfile> cableLengthProfiles) {
+        library.setCableLengthProfiles(cableLengthProfiles);
     }
 
-    public Map<String, String> getEquipmentCategoryLabelOverrides() {
-        return equipmentCategoryLabelOverrides;
+    public List<CabinetType> getSharedCabinetTypes() {
+        return library.getSharedCabinetTypes();
     }
 
-    public void setEquipmentCategoryLabelOverrides(Map<String, String> equipmentCategoryLabelOverrides) {
-        this.equipmentCategoryLabelOverrides = equipmentCategoryLabelOverrides;
+    public void setSharedCabinetTypes(List<CabinetType> sharedCabinetTypes) {
+        library.setSharedCabinetTypes(sharedCabinetTypes);
+    }
+
+    public List<ControllerType> getSharedControllerTypes() {
+        return library.getSharedControllerTypes();
+    }
+
+    public void setSharedControllerTypes(List<ControllerType> sharedControllerTypes) {
+        library.setSharedControllerTypes(sharedControllerTypes);
+    }
+
+    public List<EquipmentPreset> getSharedEquipmentPresets() {
+        return library.getSharedEquipmentPresets();
+    }
+
+    public void setSharedEquipmentPresets(List<EquipmentPreset> sharedEquipmentPresets) {
+        library.setSharedEquipmentPresets(sharedEquipmentPresets);
+    }
+
+    public List<CableType> getSharedCableTypes() {
+        return library.getSharedCableTypes();
+    }
+
+    public void setSharedCableTypes(List<CableType> sharedCableTypes) {
+        library.setSharedCableTypes(sharedCableTypes);
+    }
+
+    public List<InterfaceType> getSharedInterfaceTypes() {
+        return library.getSharedInterfaceTypes();
+    }
+
+    public void setSharedInterfaceTypes(List<InterfaceType> sharedInterfaceTypes) {
+        library.setSharedInterfaceTypes(sharedInterfaceTypes);
+    }
+
+    public List<CableLengthProfile> getSharedCableLengthProfiles() {
+        return library.getSharedCableLengthProfiles();
+    }
+
+    public void setSharedCableLengthProfiles(List<CableLengthProfile> sharedCableLengthProfiles) {
+        library.setSharedCableLengthProfiles(sharedCableLengthProfiles);
+    }
+
+    public Map<String, String> getServerCustomEquipmentCategoriesById() {
+        return library.getServerCustomEquipmentCategoriesById();
+    }
+
+    public void setServerCustomEquipmentCategoriesById(Map<String, String> serverCustomEquipmentCategoriesById) {
+        library.setServerCustomEquipmentCategoriesById(serverCustomEquipmentCategoriesById);
+    }
+
+    public Map<String, String> getServerEquipmentCategoryLabels() {
+        return library.getServerEquipmentCategoryLabels();
+    }
+
+    public void setServerEquipmentCategoryLabels(Map<String, String> serverEquipmentCategoryLabels) {
+        library.setServerEquipmentCategoryLabels(serverEquipmentCategoryLabels);
     }
 
     public List<Project> getProjects() {
@@ -99,26 +163,10 @@ public class Workspace {
     }
 
     public CabinetType cabinetTypeById(String id) {
-        if (id == null) {
-            return null;
-        }
-        for (CabinetType ct : cabinetTypes) {
-            if (ct.getId().equals(id)) {
-                return ct;
-            }
-        }
-        return null;
+        return library.cabinetTypeById(id);
     }
 
     public ControllerType controllerTypeById(String id) {
-        if (id == null) {
-            return null;
-        }
-        for (ControllerType ct : controllerTypes) {
-            if (ct.getId().equals(id)) {
-                return ct;
-            }
-        }
-        return null;
+        return library.controllerTypeById(id);
     }
 }

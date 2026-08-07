@@ -7,4 +7,4 @@
 1.3|v1.3|yes|
 1.4|v1.4|yes|
 1.5|v1.5|yes|
-1.6|v1.6|yes|
+1.6|v1.6|yes|экспорт NovaLCT для контроллера + LCTPresetMaster (несколько экранов, Complex Screen)

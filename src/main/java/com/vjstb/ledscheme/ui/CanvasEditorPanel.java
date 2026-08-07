@@ -36,9 +36,6 @@ import javax.swing.JPanel;
 public class CanvasEditorPanel extends JPanel {
 
     private static final int PADDING = 24;
-    /** Порог прилипания в экранных пикселях редактора (не в px канваса) — не зависит
-     *  от текущего масштаба, поэтому одинаково удобен и при мелком, и при крупном канвасе. */
-    private static final int SNAP_THRESHOLD_SCREEN_PX = 10;
 
     private final AppModel model;
     private final SettingsManager settings;
@@ -48,8 +45,13 @@ public class CanvasEditorPanel extends JPanel {
     private CanvasPlacement dragging;
     private double dragOffXpx, dragOffYpx;
     private CanvasPlacement selected;
+    /** Экранные px направляющей (см. snap()/drawSnapGuides) — null, если сейчас
+     *  прилипания по этой оси нет (свободное перетаскивание или цель не найдена). */
+    private Integer snapGuideScreenX;
+    private Integer snapGuideScreenY;
 
-    /** Кэш отрендеренных масок по id экрана — тот же PixelGridRenderer.renderMask,
+    /** Кэш отрендеренных масок по id РАЗМЕЩЕНИЯ (не экрана — у каждого размещения
+     *  своя настройка маски, см. CanvasPlacement) — тот же PixelGridRenderer.renderMask,
      *  что и настоящий экспорт (превью не «похоже», а РОВНО то же изображение,
      *  просто уменьшенное), но пересчитывать его на каждый repaint() было бы
      *  расточительно во время перетаскивания размещения мышью (repaint() при
@@ -63,6 +65,14 @@ public class CanvasEditorPanel extends JPanel {
         this.settings = settings;
         setBackground(Palette.BG);
         setFocusable(true);
+        // Лого маски — настройка профиля пользователя (см. UserProfile.maskLogoImagePath),
+        // не самого канваса/модели — без этого смена лого в «Предпочтениях» не была бы
+        // видна на уже открытом холсте, пока не произойдёт какое-то ДРУГОЕ изменение
+        // модели (случайно сбрасывающее maskCache целиком, см. setCanvas()).
+        settings.addListener(() -> {
+            maskCache.clear();
+            repaint();
+        });
 
         MouseAdapter mouse = new MouseAdapter() {
             @Override
@@ -101,6 +111,9 @@ public class CanvasEditorPanel extends JPanel {
                         nx = snapped[0];
                         ny = snapped[1];
                     }
+                } else {
+                    snapGuideScreenX = null;
+                    snapGuideScreenY = null;
                 }
                 dragging.setX(nx);
                 dragging.setY(ny);
@@ -109,6 +122,8 @@ public class CanvasEditorPanel extends JPanel {
 
             @Override
             public void mouseReleased(MouseEvent e) {
+                snapGuideScreenX = null;
+                snapGuideScreenY = null;
                 if (dragging != null) {
                     model.movePlacement(dragging, dragging.getX(), dragging.getY());
                     dragging = null;
@@ -147,25 +162,16 @@ public class CanvasEditorPanel extends JPanel {
         this.onChanged = onChanged != null ? onChanged : () -> { };
     }
 
-    public CanvasPlacement getSelected() {
-        return selected;
-    }
-
-    public void deleteSelected() {
-        if (selected != null && canvas != null) {
-            model.removePlacement(canvas, selected.getId());
-            selected = null;
-            onChanged.run();
-            repaint();
-        }
-    }
-
     /** Прилипание (nx,ny) — верхнего левого угла перетаскиваемого размещения (w×h px
      *  канваса) — к ближайшим краям других размещений и краям канваса, и опционально
-     *  к центру канваса (настройка профиля). Порог задан в экранных пикселях
-     *  редактора и переводится в px канваса через текущий scale. */
+     *  к центру канваса (настройка профиля). Порог и сила — из «Предпочтений»
+     *  (единые для всех канвасов с прилипанием), порог задан в экранных пикселях
+     *  редактора и переводится в px канваса через текущий scale. Побочный эффект —
+     *  выставляет snapGuideScreenX/Y (в экранных px, для drawSnapGuides). */
     private int[] snap(int nx, int ny, int w, int h, double scale) {
-        double thresholdCanvasPx = SNAP_THRESHOLD_SCREEN_PX / scale;
+        snapGuideScreenX = null;
+        snapGuideScreenY = null;
+        double thresholdCanvasPx = settings.activeProfile().getSnapThresholdPx() / scale;
         List<Integer> xTargets = new ArrayList<>();
         List<Integer> yTargets = new ArrayList<>();
         xTargets.add(0);
@@ -196,20 +202,31 @@ public class CanvasEditorPanel extends JPanel {
             yTargets.add(pl.getY() + oh - h);
             yTargets.add(pl.getY() - h);
         }
-        return new int[]{
-                closest(nx, xTargets, thresholdCanvasPx),
-                closest(ny, yTargets, thresholdCanvasPx)
-        };
+        int strength = settings.activeProfile().getSnapStrengthPercent();
+        int snappedX = closest(nx, xTargets, thresholdCanvasPx, strength, true, scale);
+        int snappedY = closest(ny, yTargets, thresholdCanvasPx, strength, false, scale);
+        return new int[]{snappedX, snappedY};
     }
 
-    private static int closest(int value, List<Integer> targets, double threshold) {
+    private int closest(int value, List<Integer> targets, double threshold, int strengthPercent,
+                         boolean isXAxis, double scale) {
         int best = value;
         double bestDist = threshold;
+        Integer bestTarget = null;
         for (int t : targets) {
             double d = Math.abs(t - value);
             if (d < bestDist) {
                 bestDist = d;
-                best = t;
+                bestTarget = t;
+            }
+        }
+        if (bestTarget != null) {
+            best = (int) Math.round(SnapMath.blend(value, bestTarget, strengthPercent));
+            int guideScreenPx = (int) Math.round(PADDING + bestTarget * scale);
+            if (isXAxis) {
+                snapGuideScreenX = guideScreenPx;
+            } else {
+                snapGuideScreenY = guideScreenPx;
             }
         }
         return best;
@@ -305,8 +322,9 @@ public class CanvasEditorPanel extends JPanel {
             // отмасштабированная под текущий вид канваса — вместо плоского
             // прямоугольника-заглушки видно реальный чек-борд, цвет пресета,
             // сетку и подписи кабинетов, как это будет выглядеть у контентщика.
-            BufferedImage maskImg = maskCache.computeIfAbsent(scr.getId(),
-                    id -> PixelGridRenderer.renderMask(scr, type, model.getWorkspace()));
+            BufferedImage maskImg = maskCache.computeIfAbsent(pl.getId(),
+                    id -> PixelGridRenderer.renderMask(scr, type, model.getWorkspace(),
+                            PixelGridRenderer.GridRenderOptions.of(scr, pl, canvas, settings)));
             g2.drawImage(maskImg, x, y, w, h, null);
             g2.setColor(isSelected ? Color.WHITE : Palette.BORDER);
             g2.setStroke(new BasicStroke(isSelected ? 2.5f : 1.4f));
@@ -335,6 +353,25 @@ public class CanvasEditorPanel extends JPanel {
         g2.drawString(canvas.getName() + " — " + canvas.getWidthPx() + "×" + canvas.getHeightPx() + " px",
                 PADDING, PADDING + ch + 16);
 
+        drawSnapGuides(g2, PADDING, PADDING, cw, ch);
+
         g2.dispose();
+    }
+
+    /** Направляющие линии Shift-прилипания (см. snap()) — тот же стиль, что и в
+     *  SchemaCanvasPanel ("как в yEd Graph Editor"), но в границах видимого канваса,
+     *  а не всего компонента (вокруг канваса есть поля с подписями). */
+    private void drawSnapGuides(Graphics2D g2, int left, int top, int width, int height) {
+        if (snapGuideScreenX == null && snapGuideScreenY == null) {
+            return;
+        }
+        g2.setColor(Color.MAGENTA);
+        g2.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 0, new float[]{4, 4}, 0));
+        if (snapGuideScreenX != null) {
+            g2.drawLine(snapGuideScreenX, top, snapGuideScreenX, top + height);
+        }
+        if (snapGuideScreenY != null) {
+            g2.drawLine(left, snapGuideScreenY, left + width, snapGuideScreenY);
+        }
     }
 }

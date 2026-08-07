@@ -11,21 +11,21 @@ import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.store.WorkspaceStore;
 import com.vjstb.ledscheme.ui.ResolumePresetExporter;
 import java.io.File;
+import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /** Проверка по образцу реального рабочего файла Resolume, присланного пользователем
  *  (канвас 3584×1280 с тремя размещёнными экранами Left_Portal/Center/Right_Portal). */
 class ResolumePresetExporterTest {
 
-    private static AppModel newModel() {
-        File f = new File(System.getProperty("java.io.tmpdir"), "vjstb_resolume_test_" + System.nanoTime() + ".json");
-        f.deleteOnExit();
-        return new AppModel(new WorkspaceStore(f));
+    private static AppModel newModel(Path dir) {
+        return new AppModel(new WorkspaceStore(new File(dir.toFile(), "workspace.json")));
     }
 
     @Test
-    void buildsScreenSetupXmlMatchingCanvasLayout() {
-        AppModel model = newModel();
+    void buildsScreenSetupXmlMatchingCanvasLayout(@TempDir Path dir) {
+        AppModel model = newModel(dir);
         CabinetType base = new CabinetType();
         base.setName("Base");
         base.setResolutionWidth(128);

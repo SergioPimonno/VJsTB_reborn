@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
+import com.vjstb.ledscheme.model.CableLengthProfile;
 import com.vjstb.ledscheme.model.CanvasPlacement;
 import com.vjstb.ledscheme.model.CardPort;
 import com.vjstb.ledscheme.model.ContentCanvas;
@@ -17,6 +18,7 @@ import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.Project;
+import com.vjstb.ledscheme.model.ProjectorInstance;
 import com.vjstb.ledscheme.model.SchemaCard;
 import com.vjstb.ledscheme.model.SchemaEdge;
 import com.vjstb.ledscheme.model.SchemaMode;
@@ -31,6 +33,7 @@ import com.vjstb.ledscheme.service.SceneStats;
 import com.vjstb.ledscheme.service.ScreenLogic;
 import com.vjstb.ledscheme.service.ScreenStats;
 import com.vjstb.ledscheme.store.WorkspaceStore;
+import com.vjstb.ledscheme.sync.LibrarySyncClient;
 import java.io.File;
 import java.nio.file.Path;
 import java.util.List;
@@ -431,9 +434,11 @@ class AppModelTest {
         model.selectScene(model.addScene("Сцена"));
         model.addScreen("Экран", type.getId(), 2, 2, 100, 200);
 
-        // новый экземпляр читает тот же файл
-        WorkspaceStore store2 = new WorkspaceStore(file);
-        Workspace reloaded = store2.load();
+        // новый экземпляр (имитация перезапуска приложения) читает те же файлы —
+        // библиотека и проекты хранятся раздельно (см. LibraryStore), поэтому
+        // перечитываем именно через AppModel, а не голый WorkspaceStore.load()
+        AppModel model2 = new AppModel(new WorkspaceStore(file));
+        Workspace reloaded = model2.getWorkspace();
         assertEquals(1, reloaded.getCabinetTypes().size());
         assertEquals(1, reloaded.getProjects().size());
         Screen screen = reloaded.getProjects().get(0).getScenes().get(0).getScreens().get(0);
@@ -1360,6 +1365,39 @@ class AppModelTest {
         assertTrue(model.canvasesForCurrentScene().isEmpty());
     }
 
+    @Test
+    void addProjectorAppendsToCurrentSceneProjectorList(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+
+        ProjectorInstance p = new ProjectorInstance();
+        p.setLabel("Проектор 1");
+        model.addProjector(p);
+
+        assertEquals(1, model.projectorsForCurrentScene().size());
+        assertEquals("Проектор 1", model.getCurrentScene().getProjectors().get(0).getLabel());
+    }
+
+    @Test
+    void deleteProjectorRemovesById(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+
+        ProjectorInstance p = new ProjectorInstance();
+        model.addProjector(p);
+
+        model.deleteProjector(p.getId());
+        assertTrue(model.projectorsForCurrentScene().isEmpty());
+    }
+
+    @Test
+    void addProjectorWithoutSelectedSceneThrows(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        assertTrue(assertThrowsRuntime(() -> model.addProjector(new ProjectorInstance())));
+    }
+
     private static boolean assertThrowsRuntime(Runnable r) {
         try {
             r.run();
@@ -1367,5 +1405,288 @@ class AppModelTest {
         } catch (RuntimeException ex) {
             return true;
         }
+    }
+
+    @Test
+    void librarySyncAddsNewItemWithServerId(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        var dto = new LibrarySyncClient.LibraryItemDto("srv-1", "CABINET", "Synced Cabinet",
+                "{\"name\":\"Synced Cabinet\"}", 5, false);
+
+        AppModel.LibrarySyncSummary summary = model.applyLibrarySyncItems(List.of(dto));
+
+        assertEquals(1, summary.added());
+        assertEquals(0, summary.updated());
+        // Синк пишет в ОБЩУЮ библиотеку (Task #135/v2.0), не в личную.
+        assertEquals(1, model.getWorkspace().getSharedCabinetTypes().size());
+        assertEquals("srv-1", model.getWorkspace().getSharedCabinetTypes().get(0).getId());
+        assertEquals("Synced Cabinet", model.getWorkspace().getSharedCabinetTypes().get(0).getName());
+        assertTrue(model.getWorkspace().getCabinetTypes().isEmpty(), "личная библиотека не тронута синком");
+    }
+
+    @Test
+    void librarySyncUpdatesExistingItemInPlaceByServerId(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-1", "CABINET", "A", "{\"name\":\"A\"}", 5, false)));
+
+        AppModel.LibrarySyncSummary summary = model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-1", "CABINET", "B", "{\"name\":\"B\"}", 6, false)));
+
+        assertEquals(0, summary.added());
+        assertEquals(1, summary.updated());
+        assertEquals(1, model.getWorkspace().getSharedCabinetTypes().size(), "не должно быть дубликата");
+        assertEquals("B", model.getWorkspace().getSharedCabinetTypes().get(0).getName());
+    }
+
+    @Test
+    void librarySyncPromotesMatchingPersonalItemAndUnionStaysSingle(@TempDir Path dir) {
+        // Регрессия на реальный баг: личная библиотека уже содержала "MG12" под
+        // своим локальным id (заведено вручную/до синка); та же запись массово
+        // залита на сервер через админ-консоль под НОВЫМ id (сервер не знает про
+        // локальный id) — синк не должен завести дубликат, а "продвинуть" запись:
+        // общая библиотека получает синхронизированную версию, личная — теряет
+        // свою (Task #135/v2.0: "личная библиотека у каждого нулевая").
+        AppModel model = freshModel(dir);
+        model.addCabinetType(new com.vjstb.ledscheme.model.CabinetType());
+        model.getWorkspace().getCabinetTypes().get(0).setName("MG12");
+        String localId = model.getWorkspace().getCabinetTypes().get(0).getId();
+
+        var dto = new LibrarySyncClient.LibraryItemDto("srv-new-id", "CABINET", "MG12",
+                "{\"name\":\"MG12\"}", 5, false);
+        AppModel.LibrarySyncSummary summary = model.applyLibrarySyncItems(List.of(dto));
+
+        assertEquals(1, summary.added());
+        assertEquals(1, model.getWorkspace().getSharedCabinetTypes().size());
+        assertEquals("srv-new-id", model.getWorkspace().getSharedCabinetTypes().get(0).getId());
+        assertNotEquals(localId, model.getWorkspace().getSharedCabinetTypes().get(0).getId());
+        assertTrue(model.getWorkspace().getCabinetTypes().isEmpty(), "личная запись должна исчезнуть после продвижения");
+        assertEquals(1, model.getCabinetTypes().size(), "объединённый список не должен задублировать");
+        assertEquals("srv-new-id", model.getCabinetTypes().get(0).getId());
+    }
+
+    @Test
+    void librarySyncPromotesMatchingPersonalCableByLabel(@TempDir Path dir) {
+        // Тот же приём продвижения, но для вида с именующим полем getLabel(), а не
+        // getName() — не должен быть завязан только на кабинет-специфичный путь.
+        AppModel model = freshModel(dir);
+        model.addCableType(com.vjstb.ledscheme.model.SchemaMode.POWER, "CEE 16A");
+
+        var dto = new LibrarySyncClient.LibraryItemDto("srv-cable-1", "CABLE", "CEE 16A",
+                "{\"mode\":\"POWER\",\"label\":\"CEE 16A\"}", 5, false);
+        model.applyLibrarySyncItems(List.of(dto));
+
+        assertEquals(1, model.getWorkspace().getSharedCableTypes().size());
+        assertTrue(model.getWorkspace().getCableTypes().isEmpty(), "личная запись должна исчезнуть после продвижения");
+        assertEquals(1, model.getCableTypes().size());
+        assertEquals("srv-cable-1", model.getCableTypes().get(0).getId());
+    }
+
+    @Test
+    void unionGetterShowsBothSharedAndPersonal(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.addCabinetType(new com.vjstb.ledscheme.model.CabinetType());
+        model.getWorkspace().getCabinetTypes().get(0).setName("Personal-A");
+        model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-1", "CABINET", "Shared-B", "{\"name\":\"Shared-B\"}", 5, false)));
+
+        assertEquals(2, model.getCabinetTypes().size());
+        assertTrue(model.getCabinetTypes().stream().anyMatch(c -> c.getName().equals("Personal-A")));
+        assertTrue(model.getCabinetTypes().stream().anyMatch(c -> c.getName().equals("Shared-B")));
+        assertTrue(model.isSharedCabinetType(model.getWorkspace().getSharedCabinetTypes().get(0).getId()));
+        assertFalse(model.isSharedCabinetType(model.getWorkspace().getCabinetTypes().get(0).getId()));
+    }
+
+    @Test
+    void addCabinetTypeNeverTouchesSharedList(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-1", "CABINET", "Shared-B", "{\"name\":\"Shared-B\"}", 5, false)));
+
+        model.addCabinetType(new com.vjstb.ledscheme.model.CabinetType());
+        model.getWorkspace().getCabinetTypes().get(0).setName("Personal-A");
+
+        assertEquals(1, model.getWorkspace().getSharedCabinetTypes().size());
+        assertEquals(1, model.getWorkspace().getCabinetTypes().size());
+    }
+
+    @Test
+    void cableLengthProfileCrud(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CableLengthProfile p = new CableLengthProfile();
+        p.setName("XLR");
+        p.setAvailableLengthsM(List.of(10.0, 20.0, 30.0));
+        p.setMarginPercent(10);
+
+        model.addCableLengthProfile(p);
+        assertEquals(1, model.getCableLengthProfiles().size());
+        assertNotNull(model.cableLengthProfileByName("xlr"), "поиск должен быть без учёта регистра");
+
+        assertThrowsRuntime(() -> {
+            CableLengthProfile dup = new CableLengthProfile();
+            dup.setName("XLR");
+            model.addCableLengthProfile(dup);
+        });
+
+        CableLengthProfile edited = p.copy();
+        edited.setMarginPercent(15);
+        model.updateCableLengthProfile(edited);
+        assertEquals(15, model.getCableLengthProfiles().get(0).getMarginPercent());
+
+        model.deleteCableLengthProfile(p.getId());
+        assertTrue(model.getCableLengthProfiles().isEmpty());
+    }
+
+    @Test
+    void librarySyncAddsCableLengthProfile(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        var dto = new LibrarySyncClient.LibraryItemDto("srv-clp-1", "CABLE_LENGTH_PROFILE", "XLR",
+                "{\"name\":\"XLR\",\"availableLengthsM\":[10.0,20.0],\"marginPercent\":10.0}", 5, false);
+
+        AppModel.LibrarySyncSummary summary = model.applyLibrarySyncItems(List.of(dto));
+
+        assertEquals(1, summary.added());
+        assertEquals(1, model.getCableLengthProfiles().size());
+        assertEquals("srv-clp-1", model.getCableLengthProfiles().get(0).getId());
+        assertEquals("XLR", model.getCableLengthProfiles().get(0).getName());
+        assertEquals(List.of(10.0, 20.0), model.getCableLengthProfiles().get(0).getAvailableLengthsM());
+    }
+
+    @Test
+    void librarySyncSkipsDeletedItemsWithoutTouchingLocalLibrary(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        var dto = new LibrarySyncClient.LibraryItemDto("srv-1", "CABINET", "Ghost", "{}", 5, true);
+
+        AppModel.LibrarySyncSummary summary = model.applyLibrarySyncItems(List.of(dto));
+
+        assertEquals(0, summary.added());
+        assertEquals(0, summary.updated());
+        assertEquals(1, summary.skippedDeleted());
+        assertTrue(model.getWorkspace().getCabinetTypes().isEmpty());
+    }
+
+    @Test
+    void librarySyncAppliesInteractiveScenarios(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        var dto = new LibrarySyncClient.LibraryItemDto("global-interactive-scenarios", "INTERACTIVE_SCENARIOS",
+                "Интерактивные сценарии",
+                "{\"scenarios\":[{\"id\":\"s1\",\"title\":\"Первый запуск\",\"steps\":["
+                        + "{\"title\":\"Шаг 1\",\"bodyHtml\":\"Нажмите сюда\",\"imageBase64\":\"AAA=\","
+                        + "\"hotspotX\":0.1,\"hotspotY\":0.2,\"hotspotWidth\":0.3,\"hotspotHeight\":0.4},"
+                        + "{\"title\":\"Шаг 2\",\"bodyHtml\":\"Готово\"}]}]}", 5, false);
+
+        AppModel.LibrarySyncSummary summary = model.applyLibrarySyncItems(List.of(dto));
+
+        assertEquals(1, summary.added());
+        List<com.vjstb.ledscheme.model.Scenario> scenarios = model.getWorkspace().getLibrary().getInteractiveScenarios();
+        assertEquals(1, scenarios.size());
+        assertEquals("Первый запуск", scenarios.get(0).getTitle());
+        assertEquals(2, scenarios.get(0).getSteps().size());
+        com.vjstb.ledscheme.model.ScenarioStep step1 = scenarios.get(0).getSteps().get(0);
+        assertTrue(step1.hasHotspot());
+        assertEquals(0.1, step1.getHotspotX());
+        com.vjstb.ledscheme.model.ScenarioStep step2 = scenarios.get(0).getSteps().get(1);
+        assertFalse(step2.hasHotspot(), "шаг без координат хотспота должен требовать кнопку «Далее»");
+    }
+
+    @Test
+    void librarySyncIgnoresUnknownKindWithoutThrowing(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        var dto = new LibrarySyncClient.LibraryItemDto("srv-1", "FUTURE_KIND", "?", "{}", 5, false);
+
+        AppModel.LibrarySyncSummary summary = model.applyLibrarySyncItems(List.of(dto));
+
+        assertEquals(0, summary.added());
+        assertEquals(0, summary.updated());
+        assertEquals(0, summary.skippedDeleted());
+    }
+
+    @Test
+    void librarySyncMatchesSharedItemByNameWhenReuploadedUnderNewServerId(@TempDir Path dir) {
+        // Регрессия на сценарий из комментария applyOne(): запись уже есть в общей
+        // библиотеке (заведена предыдущим синком под id "srv-1"), затем та же запись
+        // массово перезалита на сервер через админ-консоль под НОВЫМ id "srv-2" (ре-
+        // импорт не сохраняет исходные id) — синк должен найти её по имени и обновить
+        // на месте, а не завести второй экземпляр в общей библиотеке.
+        AppModel model = freshModel(dir);
+        model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-1", "CABINET", "MG5", "{\"name\":\"MG5\"}", 5, false)));
+
+        AppModel.LibrarySyncSummary summary = model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-2", "CABINET", "MG5", "{\"name\":\"MG5\"}", 6, false)));
+
+        assertEquals(0, summary.added());
+        assertEquals(1, summary.updated());
+        assertEquals(1, model.getWorkspace().getSharedCabinetTypes().size(), "не должно быть дубликата в общей библиотеке");
+        assertEquals("srv-2", model.getWorkspace().getSharedCabinetTypes().get(0).getId(),
+                "запись должна принять новый id сервера, а не остаться под старым");
+    }
+
+    @Test
+    void librarySyncNameMatchIsCaseInsensitive(@TempDir Path dir) {
+        // Тот же приём подбора по имени, но с другим регистром — сверка идёт через
+        // equalsIgnoreCase, иначе "MG5"/"mg5" считались бы разными записями и синк
+        // завёл бы дубликат только из-за регистра.
+        AppModel model = freshModel(dir);
+        model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-1", "CABINET", "MG5", "{\"name\":\"MG5\"}", 5, false)));
+
+        model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-2", "CABINET", "mg5", "{\"name\":\"mg5\"}", 6, false)));
+
+        assertEquals(1, model.getWorkspace().getSharedCabinetTypes().size(),
+                "регистронезависимое совпадение имени не должно создать дубликат");
+    }
+
+    @Test
+    void librarySyncMigratesScreenCabinetTypeReferenceWhenPersonalTypeIsPromoted(@TempDir Path dir) {
+        // Регрессия на реальный баг, найденный на живых данных пользователя:
+        // личный тип кабинета "продвигается" (удаляется из личной библиотеки),
+        // когда та же запись приходит с сервера под новым id — но экран, уже
+        // ссылающийся на СТАРЫЙ id личной записи, оставался с повисшей ссылкой
+        // (мощность/вес считались как 0, экран пропадал из прерига). Синк должен
+        // переносить такие ссылки на новый id общей записи.
+        AppModel model = freshModel(dir);
+        CabinetType personal = sampleType();
+        personal.setName("MG5");
+        personal = model.addCabinetType(personal);
+        String oldId = personal.getId();
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", oldId, 2, 3, 0, 0);
+
+        model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-1", "CABINET", "MG5", "{\"name\":\"MG5\"}", 5, false)));
+
+        assertTrue(model.getWorkspace().getCabinetTypes().isEmpty(), "личная запись должна быть продвинута (удалена)");
+        assertEquals("srv-1", screen.getCabinetTypeId(),
+                "ссылка экрана должна перенестись на новый id общей записи, а не остаться повисшей на старом личном id");
+    }
+
+    @Test
+    void librarySyncMigratesControllerInstanceReferenceWhenPersonalTypeIsPromoted(@TempDir Path dir) {
+        // Тот же перенос ссылок, но для типов контроллеров: ControllerInstance,
+        // уже подключённый к экрану через личный тип, должен остаться рабочим
+        // после того как тот же тип контроллера "продвигается" синком под новым
+        // id общей библиотеки.
+        AppModel model = freshModel(dir);
+        CabinetType cabinetType = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", cabinetType.getId(), 2, 3, 0, 0);
+
+        ControllerType personal = new ControllerType();
+        personal.setName("MCTRL4k");
+        personal.setPortCount(4);
+        personal = model.addControllerType(personal);
+        String oldId = personal.getId();
+        ControllerInstance controller = model.addControllerToScreen(screen, oldId);
+
+        model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-ctrl-1", "CONTROLLER", "MCTRL4k", "{\"name\":\"MCTRL4k\",\"portCount\":4}", 5, false)));
+
+        assertTrue(model.getWorkspace().getControllerTypes().isEmpty(), "личная запись должна быть продвинута (удалена)");
+        assertEquals("srv-ctrl-1", controller.getControllerTypeId(),
+                "ссылка контроллера должна перенестись на новый id общей записи, а не остаться повисшей на старом личном id");
     }
 }

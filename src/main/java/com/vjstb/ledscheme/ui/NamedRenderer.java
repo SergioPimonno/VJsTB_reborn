@@ -12,11 +12,21 @@ public class NamedRenderer<T> extends DefaultListCellRenderer {
 
     private final Function<T, String> title;
     private final Function<T, String> meta;
+    private final Function<T, Boolean> shared;
     private int fixedWidth = -1;
 
     public NamedRenderer(Function<T, String> title, Function<T, String> meta) {
+        this(title, meta, null);
+    }
+
+    /** {@code shared} — если задан и возвращает true для элемента, заголовок
+     *  красится в {@link Palette#LIBRARY_SHARED} вместо обычного цвета текста, вместо
+     *  прежнего текстового префикса "[Общая] " в самом имени (только визуальная
+     *  метка, имя остаётся чистым). */
+    public NamedRenderer(Function<T, String> title, Function<T, String> meta, Function<T, Boolean> shared) {
         this.title = title;
         this.meta = meta;
+        this.shared = shared;
     }
 
     /** Задаёт ширину содержимого ЯВНО, вместо чтения {@code list.getWidth()} —
@@ -43,7 +53,12 @@ public class NamedRenderer<T> extends DefaultListCellRenderer {
             T item = (T) value;
             String metaText = meta != null ? meta.apply(item) : "";
             int w = fixedWidth > 0 ? fixedWidth : list.getWidth();
-            setText("<html><body><b>" + escape(title.apply(item)) + "</b>"
+            boolean isShared = shared != null && Boolean.TRUE.equals(shared.apply(item));
+            String titleHtml = "<b>" + escape(title.apply(item)) + "</b>";
+            if (isShared) {
+                titleHtml = "<font color='" + toHex(Palette.LIBRARY_SHARED) + "'>" + titleHtml + "</font>";
+            }
+            setText("<html><body>" + titleHtml
                     + (metaText.isEmpty() ? "" : "<br><span style='font-size:9px;color:#7d8590;'>" + escape(metaText) + "</span>")
                     + "</body></html>");
             // CSS "width" на <body> сам по себе НЕ ограничивает preferred-размер,
@@ -65,6 +80,10 @@ public class NamedRenderer<T> extends DefaultListCellRenderer {
             }
         }
         return this;
+    }
+
+    private static String toHex(java.awt.Color c) {
+        return String.format("#%06x", c.getRGB() & 0xFFFFFF);
     }
 
     private static String escape(String s) {

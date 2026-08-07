@@ -56,10 +56,6 @@ public class SchemaCanvasPanel extends JPanel {
     private static final double MIN_NODE_H = 44;
     private static final double MIN_SCALE = 0.3;
     private static final double MAX_SCALE = 2.5;
-    /** Порог привязки (в модельных, т.е. немасштабированных, пикселях) при
-     *  Shift-перетаскивании узла к краю/центру другого узла — см. snapPosition. */
-    private static final double SNAP_THRESHOLD = 8;
-
     private final AppModel model;
     private final SchemaMode mode;
     private final com.vjstb.ledscheme.settings.SettingsManager settings;
@@ -585,15 +581,20 @@ public class SchemaCanvasPanel extends JPanel {
      *  время перетаскивания — см. mouseDragged), как в yEd Graph Editor: кандидатные
      *  координаты (левый край/центр/правый край по X, верх/центр/низ по Y)
      *  сравниваются с такими же координатами остальных узлов, и если расстояние
-     *  меньше SNAP_THRESHOLD — позиция подтягивается ровно к линии другого узла.
-     *  Побочный эффект — выставляет snapGuideX/snapGuideY для отрисовки направляющей. */
+     *  меньше порога (настройка профиля, единая для всех канвасов с прилипанием) —
+     *  позиция подтягивается к линии другого узла — на всю силу («сила
+     *  прилипания» = 100%) или частично (см. SnapMath.blend). Побочный эффект —
+     *  выставляет snapGuideX/snapGuideY (ТОЧНУЮ, не смешанную координату цели) для
+     *  отрисовки направляющей. */
     private double[] snapPosition(SchemaNode moving, double candidateX, double candidateY) {
         snapGuideX = null;
         snapGuideY = null;
+        double threshold = settings.activeProfile().getSnapThresholdPx();
+        int strength = settings.activeProfile().getSnapStrengthPercent();
         double w = moving.getWidth(), h = moving.getHeight();
         double[] xCandidates = {candidateX, candidateX + w / 2, candidateX + w};
         double[] yCandidates = {candidateY, candidateY + h / 2, candidateY + h};
-        double bestDx = SNAP_THRESHOLD, bestDy = SNAP_THRESHOLD;
+        double bestDx = threshold, bestDy = threshold;
         double snappedX = candidateX, snappedY = candidateY;
         for (SchemaNode other : nodes()) {
             if (other == moving) {
@@ -607,7 +608,7 @@ public class SchemaCanvasPanel extends JPanel {
                     double d = Math.abs(xc - ox);
                     if (d < bestDx) {
                         bestDx = d;
-                        snappedX = candidateX + (ox - xc);
+                        snappedX = SnapMath.blend(candidateX, candidateX + (ox - xc), strength);
                         snapGuideX = ox;
                     }
                 }
@@ -617,7 +618,7 @@ public class SchemaCanvasPanel extends JPanel {
                     double d = Math.abs(yc - oy);
                     if (d < bestDy) {
                         bestDy = d;
-                        snappedY = candidateY + (oy - yc);
+                        snappedY = SnapMath.blend(candidateY, candidateY + (oy - yc), strength);
                         snapGuideY = oy;
                     }
                 }
@@ -635,7 +636,9 @@ public class SchemaCanvasPanel extends JPanel {
                                            double candidateX, double candidateY) {
         snapGuideX = null;
         snapGuideY = null;
-        double bestDx = SNAP_THRESHOLD, bestDy = SNAP_THRESHOLD;
+        double threshold = settings.activeProfile().getSnapThresholdPx();
+        int strength = settings.activeProfile().getSnapStrengthPercent();
+        double bestDx = threshold, bestDy = threshold;
         double snappedX = candidateX, snappedY = candidateY;
         for (SchemaNode other : nodes()) {
             double ow = other.getWidth(), oh = other.getHeight();
@@ -643,7 +646,7 @@ public class SchemaCanvasPanel extends JPanel {
                 double d = Math.abs(candidateX - ox);
                 if (d < bestDx) {
                     bestDx = d;
-                    snappedX = ox;
+                    snappedX = SnapMath.blend(candidateX, ox, strength);
                     snapGuideX = ox;
                 }
             }
@@ -651,7 +654,7 @@ public class SchemaCanvasPanel extends JPanel {
                 double d = Math.abs(candidateY - oy);
                 if (d < bestDy) {
                     bestDy = d;
-                    snappedY = oy;
+                    snappedY = SnapMath.blend(candidateY, oy, strength);
                     snapGuideY = oy;
                 }
             }
@@ -666,13 +669,13 @@ public class SchemaCanvasPanel extends JPanel {
                 double dx = Math.abs(candidateX - wp.getX());
                 if (dx < bestDx) {
                     bestDx = dx;
-                    snappedX = wp.getX();
+                    snappedX = SnapMath.blend(candidateX, wp.getX(), strength);
                     snapGuideX = wp.getX();
                 }
                 double dy = Math.abs(candidateY - wp.getY());
                 if (dy < bestDy) {
                     bestDy = dy;
-                    snappedY = wp.getY();
+                    snappedY = SnapMath.blend(candidateY, wp.getY(), strength);
                     snapGuideY = wp.getY();
                 }
             }

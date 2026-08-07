@@ -7,6 +7,7 @@ import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.ScreenLogic;
 import com.vjstb.ledscheme.service.ScreenStats;
+import com.vjstb.ledscheme.settings.SettingsManager;
 import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
 import java.awt.Color;
@@ -37,17 +38,8 @@ public class SceneCanvasPanel extends JPanel {
     /** Ниже этой ширины ячейки кабинета детальная сетка/цепочки уже нечитаемы —
      *  показываем упрощённый прямоугольник с названием, как в обычном обзоре. */
     private static final int DETAIL_MIN_CELL_PX = 5;
-    /** Порог привязки при Shift-перетаскивании кабинета — в ЭКРАННЫХ пикселях (не в
-     *  мм!), переводится в мм через текущий масштаб на месте сравнения (см.
-     *  {@link #snapCabinetOffset}) — тот же приём, что и у CanvasEditorPanel.snap()
-     *  (SNAP_THRESHOLD_SCREEN_PX). Фиксированный порог В ММ (как было раньше — баг-
-     *  репорт «привязка не работает вообще») на практике оказывался то слишком тугим,
-     *  то почти неощутимым в зависимости от масштаба прериг-превью: при типичном
-     *  сильном уменьшении (много экранов сразу, режим "по размеру") 15мм — это доля
-     *  экранного пикселя, курсором столько не поймать. */
-    private static final int SNAP_THRESHOLD_SCREEN_PX = 10;
-
     private final AppModel model;
+    private final SettingsManager settings;
     private boolean compact;
     private boolean detailMode;
     private boolean detailPower;
@@ -88,9 +80,17 @@ public class SceneCanvasPanel extends JPanel {
     private double dragCabStartOffX, dragCabStartOffY;
     private int dragCabPressPxX, dragCabPressPxY;
     private boolean dragCabMoved;
+    /** Направляющая привязки кабинета (см. snapCabinetOffset) — в АБСОЛЮТНЫХ мм
+     *  относительно начала сетки экрана (та же система координат, что candAbsX/Y
+     *  внутри snapCabinetOffset), не в экранных px — переводится в px только при
+     *  отрисовке (paintComponent), где уже есть готовый screenBoxes с офсетом
+     *  сетки конкретного экрана в px. null — сейчас нет привязки по этой оси. */
+    private Double snapGuideAbsMmX;
+    private Double snapGuideAbsMmY;
 
-    public SceneCanvasPanel(AppModel model) {
+    public SceneCanvasPanel(AppModel model, SettingsManager settings) {
         this.model = model;
+        this.settings = settings;
         setBackground(Palette.BG);
         MouseAdapter mouse = new MouseAdapter() {
             @Override
@@ -177,6 +177,8 @@ public class SceneCanvasPanel extends JPanel {
             @Override
             public void mouseReleased(MouseEvent e) {
                 lastDragCabId = null;
+                snapGuideAbsMmX = null;
+                snapGuideAbsMmY = null;
                 if (draggingScreen != null) {
                     if (dragScreenMoved) {
                         // Тот же приём, что и у перетаскивания подписи связи в общей схеме
@@ -248,6 +250,9 @@ public class SceneCanvasPanel extends JPanel {
                                 candidateOffX, candidateOffY, sc);
                         candidateOffX = snapped[0];
                         candidateOffY = snapped[1];
+                    } else {
+                        snapGuideAbsMmX = null;
+                        snapGuideAbsMmY = null;
                     }
                     draggingCabinet.setOffsetXMm(candidateOffX);
                     draggingCabinet.setOffsetYMm(candidateOffY);
@@ -697,7 +702,38 @@ public class SceneCanvasPanel extends JPanel {
             g2.drawString("⚠ Экраны перекрываются — проверьте позиции (X/Y) или нажмите «Расставить без наложения»",
                     padding, height - 10);
         }
+
+        drawSnapGuides(g2, screenBoxes, sc, width, height);
+
         g2.dispose();
+    }
+
+    /** Направляющие линии Shift-прилипания кабинета (см. snapCabinetOffset) — тот же
+     *  стиль, что и в SchemaCanvasPanel/CanvasEditorPanel. snapGuideAbsMmX/Y хранят
+     *  цель в мм относительно начала СЕТКИ ЭКРАНА — переводим в экранные px через
+     *  {@code screenBoxes} (тот же offset/масштаб, что уже посчитан для отрисовки
+     *  сетки этого экрана чуть выше в этом же вызове paintComponent). */
+    private void drawSnapGuides(Graphics2D g2, java.util.Map<String, int[]> screenBoxes, double sc,
+                                 int width, int height) {
+        if ((snapGuideAbsMmX == null && snapGuideAbsMmY == null) || draggingCabinetScreen == null) {
+            return;
+        }
+        int[] box = screenBoxes.get(draggingCabinetScreen.getId());
+        if (box == null) {
+            return;
+        }
+        int gridX = box[0];
+        int gridY = box[1];
+        g2.setColor(Color.MAGENTA);
+        g2.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 0, new float[]{4, 4}, 0));
+        if (snapGuideAbsMmX != null) {
+            int x = (int) Math.round(gridX + snapGuideAbsMmX * sc);
+            g2.drawLine(x, 0, x, height);
+        }
+        if (snapGuideAbsMmY != null) {
+            int y = (int) Math.round(gridY + snapGuideAbsMmY * sc);
+            g2.drawLine(0, y, width, y);
+        }
     }
 
     /** Живая отрисовка ЕЩЁ НЕ сохранённой цепочки поверх детальной сетки конкретного
@@ -931,11 +967,19 @@ public class SceneCanvasPanel extends JPanel {
      *  сетка одного экрана). */
     private double[] snapCabinetOffset(Screen s, CabinetInstance cab, double candidateOffX, double candidateOffY,
                                         double sc) {
+        snapGuideAbsMmX = null;
+        snapGuideAbsMmY = null;
         CabinetType t = model.typeOf(s);
         if (t == null || t.getWidthMm() <= 0 || t.getHeightMm() <= 0) {
             return new double[]{candidateOffX, candidateOffY};
         }
-        double thresholdMm = SNAP_THRESHOLD_SCREEN_PX / Math.max(0.0001, sc);
+        // Порог задан в ЭКРАННЫХ пикселях (не в мм!), переводится в мм через текущий
+        // масштаб здесь же — фиксированный порог в мм на практике оказывался то
+        // слишком тугим, то почти неощутимым в зависимости от масштаба прериг-
+        // превью: при сильном уменьшении (много экранов сразу) пара мм — это доля
+        // экранного пикселя, курсором столько не поймать.
+        double thresholdMm = settings.activeProfile().getSnapThresholdPx() / Math.max(0.0001, sc);
+        int strength = settings.activeProfile().getSnapStrengthPercent();
         double myW = t.getWidthMm();
         double myH = t.getHeightMm();
         double candAbsX = cab.getColIndex() * myW + candidateOffX;
@@ -959,19 +1003,29 @@ public class SceneCanvasPanel extends JPanel {
             yTargets.add(nAbsY + myH);
             yTargets.add(nAbsY - myH);
         }
-        double snappedAbsX = closestMm(candAbsX, xTargets, thresholdMm);
-        double snappedAbsY = closestMm(candAbsY, yTargets, thresholdMm);
+        double snappedAbsX = closestMm(candAbsX, xTargets, thresholdMm, strength, true);
+        double snappedAbsY = closestMm(candAbsY, yTargets, thresholdMm, strength, false);
         return new double[]{snappedAbsX - cab.getColIndex() * myW, snappedAbsY - cab.getRowIndex() * myH};
     }
 
-    private static double closestMm(double value, List<Double> targets, double threshold) {
+    private double closestMm(double value, List<Double> targets, double threshold, int strengthPercent,
+                              boolean isXAxis) {
         double best = value;
         double bestDist = threshold;
+        Double bestTarget = null;
         for (double target : targets) {
             double d = Math.abs(target - value);
             if (d < bestDist) {
                 bestDist = d;
-                best = target;
+                bestTarget = target;
+            }
+        }
+        if (bestTarget != null) {
+            best = SnapMath.blend(value, bestTarget, strengthPercent);
+            if (isXAxis) {
+                snapGuideAbsMmX = bestTarget;
+            } else {
+                snapGuideAbsMmY = bestTarget;
             }
         }
         return best;

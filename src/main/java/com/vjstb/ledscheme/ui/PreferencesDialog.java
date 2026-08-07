@@ -5,13 +5,19 @@ import com.vjstb.ledscheme.settings.SettingsManager;
 import java.awt.Component;
 import java.awt.FlowLayout;
 import java.awt.Window;
+import java.io.File;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JDialog;
+import javax.swing.JFileChooser;
+import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JSpinner;
+import javax.swing.SpinnerNumberModel;
+import javax.swing.filechooser.FileNameExtensionFilter;
 
 /**
  * Диалог «Предпочтения»: поведенческие переключатели интерфейса, не связанные
@@ -25,12 +31,15 @@ public class PreferencesDialog extends JDialog {
     private final SettingsManager settings;
     private JCheckBox previewWidgetCheck;
     private JCheckBox canvasSnapToCenterCheck;
+    private JSpinner snapThresholdSpinner;
+    private JSpinner snapStrengthSpinner;
     private JCheckBox socketWiringCheck;
     private JCheckBox foolProofWiringCheck;
     private JCheckBox schemaScreensAsWiringCheck;
     private JCheckBox connectorDisplayModeCheck;
     private JCheckBox connectorsVerticalCheck;
     private JCheckBox loadTrackingCheck;
+    private JLabel maskLogoPathLabel;
 
     public PreferencesDialog(Window owner, SettingsManager settings) {
         super(owner, "Персонализация — предпочтения", ModalityType.MODELESS);
@@ -80,6 +89,27 @@ public class PreferencesDialog extends JDialog {
         canvasSnapToCenterCheck.addActionListener(e ->
                 settings.setCanvasSnapToCenter(canvasSnapToCenterCheck.isSelected()));
         body.add(canvasSnapToCenterCheck);
+
+        JPanel snapRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        snapRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        snapRow.setToolTipText("Общая настройка для холста «Генерация масок», кабинетов внутри экрана и общей"
+                + " схемы: порог — на каком расстоянии начинает притягивать; сила — насколько жёстко (100% —"
+                + " прилипает точно к цели, меньше — курсор лишь частично тянется к ней, не прилипая намертво).");
+        snapRow.add(new JLabel("Прилипание при Shift-перетаскивании — порог (px):"));
+        snapThresholdSpinner = new JSpinner(
+                new SpinnerNumberModel(settings.activeProfile().getSnapThresholdPx(), 2, 40, 1));
+        snapThresholdSpinner.addChangeListener(e ->
+                settings.setSnapThresholdPx((Integer) snapThresholdSpinner.getValue()));
+        MathFields.enableExpressions(snapThresholdSpinner);
+        snapRow.add(snapThresholdSpinner);
+        snapRow.add(new JLabel("сила (%):"));
+        snapStrengthSpinner = new JSpinner(
+                new SpinnerNumberModel(settings.activeProfile().getSnapStrengthPercent(), 10, 100, 5));
+        snapStrengthSpinner.addChangeListener(e ->
+                settings.setSnapStrengthPercent((Integer) snapStrengthSpinner.getValue()));
+        MathFields.enableExpressions(snapStrengthSpinner);
+        snapRow.add(snapStrengthSpinner);
+        body.add(snapRow);
 
         socketWiringCheck = new JCheckBox("Общая схема: линия связи цепляется за конкретный разъём, а не за блок целиком",
                 settings.activeProfile().isSocketWiringEnabled());
@@ -144,12 +174,40 @@ public class PreferencesDialog extends JDialog {
                 settings.setLoadTrackingEnabled(loadTrackingCheck.isSelected()));
         body.add(loadTrackingCheck);
 
+        JPanel logoRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        logoRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        logoRow.setToolTipText("Свой логотип для «Генерация масок»: настраивается один раз здесь и дальше"
+                + " применяется на любом гриде любого проекта, где включён чекбокс «Лого» в таблице гридов.");
+        JButton logoBtn = new JButton("Логотип для масок…");
+        logoBtn.addActionListener(e -> {
+            JFileChooser fc = new JFileChooser();
+            fc.setDialogTitle("Выберите файл логотипа");
+            fc.setFileFilter(new FileNameExtensionFilter("Изображения (PNG, JPG, GIF, BMP)",
+                    "png", "jpg", "jpeg", "gif", "bmp"));
+            String current = settings.activeProfile().getMaskLogoImagePath();
+            if (current != null) {
+                fc.setSelectedFile(new File(current));
+            }
+            if (fc.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+                settings.setMaskLogoImagePath(fc.getSelectedFile().getAbsolutePath());
+            }
+        });
+        JButton logoClearBtn = new JButton("Убрать");
+        logoClearBtn.addActionListener(e -> settings.setMaskLogoImagePath(null));
+        maskLogoPathLabel = new JLabel();
+        logoRow.add(logoBtn);
+        logoRow.add(logoClearBtn);
+        logoRow.add(maskLogoPathLabel);
+        body.add(logoRow);
+
         return (JPanel) UiKit.section("Поведение", body);
     }
 
     private void refresh() {
         previewWidgetCheck.setSelected(settings.activeProfile().isPreviewWidgetEnabled());
         canvasSnapToCenterCheck.setSelected(settings.activeProfile().isCanvasSnapToCenter());
+        snapThresholdSpinner.setValue(settings.activeProfile().getSnapThresholdPx());
+        snapStrengthSpinner.setValue(settings.activeProfile().getSnapStrengthPercent());
         socketWiringCheck.setSelected(settings.activeProfile().isSocketWiringEnabled());
         foolProofWiringCheck.setSelected(settings.activeProfile().isFoolProofWiringEnabled());
         schemaScreensAsWiringCheck.setSelected(settings.activeProfile().isSchemaScreensAsWiringDiagram());
@@ -157,5 +215,7 @@ public class PreferencesDialog extends JDialog {
                 settings.activeProfile().getConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL);
         connectorsVerticalCheck.setSelected(settings.activeProfile().isConnectorsVertical());
         loadTrackingCheck.setSelected(settings.activeProfile().isLoadTrackingEnabled());
+        String logoPath = settings.activeProfile().getMaskLogoImagePath();
+        maskLogoPathLabel.setText(logoPath != null ? new File(logoPath).getName() : "не задан");
     }
 }

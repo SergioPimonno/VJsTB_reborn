@@ -27,8 +27,8 @@ import javax.swing.JTextField;
 public class EquipmentPresetDialog extends JDialog {
 
     /** Сентинел «без подкатегории» в комбобоксе — не может совпасть с реальным
-     *  названием подкатегории (пустая строка запрещена при добавлении, см.
-     *  AppModel.addCustomEquipmentCategory). */
+     *  названием подкатегории (список подкатегорий — общая справочная данные,
+     *  синхронизируется с сервера, см. AppModel.getCustomEquipmentCategories). */
     private static final String NO_SUBCATEGORY = "— без подкатегории —";
 
     private final JComboBox<SchemaNodeType> categoryField = new JComboBox<>(SchemaNodeType.values());
@@ -36,8 +36,10 @@ public class EquipmentPresetDialog extends JDialog {
     private final JTextField descriptionField = new JTextField();
     private final JComboBox<String> subcategoryField = new JComboBox<>();
     private final JLabel subcategoryLabel = new JLabel("Подкатегория");
+    private final JComboBox<String> companyField = new JComboBox<>();
 
-    public record Result(SchemaNodeType category, String name, String description, String customCategoryLabel) {
+    public record Result(SchemaNodeType category, String name, String description, String customCategoryLabel,
+                          String company) {
     }
 
     private Result result;
@@ -54,6 +56,9 @@ public class EquipmentPresetDialog extends JDialog {
     public EquipmentPresetDialog(Window owner, AppModel model, EquipmentPreset existing, SchemaNodeType initialCategory) {
         super(owner, existing == null ? "Новый пресет оборудования" : "Редактирование пресета",
                 ModalityType.APPLICATION_MODAL);
+
+        companyField.setEditable(true);
+        companyField.setModel(new javax.swing.DefaultComboBoxModel<>(model.getKnownCompanies().toArray(new String[0])));
 
         categoryField.setRenderer(new javax.swing.DefaultListCellRenderer() {
             @Override
@@ -84,6 +89,8 @@ public class EquipmentPresetDialog extends JDialog {
         form.add(categoryField);
         form.add(new JLabel("Название"));
         form.add(nameField);
+        form.add(new JLabel("Компания (владелец техники)"));
+        form.add(companyField);
         form.add(new JLabel("Описание"));
         form.add(descriptionField);
         form.add(subcategoryLabel);
@@ -92,6 +99,7 @@ public class EquipmentPresetDialog extends JDialog {
         if (existing != null) {
             categoryField.setSelectedItem(existing.getCategory());
             nameField.setText(existing.getName());
+            companyField.getEditor().setItem(existing.getCompany() != null ? existing.getCompany() : "");
             descriptionField.setText(existing.getDescription());
             String cur = existing.getCustomCategoryLabel();
             if (cur != null && !cur.isEmpty()) {
@@ -135,7 +143,9 @@ public class EquipmentPresetDialog extends JDialog {
         if (NO_SUBCATEGORY.equals(subcategory)) {
             subcategory = null;
         }
-        result = new Result(category, name, descriptionField.getText().trim(), subcategory);
+        String company = String.valueOf(companyField.getEditor().getItem()).trim();
+        result = new Result(category, name, descriptionField.getText().trim(), subcategory,
+                company.isEmpty() ? null : company);
         dispose();
     }
 

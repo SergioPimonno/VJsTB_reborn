@@ -156,13 +156,6 @@ public class SchemaPanel extends JPanel {
         modeRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, modeRow.getPreferredSize().height));
         body.add(modeRow);
         body.add(UiKit.vgap());
-        body.add(UiKit.muted("<html>Перемещение — тащите узел мышью.<br>"
-                + "Соединение — клик по первому узлу, потом по второму.<br>"
-                + "На каждой стрелке — чип «+ подпись»: клик по нему подписывает связь"
-                + " (например, тип кабеля).<br>"
-                + "ПКМ по узлу/связи — переименовать, подписать, удалить.<br>"
-                + "2×клик по узлу «Экран» — открыть его цепочки.</html>"));
-        body.add(UiKit.vgap());
 
         selectionHint.setForeground(Palette.MUTED);
         body.add(selectionHint);
