@@ -23,6 +23,15 @@ public class SchemaEdge {
      *  «коммутация через гнёзда разъёмов»); null — связь идёт от узла целиком, как раньше. */
     private String fromPortId;
     private String toPortId;
+    /** id конкретного КАБИНЕТА (CabinetInstance), выступающего гнездом подключения на
+     *  миниатюре расключения узла-экрана — заполняется, только если связь заведена в
+     *  такой кабинет-«гнездо» (см. AppModel.chainEndpointSocketCabinetIds и настройку
+     *  «вводные кабинеты цепочек — тоже гнёзда подключения»); null — как раньше, связь
+     *  не привязана к конкретному кабинету. Независимо от {@link #fromPortId}/
+     *  {@link #toPortId} — у одного конца связи задан не более чем ОДИН из двух
+     *  (кабинет-гнездо есть только у узла-экрана, у него нет своих CardPort). */
+    private String fromCabinetInstanceId;
+    private String toCabinetInstanceId;
     private String label;
 
     private Integer wireCount;
@@ -104,6 +113,22 @@ public class SchemaEdge {
 
     public void setToPortId(String toPortId) {
         this.toPortId = toPortId;
+    }
+
+    public String getFromCabinetInstanceId() {
+        return fromCabinetInstanceId;
+    }
+
+    public void setFromCabinetInstanceId(String fromCabinetInstanceId) {
+        this.fromCabinetInstanceId = fromCabinetInstanceId;
+    }
+
+    public String getToCabinetInstanceId() {
+        return toCabinetInstanceId;
+    }
+
+    public void setToCabinetInstanceId(String toCabinetInstanceId) {
+        this.toCabinetInstanceId = toCabinetInstanceId;
     }
 
     public String getLabel() {
@@ -209,6 +234,8 @@ public class SchemaEdge {
         e.toNodeId = toNodeId;
         e.fromPortId = fromPortId;
         e.toPortId = toPortId;
+        e.fromCabinetInstanceId = fromCabinetInstanceId;
+        e.toCabinetInstanceId = toCabinetInstanceId;
         e.label = label;
         e.wireCount = wireCount;
         e.wireType = wireType;

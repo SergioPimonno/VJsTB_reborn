@@ -86,7 +86,12 @@ public class SchemaCanvasPanel extends JPanel {
      *  настройка «коммутация через гнёзда разъёмов»; null — соединение идёт от
      *  узла целиком, как раньше. */
     private String connectPendingPortId;
+    /** Кабинет-«гнездо» (см. AppModel.chainEndpointSocketCabinetIds), от которого
+     *  начато соединение — независимая ось от {@link #connectPendingPortId} (у одного
+     *  начатого соединения задан не более чем один из двух). null — как раньше. */
+    private String connectPendingCabinetInstanceId;
     private SocketHit hoveredSocket;
+    private CabinetSocketHit hoveredCabinetSocket;
     private Point lastMouse;
 
     /** Масштаб отрисовки схемы — 1.0 = как раньше (не было вовсе); Ctrl+колесо
@@ -194,15 +199,44 @@ public class SchemaCanvasPanel extends JPanel {
                         editEdgeLabel(chipHitConnect);
                         return;
                     }
+                    CabinetSocketHit cabinetHit = cabinetSocketAt(mp);
+                    if (cabinetHit != null) {
+                        if (connectPendingId == null) {
+                            connectPendingId = cabinetHit.node().getId();
+                            connectPendingPortId = null;
+                            connectPendingCabinetInstanceId = cabinetHit.cabinetInstanceId();
+                        } else if (connectPendingId.equals(cabinetHit.node().getId())
+                                && cabinetHit.cabinetInstanceId().equals(connectPendingCabinetInstanceId)) {
+                            connectPendingId = null;
+                            connectPendingCabinetInstanceId = null;
+                        } else {
+                            try {
+                                model.addSchemaEdge(mode, connectPendingId, connectPendingPortId,
+                                        connectPendingCabinetInstanceId, cabinetHit.node().getId(), null,
+                                        cabinetHit.cabinetInstanceId(), null);
+                                onChanged.run();
+                            } catch (RuntimeException ex) {
+                                JOptionPane.showMessageDialog(SchemaCanvasPanel.this, ex.getMessage(),
+                                        "Ошибка", JOptionPane.ERROR_MESSAGE);
+                            }
+                            connectPendingId = null;
+                            connectPendingPortId = null;
+                            connectPendingCabinetInstanceId = null;
+                        }
+                        repaint();
+                        return;
+                    }
                     boolean socketMode = settings.activeProfile().isSocketWiringEnabled();
                     SocketHit socketHit = socketMode ? socketAt(mp) : null;
                     if (socketHit != null) {
                         if (connectPendingId == null) {
                             connectPendingId = socketHit.node().getId();
                             connectPendingPortId = socketHit.port().getId();
+                            connectPendingCabinetInstanceId = null;
                         } else if (connectPendingId.equals(socketHit.node().getId())) {
                             connectPendingId = null;
                             connectPendingPortId = null;
+                            connectPendingCabinetInstanceId = null;
                         } else {
                             CardPort fromPort = findPort(connectPendingId, connectPendingPortId);
                             CardPort toPort = findPort(socketHit.node().getId(), socketHit.port().getId());
@@ -215,7 +249,8 @@ public class SchemaCanvasPanel extends JPanel {
                             } else {
                                 try {
                                     model.addSchemaEdge(mode, connectPendingId, connectPendingPortId,
-                                            socketHit.node().getId(), socketHit.port().getId(), null);
+                                            connectPendingCabinetInstanceId, socketHit.node().getId(),
+                                            socketHit.port().getId(), null, null);
                                     onChanged.run();
                                 } catch (RuntimeException ex) {
                                     JOptionPane.showMessageDialog(SchemaCanvasPanel.this, ex.getMessage(),
@@ -224,6 +259,7 @@ public class SchemaCanvasPanel extends JPanel {
                             }
                             connectPendingId = null;
                             connectPendingPortId = null;
+                            connectPendingCabinetInstanceId = null;
                         }
                         repaint();
                         return;
@@ -231,21 +267,26 @@ public class SchemaCanvasPanel extends JPanel {
                     if (hit == null) {
                         connectPendingId = null;
                         connectPendingPortId = null;
+                        connectPendingCabinetInstanceId = null;
                     } else if (connectPendingId == null) {
                         connectPendingId = hit.getId();
                         connectPendingPortId = null;
+                        connectPendingCabinetInstanceId = null;
                     } else if (connectPendingId.equals(hit.getId())) {
                         connectPendingId = null;
                         connectPendingPortId = null;
+                        connectPendingCabinetInstanceId = null;
                     } else {
                         try {
-                            model.addSchemaEdge(mode, connectPendingId, connectPendingPortId, hit.getId(), null, null);
+                            model.addSchemaEdge(mode, connectPendingId, connectPendingPortId,
+                                    connectPendingCabinetInstanceId, hit.getId(), null, null, null);
                         } catch (RuntimeException ex) {
                             JOptionPane.showMessageDialog(SchemaCanvasPanel.this, ex.getMessage(),
                                     "Ошибка", JOptionPane.ERROR_MESSAGE);
                         }
                         connectPendingId = null;
                         connectPendingPortId = null;
+                        connectPendingCabinetInstanceId = null;
                         onChanged.run();
                     }
                     repaint();
@@ -397,12 +438,18 @@ public class SchemaCanvasPanel extends JPanel {
                     if (connectPendingId != null) {
                         lastMouse = mp;
                     }
-                    SocketHit hover = settings.activeProfile().isSocketWiringEnabled() ? socketAt(mp) : null;
+                    CabinetSocketHit cabinetHover = cabinetSocketAt(mp);
+                    if (!java.util.Objects.equals(cabinetHover, hoveredCabinetSocket)) {
+                        hoveredCabinetSocket = cabinetHover;
+                        repaint();
+                    }
+                    SocketHit hover = cabinetHover == null && settings.activeProfile().isSocketWiringEnabled()
+                            ? socketAt(mp) : null;
                     if (!java.util.Objects.equals(hover, hoveredSocket)) {
                         hoveredSocket = hover;
-                        setCursor(Cursor.getPredefinedCursor(
-                                hover != null ? Cursor.HAND_CURSOR : Cursor.DEFAULT_CURSOR));
                     }
+                    setCursor(Cursor.getPredefinedCursor(
+                            hover != null || cabinetHover != null ? Cursor.HAND_CURSOR : Cursor.DEFAULT_CURSOR));
                     repaint();
                 } else if (interaction == Interaction.MOVE) {
                     boolean overHandle = resizeHandleAt(mp) != null;
@@ -525,6 +572,7 @@ public class SchemaCanvasPanel extends JPanel {
         this.interaction = interaction;
         this.connectPendingId = null;
         this.connectPendingPortId = null;
+        this.connectPendingCabinetInstanceId = null;
         repaint();
     }
 
@@ -759,8 +807,12 @@ public class SchemaCanvasPanel extends JPanel {
         if (a == null || b == null) {
             return null;
         }
-        Point aSocket = socketPosition(a, edge.getFromPortId(), edge);
-        Point bSocket = socketPosition(b, edge.getToPortId(), edge);
+        Point aSocket = edge.getFromCabinetInstanceId() != null
+                ? cabinetSocketPosition(a, edge.getFromCabinetInstanceId())
+                : socketPosition(a, edge.getFromPortId(), edge);
+        Point bSocket = edge.getToCabinetInstanceId() != null
+                ? cabinetSocketPosition(b, edge.getToCabinetInstanceId())
+                : socketPosition(b, edge.getToPortId(), edge);
         List<com.vjstb.ledscheme.model.EdgeWaypoint> wps = edge.getWaypoints();
 
         double[] aCenter = {a.getX() + a.getWidth() / 2.0, a.getY() + a.getHeight() / 2.0};
@@ -1610,7 +1662,9 @@ public class SchemaCanvasPanel extends JPanel {
         if (interaction == Interaction.CONNECT && connectPendingId != null && lastMouse != null) {
             SchemaNode pending = nodeById(connectPendingId);
             if (pending != null) {
-                Point socket = socketPosition(pending, connectPendingPortId, null);
+                Point socket = connectPendingCabinetInstanceId != null
+                        ? cabinetSocketPosition(pending, connectPendingCabinetInstanceId)
+                        : socketPosition(pending, connectPendingPortId, null);
                 int px, py;
                 if (socket != null) {
                     px = socket.x;
@@ -1811,15 +1865,25 @@ public class SchemaCanvasPanel extends JPanel {
      *  миниатюры); чтобы получить более подробную картинку, нужно заранее увеличить
      *  узел в редакторе (см. уголок изменения размера). Не выходит за границы узла —
      *  область рисования обрезается по прямоугольнику узла. */
-    private void drawScreenWiringThumbnail(Graphics2D g2, SchemaNode n, int nw, int nh) {
+    /** Геометрия миниатюры расключения узла-экрана — вынесена из
+     *  {@link #drawScreenWiringThumbnail} отдельным методом, чтобы гнёзда-кабинеты
+     *  (см. {@link #cabinetSocketRect}) могли получить ТУ ЖЕ позицию/масштаб ячейки
+     *  без дублирования математики (иначе рисунок и хит-тест/привязка линии могли бы
+     *  незаметно разойтись при будущей правке одного из двух мест). null — миниатюру
+     *  показать нечем (нет экрана/типа кабинета/сетки, либо узел слишком мал). */
+    private record ThumbGeometry(Screen screen, CabinetType type, int left, int top, int cellW, int cellH) {
+    }
+
+    private ThumbGeometry wiringThumbGeometry(SchemaNode n) {
         Screen scr = screenById(n.getScreenRefId());
         if (scr == null) {
-            return;
+            return null;
         }
         CabinetType t = model.typeOf(scr);
         if (t == null || t.getWidthMm() <= 0 || t.getHeightMm() <= 0 || scr.getCols() <= 0 || scr.getRows() <= 0) {
-            return;
+            return null;
         }
+        int nw = (int) n.getWidth(), nh = (int) n.getHeight();
         int pad = 4;
         int top = (int) n.getY() + 34;
         int left = (int) n.getX() + pad;
@@ -1831,11 +1895,10 @@ public class SchemaCanvasPanel extends JPanel {
         int gridBottom = (int) (n.getY() + nh) - pad;
         int availH = gridBottom - top - barH;
         if (availH < 20) {
-            barH = 0;
             availH = gridBottom - top;
         }
         if (availW < 10 || availH < 10) {
-            return;
+            return null;
         }
         // Границы могут выходить за номинальную сетку (кабинет вытащен свободным
         // смещением, Task #7/v1.6) — считаем масштаб/якорь по ФАКТИЧЕСКОМУ охвату,
@@ -1846,7 +1909,7 @@ public class SchemaCanvasPanel extends JPanel {
         double extW = ext[2] - ext[0], extH = ext[3] - ext[1];
         double scale = Math.min(availW / extW, availH / extH);
         if (scale <= 0) {
-            return;
+            return null;
         }
         int cellW = Math.max(1, (int) Math.round(t.getWidthMm() * scale));
         int cellH = Math.max(1, (int) Math.round(t.getHeightMm() * scale));
@@ -1858,18 +1921,129 @@ public class SchemaCanvasPanel extends JPanel {
         // номинального угла), вместо того чтобы сдвигать саму точку (0,0).
         left -= (int) Math.round(ext[0] * scale);
         top -= (int) Math.round(ext[1] * scale);
+        return new ThumbGeometry(scr, t, left, top, cellW, cellH);
+    }
+
+    private void drawScreenWiringThumbnail(Graphics2D g2, SchemaNode n, int nw, int nh) {
+        ThumbGeometry g = wiringThumbGeometry(n);
+        if (g == null) {
+            return;
+        }
+        int pad = 4;
+        int availW = nw - pad * 2;
+        int barH = mode == SchemaMode.POWER ? 0 : SchemeRenderer.controllerSummaryBarHeight(g.screen());
+        int gridBottom = (int) (n.getY() + nh) - pad;
+        int availH = gridBottom - ((int) n.getY() + 34) - barH;
+        if (availH < 20) {
+            barH = 0;
+        }
         Scene scene = model.getCurrentScene();
         List<PowerChain> powerChains = scene != null ? scene.getPowerChains() : List.of();
         List<SignalChain> signalChains = scene != null ? scene.getSignalChains() : List.of();
         Graphics2D clipped = (Graphics2D) g2.create();
         clipped.clipRect((int) n.getX(), (int) n.getY(), nw, nh);
-        SchemeRenderer.paintWiringDiagram(clipped, scr, t, mode == SchemaMode.POWER, cellW, cellH, left, top,
-                model.getWorkspace(), powerChains, signalChains);
+        SchemeRenderer.paintWiringDiagram(clipped, g.screen(), g.type(), mode == SchemaMode.POWER,
+                g.cellW(), g.cellH(), g.left(), g.top(), model.getWorkspace(), powerChains, signalChains);
         if (barH > 0) {
-            SchemeRenderer.drawControllerSummaryBar(clipped, scr, model.getWorkspace(),
-                    left, top + scr.getRows() * cellH + 2, availW);
+            SchemeRenderer.drawControllerSummaryBar(clipped, g.screen(), model.getWorkspace(),
+                    g.left(), g.top() + g.screen().getRows() * g.cellH() + 2, availW);
         }
+        drawChainEndpointSockets(clipped, n, g);
         clipped.dispose();
+    }
+
+    /** Кабинеты-«гнёзда» (см. AppModel.chainEndpointSocketCabinetIds) поверх миниатюры
+     *  расключения — видны, только когда включены ОБА тумблера: «коммутация через
+     *  гнёзда разъёмов» и «вводные кабинеты цепочек — тоже гнёзда подключения» (см.
+     *  Preferences). Чисто наложение поверх уже нарисованной миниатюры — сама миниатюра
+     *  не меняется, никакой новой геометрии кроме уже вычисленной {@code g}. */
+    private void drawChainEndpointSockets(Graphics2D g2, SchemaNode n, ThumbGeometry g) {
+        if (!settings.activeProfile().isSocketWiringEnabled()
+                || !settings.activeProfile().isChainEndpointSocketsEnabled()) {
+            return;
+        }
+        Set<String> socketIds = model.chainEndpointSocketCabinetIds(g.screen());
+        if (socketIds.isEmpty()) {
+            return;
+        }
+        Graphics2D g3 = (Graphics2D) g2.create();
+        g3.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        for (String cabId : socketIds) {
+            CabinetInstance cab = g.screen().cabinetById(cabId);
+            if (cab == null) {
+                continue;
+            }
+            java.awt.Rectangle r = SchemeRenderer.cabinetScreenRect(cab, g.type(), g.cellW(), g.cellH(),
+                    g.left(), g.top());
+            boolean pending = cabId.equals(connectPendingCabinetInstanceId) && n.getId().equals(connectPendingId);
+            boolean hovered = hoveredCabinetSocket != null && hoveredCabinetSocket.node() == n
+                    && cabId.equals(hoveredCabinetSocket.cabinetInstanceId());
+            int d = Math.max(6, Math.min(r.width, r.height) / 2);
+            int cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+            g3.setColor(pending ? Color.YELLOW : (hovered ? Color.WHITE : new Color(255, 221, 0, 210)));
+            g3.fillOval(cx - d / 2, cy - d / 2, d, d);
+            g3.setColor(new Color(0, 0, 0, 180));
+            g3.setStroke(new BasicStroke(1.2f));
+            g3.drawOval(cx - d / 2, cy - d / 2, d, d);
+        }
+        g3.dispose();
+    }
+
+    /** Гнездо-кабинет под точкой клика/курсора — только когда сама миниатюра
+     *  расключения показана (см. {@link #wiringThumbGeometry}) и оба тумблера гнёзд
+     *  включены (см. {@link #drawChainEndpointSockets}). Хит-тест — по прямоугольнику
+     *  ячейки кабинета целиком (как и рисуется), без отдельного запаса — ячейка и так
+     *  обычно достаточно крупная цель. */
+    private record CabinetSocketHit(SchemaNode node, String cabinetInstanceId) {
+    }
+
+    private CabinetSocketHit cabinetSocketAt(Point p) {
+        if (!settings.activeProfile().isSocketWiringEnabled()
+                || !settings.activeProfile().isChainEndpointSocketsEnabled()) {
+            return null;
+        }
+        for (SchemaNode n : nodes()) {
+            if (n.getType() != SchemaNodeType.SCREEN) {
+                continue;
+            }
+            ThumbGeometry g = wiringThumbGeometry(n);
+            if (g == null) {
+                continue;
+            }
+            Set<String> socketIds = model.chainEndpointSocketCabinetIds(g.screen());
+            for (String cabId : socketIds) {
+                CabinetInstance cab = g.screen().cabinetById(cabId);
+                if (cab == null) {
+                    continue;
+                }
+                java.awt.Rectangle r = SchemeRenderer.cabinetScreenRect(cab, g.type(), g.cellW(), g.cellH(),
+                        g.left(), g.top());
+                if (r.contains(p)) {
+                    return new CabinetSocketHit(n, cabId);
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Экранный центр кабинета-«гнезда» {@code cabinetInstanceId} на миниатюре
+     *  расключения узла {@code n} — null, если миниатюра не показана/кабинет не
+     *  найден (узел изменился), тогда вызывающий код (см. endpointsFor) откатывается
+     *  к обычной привязке от узла целиком. */
+    private Point cabinetSocketPosition(SchemaNode n, String cabinetInstanceId) {
+        if (cabinetInstanceId == null) {
+            return null;
+        }
+        ThumbGeometry g = wiringThumbGeometry(n);
+        if (g == null) {
+            return null;
+        }
+        CabinetInstance cab = g.screen().cabinetById(cabinetInstanceId);
+        if (cab == null) {
+            return null;
+        }
+        java.awt.Rectangle r = SchemeRenderer.cabinetScreenRect(cab, g.type(), g.cellW(), g.cellH(), g.left(), g.top());
+        return new Point(r.x + r.width / 2, r.y + r.height / 2);
     }
 
     private static List<PortEntry> flattenCardPorts(List<SchemaCard> cards) {

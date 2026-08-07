@@ -1040,6 +1040,15 @@ public class AppModel {
      *  а не просто «узел с узлом». fromPortId/toPortId — null для обычного соединения. */
     public SchemaEdge addSchemaEdge(SchemaMode mode, String fromNodeId, String fromPortId,
                                      String toNodeId, String toPortId, String label) {
+        return addSchemaEdge(mode, fromNodeId, fromPortId, null, toNodeId, toPortId, null, label);
+    }
+
+    /** То же самое, но привязано к конкретным кабинетам-«гнёздам» на миниатюре
+     *  расключения узла-экрана (см. {@link #chainEndpointSocketCabinetIds}) —
+     *  fromCabinetInstanceId/toCabinetInstanceId null, если этот конец связи не
+     *  привязан к кабинету (обычный узел/разъём, как в 5-аргументной версии). */
+    public SchemaEdge addSchemaEdge(SchemaMode mode, String fromNodeId, String fromPortId, String fromCabinetInstanceId,
+                                     String toNodeId, String toPortId, String toCabinetInstanceId, String label) {
         if (currentScene == null) {
             throw new IllegalStateException("Не выбрана сцена");
         }
@@ -1049,6 +1058,8 @@ public class AppModel {
         SchemaEdge edge = new SchemaEdge(mode, fromNodeId, toNodeId, label);
         edge.setFromPortId(fromPortId);
         edge.setToPortId(toPortId);
+        edge.setFromCabinetInstanceId(fromCabinetInstanceId);
+        edge.setToCabinetInstanceId(toCabinetInstanceId);
         currentScene.getSchemaEdges().add(edge);
         changed();
         return edge;
