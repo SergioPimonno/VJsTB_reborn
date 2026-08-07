@@ -2570,15 +2570,15 @@ public class AppModel {
         }
         // Проверка здесь, а не только в UI-колбэке (SignalStagePanel.onPortSelected) —
         // защита от любого другого пути вызова (сейчас или в будущем), а не только
-        // от клика по кнопке порта. ТОЛЬКО контроллер-уровневый резерв блокирует
-        // собственную цепочку безусловно (весь контроллер дублирует другой один в
-        // один — отдельная проводка конкретного порта бессмысленна). Порт-уровневый
-        // резерв (backupPortNumber) теперь МОЖЕТ получить собственную цепочку — она
-        // представляет физический ввод резервного кабеля (гнездо на общей схеме, см.
-        // chainEndpointSocketCabinetIds), а не независимый контент порта.
-        if (port != null && isControllerLevelBackupPort(currentScreen, port)) {
-            throw new IllegalStateException("Порт " + port + " принадлежит контроллеру, целиком зарезервированному"
-                    + " под резерв другого контроллера, — не может иметь собственную цепочку");
+        // от клика по кнопке порта. Зарезервированный порт (порт-уровневый резерв
+        // ЛИБО весь контроллер отдан под резерв) не может получить собственную
+        // цепочку — резервный порт физически подключён к тому же прогону кабеля,
+        // что и основной, просто с противоположного конца (см. SchemeRenderer
+        // .signalChainEndLabel, chainEndpointSocketCabinetIds) — отдельная проводка
+        // не нужна и была бы противоречивой.
+        if (port != null && isPortReservedAsBackup(currentScreen, port)) {
+            throw new IllegalStateException("Порт " + port + " зарезервирован под резерв — не может иметь"
+                    + " собственную цепочку");
         }
         // Сигнальная цепочка (в отличие от питания) физически может продолжаться с
         // одного экрана на другой (общий даунлинк на смежные экраны) — поэтому
@@ -2820,12 +2820,9 @@ public class AppModel {
     }
 
     /** true, если этот порт уже назначен чьим-то резервным (backupPortNumber другого
-     *  порта, либо весь его контроллер отдан под резерв — см. {@link #isControllerLevelBackupPort})
-     *  — чисто информационная отметка для UI (подсветка/подсказка кнопки порта, см.
-     *  PortPickerPanel), НЕ блокирует собственную цепочку сама по себе: с Task «гнёзда
-     *  расключения» порт-уровневый резерв может получить физический ввод резервного
-     *  кабеля (см. {@link #addSignalChain}, который проверяет более узкое условие —
-     *  {@link #isControllerLevelBackupPort}). */
+     *  порта), либо весь его контроллер отдан под резерв другого контроллера сцены
+     *  (см. {@link #isControllerLevelBackupPort}) — в обоих случаях порт не может
+     *  получить собственную цепочку (см. {@link #addSignalChain}). */
     public boolean isPortReservedAsBackup(Screen screen, int port) {
         Scene scene = sceneContaining(screen);
         if (scene != null) {
@@ -2838,13 +2835,11 @@ public class AppModel {
         return isControllerLevelBackupPort(screen, port);
     }
 
-    /** true — порт заблокирован для собственной цепочки НЕЗАВИСИМО от желания
-     *  инженера: весь его контроллер целиком отдан под резерв другого контроллера
-     *  сцены (см. {@link #setControllerBackupLink}) — тогда каждый его порт дублирует
-     *  соответствующий порт основного контроллера один в один, отдельная физическая
-     *  проводка конкретного порта не имеет смысла. НЕ включает порт-уровневый резерв
-     *  (см. {@link #setSignalBackupPortLink}) — тот теперь МОЖЕТ иметь собственную
-     *  цепочку (физический ввод резервного кабеля, гнездо на общей схеме). */
+    /** true — весь контроллер этого порта целиком отдан под резерв другого
+     *  контроллера сцены (см. {@link #setControllerBackupLink}) — тогда каждый его
+     *  порт дублирует соответствующий порт основного контроллера один в один.
+     *  Часть общей проверки {@link #isPortReservedAsBackup} (которая также
+     *  учитывает порт-уровневый резерв, {@link #setSignalBackupPortLink}). */
     public boolean isControllerLevelBackupPort(Screen screen, int port) {
         ControllerInstance owner = controllerForPort(screen, port);
         return owner != null && isControllerReservedAsBackup(screen, owner.getId());
@@ -2898,39 +2893,32 @@ public class AppModel {
                 }
             }
         } else {
+            // Резерв здесь НЕ отдельная цепочка — это тот же физический прогон,
+            // просто резервный кабель заходит с ПРОТИВОПОЛОЖНОГО конца (см.
+            // SchemeRenderer.signalChainEndLabel: последний кабинет цепочки с
+            // заданным backupPortNumber подписывается номером РЕЗЕРВНОГО порта —
+            // существующая, уже отрисовываемая конвенция, без отдельных данных под
+            // ней). Поэтому гнездо резерва — это ПОСЛЕДНИЙ кабинет ТОЙ ЖЕ цепочки,
+            // а не первый кабинет какой-то отдельно расключённой цепочки резервного
+            // порта (такой цепочки в модели вообще не существует и заводить её не
+            // нужно — резервный порт остаётся чисто логической меткой, как и был).
             for (SignalChain c : scene.getSignalChains()) {
-                if (isSignalChainBackupTarget(scene, c)) {
+                List<String> ids = c.getCabinetInstanceIds();
+                if (ids.isEmpty()) {
                     continue;
                 }
-                List<String> ids = c.getCabinetInstanceIds();
-                if (!ids.isEmpty() && ownIds.contains(ids.get(0))) {
+                if (ownIds.contains(ids.get(0))) {
                     result.add(ids.get(0));
                 }
                 if (c.getBackupPortNumber() != null) {
-                    SignalChain backupChain = signalChainByPortInScene(scene, c.getBackupPortNumber(), false);
-                    List<String> backupIds = backupChain != null ? backupChain.getCabinetInstanceIds() : List.of();
-                    if (!backupIds.isEmpty() && ownIds.contains(backupIds.get(0))) {
-                        result.add(backupIds.get(0));
+                    String lastId = ids.get(ids.size() - 1);
+                    if (ownIds.contains(lastId)) {
+                        result.add(lastId);
                     }
                 }
             }
         }
         return result;
-    }
-
-    /** true — {@code candidate} сам является резервной цепочкой ДРУГОГО порта (его
-     *  {@code portNumber} совпадает с чьим-то {@code backupPortNumber}) — не
-     *  самостоятельная точка входа, учитывается только вместе с основной цепочкой. */
-    private boolean isSignalChainBackupTarget(Scene scene, SignalChain candidate) {
-        if (candidate.getPortNumber() == null) {
-            return false;
-        }
-        for (SignalChain other : scene.getSignalChains()) {
-            if (other != candidate && candidate.getPortNumber().equals(other.getBackupPortNumber())) {
-                return true;
-            }
-        }
-        return false;
     }
 
     public void updateSignalPortCount(Screen screen, int count) {
