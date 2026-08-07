@@ -282,7 +282,14 @@ public class SignalStagePanel extends JPanel {
         viewGroup.add(chainViewBtn);
         viewGroup.add(schemaViewBtn);
         chainViewBtn.addActionListener(e -> viewCards.show(viewContainer, VIEW_CHAIN));
-        schemaViewBtn.addActionListener(e -> viewCards.show(viewContainer, VIEW_SCHEMA));
+        schemaViewBtn.addActionListener(e -> {
+            if (settings.activeProfile().isSchemaAutoPopulateEnabled()) {
+                boolean autoConnect = settings.activeProfile().isSocketWiringEnabled()
+                        && settings.activeProfile().isChainEndpointSocketsEnabled();
+                model.autoPopulateSchema(SchemaMode.SIGNAL, autoConnect);
+            }
+            viewCards.show(viewContainer, VIEW_SCHEMA);
+        });
         quickConnectBtn.setToolTipText("Протяжка ЛКМ по холсту выделяет область — радиальное меню предложит"
                 + " шаблон серпантина для быстрой прописки (как в NovaLCT)");
         quickConnectBtn.addActionListener(e -> canvas.setQuickConnectMode(quickConnectBtn.isSelected()));

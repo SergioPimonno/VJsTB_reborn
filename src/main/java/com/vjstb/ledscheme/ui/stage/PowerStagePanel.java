@@ -169,7 +169,14 @@ public class PowerStagePanel extends JPanel {
         viewGroup.add(chainViewBtn);
         viewGroup.add(schemaViewBtn);
         chainViewBtn.addActionListener(e -> viewCards.show(viewContainer, VIEW_CHAIN));
-        schemaViewBtn.addActionListener(e -> viewCards.show(viewContainer, VIEW_SCHEMA));
+        schemaViewBtn.addActionListener(e -> {
+            if (settings.activeProfile().isSchemaAutoPopulateEnabled()) {
+                // Питание не идёт через порты контроллера (см. PowerChain) — только
+                // узлы уже расключенных экранов, без гнёзд/автосвязей.
+                model.autoPopulateSchema(SchemaMode.POWER, false);
+            }
+            viewCards.show(viewContainer, VIEW_SCHEMA);
+        });
         quickConnectBtn.setToolTipText("Протяжка ЛКМ по холсту выделяет область — радиальное меню предложит"
                 + " шаблон серпантина для быстрой прописки (как в NovaLCT)");
         quickConnectBtn.addActionListener(e -> canvas.setQuickConnectMode(quickConnectBtn.isSelected()));

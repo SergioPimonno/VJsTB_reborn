@@ -529,8 +529,16 @@ public class AppModel {
      *  по всем контроллерам СЦЕНЫ экрана: 1..N1 — первый, N1+1..N1+N2 — второй и
      *  т.д.); null — контроллеров в сцене нет (порты вручную) или порт вне диапазона. */
     public ControllerInstance controllerForPort(Screen screen, int port) {
+        return controllerForPortInScene(sceneContaining(screen), port);
+    }
+
+    /** Как {@link #controllerForPort(Screen, int)}, но по сцене напрямую — нужен
+     *  местам вроде {@link #autoPopulateSchema}, у которых нет конкретного
+     *  {@link Screen} под рукой (порт — сквозное сценовое понятие, см.
+     *  {@link #controllersInScene}, цепочка физически может лежать на любом экране). */
+    private ControllerInstance controllerForPortInScene(Scene scene, int port) {
         int offset = 0;
-        for (ControllerInstance ci : controllersInScene(sceneContaining(screen))) {
+        for (ControllerInstance ci : controllersInScene(scene)) {
             ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
             int count = t != null ? t.effectivePortCount() : 0;
             if (port > offset && port <= offset + count) {
@@ -2919,6 +2927,239 @@ public class AppModel {
             }
         }
         return result;
+    }
+
+    /** Предзаполнение общей схемы РЕЖИМА {@code mode} (см.
+     *  {@link com.vjstb.ledscheme.settings.UserProfile#isSchemaAutoPopulateEnabled()}) —
+     *  вызывается UI при переходе с расключения экрана на общую схему: добавляет
+     *  узлы уже расключенных экранов (хоть один кабинет занят цепочкой этого режима)
+     *  и, для {@link SchemaMode#SIGNAL}, использованных контроллеров сцены (чей порт
+     *  реально прописан хотя бы одной цепочкой — основным или резервным). Не трогает
+     *  узлы, уже присутствующие в схеме (сравнение по {@code screenRefId}/
+     *  {@code controllerInstanceRefId}) — повторный вызов не создаёт дублей. У
+     *  питания нет понятия контроллера (см. {@link PowerChain}) — для
+     *  {@link SchemaMode#POWER} добавляются только экраны, {@code autoConnectSockets}
+     *  игнорируется.
+     *  {@code autoConnectSockets} — дополнительно провести связи от гнёзд вводных/
+     *  резервных кабинетов к соответствующей группе портов узла-контроллера, которому
+     *  прописана эта цепочка (см. {@link #autoConnectChainEndpoint}) — вызывающая
+     *  сторона (UI) передаёт true, только если у пользователя включены ОБА нужных
+     *  переключателя (socketWiringEnabled и chainEndpointSocketsEnabled): сама модель
+     *  не имеет доступа к настройкам профиля. */
+    public void autoPopulateSchema(SchemaMode mode, boolean autoConnectSockets) {
+        if (currentScene == null) {
+            return;
+        }
+        List<SchemaNode> nodes = new ArrayList<>(schemaNodesForCurrentScene(mode));
+        Map<String, SchemaNode> screenNodesByScreenId = new java.util.LinkedHashMap<>();
+        Map<String, SchemaNode> controllerNodesByInstanceId = new java.util.LinkedHashMap<>();
+        for (SchemaNode n : nodes) {
+            if (n.getType() == SchemaNodeType.SCREEN && n.getScreenRefId() != null) {
+                screenNodesByScreenId.put(n.getScreenRefId(), n);
+            } else if (n.getType() == SchemaNodeType.CONTROLLER && n.getControllerInstanceRefId() != null) {
+                controllerNodesByInstanceId.put(n.getControllerInstanceRefId(), n);
+            }
+        }
+
+        for (Screen scr : currentScene.getScreens()) {
+            if (screenNodesByScreenId.containsKey(scr.getId()) || !isScreenWiredFor(mode, scr)) {
+                continue;
+            }
+            int count = nodes.size();
+            SchemaNode node = addSchemaNode(mode, SchemaNodeType.SCREEN, scr.getName(),
+                    40 + (count % 6) * 170, 40 + (count / 6) * 130, scr.getId());
+            nodes.add(node);
+            screenNodesByScreenId.put(scr.getId(), node);
+        }
+
+        if (mode != SchemaMode.SIGNAL) {
+            return;
+        }
+        for (ControllerInstance ci : controllersInScene(currentScene)) {
+            if (controllerNodesByInstanceId.containsKey(ci.getId()) || !isControllerUsedForSignal(ci)) {
+                continue;
+            }
+            int count = nodes.size();
+            SchemaNode node = addSchemaNodeForController(ci, 40 + (count % 6) * 170, 260 + (count / 6) * 160);
+            nodes.add(node);
+            controllerNodesByInstanceId.put(ci.getId(), node);
+        }
+
+        if (!autoConnectSockets) {
+            return;
+        }
+        for (SignalChain c : currentScene.getSignalChains()) {
+            List<String> ids = c.getCabinetInstanceIds();
+            if (ids.isEmpty()) {
+                continue;
+            }
+            if (c.getPortNumber() != null) {
+                autoConnectChainEndpoint(screenNodesByScreenId, controllerNodesByInstanceId, ids.get(0),
+                        c.getPortNumber());
+            }
+            if (c.getBackupPortNumber() != null) {
+                autoConnectChainEndpoint(screenNodesByScreenId, controllerNodesByInstanceId,
+                        ids.get(ids.size() - 1), c.getBackupPortNumber());
+            }
+        }
+    }
+
+    /** true — хотя бы один кабинет экрана {@code scr} занят цепочкой режима {@code mode}. */
+    private boolean isScreenWiredFor(SchemaMode mode, Screen scr) {
+        Set<String> ownIds = new HashSet<>();
+        for (CabinetInstance ci : scr.getCabinets()) {
+            ownIds.add(ci.getId());
+        }
+        if (mode == SchemaMode.POWER) {
+            for (PowerChain c : currentScene.getPowerChains()) {
+                for (String id : c.getCabinetInstanceIds()) {
+                    if (ownIds.contains(id)) {
+                        return true;
+                    }
+                }
+            }
+        } else {
+            for (SignalChain c : currentScene.getSignalChains()) {
+                for (String id : c.getCabinetInstanceIds()) {
+                    if (ownIds.contains(id)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /** true — контроллеру {@code ci} реально прописана хотя бы одна цепочка сцены
+     *  (как основной ИЛИ как резервный порт) — «использованный» контроллер для
+     *  {@link #autoPopulateSchema}, в отличие от просто добавленного в сцену. */
+    private boolean isControllerUsedForSignal(ControllerInstance ci) {
+        for (SignalChain c : currentScene.getSignalChains()) {
+            if (c.getCabinetInstanceIds().isEmpty()) {
+                continue;
+            }
+            if (c.getPortNumber() != null && controllerForPortInScene(currentScene, c.getPortNumber()) == ci) {
+                return true;
+            }
+            if (c.getBackupPortNumber() != null
+                    && controllerForPortInScene(currentScene, c.getBackupPortNumber()) == ci) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Строит узел общей схемы (тип CONTROLLER), зеркалящий РЕАЛЬНУЮ комплектацию
+     *  карт контроллера {@code ci} из библиотеки типов — карты копируются со свежими
+     *  id (см. {@link #duplicateCardWithFreshIds}), чтобы группы портов этого узла не
+     *  путались с группами портов другого узла того же типа. Простой (немодульный,
+     *  без карт) контроллер получает ОДНУ синтетическую выходную группу по
+     *  {@link ControllerType#getPortCount()} — иначе узлу было бы вовсе некуда
+     *  подвести связь (см. {@link #cardPortGroupForLocalPort}, зеркальный случай).
+     *  {@link SchemaNode#getControllerInstanceRefId()} хранит ссылку на исходный
+     *  экземпляр — по ней {@link #autoPopulateSchema} находит узел повторно (не
+     *  создаёт дублей) и {@link #autoConnectChainEndpoint} — узел-цель для связи. */
+    private SchemaNode addSchemaNodeForController(ControllerInstance ci, double x, double y) {
+        ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
+        String label = ci.getLabel() != null && !ci.getLabel().isEmpty()
+                ? ci.getLabel() : (t != null ? t.getName() : "Контроллер");
+        SchemaNode node = new SchemaNode(SchemaMode.SIGNAL, SchemaNodeType.CONTROLLER, label, x, y, null);
+        node.setControllerInstanceRefId(ci.getId());
+        if (t != null) {
+            if (!t.getCards().isEmpty()) {
+                for (SchemaCard c : t.getCards()) {
+                    node.getCards().add(duplicateCardWithFreshIds(c));
+                }
+            } else if (t.getPortCount() > 0) {
+                SchemaCard synthetic = new SchemaCard(t.getName(), new ArrayList<>());
+                synthetic.getPorts().add(new CardPort("Ethernet", PortDirection.OUT, t.getPortCount()));
+                node.getCards().add(synthetic);
+            }
+        }
+        currentScene.getSchemaNodes().add(node);
+        autoFitNodeToPorts(node);
+        changed();
+        return node;
+    }
+
+    /** Проводит связь от гнезда кабинета {@code cabinetId} (узел-экран, которому он
+     *  принадлежит, ищется по факту через {@link #screenOfCabinet}) к группе портов
+     *  узла-контроллера, которому прописан {@code globalPort} — молча ничего не
+     *  делает, если соответствующие узлы ещё не добавлены в схему, порт вне карт
+     *  контроллера (fiber/неизвестный тип) или такая же связь уже существует
+     *  (идемпотентность при повторных вызовах {@link #autoPopulateSchema}). */
+    private void autoConnectChainEndpoint(Map<String, SchemaNode> screenNodesByScreenId,
+                                           Map<String, SchemaNode> controllerNodesByInstanceId,
+                                           String cabinetId, int globalPort) {
+        Screen owner = screenOfCabinet(currentScene, cabinetId);
+        if (owner == null) {
+            return;
+        }
+        SchemaNode screenNode = screenNodesByScreenId.get(owner.getId());
+        ControllerInstance ci = controllerForPortInScene(currentScene, globalPort);
+        if (screenNode == null || ci == null) {
+            return;
+        }
+        SchemaNode controllerNode = controllerNodesByInstanceId.get(ci.getId());
+        ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
+        if (controllerNode == null || t == null) {
+            return;
+        }
+        int localPort = globalPort - portOffsetOf(currentScene, ci);
+        int[] group = cardPortGroupForLocalPort(t, localPort);
+        if (group == null || group[0] >= controllerNode.getCards().size()) {
+            return;
+        }
+        List<CardPort> mirroredPorts = controllerNode.getCards().get(group[0]).getPorts();
+        if (group[1] >= mirroredPorts.size()) {
+            return;
+        }
+        String toPortId = mirroredPorts.get(group[1]).getId();
+        for (SchemaEdge e : currentScene.getSchemaEdges()) {
+            if (e.getMode() != SchemaMode.SIGNAL) {
+                continue;
+            }
+            boolean sameForward = cabinetId.equals(e.getFromCabinetInstanceId()) && toPortId.equals(e.getToPortId());
+            boolean sameReverse = cabinetId.equals(e.getToCabinetInstanceId()) && toPortId.equals(e.getFromPortId());
+            if (sameForward || sameReverse) {
+                return;
+            }
+        }
+        addSchemaEdge(SchemaMode.SIGNAL, screenNode.getId(), null, cabinetId, controllerNode.getId(), toPortId,
+                null, null);
+    }
+
+    /** Локальный (в пределах контроллера, 1-based, только среди ВЫХОДНЫХ портов — та
+     *  же нумерация, что и {@link ControllerType#isEffectivePortEthernet}) № порта →
+     *  координаты (индекс карты, индекс группы разъёмов внутри неё) в
+     *  {@link ControllerType#getCards()} — нужны, чтобы найти СООТВЕТСТВУЮЩУЮ группу
+     *  портов в узле общей схемы, зеркалящем этот контроллер (см.
+     *  {@link #addSchemaNodeForController}, копирует карты в том же порядке; для
+     *  контроллера без карт зеркалит единственную синтетическую группу — индекс
+     *  {0,0} всегда, если порт в пределах portCount). null — порт входной или вне
+     *  диапазона. */
+    private int[] cardPortGroupForLocalPort(ControllerType t, int controllerLocalPort1Based) {
+        if (t.getCards().isEmpty()) {
+            return controllerLocalPort1Based >= 1 && controllerLocalPort1Based <= t.getPortCount()
+                    ? new int[]{0, 0} : null;
+        }
+        int seen = 0;
+        for (int ci = 0; ci < t.getCards().size(); ci++) {
+            List<CardPort> ports = t.getCards().get(ci).getPorts();
+            for (int pi = 0; pi < ports.size(); pi++) {
+                CardPort p = ports.get(pi);
+                if (p.getDirection() == PortDirection.IN) {
+                    continue;
+                }
+                int groupStart = seen + 1;
+                int groupEnd = seen + p.getCount();
+                if (controllerLocalPort1Based >= groupStart && controllerLocalPort1Based <= groupEnd) {
+                    return new int[]{ci, pi};
+                }
+                seen = groupEnd;
+            }
+        }
+        return null;
     }
 
     public void updateSignalPortCount(Screen screen, int count) {

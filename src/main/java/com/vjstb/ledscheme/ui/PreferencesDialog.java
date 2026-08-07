@@ -24,7 +24,9 @@ import javax.swing.filechooser.FileNameExtensionFilter;
  * с цветом или горячими клавишами (см. {@link PersonalizationDialog} — цвета/
  * профили, {@link HotkeysDialog} — горячие клавиши) — вынесены в отдельное
  * окошко, чтобы каждый раздел персонализации открывался и настраивался
- * независимо от остальных.
+ * независимо от остальных. Переключатели сгруппированы по темам (холст, общая
+ * схема — соединения, общая схема — узлы/автозаполнение, нагрузка, маски) —
+ * плоский список из десятка не связанных на вид галочек плохо читается.
  */
 public class PreferencesDialog extends JDialog {
 
@@ -35,6 +37,7 @@ public class PreferencesDialog extends JDialog {
     private JSpinner snapStrengthSpinner;
     private JCheckBox socketWiringCheck;
     private JCheckBox chainEndpointSocketsCheck;
+    private JCheckBox schemaAutoPopulateCheck;
     private JCheckBox foolProofWiringCheck;
     private JCheckBox schemaScreensAsWiringCheck;
     private JCheckBox connectorDisplayModeCheck;
@@ -54,7 +57,15 @@ public class PreferencesDialog extends JDialog {
         JPanel content = new JPanel();
         content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
         content.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
-        content.add(buildBehaviorPanel());
+        content.add(buildCanvasGroup());
+        content.add(Box.createVerticalStrut(8));
+        content.add(buildSchemaConnectionsGroup());
+        content.add(Box.createVerticalStrut(8));
+        content.add(buildSchemaNodesGroup());
+        content.add(Box.createVerticalStrut(8));
+        content.add(buildLoadGroup());
+        content.add(Box.createVerticalStrut(8));
+        content.add(buildMaskGroup());
         content.add(Box.createVerticalStrut(10));
 
         JPanel closeRow = new JPanel(new FlowLayout(FlowLayout.RIGHT));
@@ -68,9 +79,8 @@ public class PreferencesDialog extends JDialog {
         setLocationRelativeTo(owner);
     }
 
-    private JPanel buildBehaviorPanel() {
-        JPanel body = new JPanel();
-        body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
+    private JPanel buildCanvasGroup() {
+        JPanel body = UiKit.vbox();
         body.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         previewWidgetCheck = new JCheckBox("Мини-превью всей сцены в углу холста (Питание/Сигнал)",
@@ -112,16 +122,27 @@ public class PreferencesDialog extends JDialog {
         snapRow.add(snapStrengthSpinner);
         body.add(snapRow);
 
-        socketWiringCheck = new JCheckBox("Общая схема: линия связи цепляется за конкретный разъём, а не за блок целиком",
+        return (JPanel) UiKit.section("Холст и сцена", body);
+    }
+
+    private JPanel buildSchemaConnectionsGroup() {
+        JPanel body = UiKit.vbox();
+        body.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        socketWiringCheck = new JCheckBox("Линия связи цепляется за конкретный разъём, а не за блок целиком",
                 settings.activeProfile().isSocketWiringEnabled());
         socketWiringCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
         socketWiringCheck.setToolTipText("Включено — конец линии привязывается к нужному разъёму/гнезду карты,"
                 + " с проверкой числа свободных линий на нём. Выключено — линия просто соединяет два блока"
-                + " оборудования целиком, разъёмы в блоках — только справочная информация о комплектации.");
-        socketWiringCheck.addActionListener(e -> settings.setSocketWiringEnabled(socketWiringCheck.isSelected()));
+                + " оборудования целиком, разъёмы в блоках — только справочная информация о комплектации. Открывает"
+                + " настройки ниже, работающие только вместе с этим режимом.");
+        socketWiringCheck.addActionListener(e -> {
+            settings.setSocketWiringEnabled(socketWiringCheck.isSelected());
+            applySocketDependentEnablement();
+        });
         body.add(socketWiringCheck);
 
-        foolProofWiringCheck = new JCheckBox("Общая схема: защита от дурака (нельзя соединять вход со входом и выход с выходом)",
+        foolProofWiringCheck = new JCheckBox("«Защита от дурака» (нельзя соединять вход со входом и выход с выходом)",
                 settings.activeProfile().isFoolProofWiringEnabled());
         foolProofWiringCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
         foolProofWiringCheck.setToolTipText("Блокирует попытку провести линию между двумя входами или двумя"
@@ -130,32 +151,8 @@ public class PreferencesDialog extends JDialog {
                 settings.setFoolProofWiringEnabled(foolProofWiringCheck.isSelected()));
         body.add(foolProofWiringCheck);
 
-        schemaScreensAsWiringCheck = new JCheckBox("Общая схема: узел экрана показывает схему расключения его кабинетов",
-                settings.activeProfile().isSchemaScreensAsWiringDiagram());
-        schemaScreensAsWiringCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
-        schemaScreensAsWiringCheck.setToolTipText("Включено — узел экрана рисует уменьшенную схему коммутации его"
-                + " кабинетов (как в Питании/Сигнале). Выключено — узел экрана выглядит как обычный прямоугольный"
-                + " блок с названием, без деталей расключения.");
-        schemaScreensAsWiringCheck.addActionListener(e ->
-                settings.setSchemaScreensAsWiringDiagram(schemaScreensAsWiringCheck.isSelected()));
-        body.add(schemaScreensAsWiringCheck);
-
-        chainEndpointSocketsCheck = new JCheckBox(
-                "Общая схема: вводные кабинеты цепочек — тоже гнёзда подключения",
-                settings.activeProfile().isChainEndpointSocketsEnabled());
-        chainEndpointSocketsCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
-        chainEndpointSocketsCheck.setToolTipText("Включено — на миниатюре расключения экрана (см. настройку выше)"
-                + " вводной кабинет каждой силовой цепочки, а для сигнала — вводной кабинет основной цепочки и,"
-                + " если задан резерв, вводной кабинет резервной цепочки — становятся гнёздами: к ним можно"
-                + " подвести линию на общей схеме, как к обычному разъёму. Требует включённых «линия цепляется за"
-                + " конкретный разъём» и «узел экрана показывает схему расключения» выше — без них гнёзда"
-                + " кабинетов недоступны.");
-        chainEndpointSocketsCheck.addActionListener(e ->
-                settings.setChainEndpointSocketsEnabled(chainEndpointSocketsCheck.isSelected()));
-        body.add(chainEndpointSocketsCheck);
-
         connectorDisplayModeCheck = new JCheckBox(
-                "Общая схема: показывать каждый разъём карты отдельным гнездом (не группой по типу)",
+                "Показывать каждый разъём карты отдельным гнездом (не группой по типу)",
                 settings.activeProfile().getConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL);
         connectorDisplayModeCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
         connectorDisplayModeCheck.setToolTipText("Выключено — разъёмы одного типа на карте показаны одной строкой"
@@ -168,7 +165,7 @@ public class PreferencesDialog extends JDialog {
         body.add(connectorDisplayModeCheck);
 
         connectorsVerticalCheck = new JCheckBox(
-                "Общая схема: гнёзда разъёмов у верхнего/нижнего края блока (не у левого/правого)",
+                "Гнёзда разъёмов у верхнего/нижнего края блока (не у левого/правого)",
                 settings.activeProfile().isConnectorsVertical());
         connectorsVerticalCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
         connectorsVerticalCheck.setToolTipText("Выключено — гнёзда идут строками сверху вниз у левого (вход)"
@@ -178,7 +175,60 @@ public class PreferencesDialog extends JDialog {
                 settings.setConnectorsVertical(connectorsVerticalCheck.isSelected()));
         body.add(connectorsVerticalCheck);
 
-        loadTrackingCheck = new JCheckBox("Общая схема: контроль электрической нагрузки"
+        return (JPanel) UiKit.section("Общая схема — соединения", body);
+    }
+
+    private JPanel buildSchemaNodesGroup() {
+        JPanel body = UiKit.vbox();
+        body.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        schemaScreensAsWiringCheck = new JCheckBox("Узел экрана показывает схему расключения его кабинетов",
+                settings.activeProfile().isSchemaScreensAsWiringDiagram());
+        schemaScreensAsWiringCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        schemaScreensAsWiringCheck.setToolTipText("Включено — узел экрана рисует уменьшенную схему коммутации его"
+                + " кабинетов (как в Питании/Сигнале). Выключено — узел экрана выглядит как обычный прямоугольный"
+                + " блок с названием, без деталей расключения.");
+        schemaScreensAsWiringCheck.addActionListener(e ->
+                settings.setSchemaScreensAsWiringDiagram(schemaScreensAsWiringCheck.isSelected()));
+        body.add(schemaScreensAsWiringCheck);
+
+        chainEndpointSocketsCheck = new JCheckBox(
+                "Вводные кабинеты цепочек — тоже гнёзда подключения",
+                settings.activeProfile().isChainEndpointSocketsEnabled());
+        chainEndpointSocketsCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        chainEndpointSocketsCheck.setToolTipText("Включено — на миниатюре расключения экрана (см. настройку выше)"
+                + " вводной кабинет каждой силовой цепочки, а для сигнала — вводной кабинет основной цепочки и,"
+                + " если задан резерв, последний кабинет той же цепочки — становятся гнёздами: к ним можно"
+                + " подвести линию на общей схеме, как к обычному разъёму. Доступно только при включённой"
+                + " настройке «линия цепляется за конкретный разъём» в группе «Соединения» выше.");
+        chainEndpointSocketsCheck.addActionListener(e ->
+                settings.setChainEndpointSocketsEnabled(chainEndpointSocketsCheck.isSelected()));
+        body.add(chainEndpointSocketsCheck);
+
+        schemaAutoPopulateCheck = new JCheckBox(
+                "Автозаполнение: при переходе на общую схему добавлять расключенные экраны"
+                        + " и использованные контроллеры",
+                settings.activeProfile().isSchemaAutoPopulateEnabled());
+        schemaAutoPopulateCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        schemaAutoPopulateCheck.setToolTipText("Включено — при переключении с «Расключение экрана» на «Общая схема»"
+                + " уже расключенные экраны и (для сигнала) использованные контроллеры сцены автоматически"
+                + " появляются в схеме, если их там ещё нет — не нужно добавлять их вручную по одному. Если ВДОБАВОК"
+                + " включено «вводные кабинеты цепочек — тоже гнёзда подключения» выше — гнёзда экранов"
+                + " автоматически соединяются с соответствующими портами использованных контроллеров. Уже"
+                + " добавленные вручную узлы и связи не трогает, повторный переход дублей не создаёт. Доступно"
+                + " только при включённой настройке «линия цепляется за конкретный разъём» в группе «Соединения» выше.");
+        schemaAutoPopulateCheck.addActionListener(e ->
+                settings.setSchemaAutoPopulateEnabled(schemaAutoPopulateCheck.isSelected()));
+        body.add(schemaAutoPopulateCheck);
+
+        return (JPanel) UiKit.section("Общая схема — узлы и автозаполнение", body);
+    }
+
+    private JPanel buildLoadGroup() {
+        JPanel body = UiKit.vbox();
+        body.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        loadTrackingCheck = new JCheckBox("Контроль электрической нагрузки"
                 + " (предупреждения о перегрузке цепочек/щитов)",
                 settings.activeProfile().isLoadTrackingEnabled());
         loadTrackingCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -188,6 +238,13 @@ public class PreferencesDialog extends JDialog {
         loadTrackingCheck.addActionListener(e ->
                 settings.setLoadTrackingEnabled(loadTrackingCheck.isSelected()));
         body.add(loadTrackingCheck);
+
+        return (JPanel) UiKit.section("Общая схема — нагрузка", body);
+    }
+
+    private JPanel buildMaskGroup() {
+        JPanel body = UiKit.vbox();
+        body.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         JPanel logoRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         logoRow.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -215,7 +272,19 @@ public class PreferencesDialog extends JDialog {
         logoRow.add(maskLogoPathLabel);
         body.add(logoRow);
 
-        return (JPanel) UiKit.section("Поведение", body);
+        return (JPanel) UiKit.section("Генерация масок", body);
+    }
+
+    /** chainEndpointSocketsCheck/schemaAutoPopulateCheck работают только вместе с
+     *  socketWiringCheck (без него общая схема не различает конкретные гнёзда/порты
+     *  вообще) — недоступны для включения, пока он выключен, чтобы не создавать
+     *  видимость рабочей настройки там, где она молча ничего не даёт. Уже включённое
+     *  состояние при выключении мастер-переключателя не сбрасывается автоматически —
+     *  только становится недоступным для изменения, пока мастер снова не включат. */
+    private void applySocketDependentEnablement() {
+        boolean enabled = socketWiringCheck.isSelected();
+        chainEndpointSocketsCheck.setEnabled(enabled);
+        schemaAutoPopulateCheck.setEnabled(enabled);
     }
 
     private void refresh() {
@@ -227,6 +296,8 @@ public class PreferencesDialog extends JDialog {
         foolProofWiringCheck.setSelected(settings.activeProfile().isFoolProofWiringEnabled());
         schemaScreensAsWiringCheck.setSelected(settings.activeProfile().isSchemaScreensAsWiringDiagram());
         chainEndpointSocketsCheck.setSelected(settings.activeProfile().isChainEndpointSocketsEnabled());
+        schemaAutoPopulateCheck.setSelected(settings.activeProfile().isSchemaAutoPopulateEnabled());
+        applySocketDependentEnablement();
         connectorDisplayModeCheck.setSelected(
                 settings.activeProfile().getConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL);
         connectorsVerticalCheck.setSelected(settings.activeProfile().isConnectorsVertical());
