@@ -40,8 +40,11 @@ import java.io.File;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 
 /**
@@ -2834,6 +2837,65 @@ public class AppModel {
             }
         }
         return n;
+    }
+
+    /** Id кабинетов этого экрана, которые считаются «гнёздами подключения» на общей
+     *  схеме (см. {@link com.vjstb.ledscheme.settings.UserProfile#isChainEndpointSocketsEnabled()}) —
+     *  вводной (первый в {@code cabinetInstanceIds}) кабинет каждой силовой цепочки
+     *  сцены, и для сигнала — вводной кабинет основной цепочки, плюс, если у нее
+     *  задан резервный порт, вводной кабинет цепочки этого резервного порта. Цепочки,
+     *  которые сами являются чьим-то назначенным резервом, отдельно не считаются —
+     *  их вводной кабинет уже добавлен вместе с "хозяйской" цепочкой. Отфильтровано
+     *  только кабинетами {@code screen} (сигнальная цепочка может физически уходить
+     *  на другой экран сцены — гнездо тогда рисуется там, где кабинет реально стоит). */
+    public Set<String> chainEndpointSocketCabinetIds(Screen screen) {
+        Scene scene = sceneContaining(screen);
+        if (scene == null) {
+            return Set.of();
+        }
+        Set<String> ownIds = new HashSet<>();
+        for (CabinetInstance ci : screen.getCabinets()) {
+            ownIds.add(ci.getId());
+        }
+        Set<String> result = new LinkedHashSet<>();
+        for (PowerChain c : scene.getPowerChains()) {
+            List<String> ids = c.getCabinetInstanceIds();
+            if (!ids.isEmpty() && ownIds.contains(ids.get(0))) {
+                result.add(ids.get(0));
+            }
+        }
+        for (SignalChain c : scene.getSignalChains()) {
+            if (isSignalChainBackupTarget(scene, c)) {
+                continue;
+            }
+            List<String> ids = c.getCabinetInstanceIds();
+            if (!ids.isEmpty() && ownIds.contains(ids.get(0))) {
+                result.add(ids.get(0));
+            }
+            if (c.getBackupPortNumber() != null) {
+                SignalChain backupChain = signalChainByPortInScene(scene, c.getBackupPortNumber(), false);
+                List<String> backupIds = backupChain != null ? backupChain.getCabinetInstanceIds() : List.of();
+                if (!backupIds.isEmpty() && ownIds.contains(backupIds.get(0))) {
+                    result.add(backupIds.get(0));
+                }
+            }
+        }
+        return result;
+    }
+
+    /** true — {@code candidate} сам является резервной цепочкой ДРУГОГО порта (его
+     *  {@code portNumber} совпадает с чьим-то {@code backupPortNumber}) — не
+     *  самостоятельная точка входа, учитывается только вместе с основной цепочкой. */
+    private boolean isSignalChainBackupTarget(Scene scene, SignalChain candidate) {
+        if (candidate.getPortNumber() == null) {
+            return false;
+        }
+        for (SignalChain other : scene.getSignalChains()) {
+            if (other != candidate && candidate.getPortNumber().equals(other.getBackupPortNumber())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public void updateSignalPortCount(Screen screen, int count) {

@@ -1802,4 +1802,38 @@ class AppModelTest {
         assertEquals(1, summary.deleted());
         assertTrue(model.getWorkspace().getSharedInterfaceTypes().isEmpty());
     }
+
+    @Test
+    void chainEndpointSocketCabinetIdsCoversPowerEntryAndSignalMainPlusBackupEntries(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 3, 3, 0, 0);
+        model.selectScreen(screen);
+        model.updateSignalPortCount(screen, 8);
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+
+        // Силовая цепочка: только вводной (первый) кабинет — гнездо.
+        model.addPowerChain(1, List.of(ids.get(0), ids.get(1)));
+        // Сигнал без резерва: только вводной кабинет основной цепочки — гнездо.
+        model.addSignalChain(2, false, List.of(ids.get(2), ids.get(3)));
+
+        var noBackup = model.chainEndpointSocketCabinetIds(screen);
+        assertEquals(2, noBackup.size());
+        assertTrue(noBackup.contains(ids.get(0)));
+        assertFalse(noBackup.contains(ids.get(1)), "Конечный (не вводной) кабинет силовой цепочки — не гнездо");
+        assertTrue(noBackup.contains(ids.get(2)));
+        assertFalse(noBackup.contains(ids.get(3)));
+
+        // Порт 2 получает резерв — порт 5. Резервный порт заблокирован для собственной
+        // РУЧНОЙ цепочки (см. addSignalChainRejectsReservedBackupPortDirectly) — в
+        // сегодняшней модели у него есть только пустая цепочка-заглушка (0 кабинетов),
+        // без своего вводного кабинета. Гнёзда не появляется лишнего — ровно то же
+        // множество, что и без резерва (при появлении в будущем способа физически
+        // расключить резервный порт отдельными кабинетами, этот тест должен вырасти).
+        model.setSignalBackupPortLink(2, 5);
+        var withBackup = model.chainEndpointSocketCabinetIds(screen);
+        assertEquals(noBackup, withBackup, "Пустая цепочка-заглушка резервного порта не добавляет гнёзд");
+    }
 }

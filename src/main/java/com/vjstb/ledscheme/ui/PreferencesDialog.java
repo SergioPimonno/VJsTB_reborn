@@ -34,6 +34,7 @@ public class PreferencesDialog extends JDialog {
     private JSpinner snapThresholdSpinner;
     private JSpinner snapStrengthSpinner;
     private JCheckBox socketWiringCheck;
+    private JCheckBox chainEndpointSocketsCheck;
     private JCheckBox foolProofWiringCheck;
     private JCheckBox schemaScreensAsWiringCheck;
     private JCheckBox connectorDisplayModeCheck;
@@ -139,6 +140,20 @@ public class PreferencesDialog extends JDialog {
                 settings.setSchemaScreensAsWiringDiagram(schemaScreensAsWiringCheck.isSelected()));
         body.add(schemaScreensAsWiringCheck);
 
+        chainEndpointSocketsCheck = new JCheckBox(
+                "Общая схема: вводные кабинеты цепочек — тоже гнёзда подключения",
+                settings.activeProfile().isChainEndpointSocketsEnabled());
+        chainEndpointSocketsCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        chainEndpointSocketsCheck.setToolTipText("Включено — на миниатюре расключения экрана (см. настройку выше)"
+                + " вводной кабинет каждой силовой цепочки, а для сигнала — вводной кабинет основной цепочки и,"
+                + " если задан резерв, вводной кабинет резервной цепочки — становятся гнёздами: к ним можно"
+                + " подвести линию на общей схеме, как к обычному разъёму. Требует включённых «линия цепляется за"
+                + " конкретный разъём» и «узел экрана показывает схему расключения» выше — без них гнёзда"
+                + " кабинетов недоступны.");
+        chainEndpointSocketsCheck.addActionListener(e ->
+                settings.setChainEndpointSocketsEnabled(chainEndpointSocketsCheck.isSelected()));
+        body.add(chainEndpointSocketsCheck);
+
         connectorDisplayModeCheck = new JCheckBox(
                 "Общая схема: показывать каждый разъём карты отдельным гнездом (не группой по типу)",
                 settings.activeProfile().getConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL);
@@ -211,6 +226,7 @@ public class PreferencesDialog extends JDialog {
         socketWiringCheck.setSelected(settings.activeProfile().isSocketWiringEnabled());
         foolProofWiringCheck.setSelected(settings.activeProfile().isFoolProofWiringEnabled());
         schemaScreensAsWiringCheck.setSelected(settings.activeProfile().isSchemaScreensAsWiringDiagram());
+        chainEndpointSocketsCheck.setSelected(settings.activeProfile().isChainEndpointSocketsEnabled());
         connectorDisplayModeCheck.setSelected(
                 settings.activeProfile().getConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL);
         connectorsVerticalCheck.setSelected(settings.activeProfile().isConnectorsVertical());
