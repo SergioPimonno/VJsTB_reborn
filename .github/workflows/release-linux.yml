@@ -1,17 +1,17 @@
-name: Release macOS build
+name: Release Linux build
 
-# Собирает нативный .dmg для macOS (с встроенным Java-рантаймом — пользователю
+# Собирает нативный .deb для Linux (с встроенным Java-рантаймом — пользователю
 # не нужно ставить Java отдельно) и прикладывает его к существующему GitHub
 # Release с указанным тегом. jpackage умеет собирать только под ту ОС, на
-# которой запущен, поэтому mac-сборка обязательно идёт на macos-latest раннере,
-# а не локально (разработка ведётся на Windows).
+# которой запущен, поэтому linux-сборка обязательно идёт на ubuntu-latest
+# раннере, а не локально (разработка ведётся на Windows).
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Тег релиза, к которому прикладывать .dmg (например v1.3)'
+        description: 'Тег релиза, к которому прикладывать .deb (например v2.0)'
         required: true
-        default: 'v1.3'
+        default: 'v2.0'
   push:
     tags:
       - 'v*'
@@ -20,8 +20,8 @@ permissions:
   contents: write
 
 jobs:
-  build-macos-dmg:
-    runs-on: macos-latest
+  build-linux-deb:
+    runs-on: ubuntu-latest
     steps:
       - name: Определить тег
         id: ver
@@ -63,10 +63,10 @@ jobs:
           mkdir -p dist-input
           cp target/led-scheme.jar dist-input/led-scheme.jar
 
-      - name: Собрать .dmg (jpackage, со встроенным рантаймом)
+      - name: Собрать .deb (jpackage, со встроенным рантаймом)
         run: |
           jpackage \
-            --type dmg \
+            --type deb \
             --input dist-input \
             --dest dist \
             --name "LED Scheme Designer" \
@@ -74,15 +74,16 @@ jobs:
             --main-class com.vjstb.ledscheme.App \
             --app-version "${{ steps.ver.outputs.version }}" \
             --vendor "VJsTB" \
-            --mac-package-name "LED Scheme Designer"
+            --linux-package-name "led-scheme-designer" \
+            --linux-shortcut
 
-      - name: Загрузить .dmg в релиз
+      - name: Загрузить .deb в релиз
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          DMG=$(find dist -name '*.dmg' | head -n1)
-          mv "$DMG" "dist/LED-Scheme-Designer-${{ steps.ver.outputs.tag }}-mac.dmg"
+          DEB=$(find dist -name '*.deb' | head -n1)
+          mv "$DEB" "dist/LED-Scheme-Designer-${{ steps.ver.outputs.tag }}-linux.deb"
           gh release upload "${{ steps.ver.outputs.tag }}" \
-            "dist/LED-Scheme-Designer-${{ steps.ver.outputs.tag }}-mac.dmg" \
+            "dist/LED-Scheme-Designer-${{ steps.ver.outputs.tag }}-linux.deb" \
             --repo "${{ github.repository }}" \
             --clobber
