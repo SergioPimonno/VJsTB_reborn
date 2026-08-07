@@ -767,10 +767,13 @@ class AppModelTest {
     }
 
     @Test
-    void addSignalChainRejectsReservedBackupPortDirectly(@TempDir Path dir) {
-        // Защита должна срабатывать на уровне AppModel.addSignalChain САМОМ ПО СЕБЕ,
-        // а не только через проверку в UI-колбэке (SignalStagePanel.onPortSelected) —
-        // вызов напрямую, в обход UI, должен точно так же получить отказ.
+    void addSignalChainAllowsWiringPortLevelBackupTarget(@TempDir Path dir) {
+        // Порт-уровневый резерв (backupPortNumber) НЕ блокирует собственную цепочку —
+        // она представляет физический ввод резервного кабеля (гнездо на общей схеме,
+        // см. chainEndpointSocketCabinetIds), а не независимый контент порта. Раньше
+        // это было безусловно запрещено (isPortReservedAsBackup) — теперь запрет уже
+        // ýже, см. isControllerLevelBackupPort и controllerLevelBackupReservesAllItsPorts
+        // (контроллер-уровневый резерв по-прежнему блокирует безусловно).
         AppModel model = freshModel(dir);
         CabinetType type = model.addCabinetType(sampleType());
         model.selectProject(model.addProject("P"));
@@ -781,9 +784,14 @@ class AppModelTest {
 
         model.setSignalBackupPortLink(2, 4);
         assertTrue(model.isPortReservedAsBackup(screen, 4));
+        assertFalse(model.isControllerLevelBackupPort(screen, 4));
 
         List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).limit(1).toList();
-        assertTrue(assertThrowsRuntime(() -> model.addSignalChain(4, false, ids)));
+        model.addSignalChain(4, false, ids);
+        SignalChain backupChain = model.signalChainByPort(screen, 4, false);
+        assertNotNull(backupChain);
+        assertEquals(ids, backupChain.getCabinetInstanceIds());
+
         // Порт, который НЕ зарезервирован, по-прежнему можно расключить как обычно.
         model.addSignalChain(5, false, ids);
         assertNotNull(model.signalChainByPort(screen, 5, false));
@@ -1854,15 +1862,16 @@ class AppModelTest {
         var signal = model.chainEndpointSocketCabinetIds(SchemaMode.SIGNAL, screen);
         assertEquals(java.util.Set.of(ids.get(2)), signal);
 
-        // Порт 2 получает резерв — порт 5. Резервный порт заблокирован для собственной
-        // РУЧНОЙ цепочки (см. addSignalChainRejectsReservedBackupPortDirectly) — в
-        // сегодняшней модели у него есть только пустая цепочка-заглушка (0 кабинетов),
-        // без своего вводного кабинета. Гнёзда не появляется лишнего — ровно то же
-        // множество, что и без резерва (при появлении в будущем способа физически
-        // расключить резервный порт отдельными кабинетами, этот тест должен вырасти).
+        // Порт 2 получает резерв — порт 5, физически расключённый отдельными
+        // кабинетами (см. addSignalChainAllowsWiringPortLevelBackupTarget — порт-
+        // уровневый резерв теперь МОЖЕТ иметь собственную цепочку, представляющую
+        // физический ввод резервного кабеля). Вводной кабинет резервной цепочки
+        // должен тоже стать гнездом, вдобавок к основному.
         model.setSignalBackupPortLink(2, 5);
+        model.addSignalChain(5, false, List.of(ids.get(6), ids.get(7)));
         var signalWithBackup = model.chainEndpointSocketCabinetIds(SchemaMode.SIGNAL, screen);
-        assertEquals(signal, signalWithBackup, "Пустая цепочка-заглушка резервного порта не добавляет гнёзд");
+        assertEquals(java.util.Set.of(ids.get(2), ids.get(6)), signalWithBackup,
+                "Вводной кабинет резервной цепочки порта 5 должен стать гнездом вдобавок к основному");
         assertEquals(power, model.chainEndpointSocketCabinetIds(SchemaMode.POWER, screen),
                 "Назначение сигнального резерва не должно влиять на гнёзда питания");
     }

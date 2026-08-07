@@ -123,7 +123,7 @@ public class SignalStagePanel extends JPanel {
             if (scr == null || activePort == null) {
                 return null;
             }
-            if (model.isPortReservedAsBackup(scr, activePort)) {
+            if (model.isControllerLevelBackupPort(scr, activePort)) {
                 return null;
             }
             // Проверяем по ВСЕЙ сцене, а не только этому экрану — кабинет мог быть
@@ -420,10 +420,10 @@ public class SignalStagePanel extends JPanel {
                     "Контроллер не назначен", JOptionPane.WARNING_MESSAGE);
             return;
         }
-        if (model.isPortReservedAsBackup(scr, port)) {
+        if (model.isControllerLevelBackupPort(scr, port)) {
             JOptionPane.showMessageDialog(this,
-                    "Порт " + port + " назначен резервным для другого порта — он подхватывает сигнал"
-                            + " автоматически и не может иметь собственную ручную цепочку.",
+                    "Порт " + port + " принадлежит контроллеру, целиком зарезервированному под резерв другого"
+                            + " контроллера сцены, — не может иметь собственную цепочку.",
                     "Порт зарезервирован под бэкап", JOptionPane.WARNING_MESSAGE);
             return;
         }
