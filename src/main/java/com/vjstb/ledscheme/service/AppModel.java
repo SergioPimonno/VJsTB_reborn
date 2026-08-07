@@ -2851,15 +2851,19 @@ public class AppModel {
     }
 
     /** Id кабинетов этого экрана, которые считаются «гнёздами подключения» на общей
-     *  схеме (см. {@link com.vjstb.ledscheme.settings.UserProfile#isChainEndpointSocketsEnabled()}) —
-     *  вводной (первый в {@code cabinetInstanceIds}) кабинет каждой силовой цепочки
-     *  сцены, и для сигнала — вводной кабинет основной цепочки, плюс, если у нее
-     *  задан резервный порт, вводной кабинет цепочки этого резервного порта. Цепочки,
-     *  которые сами являются чьим-то назначенным резервом, отдельно не считаются —
-     *  их вводной кабинет уже добавлен вместе с "хозяйской" цепочкой. Отфильтровано
-     *  только кабинетами {@code screen} (сигнальная цепочка может физически уходить
-     *  на другой экран сцены — гнездо тогда рисуется там, где кабинет реально стоит). */
-    public Set<String> chainEndpointSocketCabinetIds(Screen screen) {
+     *  схеме РЕЖИМА {@code mode} (см. {@link com.vjstb.ledscheme.settings.UserProfile#isChainEndpointSocketsEnabled()})
+     *  — для {@link SchemaMode#POWER}: вводной (первый в {@code cabinetInstanceIds})
+     *  кабинет каждой силовой цепочки сцены; для {@link SchemaMode#SIGNAL}: вводной
+     *  кабинет основной цепочки, плюс, если у неё задан резервный порт, вводной
+     *  кабинет цепочки этого резервного порта. Режимы НЕ смешиваются — общая схема
+     *  питания не должна показывать гнёзда сигнальных цепочек и наоборот (баг-репорт:
+     *  на схеме питания рядом с настоящим вводным кабинетом появлялось лишнее гнездо
+     *  от сигнальной цепочки на том же экране). Цепочки, которые сами являются
+     *  чьим-то назначенным резервом, отдельно не считаются — их вводной кабинет уже
+     *  добавлен вместе с "хозяйской" цепочкой. Отфильтровано только кабинетами
+     *  {@code screen} (цепочка может физически уходить на другой экран сцены — гнездо
+     *  тогда рисуется там, где кабинет реально стоит). */
+    public Set<String> chainEndpointSocketCabinetIds(SchemaMode mode, Screen screen) {
         Scene scene = sceneContaining(screen);
         if (scene == null) {
             return Set.of();
@@ -2869,25 +2873,28 @@ public class AppModel {
             ownIds.add(ci.getId());
         }
         Set<String> result = new LinkedHashSet<>();
-        for (PowerChain c : scene.getPowerChains()) {
-            List<String> ids = c.getCabinetInstanceIds();
-            if (!ids.isEmpty() && ownIds.contains(ids.get(0))) {
-                result.add(ids.get(0));
+        if (mode == SchemaMode.POWER) {
+            for (PowerChain c : scene.getPowerChains()) {
+                List<String> ids = c.getCabinetInstanceIds();
+                if (!ids.isEmpty() && ownIds.contains(ids.get(0))) {
+                    result.add(ids.get(0));
+                }
             }
-        }
-        for (SignalChain c : scene.getSignalChains()) {
-            if (isSignalChainBackupTarget(scene, c)) {
-                continue;
-            }
-            List<String> ids = c.getCabinetInstanceIds();
-            if (!ids.isEmpty() && ownIds.contains(ids.get(0))) {
-                result.add(ids.get(0));
-            }
-            if (c.getBackupPortNumber() != null) {
-                SignalChain backupChain = signalChainByPortInScene(scene, c.getBackupPortNumber(), false);
-                List<String> backupIds = backupChain != null ? backupChain.getCabinetInstanceIds() : List.of();
-                if (!backupIds.isEmpty() && ownIds.contains(backupIds.get(0))) {
-                    result.add(backupIds.get(0));
+        } else {
+            for (SignalChain c : scene.getSignalChains()) {
+                if (isSignalChainBackupTarget(scene, c)) {
+                    continue;
+                }
+                List<String> ids = c.getCabinetInstanceIds();
+                if (!ids.isEmpty() && ownIds.contains(ids.get(0))) {
+                    result.add(ids.get(0));
+                }
+                if (c.getBackupPortNumber() != null) {
+                    SignalChain backupChain = signalChainByPortInScene(scene, c.getBackupPortNumber(), false);
+                    List<String> backupIds = backupChain != null ? backupChain.getCabinetInstanceIds() : List.of();
+                    if (!backupIds.isEmpty() && ownIds.contains(backupIds.get(0))) {
+                        result.add(backupIds.get(0));
+                    }
                 }
             }
         }
