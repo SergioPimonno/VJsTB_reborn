@@ -135,6 +135,11 @@ public class SettingsManager {
         persist();
     }
 
+    public void setChainEndpointSocketsEnabled(boolean enabled) {
+        activeProfile().setChainEndpointSocketsEnabled(enabled);
+        persist();
+    }
+
     public void setFoolProofWiringEnabled(boolean enabled) {
         activeProfile().setFoolProofWiringEnabled(enabled);
         persist();
