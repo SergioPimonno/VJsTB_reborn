@@ -22,6 +22,11 @@ public class AppSettings {
     private String authToken;
     private String authUsername;
     private String authRole;
+    /** Версия, для которой пользователь уже закрыл уведомление об обновлении (см.
+     *  ui.UpdateNoticeDialog/App.checkForUpdatesInBackground) — не переспрашиваем
+     *  снова про ЭТУ ЖЕ версию при следующих запусках, но уведомим про более новую,
+     *  если она появится. null — ничего ещё не закрывали. */
+    private String dismissedUpdateVersion;
 
     public String getActiveProfileId() {
         return activeProfileId;
@@ -77,5 +82,13 @@ public class AppSettings {
 
     public void setAuthRole(String authRole) {
         this.authRole = authRole;
+    }
+
+    public String getDismissedUpdateVersion() {
+        return dismissedUpdateVersion;
+    }
+
+    public void setDismissedUpdateVersion(String dismissedUpdateVersion) {
+        this.dismissedUpdateVersion = dismissedUpdateVersion;
     }
 }

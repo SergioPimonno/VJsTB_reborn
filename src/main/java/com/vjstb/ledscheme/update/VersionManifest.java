@@ -1,5 +1,8 @@
 package com.vjstb.ledscheme.update;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vjstb.ledscheme.sync.LibrarySyncClient;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -10,27 +13,23 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Список доступных версий приложения — читается из простого текстового файла
- * в репозитории (не JSON, чтобы его было легко править вручную при выпуске новой
- * версии): по строке на версию, формат {@code версия|тег релиза|available|заметка},
- * где available — «yes»/«no» (строки со «no» или без этого поля скрыты от
- * пользователя — черновик/снятая с публикации версия). Строки, начинающиеся с
- * {@code #}, и пустые строки игнорируются.
+ * Список доступных версий приложения — читается с сервера (общая библиотека,
+ * синглтон-вид {@code VERSION_MANIFEST}, редактируется через админ-консоль
+ * ledscheme-admin, см. серверный class-javadoc LibraryItemKind). Раньше читался из
+ * статического {@code versions.txt} в этом же GitHub-репозитории, правившегося
+ * вручную при каждом релизе — перенесено на сервер, чтобы список обновлений можно
+ * было менять без нового коммита/пуша, и чтобы клиент мог автоматически проверять
+ * его при запуске (см. App.checkForUpdatesInBackground).
  *
- * <p>Подход и формат сознательно взяты из уже проверенного в другом приложении
- * автора (dxvfix) механизма самообновления — никакого сравнения версий тут нет:
- * пользователь сам выбирает нужную версию из списка доступных (см. UpdateDialog),
- * а не получает автоматически "самую новую".</p>
+ * <p>Никакого автовыбора "самой новой версии" тут по-прежнему нет для РУЧНОГО
+ * обновления (см. UpdateDialog — пользователь сам выбирает версию из списка);
+ * сравнение версий появилось только для автоматической проверки при запуске (см.
+ * {@link #isNewer}), которая лишь предупреждает, а не подменяет файл сама.</p>
  */
 public final class VersionManifest {
 
-    /** Сырой текстовый файл в репозитории — публикуется вручную при выпуске
-     *  релиза (сам этот класс его не пишет, только читает). Ветка по умолчанию в
-     *  этом репозитории — master (не main, как изначально ошибочно было записано
-     *  здесь — из-за этого сервер отвечал 404, и список версий не загружался,
-     *  см. баг-репорт, Task #95/v1.5). */
-    public static final String MANIFEST_URL =
-            "https://raw.githubusercontent.com/SergioPimonno/VJsTB_reborn/master/versions.txt";
+    private static final ObjectMapper MAPPER = new ObjectMapper()
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
 
     public record Entry(String version, String releaseTag, boolean available, String notes) {
         @Override
@@ -39,16 +38,26 @@ public final class VersionManifest {
         }
     }
 
+    /** Зеркалит payload синглтона VERSION_MANIFEST на сервере (см. серверный
+     *  class-javadoc LibraryItemKind и админский VersionManifestPanel) — те же
+     *  имена полей у {@link Entry}, Jackson сопоставляет по имени напрямую. */
+    private record Payload(List<Entry> versions) {
+    }
+
     private VersionManifest() {
     }
 
     /** Скачивает и разбирает манифест — бросает IOException при сетевой ошибке
-     *  (вызывающая сторона показывает это пользователю, см. UpdateDialog). */
+     *  или если синглтон ещё ни разу не сохранён с админ-консоли (см. серверный
+     *  {@code LibraryController.singleton}, 404 в этом случае) — вызывающая сторона
+     *  показывает это пользователю (см. UpdateDialog) либо тихо пропускает
+     *  автопроверку при запуске (см. App). */
     public static List<Entry> fetch() throws IOException, InterruptedException {
         HttpClient client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
-        HttpRequest request = HttpRequest.newBuilder(URI.create(MANIFEST_URL))
+        HttpRequest request = HttpRequest.newBuilder(
+                        URI.create(LibrarySyncClient.DEFAULT_BASE_URL + "/api/library/singleton/VERSION_MANIFEST"))
                 .timeout(Duration.ofSeconds(15))
                 .GET()
                 .build();
@@ -56,10 +65,12 @@ public final class VersionManifest {
         if (response.statusCode() != 200) {
             throw new IOException("Сервер вернул код " + response.statusCode());
         }
-        return parse(response.body());
+        LibrarySyncClient.LibraryItemDto dto = MAPPER.readValue(response.body(), LibrarySyncClient.LibraryItemDto.class);
+        Payload payload = MAPPER.readValue(dto.payloadJson(), Payload.class);
+        return payload.versions() != null ? payload.versions() : List.of();
     }
 
-    /** Только доступные (available=yes) версии — то, что нужно показать в списке. */
+    /** Только доступные (available=true) версии — то, что нужно показать в списке. */
     public static List<Entry> fetchAvailable() throws IOException, InterruptedException {
         List<Entry> all = fetch();
         List<Entry> result = new ArrayList<>();
@@ -71,26 +82,36 @@ public final class VersionManifest {
         return result;
     }
 
-    public static List<Entry> parse(String text) {
-        List<Entry> result = new ArrayList<>();
-        for (String rawLine : text.split("\n")) {
-            String line = rawLine.strip();
-            if (line.isEmpty() || line.startsWith("#")) {
-                continue;
-            }
-            String[] parts = line.split("\\|", -1);
-            if (parts.length < 2) {
-                continue;
-            }
-            String version = parts[0].strip();
-            String tag = parts[1].strip();
-            boolean available = parts.length > 2 && "yes".equalsIgnoreCase(parts[2].strip());
-            String notes = parts.length > 3 ? parts[3].strip() : "";
-            if (version.isEmpty() || tag.isEmpty()) {
-                continue;
-            }
-            result.add(new Entry(version, tag, available, notes));
+    /** Простое сравнение точечных версий вида "2.0"/"1.6.1" по числовым сегментам
+     *  (отсутствующий сегмент == 0, нечисловой сегмент сравнивается как строка —
+     *  этого достаточно для схемы версионирования этого проекта, полноценный
+     *  semver тут не нужен). {@code candidate > current}. */
+    public static boolean isNewer(String candidate, String current) {
+        if (candidate == null || candidate.isBlank()) {
+            return false;
         }
-        return result;
+        if (current == null || current.isBlank()) {
+            return true;
+        }
+        String[] a = candidate.trim().split("\\.");
+        String[] b = current.trim().split("\\.");
+        int len = Math.max(a.length, b.length);
+        for (int i = 0; i < len; i++) {
+            String sa = i < a.length ? a[i] : "0";
+            String sb = i < b.length ? b[i] : "0";
+            int cmp = compareSegment(sa, sb);
+            if (cmp != 0) {
+                return cmp > 0;
+            }
+        }
+        return false;
+    }
+
+    private static int compareSegment(String a, String b) {
+        try {
+            return Integer.compare(Integer.parseInt(a), Integer.parseInt(b));
+        } catch (NumberFormatException ex) {
+            return a.compareTo(b);
+        }
     }
 }
