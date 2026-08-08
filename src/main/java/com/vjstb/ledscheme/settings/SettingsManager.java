@@ -218,6 +218,15 @@ public class SettingsManager {
         persist();
     }
 
+    public String getDismissedUpdateVersion() {
+        return settings.getDismissedUpdateVersion();
+    }
+
+    public void setDismissedUpdateVersion(String version) {
+        settings.setDismissedUpdateVersion(version);
+        persist();
+    }
+
     public double getLayoutProportion(String key, double defaultValue) {
         Double v = activeProfile().getLayout().get(key);
         return v != null ? v : defaultValue;
