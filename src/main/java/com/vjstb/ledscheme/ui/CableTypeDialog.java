@@ -17,6 +17,7 @@ import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JTextField;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 
@@ -55,6 +56,7 @@ public class CableTypeDialog extends JDialog {
     private final JPanel outputHost = new JPanel(outputCards);
     private final JPanel inputHost = new JPanel(inputCards);
     private final JLabel preview = new JLabel(" ");
+    private final JTextField fixedLengthField = new JTextField();
     private String result;
 
     public CableTypeDialog(Window owner, AppModel model) {
@@ -98,6 +100,12 @@ public class CableTypeDialog extends JDialog {
         endInput.add(new JLabel("Тип"));
         endInput.add(inputHost);
         form.add(endInput);
+        form.add(Box.createVerticalStrut(6));
+
+        JPanel lengthRow = new JPanel(new GridLayout(0, 2, 6, 4));
+        lengthRow.add(new JLabel("Фиксированная длина, м (необязательно)"));
+        lengthRow.add(fixedLengthField);
+        form.add(lengthRow);
         form.add(Box.createVerticalStrut(8));
 
         preview.setForeground(Palette.MUTED);
@@ -215,6 +223,13 @@ public class CableTypeDialog extends JDialog {
 
     public SchemaMode getMode() {
         return (SchemaMode) modeCombo.getSelectedItem();
+    }
+
+    /** {@code null}, если поле пустое или не разобралось как число/выражение —
+     *  переходник тогда без фиксированной длины (учитывается в спецификации только
+     *  по количеству). */
+    public Double getFixedLengthM() {
+        return MathExpr.tryEval(fixedLengthField.getText());
     }
 
     /** Показывает диалог; возвращает собранную подпись кабеля или null при отмене. */

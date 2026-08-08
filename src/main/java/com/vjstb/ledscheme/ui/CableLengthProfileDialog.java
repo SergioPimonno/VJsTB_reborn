@@ -1,9 +1,11 @@
 package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.model.CableLengthProfile;
+import com.vjstb.ledscheme.model.SchemaMode;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
+import java.awt.GridLayout;
 import java.awt.Window;
 import java.util.ArrayList;
 import java.util.List;
@@ -12,6 +14,7 @@ import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
+import javax.swing.JComboBox;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JList;
@@ -23,11 +26,13 @@ import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
 import javax.swing.SpinnerNumberModel;
 
-/** Добавление/редактирование каталога доступных длин катушек кабеля определённого
- *  типа (тот же приём для редактируемого списка значений, что и у других
- *  диалогов библиотеки — здесь просто числа вместо строк). */
+/** Добавление/редактирование каталога доступных длин катушек ОДНОРОДНОГО кабеля
+ *  определённого типа (тот же приём для редактируемого списка значений, что и у
+ *  других диалогов библиотеки — здесь просто числа вместо строк). Режим (питание/
+ *  сигнал) — как у CableType, для отдельных списков в WireLabelDialog. */
 public class CableLengthProfileDialog extends JDialog {
 
+    private final JComboBox<SchemaMode> modeCombo = new JComboBox<>(SchemaMode.values());
     private final JTextField nameField = new JTextField();
     private final DefaultListModel<Double> lengthsModel = new DefaultListModel<>();
     private final JList<Double> lengthsList = new JList<>(lengthsModel);
@@ -37,15 +42,31 @@ public class CableLengthProfileDialog extends JDialog {
     private CableLengthProfile result;
 
     public CableLengthProfileDialog(Window owner, CableLengthProfile existing) {
+        this(owner, existing, SchemaMode.POWER, null);
+    }
+
+    /** initialMode — режим по умолчанию для НОВОГО каталога (например, режим схемы,
+     *  из которой открыт диалог сохранения свободного текста в библиотеку); для
+     *  редактирования существующего каталога используется его собственный режим.
+     *  initialName — предзаполненное имя (та же ситуация — текст, набранный в
+     *  WireLabelDialog, до сохранения в библиотеку). */
+    public CableLengthProfileDialog(Window owner, CableLengthProfile existing, SchemaMode initialMode,
+                                     String initialName) {
         super(owner, existing == null ? "Новый каталог длин кабеля" : "Редактирование каталога длин",
                 ModalityType.APPLICATION_MODAL);
         existingId = existing != null ? existing.getId() : null;
         if (existing != null) {
+            modeCombo.setSelectedItem(existing.getMode() != null ? existing.getMode() : SchemaMode.POWER);
             nameField.setText(existing.getName());
             for (Double len : existing.getAvailableLengthsM()) {
                 lengthsModel.addElement(len);
             }
             marginSpinner.setValue(existing.getMarginPercent());
+        } else {
+            modeCombo.setSelectedItem(initialMode != null ? initialMode : SchemaMode.POWER);
+            if (initialName != null) {
+                nameField.setText(initialName);
+            }
         }
         lengthsList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
 
@@ -54,6 +75,11 @@ public class CableLengthProfileDialog extends JDialog {
 
         JPanel top = new JPanel();
         top.setLayout(new BoxLayout(top, BoxLayout.Y_AXIS));
+        JPanel modeRow = new JPanel(new GridLayout(0, 2, 6, 4));
+        modeRow.add(new JLabel("Режим"));
+        modeRow.add(modeCombo);
+        top.add(modeRow);
+        top.add(Box.createVerticalStrut(6));
         JPanel nameRow = new JPanel(new BorderLayout(6, 0));
         nameRow.add(new JLabel("Метка типа провода (как в подписи связи схемы)"), BorderLayout.NORTH);
         nameRow.add(nameField, BorderLayout.CENTER);
@@ -151,6 +177,7 @@ public class CableLengthProfileDialog extends JDialog {
         if (existingId != null) {
             result.setId(existingId);
         }
+        result.setMode((SchemaMode) modeCombo.getSelectedItem());
         result.setName(name);
         result.setAvailableLengthsM(lengths);
         result.setMarginPercent((Double) marginSpinner.getValue());

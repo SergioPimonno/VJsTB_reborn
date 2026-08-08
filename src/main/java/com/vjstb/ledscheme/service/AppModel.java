@@ -1370,10 +1370,31 @@ public class AppModel {
         return result;
     }
 
+    /** Переходник (см. class-javadoc CableType) по подписи, без учёта регистра —
+     *  тот же ключ совпадения, что и у {@link #cableLengthProfileByName}, для
+     *  вывода его фиксированной длины в спецификацию коммутации (см.
+     *  ui.stage.OutputStagePanel), когда подпись линии не совпала ни с одним
+     *  каталогом длин (значит это, скорее всего, переходник, а не однородный кабель). */
+    public CableType cableTypeByLabel(String label) {
+        if (label == null) {
+            return null;
+        }
+        for (CableType c : getCableTypes()) {
+            if (c.getLabel().equalsIgnoreCase(label)) {
+                return c;
+            }
+        }
+        return null;
+    }
+
+    public CableType addCableType(SchemaMode mode, String label) {
+        return addCableType(mode, label, null);
+    }
+
     /** Добавляет кабель в библиотеку, если такой подписи для этого режима ещё нет
      *  (без исключения — просто ничего не делает повторно, вызывается и из "Сохранить
      *  как кабель" в диалогах, где случайное повторное сохранение не должно мешать). */
-    public CableType addCableType(SchemaMode mode, String label) {
+    public CableType addCableType(SchemaMode mode, String label, Double fixedLengthM) {
         String trimmed = label == null ? "" : label.trim();
         if (trimmed.isEmpty()) {
             throw new IllegalArgumentException("Укажите подпись кабеля");
@@ -1384,18 +1405,20 @@ public class AppModel {
             }
         }
         CableType cable = new CableType(mode, trimmed);
+        cable.setFixedLengthM(fixedLengthM);
         workspace.getCableTypes().add(cable);
         changed();
         return cable;
     }
 
-    public void updateCableType(CableType cable, SchemaMode mode, String label) {
+    public void updateCableType(CableType cable, SchemaMode mode, String label, Double fixedLengthM) {
         String trimmed = label == null ? "" : label.trim();
         if (trimmed.isEmpty()) {
             throw new IllegalArgumentException("Укажите подпись кабеля");
         }
         cable.setMode(mode);
         cable.setLabel(trimmed);
+        cable.setFixedLengthM(fixedLengthM);
         changed();
     }
 
@@ -1539,6 +1562,19 @@ public class AppModel {
             }
         }
         return null;
+    }
+
+    /** Каталоги длин этого режима — включая записи без явного режима (см. javadoc
+     *  CableLengthProfile.mode: созданы до появления этого поля, показываются в
+     *  обоих режимах до первого явного редактирования). */
+    public List<CableLengthProfile> cableLengthProfilesForMode(SchemaMode mode) {
+        List<CableLengthProfile> result = new ArrayList<>();
+        for (CableLengthProfile p : getCableLengthProfiles()) {
+            if (p.getMode() == null || p.getMode() == mode) {
+                result.add(p);
+            }
+        }
+        return result;
     }
 
     private void requireUniqueCableLengthProfileName(String name, String ignoreId) {

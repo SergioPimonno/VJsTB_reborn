@@ -1,10 +1,12 @@
 package com.vjstb.ledscheme.ui;
 
+import com.vjstb.ledscheme.model.CableLengthProfile;
 import com.vjstb.ledscheme.model.CableType;
 import com.vjstb.ledscheme.model.PowerConnectorType;
 import com.vjstb.ledscheme.model.SchemaEdge;
 import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.settings.SettingsManager;
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
@@ -29,21 +31,22 @@ import javax.swing.SwingUtilities;
 /**
  * Заготовка структурированной подписи связи схемы: каждая стрелка — это
  * коммутация, поэтому подпись всегда имеет вид «N×Тип» (плюс метраж для питания).
- * Для питания предложены типовые разъёмы (CEE 125/63/32/16A, Schuko, переходник),
- * для сигнала — типовые интерфейсы, плюс кабели из пользовательской библиотеки
- * (см. AppModel.cableTypesForMode) — оба списка редактируемы (можно вписать своё),
- * кроме случая коммутации через гнёзда (см. lockedConnectorType).
+ * Список типов — СТРОГО из двух библиотек (никаких хардкодных абстрактных
+ * пресетов вроде голого "CEE 16A"/"HDMI" текстом, который ни на что не ссылается):
+ * {@link CableLengthProfile} (однородный кабель, для которого считается сплайсовка
+ * в спецификации — см. service.CableSpecCalc) и {@link CableType} (переходники —
+ * разъёмы на концах разные, у них может быть фиксированная длина вместо каталога,
+ * см. class-javadoc CableType). Комбобокс всё равно остаётся редактируемым —
+ * свободный текст допускается как запасной вариант (пока нужного типа ещё нет в
+ * библиотеке), кнопки внизу дают тут же зарегистрировать его в нужной библиотеке
+ * (локально и/или предложить в общую — см. {@link #registerAsAdapter}/
+ * {@link #registerAsLengthProfile}) — кроме случая коммутации через гнёзда (см.
+ * lockedConnectorType), где список сужен до вариантов под конкретный разъём.
  */
 public class WireLabelDialog extends JDialog {
 
-    private static final String[] POWER_PRESETS = {
-            "CEE 125A", "CEE 63A", "CEE 32A", "CEE 16A", "Schuko", "Переходник CEE-Schuko", "ВВГ 5х6"
-    };
-    private static final String[] SIGNAL_PRESETS = {
-            "SDI", "HDMI", "DisplayPort", "DVI", "Fiber", "Ethernet", "Genlock (SDI)", "XLR", "USB-C", "Thunderbolt"
-    };
-
     private final AppModel model;
+    private final SettingsManager settings;
     private final SchemaMode mode;
     private final JSpinner countSpinner = new JSpinner(new SpinnerNumberModel(1, 1, 999, 1));
     private final JComboBox<String> typeCombo;
@@ -51,8 +54,8 @@ public class WireLabelDialog extends JDialog {
     private final JLabel preview = new JLabel(" ");
     private boolean confirmed = false;
 
-    public WireLabelDialog(Window owner, AppModel model, SchemaMode mode, SchemaEdge edge) {
-        this(owner, model, mode, edge, Set.of());
+    public WireLabelDialog(Window owner, AppModel model, SettingsManager settings, SchemaMode mode, SchemaEdge edge) {
+        this(owner, model, settings, mode, edge, Set.of());
     }
 
     /** connectorHints — типы разъёма питания кабинетов на одном из концов связи
@@ -63,9 +66,9 @@ public class WireLabelDialog extends JDialog {
      *  (переопределение типа по ячейке): список кабелей объединяет варианты под
      *  ВСЕ присутствующие типы, а не только первый попавшийся. Пустое множество —
      *  тип не определён или не применимо (например, режим «Сигнал») — список не сужается. */
-    public WireLabelDialog(Window owner, AppModel model, SchemaMode mode, SchemaEdge edge,
+    public WireLabelDialog(Window owner, AppModel model, SettingsManager settings, SchemaMode mode, SchemaEdge edge,
                             Set<PowerConnectorType> connectorHints) {
-        this(owner, model, mode, edge, connectorHints, null, null, null, true);
+        this(owner, model, settings, mode, edge, connectorHints, null, null, null, true);
     }
 
     /** lockedConnectorType — если связь заведена через конкретные гнёзда разъёмов
@@ -87,10 +90,11 @@ public class WireLabelDialog extends JDialog {
      *  который расчёт не учитывает — тогда ограничение снимается целиком (до 999),
      *  а не просто ослабляется, иначе оно бы просто перепрыгнуло к другому пределу
      *  без реальной возможности переопределить как считает нужным сам инженер. */
-    public WireLabelDialog(Window owner, AppModel model, SchemaMode mode, SchemaEdge edge,
+    public WireLabelDialog(Window owner, AppModel model, SettingsManager settings, SchemaMode mode, SchemaEdge edge,
                             Set<PowerConnectorType> connectorHints, String lockedConnectorType, Integer maxCount,
                             String maxCountReason, boolean enforceCap) {
-        this(owner, model, mode, edge, connectorHints, lockedConnectorType, maxCount, maxCountReason, enforceCap, false);
+        this(owner, model, settings, mode, edge, connectorHints, lockedConnectorType, maxCount, maxCountReason,
+                enforceCap, false);
     }
 
     /** forceSingleCable — связь заведена через КОНКРЕТНОЕ гнездо при включённом
@@ -99,11 +103,12 @@ public class WireLabelDialog extends JDialog {
      *  физический разъём, поэтому «сколько кабелей в этой линии» перестаёт быть
      *  осмысленным вопросом — всегда 1, спиннер блокируется (не скрывается целиком —
      *  так виднее, что значение НЕ забыто, а намеренно зафиксировано). */
-    public WireLabelDialog(Window owner, AppModel model, SchemaMode mode, SchemaEdge edge,
+    public WireLabelDialog(Window owner, AppModel model, SettingsManager settings, SchemaMode mode, SchemaEdge edge,
                             Set<PowerConnectorType> connectorHints, String lockedConnectorType, Integer maxCount,
                             String maxCountReason, boolean enforceCap, boolean forceSingleCable) {
         super(owner, "Подпись связи (коммутация)", ModalityType.APPLICATION_MODAL);
         this.model = model;
+        this.settings = settings;
         this.mode = mode;
 
         int spinnerMax = enforceCap && maxCount != null ? maxCount : 999;
@@ -114,7 +119,12 @@ public class WireLabelDialog extends JDialog {
             countSpinner.setEnabled(false);
         }
 
-        List<String> libraryLabels = model != null ? model.cableTypesForMode(mode).stream()
+        // Список типов — строго из библиотек (см. class-javadoc): каталог длин
+        // (однородный кабель, сплайсуется) + кабели/переходники (разные концы,
+        // опционально фиксированная длина). Никаких хардкодных абстрактных пресетов.
+        List<String> lengthProfileNames = model != null ? model.cableLengthProfilesForMode(mode).stream()
+                .map(CableLengthProfile::getName).toList() : List.of();
+        List<String> adapterLabels = model != null ? model.cableTypesForMode(mode).stream()
                 .map(CableType::getLabel).toList() : List.of();
         boolean locked = lockedConnectorType != null;
         String[] presets;
@@ -123,10 +133,10 @@ public class WireLabelDialog extends JDialog {
             // релевантный(е) переходник(и) под разъём кабинета на другом конце связи,
             // включая совпадающие кабели библиотеки, чтобы их можно было ВЫБРАТЬ
             // (не просто получить один синтезированный вариант без права выбора).
-            presets = lockedOptionsFor(lockedConnectorType, connectorHints, libraryLabels);
+            presets = lockedOptionsFor(lockedConnectorType, connectorHints, lengthProfileNames, adapterLabels);
         } else {
-            presets = mode == SchemaMode.POWER ? powerPresetsFor(connectorHints, libraryLabels)
-                    : mergeWithLibrary(SIGNAL_PRESETS, libraryLabels);
+            presets = mode == SchemaMode.POWER ? powerPresetsFor(connectorHints, lengthProfileNames, adapterLabels)
+                    : mergeLists(lengthProfileNames, adapterLabels);
         }
         typeCombo = new JComboBox<>(presets);
         // Гнездо всё равно ограничивает СВОБОДНЫЙ текст (нельзя вписать что угодно —
@@ -140,10 +150,14 @@ public class WireLabelDialog extends JDialog {
         form.add(countSpinner);
         form.add(new JLabel(locked ? "Тип (по разъёму гнезда)" : "Тип"));
         form.add(typeCombo);
-        if (mode == SchemaMode.POWER) {
-            form.add(new JLabel("Метраж, м (необязательно)"));
-            form.add(lengthField);
-        }
+        // Раньше поле показывалось только для питания (у сигнала обычно короткие
+        // патч-кабели, длина не важна для спецификации) — но теперь у сигнала тоже
+        // бывают зарегистрированные однородные типы со сплайсовкой (например, Fiber
+        // MMF LC/SC на десятки-сотни метров между МХ/CVT), для которых длина как раз
+        // критична, а задать её было негде (баг-репорт). Показываем всегда,
+        // необязательно — короткие сигнальные кабели просто оставляют поле пустым.
+        form.add(new JLabel("Метраж, м (необязательно)"));
+        form.add(lengthField);
 
         if (!forceSingleCable && edge.getWireCount() != null) {
             countSpinner.setValue(Math.min(edge.getWireCount(), spinnerMax));
@@ -215,14 +229,20 @@ public class WireLabelDialog extends JDialog {
             clearRequested = true;
             dispose();
         });
-        JButton saveToLibrary = new JButton("💾 В библиотеку кабелей");
-        saveToLibrary.setToolTipText("Сохранить текущий тип как кабель библиотеки — будет предложен"
-                + " в списке в следующий раз");
-        saveToLibrary.addActionListener(e -> saveCurrentTypeToLibrary());
-        saveToLibrary.setEnabled(model != null);
+        JButton saveAsAdapter = new JButton("💾 Как переходник…");
+        saveAsAdapter.setToolTipText("Разъёмы на концах разные — сохранить в библиотеку переходников"
+                + " (см. class-javadoc CableType), появится в списке в следующий раз");
+        saveAsAdapter.addActionListener(e -> registerAsAdapter());
+        saveAsAdapter.setEnabled(model != null);
+        JButton saveAsLengthProfile = new JButton("💾 Как каталог длин…");
+        saveAsLengthProfile.setToolTipText("Однородный кабель (одинаковый разъём на обоих концах) — сохранить"
+                + " в каталог длин, чтобы для него считалась сплайсовка в спецификации");
+        saveAsLengthProfile.addActionListener(e -> registerAsLengthProfile());
+        saveAsLengthProfile.setEnabled(model != null);
 
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        buttons.add(saveToLibrary);
+        buttons.add(saveAsAdapter);
+        buttons.add(saveAsLengthProfile);
         buttons.add(clear);
         buttons.add(cancel);
         buttons.add(ok);
@@ -250,21 +270,25 @@ public class WireLabelDialog extends JDialog {
      *  экрана на этом конце связи; больше ОДНОГО значения — экран смешивает
      *  несколько типов кабинетов, тогда список объединяет варианты под все типы
      *  сразу (см. WireLabelDialog(..., Set) выше), а не только под первый.
-     *  libraryLabels — пользовательские кабели (см. AppModel.cableTypesForMode),
-     *  добавляются в конец списка. */
-    private static String[] powerPresetsFor(Set<PowerConnectorType> connectorHints, List<String> libraryLabels) {
+     *  lengthProfileNames — зарегистрированные однородные типы (каталог длин),
+     *  adapterLabels — зарегистрированные переходники (см. AppModel.cableTypesForMode). */
+    private static String[] powerPresetsFor(Set<PowerConnectorType> connectorHints, List<String> lengthProfileNames,
+                                             List<String> adapterLabels) {
         if (connectorHints.isEmpty()) {
-            return mergeWithLibrary(POWER_PRESETS, libraryLabels);
+            return mergeLists(lengthProfileNames, adapterLabels);
         }
         java.util.LinkedHashSet<String> presets = new LinkedHashSet<>();
         for (PowerConnectorType hint : connectorHints) {
             switch (hint) {
                 case POWERCON -> presets.add("CEE 16A → PowerCon");
                 case TRUECON -> presets.add("CEE 16A → TrueCON");
-                case OTHER -> { for (String p : POWER_PRESETS) presets.add(p); }
+                // Разъём кабинета неизвестен (не PowerCon/TrueCon специфично) —
+                // нет конкретного переходника для подсказки, показываем как есть
+                // зарегистрированные однородные типы.
+                case OTHER -> presets.addAll(lengthProfileNames);
             }
         }
-        presets.addAll(compatibleLibraryCables(libraryLabels, connectorHints));
+        presets.addAll(compatibleLibraryCables(adapterLabels, connectorHints));
         return presets.toArray(new String[0]);
     }
 
@@ -302,27 +326,37 @@ public class WireLabelDialog extends JDialog {
         };
     }
 
-    private static String[] mergeWithLibrary(String[] builtins, List<String> libraryLabels) {
-        LinkedHashSet<String> all = new LinkedHashSet<>(List.of(builtins));
-        all.addAll(libraryLabels);
+    private static String[] mergeLists(List<String> a, List<String> b) {
+        LinkedHashSet<String> all = new LinkedHashSet<>(a);
+        all.addAll(b);
         return all.toArray(new String[0]);
     }
 
     /** Список вариантов ТИПА для связи, заведённой через конкретное гнездо (см.
      *  lockedConnectorType в SchemaCanvasPanel.editEdgeLabel) — всегда включает голый
-     *  номинал самого гнезда, плюс, если разъём кабинета на другом конце известен
-     *  (ровно один намёк), переходник под него (тот же вариант, что и в свободном
-     *  вводе — "CEE 16A → TrueCON"/"CEE 16A → PowerCon"), плюс любые кабели
-     *  библиотеки, чья подпись содержит номинал гнезда (например, если инженер уже
-     *  сохранил свой собственный вариант переходника под этот номинал). Дубликаты
-     *  и уже комбинированные значения (гнездо само промаркировано с "→") не плодятся. */
+     *  номинал самого гнезда, плюс:
+     *  — зарегистрированные однородные типы каталога длин, чьё имя начинается с этого
+     *  номинала (например, «Fiber MMF LC»/«Fiber MMF SC» для голого «Fiber» —
+     *  баг-репорт: раньше каталог длин тут вообще не смотрели, доступен был только
+     *  абстрактный голый номинал, хотя в библиотеке уже есть конкретные типы);
+     *  — если разъём кабинета на другом конце известен (ровно один намёк), переходник
+     *  под него (тот же вариант, что и в свободном вводе — "CEE 16A → TrueCON"/
+     *  "CEE 16A → PowerCon"), плюс любые переходники библиотеки, чья подпись содержит
+     *  номинал гнезда (например, если инженер уже сохранил свой собственный вариант
+     *  переходника под этот номинал). Дубликаты и уже комбинированные значения
+     *  (гнездо само промаркировано с "→") не плодятся. */
     public static String[] lockedOptionsFor(String bareType, Set<PowerConnectorType> connectorHints,
-                                             List<String> libraryLabels) {
+                                             List<String> lengthProfileNames, List<String> adapterLabels) {
         LinkedHashSet<String> options = new LinkedHashSet<>();
         options.add(bareType);
         if (!bareType.contains("→")) {
+            for (String name : lengthProfileNames) {
+                if (name.startsWith(bareType)) {
+                    options.add(name);
+                }
+            }
             List<String> adapterCandidates = new java.util.ArrayList<>();
-            for (String lib : libraryLabels) {
+            for (String lib : adapterLabels) {
                 if (lib.startsWith(bareType) && lib.contains("→")) {
                     adapterCandidates.add(lib);
                 }
@@ -364,7 +398,11 @@ public class WireLabelDialog extends JDialog {
         return String.valueOf(typeCombo.getEditor().getItem()).trim();
     }
 
-    private void saveCurrentTypeToLibrary() {
+    /** Разъёмы на концах разные (см. class-javadoc CableType) — сохраняет локально
+     *  в библиотеку переходников, затем сразу предлагает отправить его же в общую
+     *  библиотеку на модерацию (см. {@link #offerToPropose}): админ не может
+     *  предусмотреть заранее все переходники, которые реально нужны на площадке. */
+    private void registerAsAdapter() {
         if (model == null) {
             return;
         }
@@ -373,9 +411,46 @@ public class WireLabelDialog extends JDialog {
         if (label == null) {
             return;
         }
-        model.addCableType(dlg.getMode(), label);
-        JOptionPane.showMessageDialog(this, "Сохранено в библиотеку кабелей: " + label, "Библиотека кабелей",
-                JOptionPane.INFORMATION_MESSAGE);
+        CableType saved = model.addCableType(dlg.getMode(), label, dlg.getFixedLengthM());
+        JOptionPane.showMessageDialog(this, "Сохранено в библиотеку переходников: " + label,
+                "Библиотека кабелей", JOptionPane.INFORMATION_MESSAGE);
+        offerToPropose("CABLE", saved.getLabel(), saved);
+    }
+
+    /** Однородный кабель (одинаковый разъём на обоих концах) — сохраняет локально
+     *  в каталог длин (для сплайсовки, см. class-javadoc CableLengthProfile), затем
+     *  так же предлагает его в общую библиотеку (см. {@link #registerAsAdapter}). */
+    private void registerAsLengthProfile() {
+        if (model == null) {
+            return;
+        }
+        String prefill = currentTypeText();
+        CableLengthProfile created = new CableLengthProfileDialog(SwingUtilities.getWindowAncestor(this), null, mode,
+                prefill.isEmpty() ? null : prefill).showDialog();
+        if (created == null) {
+            return;
+        }
+        try {
+            model.addCableLengthProfile(created);
+        } catch (RuntimeException ex) {
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "Проверка данных", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        JOptionPane.showMessageDialog(this, "Сохранено в каталог длин: " + created.getName(),
+                "Каталог длин кабелей", JOptionPane.INFORMATION_MESSAGE);
+        offerToPropose("CABLE_LENGTH_PROFILE", created.getName(), created);
+    }
+
+    /** Сразу за локальным сохранением — предложить тот же элемент в общую
+     *  библиотеку на модерацию (см. ProposeDialog), чтобы не нужно было отдельно
+     *  искать его потом на этапе «Библиотеки». ProposeDialog сам разберётся, если
+     *  пользователь не вошёл в аккаунт (см. его javadoc), поэтому вызывается
+     *  безусловно; settings == null (в контексте без настроек) — пропускаем. */
+    private void offerToPropose(String libraryItemKind, String itemName, Object item) {
+        if (settings == null) {
+            return;
+        }
+        ProposeDialog.show(SwingUtilities.getWindowAncestor(this), settings, libraryItemKind, itemName, item);
     }
 
     private void updatePreview() {

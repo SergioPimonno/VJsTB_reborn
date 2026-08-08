@@ -1091,7 +1091,7 @@ public class SchemaCanvasPanel extends JPanel {
         // продолжает работать как обычная связь узел-узел, режим на неё не влияет.
         boolean forceSingleCable = settings.activeProfile().getConnectorDisplayMode(mode) == ConnectorDisplayMode.INDIVIDUAL
                 && (edge.getFromPortId() != null || edge.getToPortId() != null);
-        WireLabelDialog dlg = new WireLabelDialog(SwingUtilities.getWindowAncestor(this), model, mode, edge,
+        WireLabelDialog dlg = new WireLabelDialog(SwingUtilities.getWindowAncestor(this), model, settings, mode, edge,
                 hints, lockedType, maxCount, maxCountReason, settings.activeProfile().isFoolProofWiringEnabled(),
                 forceSingleCable);
         dlg.setVisible(true);
