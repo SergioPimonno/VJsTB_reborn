@@ -248,6 +248,10 @@ public class VisualizationStagePanel extends JPanel {
         placementsTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         placementsTable.getColumnModel().getColumn(8)
                 .setCellEditor(new DefaultCellEditor(new JComboBox<>(MaskColorPreset.values())));
+        placementsTable.getColumnModel().getColumn(5)
+                .setCellEditor(com.vjstb.ledscheme.ui.MathFields.integerCellEditor());
+        placementsTable.getColumnModel().getColumn(6)
+                .setCellEditor(com.vjstb.ledscheme.ui.MathFields.integerCellEditor());
         JScrollPane scroll = new JScrollPane(placementsTable);
         scroll.setPreferredSize(new Dimension(200, 180));
         panel.add(scroll, BorderLayout.CENTER);

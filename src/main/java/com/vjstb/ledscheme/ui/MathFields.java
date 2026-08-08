@@ -1,8 +1,13 @@
 package com.vjstb.ledscheme.ui;
 
+import java.awt.Color;
 import java.text.ParseException;
+import javax.swing.BorderFactory;
+import javax.swing.DefaultCellEditor;
 import javax.swing.JFormattedTextField;
 import javax.swing.JSpinner;
+import javax.swing.JTextField;
+import javax.swing.table.TableCellEditor;
 import javax.swing.text.DefaultFormatterFactory;
 import javax.swing.text.NumberFormatter;
 
@@ -80,5 +85,38 @@ public final class MathFields {
         wrapped.setAllowsInvalid(original.getAllowsInvalid());
         wrapped.setCommitsOnValidEdit(original.getCommitsOnValidEdit());
         field.setFormatterFactory(new DefaultFormatterFactory(wrapped));
+    }
+
+    /** То же самое (см. class-javadoc), но для целочисленной колонки {@link
+     *  javax.swing.JTable} — штатный {@code JTable} для {@code Integer.class} строит
+     *  свой editor через reflection-конструктор {@code new Integer(String)}, который
+     *  просто не понимает выражений и подсвечивает поле красным (пример из бага:
+     *  ячейка «X,px»/«Y,px» таблицы гридов генератора масок отвергала «128*20»).
+     *  Не оборачиваем существующий editor, как для {@link JSpinner} выше, — у
+     *  {@code JTable} его штатная реализация не выставляет наружу форматтер, проще
+     *  завести отдельный {@link DefaultCellEditor} на {@link JTextField}. */
+    public static TableCellEditor integerCellEditor() {
+        JTextField field = new JTextField();
+        field.setHorizontalAlignment(JTextField.RIGHT);
+        javax.swing.border.Border defaultBorder = field.getBorder();
+        return new DefaultCellEditor(field) {
+            @Override
+            public boolean stopCellEditing() {
+                Double value = MathExpr.tryEval(field.getText());
+                if (value == null) {
+                    field.setBorder(BorderFactory.createLineBorder(Color.RED));
+                    return false;
+                }
+                field.setBorder(defaultBorder);
+                field.setText(String.valueOf(Math.round(value)));
+                return super.stopCellEditing();
+            }
+
+            @Override
+            public Object getCellEditorValue() {
+                Double value = MathExpr.tryEval(field.getText());
+                return value != null ? (int) Math.round(value) : 0;
+            }
+        };
     }
 }

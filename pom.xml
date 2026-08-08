@@ -23,10 +23,18 @@
         <jackson.version>2.17.2</jackson.version>
         <flatlaf.version>3.5.1</flatlaf.version>
         <junit.version>5.10.3</junit.version>
+        <poi.version>5.2.5</poi.version>
         <main.class>com.vjstb.ledscheme.App</main.class>
     </properties>
 
     <dependencies>
+        <!-- Экспорт спецификации в .xlsx (ui.stage.OutputStagePanel / service.SpecXlsxWriter) -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>${poi.version}</version>
+        </dependency>
+
         <!-- Общие доменные POJO для видов общей библиотеки (см. ledscheme-model) —
              нужно один раз собрать `mvn install` в этом соседнем проекте перед
              сборкой этого. -->
