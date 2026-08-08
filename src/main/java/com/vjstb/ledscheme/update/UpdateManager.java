@@ -208,17 +208,43 @@ public final class UpdateManager {
         }
         long pid = ProcessHandle.current().pid();
         Path scriptFile = Files.createTempFile("led-scheme-update-", ".bat");
+        // Баг-репорт: "скачало, перезапустилось, осталась старая версия" — copy
+        // сразу после выхода процесса иногда молча не срабатывает (антивирус ещё
+        // сканирует свежескачанный jar, либо JVM не сразу освобождает файловый
+        // хендл на Windows), а старый код не проверял результат copy вообще и
+        // просто перезапускал СТАРЫЙ jar как ни в чём не бывало. Теперь — до 15
+        // попыток по секунде (сверяем итоговый размер файла с размером скачанного
+        // — простая, но достаточная проверка успешности copy) — и НЕ через
+        // `timeout /t`, а через `ping -n 2 127.0.0.1`: у detached-процесса без
+        // консоли (см. ниже, вывод в NUL) `timeout` мгновенно падает с "Input
+        // redirection is not supported" и НЕ ждёт вообще — воспроизведено и
+        // проверено локально, именно это на практике сводило все 15 попыток к
+        // одной, за доли секунды, пока файл ещё гарантированно занят. `ping`
+        // такой зависимости от консоли не имеет — стандартный приём для паузы в
+        // detached/service-скриптах на Windows.
         String script = "@echo off\r\n"
-                + "setlocal\r\n"
+                + "setlocal enabledelayedexpansion\r\n"
                 + "set TARGET=\"" + currentJar.toAbsolutePath() + "\"\r\n"
                 + "set SOURCE=\"" + downloadedJar.toAbsolutePath() + "\"\r\n"
                 + ":waitloop\r\n"
                 + "tasklist /FI \"PID eq " + pid + "\" | find \"" + pid + "\" >nul\r\n"
                 + "if not errorlevel 1 (\r\n"
-                + "  timeout /t 1 /nobreak >nul\r\n"
+                + "  ping -n 2 127.0.0.1 >nul\r\n"
                 + "  goto waitloop\r\n"
                 + ")\r\n"
-                + "copy /Y %SOURCE% %TARGET% >nul\r\n"
+                + "for %%A in (%SOURCE%) do set SOURCESIZE=%%~zA\r\n"
+                + "set RETRIES=15\r\n"
+                + ":copyloop\r\n"
+                + "copy /Y %SOURCE% %TARGET% >nul 2>&1\r\n"
+                + "set TARGETSIZE=0\r\n"
+                + "if exist %TARGET% for %%A in (%TARGET%) do set TARGETSIZE=%%~zA\r\n"
+                + "if not \"!TARGETSIZE!\"==\"!SOURCESIZE!\" (\r\n"
+                + "  set /a RETRIES-=1\r\n"
+                + "  if !RETRIES! gtr 0 (\r\n"
+                + "    ping -n 2 127.0.0.1 >nul\r\n"
+                + "    goto copyloop\r\n"
+                + "  )\r\n"
+                + ")\r\n"
                 + "start \"\" javaw -jar %TARGET%\r\n"
                 + "del %SOURCE% >nul 2>&1\r\n"
                 + "(goto) 2>nul & del \"%~f0\"\r\n";
