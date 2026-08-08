@@ -75,7 +75,8 @@ jobs:
             --app-version "${{ steps.ver.outputs.version }}" \
             --vendor "VJsTB" \
             --linux-package-name "led-scheme-designer" \
-            --linux-shortcut
+            --linux-shortcut \
+            --icon packaging/icon-main.png
 
       - name: Загрузить .deb в релиз
         env:

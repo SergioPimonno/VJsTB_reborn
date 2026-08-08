@@ -71,6 +71,7 @@ public class MainFrame extends JFrame {
         setMinimumSize(new Dimension(1100, 760));
         setLocationRelativeTo(null);
         setLayout(new BorderLayout());
+        setIconImages(AppIcons.loadAppIconImages());
 
         setJMenuBar(new MainMenuBar(this, model, settings, this::showShortcuts));
 

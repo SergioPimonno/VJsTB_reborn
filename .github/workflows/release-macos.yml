@@ -74,7 +74,8 @@ jobs:
             --main-class com.vjstb.ledscheme.App \
             --app-version "${{ steps.ver.outputs.version }}" \
             --vendor "VJsTB" \
-            --mac-package-name "LED Scheme Designer"
+            --mac-package-name "LED Scheme Designer" \
+            --icon packaging/icon-main.icns
 
       - name: Загрузить .dmg в релиз
         env:
