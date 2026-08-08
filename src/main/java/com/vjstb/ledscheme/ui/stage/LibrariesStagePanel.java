@@ -548,7 +548,8 @@ public class LibrariesStagePanel extends JPanel {
     private JPanel buildCableLibrary() {
         cableList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         cableRenderer = new NamedRenderer<CableType>(
-                c -> (c.getMode() == SchemaMode.POWER ? "[Питание] " : "[Сигнал] ") + c.getLabel(), c -> "",
+                c -> (c.getMode() == SchemaMode.POWER ? "[Питание] " : "[Сигнал] ") + c.getLabel(),
+                c -> c.getFixedLengthM() != null ? UiKit.fmt(c.getFixedLengthM()) + " м (фиксированная длина)" : "",
                 c -> model.isSharedCableType(c.getId()));
         cableList.setCellRenderer(cableRenderer);
 
@@ -558,7 +559,7 @@ public class LibrariesStagePanel extends JPanel {
             com.vjstb.ledscheme.ui.CableTypeDialog dlg = new com.vjstb.ledscheme.ui.CableTypeDialog(topWindow(), model);
             String label = dlg.showDialog();
             if (label != null) {
-                tryRun(() -> model.addCableType(dlg.getMode(), label));
+                tryRun(() -> model.addCableType(dlg.getMode(), label, dlg.getFixedLengthM()));
             }
         });
         Runnable deleteSelectedCable = () -> {
@@ -596,7 +597,8 @@ public class LibrariesStagePanel extends JPanel {
     private JPanel buildCableLengthProfileLibrary() {
         cableLengthProfileList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         cableLengthProfileRenderer = new NamedRenderer<CableLengthProfile>(
-                CableLengthProfile::getName,
+                p -> (p.getMode() == null ? "" : p.getMode() == SchemaMode.POWER ? "[Питание] " : "[Сигнал] ")
+                        + p.getName(),
                 p -> {
                     java.util.List<String> lens = new java.util.ArrayList<>();
                     for (Double len : p.getAvailableLengthsM()) {
