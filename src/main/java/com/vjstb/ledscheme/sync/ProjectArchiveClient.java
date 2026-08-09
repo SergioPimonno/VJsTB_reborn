@@ -109,7 +109,7 @@ public class ProjectArchiveClient {
 
     private HttpResponse<String> send(String token, String method, String path, String body)
             throws IOException, InterruptedException {
-        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+        HttpClient client = TrustedHttp.client();
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(LibrarySyncClient.DEFAULT_BASE_URL + path))
                 .timeout(Duration.ofSeconds(20))
                 .header("Authorization", "Bearer " + token);

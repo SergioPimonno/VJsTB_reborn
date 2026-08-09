@@ -3,6 +3,7 @@ package com.vjstb.ledscheme.update;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vjstb.ledscheme.sync.LibrarySyncClient;
+import com.vjstb.ledscheme.sync.TrustedHttp;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -53,9 +54,7 @@ public final class VersionManifest {
      *  показывает это пользователю (см. UpdateDialog) либо тихо пропускает
      *  автопроверку при запуске (см. App). */
     public static List<Entry> fetch() throws IOException, InterruptedException {
-        HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(10))
-                .build();
+        HttpClient client = TrustedHttp.client();
         HttpRequest request = HttpRequest.newBuilder(
                         URI.create(LibrarySyncClient.DEFAULT_BASE_URL + "/api/library/singleton/VERSION_MANIFEST"))
                 .timeout(Duration.ofSeconds(15))

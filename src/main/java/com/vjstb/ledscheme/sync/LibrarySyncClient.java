@@ -20,8 +20,13 @@ import java.util.List;
  */
 public class LibrarySyncClient {
 
-    /** Свой сервер один — адрес пока константа, без поля в настройках (см. план). */
-    public static final String DEFAULT_BASE_URL = "http://138.16.177.176:8081";
+    /** Свой сервер один — адрес пока константа, без поля в настройках (см. план).
+     *  HTTPS через Caddy на нестандартном порту (см. CLAUDE.md секция 2) —
+     *  8081 больше не открыт наружу, сервер слушает только 127.0.0.1:8081,
+     *  публично доступен только через reverse-proxy на 8443. Сертификат
+     *  самоподписанный (домена пока нет) — доверие настраивается точечно,
+     *  см. {@link TrustedHttp}. */
+    public static final String DEFAULT_BASE_URL = "https://138.16.177.176:8443";
 
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
@@ -47,9 +52,7 @@ public class LibrarySyncClient {
     }
 
     public ChangesResult fetchChanges(long since) throws IOException, InterruptedException {
-        HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(10))
-                .build();
+        HttpClient client = TrustedHttp.client();
         HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/api/library/changes?since=" + since))
                 .timeout(Duration.ofSeconds(15))
                 .GET()
