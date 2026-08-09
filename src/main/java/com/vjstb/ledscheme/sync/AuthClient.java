@@ -50,9 +50,7 @@ public class AuthClient {
 
     private AuthResult call(String path, String username, String password) throws IOException, InterruptedException {
         String body = MAPPER.writeValueAsString(Map.of("username", username, "password", password));
-        HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(10))
-                .build();
+        HttpClient client = TrustedHttp.client();
         HttpRequest request = HttpRequest.newBuilder(URI.create(LibrarySyncClient.DEFAULT_BASE_URL + path))
                 .timeout(Duration.ofSeconds(15))
                 .header("Content-Type", "application/json")

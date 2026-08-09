@@ -46,7 +46,7 @@ public class CabinetConfigClient {
     }
 
     private HttpResponse<String> send(String path) throws IOException, InterruptedException {
-        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+        HttpClient client = TrustedHttp.client();
         HttpRequest request = HttpRequest.newBuilder(URI.create(LibrarySyncClient.DEFAULT_BASE_URL + path))
                 .timeout(Duration.ofSeconds(20))
                 .GET()

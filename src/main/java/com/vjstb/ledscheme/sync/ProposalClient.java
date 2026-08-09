@@ -41,9 +41,7 @@ public class ProposalClient {
         body.put("justification", justification);
         String json = MAPPER.writeValueAsString(body);
 
-        HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(10))
-                .build();
+        HttpClient client = TrustedHttp.client();
         HttpRequest request = HttpRequest.newBuilder(URI.create(LibrarySyncClient.DEFAULT_BASE_URL + "/api/proposals"))
                 .timeout(Duration.ofSeconds(15))
                 .header("Content-Type", "application/json")

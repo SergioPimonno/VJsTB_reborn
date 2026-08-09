@@ -23,6 +23,10 @@ out/
 # Maven shade plugin artifact
 dependency-reduced-pom.xml
 
+# Local jpackage output
+dist-input/
+dist/
+
 # Data / local runtime
 *.log
 data/
