@@ -1,24 +1,34 @@
 package com.vjstb.ledscheme.service;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /**
- * СТРУКТУРНЫЕ (не golden-байтовые) тесты {@link NovaLctScrWriter#writeStandardMultiScreen}.
- * Пользователь восстановил реальный 2-экранный образец ({@code 2scr.scr}) из Корзины, и формулы
- * ниже (счётчик экранов, длина/содержимое хвостового блока — {@code 231×N}/{@code screenCount}
- * в {@code tail[2:4]}/{@code tail[132]}) сверены с ним точно (см. javadoc
- * {@link NovaLctScrWriter#writeStandardMultiScreen}) — НО сам образец описывает два ПУСТЫХ экрана
- * с плейсхолдер-подобными полями (cols=100/rows=0 у экрана 0), поэтому побайтовое воспроизведение
- * ЦЕЛОГО файла как golden-теста не имеет смысла (наш writer никогда не строит такую вырожденную
- * сетку) — эти тесты по-прежнему проверяют только внутреннюю согласованность метода на
- * "нормальных" входных данных, не сами байты 2scr.scr.
+ * Golden-байтовые регрессионные тесты {@link NovaLctScrWriter#writeStandardMultiScreen} — фиксируют
+ * РЕАЛЬНЫЙ вывод NovaLCT (не наш собственный), как {@code NovaLctScrWriterTest} для одноэкранного
+ * писателя. Раньше (до этой сессии) единственным реальным образцом был {@code 2scr.scr} — два ПУСТЫХ
+ * экрана (0 кабинетных записей, placeholder-подобные поля), подтверждавший только структуру
+ * контейнера, не семантику полей. Теперь есть 3 НЕПУСТЫХ образца, специально подготовленных и
+ * сохранённых пользователем из реальной NovaLCT для проверки именно этого писателя:
+ * <ul>
+ *   <li>{@code twoPlainScreens} — 2 независимых экрана разного размера с ненулевым зазором
+ *   Coordinate X между ними (проверяет, что офсет — реальная пиксельная позиция на канвасе, не
+ *   просто визуальный порядок).</li>
+ *   <li>{@code threePlusScreens} — 3 экрана (формула хвостового блока {@code 133+40×N} раньше была
+ *   экстраполирована всего по 2 точкам N=1,2).</li>
+ *   <li>{@code multiCardAcrossScreens} — 2 экрана на РАЗНЫХ физических Sending Card (card0/card1),
+ *   не просто разных портах одной карты.</li>
+ * </ul>
+ * Байтовый разбор всех четырёх (включая упомянутый выше {@code 2scr.scr}) привёл к пересмотру
+ * структурной модели метода — см. подробности в его javadoc.
  */
 class NovaLctMultiScreenWriterTest {
 
@@ -87,4 +97,109 @@ class NovaLctMultiScreenWriterTest {
         String json = "[{\"si\":0,\"x1\":0,\"y1\":0,\"x2\":0,\"y2\":0,\"x3\":0,\"y3\":0,\"x4\":0,\"y4\":0}]";
         return recordCount0 * 17 + 6 + 2 + json.length();
     }
+
+    /** Простое расключение "сверху вниз по столбцу" (как в реальных образцах ниже — пользователь
+     *  прописывал их не серпантином, а по столбцам подряд) — cell(0,0) получает seq 0 неявно (см.
+     *  class-javadoc NovaLctScrWriter, для неё запись не пишется). */
+    private static Map<NovaLctScrWriter.CellKey, NovaLctScrWriter.Rec> columnMajorChain(
+            int cols, int rows, int card, int port) {
+        Map<NovaLctScrWriter.CellKey, NovaLctScrWriter.Rec> cells = new java.util.HashMap<>();
+        int seq = 0;
+        for (int col = 0; col < cols; col++) {
+            for (int row = 0; row < rows; row++) {
+                cells.put(new NovaLctScrWriter.CellKey(col, row),
+                        new NovaLctScrWriter.Rec(row, col, card, port, seq));
+                seq++;
+            }
+        }
+        return cells;
+    }
+
+    @Test
+    void matchesRealSample_twoPlainScreens_differentSizesWithCanvasGap() {
+        NovaLctScrWriter.ScreenBlock a = new NovaLctScrWriter.ScreenBlock(3, 2, 128, 128, 0,
+                columnMajorChain(3, 2, 0, 0));
+        NovaLctScrWriter.ScreenBlock b = new NovaLctScrWriter.ScreenBlock(2, 3, 128, 128, 640,
+                columnMajorChain(2, 3, 0, 1));
+
+        byte[] actual = NovaLctScrWriter.writeStandardMultiScreen(List.of(a, b));
+        byte[] expected = decode(TWO_PLAIN_SCREENS_BASE64);
+        assertArrayEquals(expected, actual);
+    }
+
+    @Test
+    void matchesRealSample_threePlusScreens() {
+        NovaLctScrWriter.ScreenBlock a = new NovaLctScrWriter.ScreenBlock(2, 2, 128, 128, 0,
+                columnMajorChain(2, 2, 0, 0));
+        NovaLctScrWriter.ScreenBlock b = new NovaLctScrWriter.ScreenBlock(2, 2, 128, 128, 512,
+                columnMajorChain(2, 2, 0, 1));
+        NovaLctScrWriter.ScreenBlock c = new NovaLctScrWriter.ScreenBlock(2, 2, 128, 128, 1024,
+                columnMajorChain(2, 2, 0, 2));
+
+        byte[] actual = NovaLctScrWriter.writeStandardMultiScreen(List.of(a, b, c));
+        byte[] expected = decode(THREE_PLUS_SCREENS_BASE64);
+        assertArrayEquals(expected, actual);
+    }
+
+    @Test
+    void matchesRealSample_multiCardAcrossScreens_differentSendingCards() {
+        NovaLctScrWriter.ScreenBlock x = new NovaLctScrWriter.ScreenBlock(2, 2, 128, 128, 0,
+                columnMajorChain(2, 2, 0, 0));
+        NovaLctScrWriter.ScreenBlock y = new NovaLctScrWriter.ScreenBlock(2, 2, 128, 128, 512,
+                columnMajorChain(2, 2, 1, 0));
+
+        byte[] actual = NovaLctScrWriter.writeStandardMultiScreen(List.of(x, y));
+        byte[] expected = decode(MULTI_CARD_ACROSS_SCREENS_BASE64);
+        assertArrayEquals(expected, actual);
+    }
+
+    private static byte[] decode(String base64) {
+        return Base64.getDecoder().decode(base64);
+    }
+
+    private static final String TWO_PLAIN_SCREENS_BASE64 =
+            "RFNDSSw5gAAAAPIBAADVAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA6QP8AAEBkAZgBAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADuA+8xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAbQEAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACcAAAAHAAAAABAAAAAAADAAIAAAAAAAAAAAAAAAAAgACAAAEAAAEAAACAAAAA"
+            + "AQCAAIAAAQAAAgCAAAAAAQAAAIAAgAABAAADAIAAgAABAAEAgACAAAEAAAQAAAEAAAIAAACAAIAAAQAABQAAAYAAAgABAIAA"
+            + "gAABAQCAAgAAAgADAAABAACAAgAAAAAAAIAAgAABAAEBAIACgAAAAAEAgACAAAEAAQIAgAIAAQAAAgCAAIAAAQABAwAAAwAA"
+            + "AQAAAIAAgAABAAEEAAADgAABAAEAgACAAAEAAQUAAAMAAQEAAgCAAIAAAYMAW3sic2kiOjAsIngxIjowLCJ5MSI6MCwieDIi"
+            + "OjAsInkyIjowLCJ4MyI6MCwieTMiOjAsIng0IjowLCJ5NCI6MH0seyJzaSI6MSwieDEiOjAsInkxIjowLCJ4MiI6MCwieTIi"
+            + "OjAsIngzIjowLCJ5MyI6MCwieDQiOjAsInk0IjowfV3qA84BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAACAAEAAeQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAHkAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+    private static final String THREE_PLUS_SCREENS_BASE64 =
+            "RFNDSRhIgAAAAEECAAD9AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA6QP8AAEBkAZgBAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADuA6FBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAewEAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADTgAAAE4AAABOAAAAAQAAAAAAAgACAAAAAAAAAAAAAAAAAIAAgAABAAABAAAA"
+            + "gAAAAAEAgACAAAEAAAIAgAAAAAEAAACAAIAAAQAAAwCAAIAAAQABAIAAgAABAQAAAgAAAgACAAABAAAAAgAAAAAAAIAAgAAB"
+            + "AAEBAAACgAAAAAEAgACAAAEAAQIAgAIAAAEAAACAAIAAAQABAwCAAoAAAQABAIAAgAABAQAABAAAAgACAAACAAAABAAAAAAA"
+            + "AIAAgAABAAIBAAAEgAAAAAEAgACAAAEAAgIAgAQAAAEAAACAAIAAAQACAwCABIAAAQABAIAAgAABxABbeyJzaSI6MCwieDEi"
+            + "OjAsInkxIjowLCJ4MiI6MCwieTIiOjAsIngzIjowLCJ5MyI6MCwieDQiOjAsInk0IjowfSx7InNpIjoxLCJ4MSI6MCwieTEi"
+            + "OjAsIngyIjowLCJ5MiI6MCwieDMiOjAsInkzIjowLCJ4NCI6MCwieTQiOjB9LHsic2kiOjIsIngxIjowLCJ5MSI6MCwieDIi"
+            + "OjAsInkyIjowLCJ4MyI6MCwieTMiOjAsIng0IjowLCJ5NCI6MH1d6gO1AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwABAAHkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAB"
+            + "5AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAeQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            + "AAAAAA==";
+
+    private static final String MULTI_CARD_ACROSS_SCREENS_BASE64 =
+            "RFNDSXQygAAAAK4BAADVAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA6QP8AAEBkAZgBAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADuA7grAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAKQEAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACTgAAAE4AAAABAAAAAAACAAIAAAAAAAAAAAAAAAAAgACAAAEAAAEAAACAAAAA"
+            + "AQCAAIAAAQAAAgCAAAAAAQAAAIAAgAABAAADAIAAgAABAAEAgACAAAEBAAACAAACAAIAAQAAAAACAAAAAAAAgACAAAEBAAEA"
+            + "AAKAAAAAAQCAAIAAAQEAAgCAAgAAAQAAAIAAgAABAQADAIACgAABAAEAgACAAAGDAFt7InNpIjowLCJ4MSI6MCwieTEiOjAs"
+            + "IngyIjowLCJ5MiI6MCwieDMiOjAsInkzIjowLCJ4NCI6MCwieTQiOjB9LHsic2kiOjEsIngxIjowLCJ5MSI6MCwieDIiOjAs"
+            + "InkyIjowLCJ4MyI6MCwieTMiOjAsIng0IjowLCJ5NCI6MH1d6gPOAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgABAAHkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAB5AAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 }
