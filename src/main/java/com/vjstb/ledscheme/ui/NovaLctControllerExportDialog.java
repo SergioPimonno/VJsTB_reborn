@@ -50,11 +50,15 @@ import javax.swing.filechooser.FileNameExtensionFilter;
  * "дыры" между ними получают {@code card=0xFF} ("blank"), см. javadoc метода) —
  * рекомендуемый, подтверждённый и на вырожденном случае, и на реальном образце
  * {@code 111.scr} путь — либо экспортировать как несколько ОТДЕЛЬНЫХ экранов в
- * одном файле (см. {@link NovaLctCombineHelper#splitSeparate} /
- * {@link NovaLctScrWriter#writeStandardMultiScreen}) — это best-effort
- * мультиэкранный под-формат, разобранный лишь по заметкам об одном (уже
- * недоступном) реальном образце, НЕ подтверждено реальной загрузкой — предлагается
- * только за отдельным строгим предупреждением (см. {@link #confirmMultiScreenExperimentalWarning}). */
+ * одном файле (см. {@link NovaLctCombineHelper#splitSeparateGrouped} /
+ * {@link NovaLctScrWriter#writeStandardMultiScreen}) — сам писатель ПОДТВЕРЖДЁН
+ * побайтово 4 реальными образцами (2026-08-09). В этом режиме экраны МОЖНО
+ * группировать (Ctrl+клик в {@link LctPresetMasterDialog} + «Группировать») —
+ * несколько экранов проекта тогда сливаются в ОДИН из нескольких NovaLCT-экранов
+ * (тем же blank-механизмом, что и Combine, но в границах группы, а не всей сетки)
+ * — реальный кейс, ранее вообще не поддерживавшийся ({@code splitSeparate} мог
+ * только 1:1). Экран без явной группы остаётся отдельным NovaLCT-экраном, как и
+ * раньше. */
 public final class NovaLctControllerExportDialog {
 
     private NovaLctControllerExportDialog() {
@@ -87,13 +91,18 @@ public final class NovaLctControllerExportDialog {
         });
 
         JPanel panel = new JPanel(new BorderLayout(0, 8));
-        panel.setPreferredSize(new java.awt.Dimension(360, panel.getPreferredSize().height));
         panel.add(new JLabel("Контроллер для экспорта:"), BorderLayout.NORTH);
         panel.add(controllerCombo, BorderLayout.CENTER);
-        JLabel hint = new JLabel();
+        // ВАЖНО: JOptionPane пакует диалог ОДИН раз при показе, в отличие от обычного
+        // JDialog/GuideDialog -- UiKit.bindHtmlWrapWidth рассчитан на живой, уже
+        // видимый контейнер (ставит текст асинхронно через invokeLater/слушатель
+        // resize), здесь на момент паковки диалога подпись ещё пустая, отчего реальная
+        // (тогда уже более высокая) подпись наезжает на комбобокс поверх него (баг-репорт
+        // с наложением текста). Ширина обёртки фиксирована заранее (360-24=336px) —
+        // async-подгонка тут не нужна, задаём HTML сразу с готовой шириной.
+        JLabel hint = new JLabel("<html><body style='width:336px'>Экспортирует ВСЁ, что расключено через"
+                + " выбранный контроллер, — с любого экрана сцены, а не только текущего.</body></html>");
         panel.add(hint, BorderLayout.SOUTH);
-        UiKit.bindHtmlWrapWidth(hint, panel, () -> "Экспортирует ВСЁ, что расключено через выбранный"
-                + " контроллер, — с любого экрана сцены, а не только текущего.");
 
         if (JOptionPane.showConfirmDialog(owner, panel, "Экспорт NovaLCT для контроллера",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE) != JOptionPane.OK_OPTION) {
@@ -162,8 +171,10 @@ public final class NovaLctControllerExportDialog {
                         placement.slots(), placement.cols(), placement.rows(), recs, model);
                 data = NovaLctScrWriter.writeStandardCombined(combined);
             } else {
-                List<NovaLctScrWriter.ScreenBlock> blocks =
-                        NovaLctCombineHelper.splitSeparate(placement.slots(), recs, model);
+                // splitSeparateGrouped -- ОБЩИЙ случай, включающий старое 1:1 поведение
+                // splitSeparate как частный (пустая/нулевая карта групп) -- см. её javadoc.
+                List<NovaLctScrWriter.ScreenBlock> blocks = NovaLctCombineHelper.splitSeparateGrouped(
+                        placement.slots(), placement.groupIdByScreenId(), recs, model);
                 data = NovaLctScrWriter.writeStandardMultiScreen(blocks);
             }
             defaultName = controller.getLabel();
@@ -190,17 +201,20 @@ public final class NovaLctControllerExportDialog {
         javax.swing.JRadioButton combineBtn = new javax.swing.JRadioButton(
                 "Объединить в 1 экран (по размещению в канвасе) — рекомендуется", true);
         javax.swing.JRadioButton separateBtn = new javax.swing.JRadioButton(
-                "Отдельными экранами в одном файле — experimental, не подтверждено");
+                "Отдельными экранами в одном файле");
         javax.swing.ButtonGroup group = new javax.swing.ButtonGroup();
         group.add(combineBtn);
         group.add(separateBtn);
 
         JPanel panel = new JPanel(new BorderLayout(0, 8));
-        panel.setPreferredSize(new java.awt.Dimension(380, panel.getPreferredSize().height));
-        JLabel hint = new JLabel();
+        // См. комментарий у аналогичного места в showExportFlow -- bindHtmlWrapWidth
+        // не годится для JOptionPane (пакуется один раз, до того как async-подгонка
+        // текста успевает сработать), отчего радиокнопки физически не помещались в
+        // выделенную область и были невидимы (баг-репорт: "кнопки Combine/Separate
+        // вообще не видно"). Ширина обёртки фиксирована заранее (380-24=356px).
+        JLabel hint = new JLabel("<html><body style='width:356px'>Контроллер обслуживает " + screenCount
+                + " экрана(ов) сразу — как собрать их в один файл NovaLCT?</body></html>");
         panel.add(hint, BorderLayout.NORTH);
-        UiKit.bindHtmlWrapWidth(hint, panel, () -> "Контроллер обслуживает " + screenCount
-                + " экрана(ов) сразу — как собрать их в один файл NovaLCT?");
         JPanel radios = new JPanel(new java.awt.GridLayout(0, 1));
         radios.add(combineBtn);
         radios.add(separateBtn);
@@ -213,24 +227,23 @@ public final class NovaLctControllerExportDialog {
         return separateBtn.isSelected() ? ExportMode.SEPARATE : ExportMode.COMBINE;
     }
 
-    /** true — пользователь подтвердил, что понимает риск best-effort мультиэкранного
-     *  под-формата (см. {@link NovaLctScrWriter#writeStandardMultiScreen}) и хочет
-     *  продолжить несмотря на это; false — отменил. Единственное место во всём
-     *  классе, где такое предупреждение ещё нужно — Standard/Complex Screen (один
-     *  экран) и объединение экранов (см. {@link NovaLctCombineHelper#combine})
-     *  теперь оба подтверждены побайтово реальными файлами NovaLCT. */
+    /** true — пользователь подтвердил и хочет продолжить; false — отменил. Сам бинарный
+     *  формат (см. {@link NovaLctScrWriter#writeStandardMultiScreen}) и группировка
+     *  (см. {@link NovaLctCombineHelper#splitSeparateGrouped}) проверены на реальных
+     *  файлах NovaLCT/юнит-тестами — предупреждение здесь не про формат, а про то, что
+     *  сам ЭТОТ путь целиком (UI-диалог → группировка → запись файла) прогнан через
+     *  реальную загрузку в NovaLCT меньше раз, чем Combine — стоит перепроверить
+     *  результат в NovaLCT перед боевым использованием. */
     private static boolean confirmMultiScreenExperimentalWarning(Frame owner) {
         int rc = JOptionPane.showConfirmDialog(owner,
-                "<html><body style='width:360px'><b>Этот режим НЕ проверен реальной загрузкой в NovaLCT</b> —"
-                        + " ни разу, ни на одном сгенерированном файле."
-                        + "<br><br>Формат разобран по единственному образцу с 2 экранами, и часть его полей понята"
-                        + " лишь частично (см. код/комментарии {@code NovaLctScrWriter."
-                        + "writeStandardMultiScreen}) — сам этот образец на диске больше не сохранился, сверить"
-                        + " заново нельзя."
-                        + "<br><br>Настоятельно рекомендуется вместо этого использовать «Объединить в 1 экран», либо"
-                        + " продолжить ТОЛЬКО для тестовой загрузки в NovaLCT с последующей проверкой результата."
-                        + "<br><br>Продолжить на свой риск?</body></html>",
-                "Экспорт NovaLCT — experimental мультиэкранный формат", JOptionPane.YES_NO_OPTION,
+                "<html><body style='width:360px'><b>Каждый экран проекта — отдельный NovaLCT-экран</b>,"
+                        + " если вы явно не объединили несколько из них в группу (Ctrl+клик на сетке размещения +"
+                        + " «Группировать») — тогда группа станет ОДНИМ NovaLCT-экраном."
+                        + "<br><br>Формат файла подтверждён побайтово реальными образцами NovaLCT, но этот путь"
+                        + " целиком (включая группировку) стоит один раз перепроверить реальной загрузкой в"
+                        + " NovaLCT, прежде чем полагаться на него в боевой работе."
+                        + "<br><br>Продолжить?</body></html>",
+                "Экспорт NovaLCT — отдельные экраны", JOptionPane.YES_NO_OPTION,
                 JOptionPane.WARNING_MESSAGE);
         return rc == JOptionPane.YES_OPTION;
     }

@@ -59,7 +59,18 @@ import javax.swing.DefaultListModel;
  * выбор экрана в списке ("вооружает" его) + клик по сетке ставит экран туда
  * (упрощённый эквивалент drag&drop МЕЖДУ компонентами, без тяжёлого Swing DnD
  * API — начальная расстановка кликом, дальнейшая перестановка — уже полноценный
- * drag прямо по сетке). */
+ * drag прямо по сетке).
+ *
+ * <p><b>Группировка</b> (для Separate-экспорта — {@code Combine} по-прежнему
+ * сливает ВСЁ безусловно, эта раскладка тут не участвует): Ctrl/Cmd+клик по уже
+ * размещённым экранам добавляет/убирает их из текущего выбора (оранжевая
+ * рамка, независима от drag/{@code selected}) — «Группировать» присваивает
+ * выбранным (2+) один общий id, «Разгруппировать» снимает его. Сгруппированные
+ * экраны рисуются с пунктирным контуром вокруг общего bounding box и при
+ * экспорте сливаются в ОДИН NovaLCT-экран тем же blank-механизмом, что и
+ * {@link NovaLctCombineHelper#combine} (см. {@link NovaLctCombineHelper
+ * #splitSeparateGrouped}), только в границах группы, а не всей сетки. Экран
+ * без группы — как и раньше, свой собственный NovaLCT-экран. */
 public final class LctPresetMasterDialog extends JDialog {
 
     /** Пастельная палитра Sending Card Number — по мотивам цветов реальной NovaLCT
@@ -75,8 +86,18 @@ public final class LctPresetMasterDialog extends JDialog {
     };
     private static final Color BLANK_COLOR = new Color(0x6a, 0x6f, 0x76);
     private static final Color UNWIRED_COLOR = new Color(0x45, 0x4b, 0x54);
+    /** Подсветка Ctrl+клик выбора (кандидаты на группировку, см. GridPanel.multiSelected) --
+     *  отдельный цвет от Palette.ACCENT, которым рисуется рамка УЖЕ сгруппированных экранов,
+     *  чтобы "выбираю" и "уже сгруппировано" не путались визуально. */
+    private static final Color GROUP_SELECT_COLOR = new Color(0xff, 0xa0, 0x00);
 
-    public record Result(List<NovaLctCombineHelper.ScreenSlot> slots, int cols, int rows) {
+    /** {@code groupIdByScreenId} — экраны с ОДНИМ и тем же id сливаются в один
+     *  NovaLCT-экран при Separate-экспорте (см. {@link NovaLctCombineHelper
+     *  #splitSeparateGrouped}); экран без записи — своя единственная "группа",
+     *  как и было до появления группировки. Пуста, если пользователь ничего не
+     *  группировал — тогда поведение Separate идентично тому, что было раньше. */
+    public record Result(List<NovaLctCombineHelper.ScreenSlot> slots, int cols, int rows,
+                          Map<String, Integer> groupIdByScreenId) {
     }
 
     private final GridPanel gridPanel;
@@ -86,6 +107,8 @@ public final class LctPresetMasterDialog extends JDialog {
     private final JSpinner rowsSpinner;
     private final JLabel statusLabel = new JLabel(" ");
     private final JButton removeBtn = new JButton("Убрать с сетки");
+    private final JButton groupBtn = new JButton("Группировать");
+    private final JButton ungroupBtn = new JButton("Разгруппировать");
     private final JButton okBtn = new JButton("Далее");
 
     private Result result;
@@ -180,6 +203,16 @@ public final class LctPresetMasterDialog extends JDialog {
                 updateStatus();
             }
         });
+        groupBtn.addActionListener(e -> {
+            gridPanel.groupSelected();
+            gridPanel.repaint();
+            updateStatus();
+        });
+        ungroupBtn.addActionListener(e -> {
+            gridPanel.ungroupSelected();
+            gridPanel.repaint();
+            updateStatus();
+        });
 
         okBtn.addActionListener(e -> onOk());
         JButton cancelBtn = new JButton("Отмена");
@@ -197,7 +230,17 @@ public final class LctPresetMasterDialog extends JDialog {
         JScrollPane listScroll = new JScrollPane(unplacedList);
         listScroll.setPreferredSize(new Dimension(180, 200));
         side.add(listScroll, BorderLayout.CENTER);
-        side.add(removeBtn, BorderLayout.SOUTH);
+
+        JPanel groupHint = new JPanel();
+        groupHint.setLayout(new BoxLayout(groupHint, BoxLayout.Y_AXIS));
+        groupHint.add(UiKit.muted("Ctrl+клик по экранам на сетке — выбрать несколько"
+                + " для объединения в один NovaLCT-экран (при экспорте «Отдельными экранами»)"));
+        JPanel groupButtons = new JPanel(new GridLayout(1, 2, 4, 0));
+        groupButtons.add(groupBtn);
+        groupButtons.add(ungroupBtn);
+        groupHint.add(groupButtons);
+        groupHint.add(removeBtn);
+        side.add(groupHint, BorderLayout.SOUTH);
 
         JPanel legend = buildLegend();
 
@@ -267,10 +310,12 @@ public final class LctPresetMasterDialog extends JDialog {
             statusLabel.setText("Blank-ячеек: " + gridPanel.blankCount());
             okBtn.setEnabled(true);
         }
+        groupBtn.setEnabled(gridPanel.canGroupSelected());
+        ungroupBtn.setEnabled(gridPanel.canUngroupSelected());
     }
 
     private void onOk() {
-        result = new Result(gridPanel.slots(), gridPanel.cols, gridPanel.rows);
+        result = new Result(gridPanel.slots(), gridPanel.cols, gridPanel.rows, gridPanel.groupIdByScreenId());
         dispose();
     }
 
@@ -300,6 +345,15 @@ public final class LctPresetMasterDialog extends JDialog {
         private NovaLctCombineHelper.ScreenSlot dragging;
         private int dragStartCol, dragStartRow, dragPressCol, dragPressRow;
 
+        // Группировка для Separate-экспорта (см. NovaLctCombineHelper.splitSeparateGrouped) --
+        // НЕ связана с combine()/выбором Combine-режима, тот по-прежнему сливает ВСЁ. Экран без
+        // записи здесь -- своя единственная группа (обратная совместимость со старым 1:1
+        // splitSeparate). multiSelected -- отдельный от "selected"/drag набор, Screen как ключ
+        // (не ScreenSlot -- тот пересоздаётся при каждом drag, ссылка стала бы невалидной).
+        private final Map<String, Integer> groupIdByScreenId = new HashMap<>();
+        private final java.util.Set<Screen> multiSelected = new java.util.LinkedHashSet<>();
+        private int nextGroupId = 1;
+
         private java.util.function.BiConsumer<Integer, Integer> onEmptyCellClicked = (c, r) -> { };
         private Runnable onChanged = () -> { };
 
@@ -324,6 +378,20 @@ public final class LctPresetMasterDialog extends JDialog {
                         return;
                     }
                     NovaLctCombineHelper.ScreenSlot hit = slotAt(cell.x, cell.y);
+                    if (hit != null && (e.isControlDown() || e.isMetaDown())) {
+                        // Ctrl/Cmd+клик -- ТОЛЬКО переключает участие в группировке, не начинает
+                        // drag (иначе одно и то же нажатие пыталось бы и группировать, и двигать).
+                        if (!multiSelected.remove(hit.screen())) {
+                            multiSelected.add(hit.screen());
+                        }
+                        selected = hit;
+                        repaint();
+                        onChanged.run();
+                        return;
+                    }
+                    if (hit == null || !multiSelected.contains(hit.screen())) {
+                        multiSelected.clear();
+                    }
                     selected = hit;
                     if (hit != null) {
                         dragging = hit;
@@ -335,6 +403,7 @@ public final class LctPresetMasterDialog extends JDialog {
                         onEmptyCellClicked.accept(cell.x, cell.y);
                     }
                     repaint();
+                    onChanged.run();
                 }
 
                 @Override
@@ -410,8 +479,48 @@ public final class LctPresetMasterDialog extends JDialog {
             }
             placed.remove(selected);
             Screen s = selected.screen();
+            groupIdByScreenId.remove(s.getId());
+            multiSelected.remove(s);
             selected = null;
             return s;
+        }
+
+        boolean canGroupSelected() {
+            return multiSelected.size() >= 2;
+        }
+
+        boolean canUngroupSelected() {
+            for (Screen s : multiSelected) {
+                if (groupIdByScreenId.containsKey(s.getId())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /** Присваивает всем выбранным (Ctrl+клик) экранам ОДИН новый id группы — они
+         *  сольются в один NovaLCT-экран при {@code splitSeparateGrouped} (см. её
+         *  javadoc). Если какой-то из них уже состоял в другой группе — покидает её
+         *  (остальные участники той группы просто останутся, вплоть до вырождения в
+         *  группу из одного элемента, что эквивалентно "без группы вообще"). */
+        void groupSelected() {
+            if (multiSelected.size() < 2) {
+                return;
+            }
+            int gid = nextGroupId++;
+            for (Screen s : multiSelected) {
+                groupIdByScreenId.put(s.getId(), gid);
+            }
+        }
+
+        void ungroupSelected() {
+            for (Screen s : multiSelected) {
+                groupIdByScreenId.remove(s.getId());
+            }
+        }
+
+        Map<String, Integer> groupIdByScreenId() {
+            return new HashMap<>(groupIdByScreenId);
         }
 
         /** true — новый размер применён (все уже размещённые экраны по-прежнему
@@ -573,6 +682,59 @@ public final class LctPresetMasterDialog extends JDialog {
                 g2.fillRect(x, y, nameW + 8, 18);
                 g2.setColor(isSelected ? Palette.ACCENT : Color.WHITE);
                 g2.drawString(s.getName(), x + 4, y + 14);
+            }
+
+            // Ctrl+клик выбор (кандидаты на группировку) -- отдельная от "selected"/drag
+            // подсветка, см. поле multiSelected.
+            if (!multiSelected.isEmpty()) {
+                g2.setColor(GROUP_SELECT_COLOR);
+                g2.setStroke(new BasicStroke(2.5f));
+                for (NovaLctCombineHelper.ScreenSlot slot : placed) {
+                    if (!multiSelected.contains(slot.screen())) {
+                        continue;
+                    }
+                    Screen s = slot.screen();
+                    int x = (int) (PADDING + slot.colOffset() * size);
+                    int y = (int) (top + slot.rowOffset() * size);
+                    int w = (int) (s.getCols() * size);
+                    int h = (int) (s.getRows() * size);
+                    g2.drawRect(x, y, w, h);
+                }
+            }
+
+            // Уже сгруппированные экраны (2+ участника) -- пунктирная рамка вокруг
+            // bounding box группы, тот же контур, что построит buildGroupBlock при
+            // экспорте (см. NovaLctCombineHelper.splitSeparateGrouped).
+            if (!groupIdByScreenId.isEmpty()) {
+                Map<Integer, List<NovaLctCombineHelper.ScreenSlot>> byGroup = new HashMap<>();
+                for (NovaLctCombineHelper.ScreenSlot slot : placed) {
+                    Integer gid = groupIdByScreenId.get(slot.screen().getId());
+                    if (gid != null) {
+                        byGroup.computeIfAbsent(gid, k -> new ArrayList<>()).add(slot);
+                    }
+                }
+                g2.setColor(Palette.ACCENT);
+                g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 0,
+                        new float[]{6f, 4f}, 0));
+                for (List<NovaLctCombineHelper.ScreenSlot> group : byGroup.values()) {
+                    if (group.size() < 2) {
+                        continue;
+                    }
+                    int gMinCol = Integer.MAX_VALUE, gMinRow = Integer.MAX_VALUE;
+                    int gMaxCol = Integer.MIN_VALUE, gMaxRow = Integer.MIN_VALUE;
+                    for (NovaLctCombineHelper.ScreenSlot slot : group) {
+                        Screen s = slot.screen();
+                        gMinCol = Math.min(gMinCol, slot.colOffset());
+                        gMinRow = Math.min(gMinRow, slot.rowOffset());
+                        gMaxCol = Math.max(gMaxCol, slot.colOffset() + s.getCols());
+                        gMaxRow = Math.max(gMaxRow, slot.rowOffset() + s.getRows());
+                    }
+                    int x = (int) (PADDING + gMinCol * size) - 3;
+                    int y = (int) (top + gMinRow * size) - 3;
+                    int w = (int) ((gMaxCol - gMinCol) * size) + 6;
+                    int h = (int) ((gMaxRow - gMinRow) * size) + 6;
+                    g2.drawRoundRect(x, y, w, h, 8, 8);
+                }
             }
 
             g2.dispose();

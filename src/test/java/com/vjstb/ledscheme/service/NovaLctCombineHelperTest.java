@@ -19,6 +19,7 @@ import com.vjstb.ledscheme.store.WorkspaceStore;
 import java.io.File;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import org.junit.jupiter.api.Test;
@@ -250,5 +251,108 @@ class NovaLctCombineHelperTest {
         assertTrue(combined.cols() == 2 && combined.rows() == 1,
                 "Два экрана 1x1 бок о бок должны дать объединённую сетку 2x1, получено "
                         + combined.cols() + "x" + combined.rows());
+    }
+
+    @Test
+    void splitSeparateGrouped_withoutGroups_matchesPlainSplitSeparate(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(type128("T"));
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen a = model.addScreen("A", type.getId(), 2, 2, 0, 0);
+        Screen b = model.addScreen("B", type.getId(), 2, 2, 0, 0);
+        model.selectScreen(a);
+
+        ControllerType ct = model.addControllerType(singleCardController());
+        ControllerInstance controller = model.addControllerToScreen(a, ct.getId());
+
+        for (Screen s : List.of(a, b)) {
+            List<String> ids = new java.util.ArrayList<>();
+            for (int c = 0; c < s.getCols(); c++) {
+                for (int r = 0; r < s.getRows(); r++) {
+                    ids.add(s.cabinetAt(r, c).getId());
+                }
+            }
+            model.addSignalChain(s == a ? 1 : 2, false, ids);
+        }
+
+        List<NovaLctCombineHelper.ScreenSlot> slots = List.of(
+                new NovaLctCombineHelper.ScreenSlot(a, 0, 0),
+                new NovaLctCombineHelper.ScreenSlot(b, 4, 0));
+        List<NovaLctControllerResolver.CabinetRec> recs =
+                NovaLctControllerResolver.resolve(scene, controller, model);
+
+        List<NovaLctScrWriter.ScreenBlock> plain = NovaLctCombineHelper.splitSeparate(slots, recs, model);
+        List<NovaLctScrWriter.ScreenBlock> grouped =
+                NovaLctCombineHelper.splitSeparateGrouped(slots, Map.of(), recs, model);
+        List<NovaLctScrWriter.ScreenBlock> groupedNullMap =
+                NovaLctCombineHelper.splitSeparateGrouped(slots, null, recs, model);
+
+        assertEquals(plain, grouped, "Без группировки splitSeparateGrouped обязан совпадать с splitSeparate");
+        assertEquals(plain, groupedNullMap, "null-карта групп -- то же самое, что пустая");
+    }
+
+    @Test
+    void splitSeparateGrouped_mergesGroupedScreensIntoOneBlockWithBlankHoles(@TempDir Path dir) {
+        // A1 (2x2) + A2 (2x2, короче на 1 ряд по факту той же высоты тут не проверяем --
+        // просто разные по форме) сгруппированы -> ОДИН NovaLCT-экран; B (3x2) отдельно.
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(type128("T"));
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen a1 = model.addScreen("A1", type.getId(), 2, 2, 0, 0); // 2 rows, 2 cols
+        Screen a2 = model.addScreen("A2", type.getId(), 1, 2, 0, 0); // 1 row, 2 cols -- короче A1
+        Screen b = model.addScreen("B", type.getId(), 2, 3, 0, 0);
+        model.selectScreen(a1);
+
+        ControllerType ct = model.addControllerType(singleCardController());
+        ControllerInstance controller = model.addControllerToScreen(a1, ct.getId());
+
+        int port = 1;
+        for (Screen s : List.of(a1, a2, b)) {
+            List<String> ids = new java.util.ArrayList<>();
+            for (int c = 0; c < s.getCols(); c++) {
+                for (int r = 0; r < s.getRows(); r++) {
+                    ids.add(s.cabinetAt(r, c).getId());
+                }
+            }
+            model.addSignalChain(port++, false, ids);
+        }
+
+        // A1 в col 0-1, A2 сразу справа в col 2-3 (короче -- оставит дыру снизу),
+        // B отдельно, с зазором, в col 6-8.
+        List<NovaLctCombineHelper.ScreenSlot> slots = List.of(
+                new NovaLctCombineHelper.ScreenSlot(a1, 0, 0),
+                new NovaLctCombineHelper.ScreenSlot(a2, 2, 0),
+                new NovaLctCombineHelper.ScreenSlot(b, 6, 0));
+        Map<String, Integer> groups = Map.of(a1.getId(), 1, a2.getId(), 1);
+
+        List<NovaLctControllerResolver.CabinetRec> recs =
+                NovaLctControllerResolver.resolve(scene, controller, model);
+        List<NovaLctScrWriter.ScreenBlock> blocks =
+                NovaLctCombineHelper.splitSeparateGrouped(slots, groups, recs, model);
+
+        assertEquals(2, blocks.size(), "2 группы (A1+A2 слиты, B отдельно) -> 2 NovaLCT-экрана");
+        NovaLctScrWriter.ScreenBlock group = blocks.get(0);
+        NovaLctScrWriter.ScreenBlock separate = blocks.get(1);
+        assertEquals(0, group.screenXPx(), "Группа начинается с самого левого своего слота (A1, col 0)");
+        assertEquals(4, group.cols(), "Bounding box группы: A1(2 col)+A2(2 col) = 4");
+        assertEquals(2, group.rows(), "Bounding box группы по высоте -- максимум из A1(2)/A2(1)");
+        assertEquals(768, separate.screenXPx(), "B начинается с col 6 * cabW(128) = 768px");
+        assertEquals(3, separate.cols());
+        assertEquals(2, separate.rows());
+
+        long blankCount = group.cells().values().stream().filter(r -> r.card() == 255).count();
+        assertEquals(2, blankCount, "A2 короче A1 на 1 ряд из 2 столбцов -- ровно 2 blank-ячейки внутри группы");
+        for (var e : group.cells().entrySet()) {
+            if (e.getValue().card() == 255) {
+                assertTrue(e.getKey().col() >= 2 && e.getKey().row() == 1,
+                        "Blank-ячейки обязаны быть под A2 (col 2-3, row 1), получено " + e.getKey());
+            }
+        }
+        // separate (B) -- полностью расключён, дыр нет.
+        assertTrue(separate.cells().values().stream().noneMatch(r -> r.card() == 255));
     }
 }
