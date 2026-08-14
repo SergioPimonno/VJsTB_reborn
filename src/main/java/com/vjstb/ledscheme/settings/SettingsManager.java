@@ -190,8 +190,28 @@ public class SettingsManager {
         persist();
     }
 
+    public void setPowerUnitKw(boolean enabled) {
+        activeProfile().setPowerUnitKw(enabled);
+        persist();
+    }
+
     public void setMaskLogoImagePath(String path) {
         activeProfile().setMaskLogoImagePath(path);
+        persist();
+    }
+
+    public void setDarkTheme(boolean dark) {
+        activeProfile().setDarkTheme(dark);
+        persist();
+    }
+
+    public void setLafStyle(String styleId) {
+        activeProfile().setLafStyle(styleId);
+        persist();
+    }
+
+    public void setFontFamily(String fontFamily) {
+        activeProfile().setFontFamily(fontFamily);
         persist();
     }
 

@@ -1398,6 +1398,63 @@ class AppModelTest {
     }
 
     @Test
+    void setMaskColorIsSharedAcrossAllPlacementsOfTheSameScreen(@TempDir Path dir) {
+        // Баг-репорт 2026-08-13: цвет чек-борда маски раньше хранился per-CanvasPlacement,
+        // одна и та же запись экрана могла показывать РАЗНЫЙ цвет в разных канвасах.
+        // Теперь цвет общий на Screen — один вызов setMaskColor обязан отразиться сразу
+        // на всех местах, читающих screen.getBackground() (PixelGridRenderer и т.д.),
+        // независимо от того, сколько канвасов/размещений у этого экрана.
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen a = model.addScreen("A", type.getId(), 2, 2, 0, 0);
+        assertEquals(com.vjstb.ledscheme.model.MaskColorPreset.NORMAL, a.getBackground());
+
+        ContentCanvas canvas1 = model.addCanvas("Канвас 1", 1920, 1080);
+        ContentCanvas canvas2 = model.addCanvas("Канвас 2", 1280, 720);
+        model.addScreenToCanvas(canvas1, a.getId(), 0, 0);
+        model.addScreenToCanvas(canvas2, a.getId(), 0, 0);
+
+        model.setMaskColor(a, com.vjstb.ledscheme.model.MaskColorPreset.RED_GRAY);
+
+        assertEquals(com.vjstb.ledscheme.model.MaskColorPreset.RED_GRAY, a.getBackground(),
+                "цвет должен примениться напрямую к экрану");
+        // Оба размещения читают цвет ЧЕРЕЗ экран (см. PixelGridRenderer.GridRenderOptions.of),
+        // а не хранят собственную копию — здесь просто подтверждаем, что модель их не трогает.
+        assertEquals(1, canvas1.getPlacements().size());
+        assertEquals(1, canvas2.getPlacements().size());
+    }
+
+    @Test
+    @SuppressWarnings("deprecation") // CanvasPlacement.setBackground -- намеренно, имитирует старый проект
+    void legacyPerPlacementMaskColorIsSeededOntoScreenOnLoad(@TempDir Path dir) {
+        // Миграция при загрузке (AppModel constructor -> seedScreenMaskColorsFromLegacyPlacements):
+        // проект, сохранённый ДО переноса цвета на Screen, имел цвет только на
+        // CanvasPlacement.background — при следующей загрузке того же файла новый AppModel
+        // обязан перенести его на Screen, а не молча сбросить выбор пользователя на NORMAL.
+        File workspaceFile = new File(dir.toFile(), "workspace.json");
+        AppModel model1 = new AppModel(new WorkspaceStore(workspaceFile));
+        CabinetType type = model1.addCabinetType(sampleType());
+        model1.selectProject(model1.addProject("P"));
+        model1.selectScene(model1.addScene("S"));
+        Screen scr = model1.addScreen("A", type.getId(), 2, 2, 0, 0);
+        ContentCanvas canvas = model1.addCanvas("Канвас", 1920, 1080);
+        CanvasPlacement pl = model1.addScreenToCanvas(canvas, scr.getId(), 0, 0);
+        // Прямая запись через устаревший (но всё ещё десериализуемый) сеттер -- имитирует
+        // проект, сохранённый старой версией приложения, до появления Screen#background.
+        pl.setBackground(com.vjstb.ledscheme.model.MaskColorPreset.FULL_GREEN);
+        model1.movePlacement(pl, 1, 1); // любой мутатор -- лишь бы вызвать changed()/persist()
+
+        AppModel model2 = new AppModel(new WorkspaceStore(workspaceFile));
+        // getCurrentProject/Scene не восстанавливаются сами по себе при загрузке (см. остальные
+        // тесты в этом файле) -- достаём экран напрямую из дерева workspace.
+        Screen reloadedScreen = model2.getWorkspace().getProjects().get(0).getScenes().get(0).getScreens().get(0);
+        assertEquals(com.vjstb.ledscheme.model.MaskColorPreset.FULL_GREEN, reloadedScreen.getBackground(),
+                "цвет из старого per-placement поля должен перенестись на экран при загрузке");
+    }
+
+    @Test
     void addProjectorAppendsToCurrentSceneProjectorList(@TempDir Path dir) {
         AppModel model = freshModel(dir);
         model.selectProject(model.addProject("P"));
@@ -1668,6 +1725,137 @@ class AppModelTest {
 
         assertEquals(1, model.getWorkspace().getSharedCabinetTypes().size(),
                 "регистронезависимое совпадение имени не должно создать дубликат");
+    }
+
+    @Test
+    void librarySyncAddsHoistType(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        var dto = new LibrarySyncClient.LibraryItemDto("srv-hoist-1", "HOIST", "CM Lodestar 1t",
+                "{\"name\":\"CM Lodestar 1t\",\"wllKg\":1000.0}", 5, false);
+
+        AppModel.LibrarySyncSummary summary = model.applyLibrarySyncItems(List.of(dto));
+
+        assertEquals(1, summary.added());
+        assertEquals(1, model.getHoistTypes().size());
+        assertEquals("srv-hoist-1", model.getHoistTypes().get(0).getId());
+        assertEquals("CM Lodestar 1t", model.getHoistTypes().get(0).getName());
+        assertEquals(1000.0, model.getHoistTypes().get(0).getWllKg(), 1e-6);
+    }
+
+    @Test
+    void librarySyncMigratesScreenHoistTypeReferenceWhenPersonalTypeIsPromoted(@TempDir Path dir) {
+        // Тот же перенос ссылок, что и у CABINET/CONTROLLER (см. соседние тесты), но
+        // для Screen.riggingHoistTypeId -- личная запись HoistType "продвигается"
+        // под новым id, экран, уже на неё ссылающийся, не должен остаться с повисшим FK.
+        AppModel model = freshModel(dir);
+        com.vjstb.ledscheme.model.HoistType personal = new com.vjstb.ledscheme.model.HoistType();
+        personal.setName("CM Lodestar 1t");
+        personal = model.addHoistType(personal);
+        String oldId = personal.getId();
+        CabinetType cabinetType = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", cabinetType.getId(), 2, 3, 0, 0);
+        screen.setRiggingHoistTypeId(oldId);
+
+        model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-hoist-1", "HOIST", "CM Lodestar 1t", "{\"name\":\"CM Lodestar 1t\",\"wllKg\":1000.0}", 5, false)));
+
+        assertTrue(model.getWorkspace().getHoistTypes().isEmpty(), "личная запись должна быть продвинута (удалена)");
+        assertEquals("srv-hoist-1", screen.getRiggingHoistTypeId(),
+                "ссылка экрана должна перенестись на новый id общей записи, а не остаться повисшей на старом личном id");
+    }
+
+    @Test
+    void librarySyncKeepsSharedHoistTypeDeletionIfScreenStillReferencesIt(@TempDir Path dir) {
+        // Тот же защищённый путь удаления, что у CABINET (см.
+        // librarySyncKeepsSharedCabinetTypeDeletionIfScreenStillReferencesIt) --
+        // экран реально ссылается на этот HoistType через riggingHoistTypeId.
+        AppModel model = freshModel(dir);
+        model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-hoist-1", "HOIST", "CM Lodestar 1t", "{\"name\":\"CM Lodestar 1t\",\"wllKg\":1000.0}", 5, false)));
+        CabinetType cabinetType = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", cabinetType.getId(), 2, 3, 0, 0);
+        screen.setRiggingHoistTypeId("srv-hoist-1");
+
+        AppModel.LibrarySyncSummary summary = model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-hoist-1", "HOIST", "CM Lodestar 1t", "{\"name\":\"CM Lodestar 1t\"}", 6, true)));
+
+        assertEquals(0, summary.deleted());
+        assertEquals(1, summary.skippedDeleted());
+        assertEquals(1, model.getWorkspace().getSharedHoistTypes().size(),
+                "запись должна остаться — на неё ссылается riggingHoistTypeId реального экрана");
+    }
+
+    @Test
+    void librarySyncAddsStructureFrameType(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        var dto = new LibrarySyncClient.LibraryItemDto("srv-frame-1", "STRUCTURE_FRAME", "Рама 950",
+                "{\"name\":\"Рама 950\",\"kind\":\"FRAME\",\"heightMm\":950.0,\"widthMm\":500.0,"
+                        + "\"depthMm\":51.0,\"weightKg\":12.0}", 5, false);
+
+        AppModel.LibrarySyncSummary summary = model.applyLibrarySyncItems(List.of(dto));
+
+        assertEquals(1, summary.added());
+        assertEquals(1, model.getStructureFrameTypes().size());
+        assertEquals("srv-frame-1", model.getStructureFrameTypes().get(0).getId());
+        assertEquals("Рама 950", model.getStructureFrameTypes().get(0).getName());
+        assertEquals(com.vjstb.ledscheme.model.StructureFrameType.Kind.FRAME,
+                model.getStructureFrameTypes().get(0).getKind());
+        assertEquals(950.0, model.getStructureFrameTypes().get(0).getHeightMm(), 1e-6);
+    }
+
+    @Test
+    void librarySyncMigratesScreenStructureFrameTypeReferenceWhenPersonalTypeIsPromoted(@TempDir Path dir) {
+        // Тот же перенос ссылок, что и у HOIST/CABINET/CONTROLLER (см. соседние тесты), но
+        // для Screen.structureFrameTypeId -- личная запись StructureFrameType "продвигается"
+        // под новым id, экран, уже на неё ссылающийся, не должен остаться с повисшим FK.
+        AppModel model = freshModel(dir);
+        com.vjstb.ledscheme.model.StructureFrameType personal = new com.vjstb.ledscheme.model.StructureFrameType();
+        personal.setName("Рама 950");
+        personal.setKind(com.vjstb.ledscheme.model.StructureFrameType.Kind.FRAME);
+        personal = model.addStructureFrameType(personal);
+        String oldId = personal.getId();
+        CabinetType cabinetType = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", cabinetType.getId(), 2, 3, 0, 0);
+        screen.setStructureFrameTypeId(oldId);
+
+        model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-frame-1", "STRUCTURE_FRAME", "Рама 950",
+                "{\"name\":\"Рама 950\",\"kind\":\"FRAME\",\"heightMm\":950.0}", 5, false)));
+
+        assertTrue(model.getWorkspace().getStructureFrameTypes().isEmpty(),
+                "личная запись должна быть продвинута (удалена)");
+        assertEquals("srv-frame-1", screen.getStructureFrameTypeId(),
+                "ссылка экрана должна перенестись на новый id общей записи, а не остаться повисшей на старом личном id");
+    }
+
+    @Test
+    void librarySyncKeepsSharedStructureFrameTypeDeletionIfScreenStillReferencesIt(@TempDir Path dir) {
+        // Тот же защищённый путь удаления, что у HOIST/CABINET -- экран реально
+        // ссылается на этот StructureFrameType через одно из четырёх FK-полей
+        // (здесь -- structureCupTypeId, чтобы покрыть не только "основное" поле).
+        AppModel model = freshModel(dir);
+        model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-cup-1", "STRUCTURE_FRAME", "Стакан",
+                "{\"name\":\"Стакан\",\"kind\":\"CUP\",\"weightKg\":0.3}", 5, false)));
+        CabinetType cabinetType = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", cabinetType.getId(), 2, 3, 0, 0);
+        screen.setStructureCupTypeId("srv-cup-1");
+
+        AppModel.LibrarySyncSummary summary = model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-cup-1", "STRUCTURE_FRAME", "Стакан", "{\"name\":\"Стакан\",\"kind\":\"CUP\"}", 6, true)));
+
+        assertEquals(0, summary.deleted());
+        assertEquals(1, summary.skippedDeleted());
+        assertEquals(1, model.getWorkspace().getSharedStructureFrameTypes().size(),
+                "запись должна остаться — на неё ссылается structureCupTypeId реального экрана");
     }
 
     @Test
@@ -2156,5 +2344,150 @@ class AppModelTest {
         model.autoPopulateSchema(SchemaMode.SIGNAL, true);
         assertTrue(model.schemaEdgesForCurrentScene(SchemaMode.SIGNAL).isEmpty(),
                 "Узел экрана уже существовал до этого вызова — разорванная связь не должна восстановиться");
+    }
+
+    private static long visibleFrames(Screen s) {
+        return s.getStructureFrameCells().stream().filter(c -> !c.isHidden()).count();
+    }
+
+    @Test
+    void updateScreenStructureSeedsFullUniformGrid(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
+
+        // towerCount=2, verticalFramesPerTower=3 (в КАЖДОМ из 2 рядов), peremychkaLevels=2,
+        // extendedBaseSections=0 (только ядро).
+        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 2, 0, true, null, null, null, null, 0, null);
+
+        assertEquals(12, screen.getStructureFrameCells().size(), "2 башни x 2 ряда x 3 сегмента");
+        assertTrue(screen.getStructureFrameCells().stream().noneMatch(com.vjstb.ledscheme.model.StructureFrameCell::isHidden),
+                "свежесгенерированная сетка целиком видима");
+        assertEquals(4, screen.getStructurePeremychkaCells().size(), "2 башни x 2 уровня перемычек");
+        assertEquals(2, screen.getStructureBaseFrameCells().size(), "2 башни x 1 секция (ядро)");
+        assertTrue(screen.getStructureBaseFrameCells().stream()
+                .noneMatch(com.vjstb.ledscheme.model.StructureBaseFrameCell::isHidden));
+    }
+
+    @Test
+    void toggleStructureFrameCellHidesThenUnhidesTheSameCell(@TempDir Path dir) {
+        // Клик по существующей ячейке ПРЯЧЕТ её (hidden=true), а не удаляет из списка --
+        // иначе следующий «Рассчитать конструктив» не смог бы отличить «эту ячейку убрали
+        // руками» от «она никогда не считалась» и молча вернул бы её (см.
+        // recalculatingStructurePreservesManualRemovalsWithinNewBounds ниже).
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
+        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 2, 0, true, null, null, null, null, 0, null);
+
+        model.toggleStructureFrameCell(screen, 0, 0, 1);
+        assertEquals(12, screen.getStructureFrameCells().size(), "запись остаётся, просто прячется");
+        assertEquals(11, visibleFrames(screen));
+        assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(0, 0, 1) && c.isHidden()));
+
+        model.toggleStructureFrameCell(screen, 0, 0, 1);
+        assertEquals(12, visibleFrames(screen), "повторный клик по тому же месту должен вернуть видимость");
+    }
+
+    @Test
+    void togglePeremychkaCellAndBaseFrameSectionToggleIndependently(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
+        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 2, 0, true, null, null, null, null, 0, null);
+
+        model.toggleStructurePeremychkaCell(screen, 0, 1);
+        assertEquals(3, screen.getStructurePeremychkaCells().stream().filter(c -> !c.isHidden()).count(),
+                "4 всего - 1 спрятанная");
+
+        model.toggleStructureBaseFrameSection(screen, 1, 0);
+        assertTrue(screen.getStructureBaseFrameCells().stream().anyMatch(c -> c.matches(1, 0) && c.isHidden()));
+        assertTrue(screen.getStructureBaseFrameCells().stream().anyMatch(c -> c.matches(0, 0) && !c.isHidden()),
+                "башня 0 не должна была пострадать");
+    }
+
+    @Test
+    void recalculatingStructurePreservesManualRemovalsWithinNewBounds(@TempDir Path dir) {
+        // Баг-репорт (сценарий из ScreenLogic.resizeGrid для кабинетов, тот же принцип для
+        // конструктива): «Рассчитать конструктив» после мелкой правки (например, высоты
+        // башни) не должен молча возвращать вручную убранные пользователем сегменты.
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
+        model.updateScreenStructure(screen, 3000, 1000, 3, 3, 3, 0, true, null, null, null, null, 0, null);
+
+        // Убрали средний сегмент ПЕРЕДНЕГО ряда башни 1.
+        model.toggleStructureFrameCell(screen, 1, 0, 1);
+
+        // Те же границы сетки (3 башни x 3 сегмента) -- пересчёт НЕ должен вернуть убранное.
+        model.updateScreenStructure(screen, 3200, 1000, 3, 3, 3, 0, true, null, null, null, null, 0, null);
+        assertEquals(17, visibleFrames(screen), "18 (3 башни x 2 ряда x 3 сегмента) - 1 убранный");
+        assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(1, 0, 1) && c.isHidden()),
+                "убранный сегмент не должен молча вернуться видимым при пересчёте в тех же границах");
+
+        // Уменьшили сетку, но убранная ячейка (1,0,1) ВСЁ РАВНО внутри новых границ
+        // (1<2 башня, 1<2 сегмент) -- остаётся скрытой как есть, а не воскресает только
+        // потому что сетка сжалась.
+        model.updateScreenStructure(screen, 3200, 1000, 2, 2, 2, 0, true, null, null, null, null, 0, null);
+        assertEquals(8, screen.getStructureFrameCells().size(),
+                "2 башни x 2 ряда x 2 сегмента, включая скрытую (1,0,1)");
+        assertEquals(7, visibleFrames(screen));
+        assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(1, 0, 1) && c.isHidden()));
+    }
+
+    @Test
+    void toggleStructureFrameCellWithNewCellTypeOverrideAppliesOnlyOnCreation(@TempDir Path dir) {
+        // Phase 2.2: "менюшка с выбором текущей рамы для построения" -- при СОЗДАНИИ новой
+        // ячейки (позиция ещё не встречалась) можно сразу задать переопределение типа рамы
+        // (например, короткая рама на краю), но повторное переключение УЖЕ существующей
+        // записи (hidden туда-обратно) тип не меняет.
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
+        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 0, 0, true, null, null, null, null, 0, null);
+
+        // Позиция (5, 0, 0) вне номинальной сетки (только 2 башни, индексы 0/1) -- создаётся
+        // новая запись с переопределением типа.
+        model.toggleStructureFrameCell(screen, 5, 0, 0, "short-frame-id");
+        var created = screen.getStructureFrameCells().stream().filter(c -> c.matches(5, 0, 0)).findFirst()
+                .orElseThrow();
+        assertEquals("short-frame-id", created.getFrameTypeId());
+
+        // Повторный клик по ТОЙ ЖЕ позиции прячет её -- тип не трогается никаким параметром.
+        model.toggleStructureFrameCell(screen, 5, 0, 0, "ignored-id");
+        assertTrue(created.isHidden());
+        assertEquals("short-frame-id", created.getFrameTypeId(), "тип существующей ячейки не переопределяется");
+    }
+
+    @Test
+    void toggleStructureFrameCellSupportsRow2ReinforcementInExtensionSection(@TempDir Path dir) {
+        // Phase 2.2: row == 2 -- усилительная рама выноса, segmentIndex переиспользуется как
+        // номер секции выноса (см. StructureFrameCell class-javadoc), toggle работает так же,
+        // как для рядов 0/1.
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
+        // 1 доп. секция выноса -> regenerateStructureCells уже посеял 1 усилительную раму на
+        // башню в секции 1 (см. StructureCalcTest.reinforcementFramesInExtensionSectionsCounts...).
+        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 0, 1, true, null, null, null, null, 0, null);
+
+        assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(0, 2, 1) && !c.isHidden()),
+                "усилительная рама башни 0 в секции 1 сгенерирована и видима");
+
+        model.toggleStructureFrameCell(screen, 0, 2, 1);
+        assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(0, 2, 1) && c.isHidden()),
+                "клик по существующей усилительной раме прячет её");
     }
 }

@@ -135,8 +135,18 @@ CLAUDE.md админки (у неё релизов нет вообще, толь
 
 Два вида элементов `LibraryItemKind`:
 - **Обычные** (много строк): `CABINET, CONTROLLER, EQUIPMENT, CABLE, INTERFACE,
-  CABLE_LENGTH_PROFILE, EQUIPMENT_CUSTOM_CATEGORY` — создаются/удаляются
-  свободно, id генерируется при создании.
+  CABLE_LENGTH_PROFILE, HOIST, STRUCTURE_FRAME, EQUIPMENT_CUSTOM_CATEGORY` —
+  создаются/удаляются свободно, id генерируется при создании. `HOIST` (модели
+  лебёдок/талей с паспортной WLL, добавлен 2026-08-11) и `STRUCTURE_FRAME`
+  (элементы наземного конструктива — рама/короткая рама/стакан/контейнер
+  балласта, один вид с дискриминатором `kind` внутри payload, добавлен
+  2026-08-11) — единственные из этого списка (кроме CABINET/CONTROLLER), где на
+  id реально ссылается FK в данных проекта (`Screen.riggingHoistTypeId` и
+  четыре `Screen.structureXxxTypeId` соответственно) — поэтому их синк-удаление
+  защищено так же, как CABINET/CONTROLLER (см. `AppModel.isHoistTypeReferenced`/
+  `isStructureFrameTypeReferenced`), а не безусловно, как у
+  CABLE/INTERFACE/CABLE_LENGTH_PROFILE. См. `RIGGING_CALC_NOTES.md` и
+  `STRUCTURE_CALC_NOTES.md` за подробностями и мотивацией.
 - **Синглтоны** (ровно одна строка на весь сервер, фиксированный id):
   `GUIDE_TEXT, ONBOARDING_TEXT, EQUIPMENT_CATEGORY_LABELS, CALC_DEFAULTS,
   INTERACTIVE_SCENARIOS, VERSION_MANIFEST`. Карты `SINGLETON_IDS`/

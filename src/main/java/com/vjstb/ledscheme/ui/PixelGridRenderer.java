@@ -71,7 +71,10 @@ public final class PixelGridRenderer {
                     logo = null;
                 }
             }
-            return new GridRenderOptions(displayName, pl.getBackground(),
+            // background -- ОБЩИЙ для экрана (см. Screen#getBackground), не с pl -- та же
+            // запись экрана в разных канвасах теперь красится одинаково (2026-08-13,
+            // баг-репорт: раньше был per-placement, см. class-javadoc CanvasPlacement).
+            return new GridRenderOptions(displayName, screen.getBackground(),
                     pl.isShowGrid(), pl.isShowRaster(), pl.isShowIds(),
                     pl.isShowCircle(), pl.isShowCross(), pl.isShowCorner(), pl.isShowLogo(),
                     canvas.isLargeGridNames(), textColor, canvas.isDropShadow(), logo);
@@ -79,9 +82,12 @@ public final class PixelGridRenderer {
 
         /** Для отдельного полноэкранного экспорта маски вне канваса (по сцене целиком,
          *  см. VisualizationStagePanel.exportMasks) — прежнее поведение по умолчанию
-         *  (сетка+растр+номера, без новых элементов, без канваса). */
+         *  (сетка+растр+номера, без новых элементов, без канваса), но цвет теперь берётся
+         *  из {@link Screen#getBackground()}, а не хардкодится в NORMAL — иначе этот путь
+         *  экспорта расходился бы с тем, что реально видно на канвасе (тот же баг-репорт,
+         *  что и у {@link #of}). */
         public static GridRenderOptions defaultForScreen(Screen screen) {
-            return new GridRenderOptions(screen.getName(), MaskColorPreset.NORMAL,
+            return new GridRenderOptions(screen.getName(), screen.getBackground(),
                     true, true, true, false, false, false, false,
                     false, Color.WHITE, false, null);
         }

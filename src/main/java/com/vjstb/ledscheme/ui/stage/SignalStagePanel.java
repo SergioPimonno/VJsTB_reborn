@@ -146,7 +146,7 @@ public class SignalStagePanel extends JPanel {
         this.chainCtrl.setOnCommitError(msg ->
                 JOptionPane.showMessageDialog(this, msg, "Не удалось завершить цепочку",
                         JOptionPane.ERROR_MESSAGE));
-        this.canvas = new CanvasPanel(model, chainCtrl);
+        this.canvas = new CanvasPanel(model, settings, chainCtrl);
         // «Быстрое подключение» (как в NovaLCT) — протяжка выделяет прямоугольную
         // область кабинетов, радиальное меню выбирает шаблон серпантина, скрытые и
         // уже занятые кабинеты области просто выпадают из последовательности.
@@ -258,6 +258,10 @@ public class SignalStagePanel extends JPanel {
             }
         });
         settings.addListener(this::updateCornerPreviewVisibility);
+        // Переключатель Вт/кВт (Персонализация) не меняет модель — без этого подписчик
+        // statPower оставался бы со старым текстом до следующего model-триггерного
+        // rebuild (баг-репорт: галочка включена, но «Мощность сцены» не поменялась).
+        settings.addListener(this::refresh);
 
         JScrollPane sideScroll = new JScrollPane(buildSide());
         sideScroll.setBorder(null);
@@ -792,7 +796,7 @@ public class SignalStagePanel extends JPanel {
             statRes.setText(screens.size() + " экран(ов)");
             statSize.setText("—");
             statCount.setText(String.valueOf(s.activeCabinetCount()));
-            statPower.setText(UiKit.fmt(s.totalPowerW()) + " Вт");
+            statPower.setText(UiKit.fmtPower(s.totalPowerW(), settings.activeProfile().isPowerUnitKw()));
             statWeight.setText(UiKit.fmt(s.totalWeightKg()) + " кг");
         } else if (has) {
             ScreenStats s = ScreenLogic.stats(scr, model.typeOf(scr), model.getWorkspace());
@@ -801,7 +805,7 @@ public class SignalStagePanel extends JPanel {
             statRes.setText(s.resolutionWidthPx() + " × " + s.resolutionHeightPx() + " px");
             statSize.setText(UiKit.fmt(s.physicalWidthMm()) + " × " + UiKit.fmt(s.physicalHeightMm()) + " мм");
             statCount.setText(String.valueOf(s.activeCabinetCount()));
-            statPower.setText(UiKit.fmt(s.totalPowerW()) + " Вт");
+            statPower.setText(UiKit.fmtPower(s.totalPowerW(), settings.activeProfile().isPowerUnitKw()));
             statWeight.setText(UiKit.fmt(s.totalWeightKg()) + " кг");
         } else {
             statCabinetType.setText("—");

@@ -50,6 +50,8 @@ public class PersonalizationDialog extends javax.swing.JDialog {
 
         content.add(buildProfileRow());
         content.add(Box.createVerticalStrut(10));
+        content.add(buildStylePanel());
+        content.add(Box.createVerticalStrut(10));
         content.add(buildColorsPanel());
         content.add(Box.createVerticalStrut(10));
 
@@ -142,6 +144,65 @@ public class PersonalizationDialog extends javax.swing.JDialog {
         btns.add(delBtn);
         row.add(btns, java.awt.BorderLayout.EAST);
         return row;
+    }
+
+    /** Стиль отрисовки (см. {@link LafStyle} — 4 варианта, все из уже подключённого
+     *  {@code flatlaf}) + шрифт приложения ({@code FlatLaf.setPreferredFontFamily},
+     *  живо обновляется через {@code FlatLaf.updateUI()} без перезапуска). Независимая
+     *  от акцентных цветов ось персонализации — см. class-javadoc Palette. */
+    private JPanel buildStylePanel() {
+        JPanel body = new JPanel();
+        body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
+        body.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JComboBox<LafStyle> styleCombo = new JComboBox<>(LafStyle.values());
+        styleCombo.setSelectedItem(LafStyle.byId(settings.activeProfile().getLafStyle()));
+        styleCombo.addActionListener(e -> {
+            LafStyle style = (LafStyle) styleCombo.getSelectedItem();
+            if (style == null) {
+                return;
+            }
+            try {
+                javax.swing.UIManager.setLookAndFeel(style.createLaf());
+            } catch (Exception ignored) {
+                return;
+            }
+            Palette.applyTheme(style.isDark());
+            for (Window w : Window.getWindows()) {
+                javax.swing.SwingUtilities.updateComponentTreeUI(w);
+                w.repaint();
+            }
+            settings.setLafStyle(style.getId());
+        });
+        JPanel styleRow = new JPanel(new java.awt.BorderLayout(8, 0));
+        styleRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        styleRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+        styleRow.add(new JLabel("Стиль оформления"), java.awt.BorderLayout.CENTER);
+        styleRow.add(styleCombo, java.awt.BorderLayout.EAST);
+        body.add(styleRow);
+
+        String[] fonts = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().getAvailableFontFamilyNames();
+        String[] fontOptions = new String[fonts.length + 1];
+        fontOptions[0] = "По умолчанию";
+        System.arraycopy(fonts, 0, fontOptions, 1, fonts.length);
+        JComboBox<String> fontCombo = new JComboBox<>(fontOptions);
+        String currentFont = settings.activeProfile().getFontFamily();
+        fontCombo.setSelectedItem(currentFont != null ? currentFont : "По умолчанию");
+        fontCombo.addActionListener(e -> {
+            String sel = (String) fontCombo.getSelectedItem();
+            String family = "По умолчанию".equals(sel) ? null : sel;
+            com.formdev.flatlaf.FlatLaf.setPreferredFontFamily(family);
+            com.formdev.flatlaf.FlatLaf.updateUI();
+            settings.setFontFamily(family);
+        });
+        JPanel fontRow = new JPanel(new java.awt.BorderLayout(8, 0));
+        fontRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        fontRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+        fontRow.add(new JLabel("Шрифт приложения"), java.awt.BorderLayout.CENTER);
+        fontRow.add(fontCombo, java.awt.BorderLayout.EAST);
+        body.add(fontRow);
+
+        return (JPanel) UiKit.section("Стиль оформления", body);
     }
 
     private JPanel buildColorsPanel() {

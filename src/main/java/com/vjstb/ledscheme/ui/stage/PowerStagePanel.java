@@ -100,7 +100,7 @@ public class PowerStagePanel extends JPanel {
         this.chainCtrl.setOnCommitError(msg ->
                 JOptionPane.showMessageDialog(this, msg, "Не удалось завершить цепочку",
                         JOptionPane.ERROR_MESSAGE));
-        this.canvas = new CanvasPanel(model, chainCtrl);
+        this.canvas = new CanvasPanel(model, settings, chainCtrl);
         // «Быстрое подключение» (как в NovaLCT) — протяжка выделяет прямоугольную
         // область кабинетов, радиальное меню выбирает шаблон серпантина, скрытые и
         // уже занятые кабинеты области просто выпадают из последовательности.
@@ -145,6 +145,10 @@ public class PowerStagePanel extends JPanel {
             }
         });
         settings.addListener(this::updateCornerPreviewVisibility);
+        // Переключатель Вт/кВт (Персонализация) не меняет модель — без этого подписчик
+        // statPower оставался бы со старым текстом до следующего model-триггерного
+        // rebuild (баг-репорт: галочка включена, но «Мощность сцены» не поменялась).
+        settings.addListener(this::refresh);
 
         JScrollPane sideScroll = new JScrollPane(buildSide());
         sideScroll.setBorder(null);
@@ -341,8 +345,9 @@ public class PowerStagePanel extends JPanel {
                 // целиком; предупреждение/кнопка «Я знаю» — единственное, что зависит от
                 // настройки «Контроль электрической нагрузки».
                 AppModel.ChainLoadStatus status = model.powerChainLoadStatus(scene, c);
+                boolean kw = settings.activeProfile().isPowerUnitKw();
                 String label = "L" + c.getPhase() + " · " + c.getCabinetInstanceIds().size() + " каб." + suffix
-                        + " · " + UiKit.fmt(status.loadWatts()) + " Вт";
+                        + " · " + UiKit.fmtPower(status.loadWatts(), kw);
                 AppModel.ChainLoadStatus warnStatus = trackLoad ? status : null;
                 chainListPanel.add(chainRow(label, com.vjstb.ledscheme.ui.SchemeRenderer.chainColor(c), warnStatus,
                         () -> model.acknowledgePowerChainOverload(scene, c), () -> model.deletePowerChain(c.getId()),
@@ -361,28 +366,30 @@ public class PowerStagePanel extends JPanel {
             statCabinetType.setText(cabinetTypeSummary(screens));
             statRes.setText(screens.size() + " экран(ов)");
             statSize.setText("—");
+            boolean kw = settings.activeProfile().isPowerUnitKw();
             statCount.setText(String.valueOf(s.activeCabinetCount()));
-            statPower.setText(UiKit.fmt(s.totalPowerW()) + " Вт");
+            statPower.setText(UiKit.fmtPower(s.totalPowerW(), kw));
             statWeight.setText(UiKit.fmt(s.totalWeightKg()) + " кг");
             statPhases.setText(String.format(
-                    "<html>L1: %d каб. · %s Вт<br>L2: %d каб. · %s Вт<br>L3: %d каб. · %s Вт</html>",
-                    s.phaseCabinetCounts()[1], UiKit.fmt(s.phasePowerW()[1]),
-                    s.phaseCabinetCounts()[2], UiKit.fmt(s.phasePowerW()[2]),
-                    s.phaseCabinetCounts()[3], UiKit.fmt(s.phasePowerW()[3])));
+                    "<html>L1: %d каб. · %s<br>L2: %d каб. · %s<br>L3: %d каб. · %s</html>",
+                    s.phaseCabinetCounts()[1], UiKit.fmtPower(s.phasePowerW()[1], kw),
+                    s.phaseCabinetCounts()[2], UiKit.fmtPower(s.phasePowerW()[2], kw),
+                    s.phaseCabinetCounts()[3], UiKit.fmtPower(s.phasePowerW()[3], kw)));
         } else if (has) {
             ScreenStats s = ScreenLogic.stats(scr, model.typeOf(scr), model.getWorkspace());
             com.vjstb.ledscheme.model.CabinetType ct = model.typeOf(scr);
+            boolean kw = settings.activeProfile().isPowerUnitKw();
             statCabinetType.setText(ct != null ? ct.getName() : "—");
             statRes.setText(s.resolutionWidthPx() + " × " + s.resolutionHeightPx() + " px");
             statSize.setText(UiKit.fmt(s.physicalWidthMm()) + " × " + UiKit.fmt(s.physicalHeightMm()) + " мм");
             statCount.setText(String.valueOf(s.activeCabinetCount()));
-            statPower.setText(UiKit.fmt(s.totalPowerW()) + " Вт");
+            statPower.setText(UiKit.fmtPower(s.totalPowerW(), kw));
             statWeight.setText(UiKit.fmt(s.totalWeightKg()) + " кг");
             statPhases.setText(String.format(
-                    "<html>L1: %d каб. · %s Вт<br>L2: %d каб. · %s Вт<br>L3: %d каб. · %s Вт</html>",
-                    s.phaseCabinetCounts()[1], UiKit.fmt(s.phasePowerW()[1]),
-                    s.phaseCabinetCounts()[2], UiKit.fmt(s.phasePowerW()[2]),
-                    s.phaseCabinetCounts()[3], UiKit.fmt(s.phasePowerW()[3])));
+                    "<html>L1: %d каб. · %s<br>L2: %d каб. · %s<br>L3: %d каб. · %s</html>",
+                    s.phaseCabinetCounts()[1], UiKit.fmtPower(s.phasePowerW()[1], kw),
+                    s.phaseCabinetCounts()[2], UiKit.fmtPower(s.phasePowerW()[2], kw),
+                    s.phaseCabinetCounts()[3], UiKit.fmtPower(s.phasePowerW()[3], kw)));
         } else {
             statCabinetType.setText("—");
             statRes.setText("—");
@@ -416,8 +423,9 @@ public class PowerStagePanel extends JPanel {
         JLabel text = new JLabel((overloaded ? "⚠ " : "") + label);
         if (overloaded) {
             text.setForeground(Palette.WARN);
-            text.setToolTipText("Перегрузка: " + UiKit.fmt(status.loadWatts()) + " Вт при допустимых "
-                    + UiKit.fmt(status.capacityWatts()) + " Вт на разъём кабинета");
+            boolean kw = settings.activeProfile().isPowerUnitKw();
+            text.setToolTipText("Перегрузка: " + UiKit.fmtPower(status.loadWatts(), kw) + " при допустимых "
+                    + UiKit.fmtPower(status.capacityWatts(), kw) + " на разъём кабинета");
         }
         // ПКМ по строке — свой цвет цепочки (Task #4), по образцу SchemaCanvasPanel.showEdgeMenu.
         // ЛКМ по строке (не по кнопкам справа) — возобновить построение ЭТОЙ цепочки

@@ -27,12 +27,86 @@ public class Screen {
     /** Глубина цвета на канал, бит (8/10/12) — тоже влияет на ёмкость порта. */
     private int colorBitDepth = 8;
 
+    /** Цвет чек-борда маски этого экрана (см. {@code ui.PixelGridRenderer}) — ОДИН на
+     *  экран, применяется одинаково во ВСЕХ канвасах, где этот экран размещён (2026-08-13,
+     *  баг-репорт: раньше цвет хранился per-{@code CanvasPlacement}, и один и тот же
+     *  экран мог показывать разный цвет маски в разных канвасах — см. class-javadoc
+     *  {@code CanvasPlacement} про историю этого поля). Меняется через
+     *  {@code AppModel#setMaskColor}, не напрямую сеттером. */
+    private MaskColorPreset background = MaskColorPreset.NORMAL;
+
     /** Способ монтажа — влияет на применимость расчёта точек подвеса. */
     private ScreenMountType mountType = ScreenMountType.RIGGED;
-    /** Заготовка под расчёт точек подвеса (формула будет добавлена отдельно):
-     *  пока просто вручную вводимое количество точек и заметки. */
+    /** Количество точек подвеса — авторасчёт см. {@code service.RiggingCalc}/
+     *  {@code ScreenLogic#suggestRiggingPoints}, либо вручную скорректировано
+     *  пользователем под конкретную ферму/траверс. */
     private int riggingPointsCount = 0;
     private String riggingNotes;
+    /** Минимальный требуемый коэффициент запаса прочности сертификации подъёмного
+     *  оборудования (5:1 — типовой минимум для временного шоу-монтажа по PLASA/
+     *  ESTA, 8:1+ — для стационарных/публичных инсталляций) — ТРЕБОВАНИЕ к тому,
+     *  на что должно быть рассчитано выбранное оборудование (breaking strength ÷
+     *  WLL), НЕ множитель, накручиваемый на вычисленную нагрузку поверх — WLL,
+     *  указанный производителем/сертификатом, уже учитывает этот запас. Расчёт
+     *  (см. {@code service.RiggingCalc#compute}) сравнивает нагрузку точки
+     *  НАПРЯМУЮ с {@link #riggingHoistCapacityKg}, этот коэффициент — только
+     *  напоминание/фильтр при выборе конкретной модели лебёдки/тали. */
+    private double riggingSafetyFactorMin = 5.0;
+    /** Грузоподъёмность (WLL, кг) реально выбранной лебёдки/тали — ОДНА модель на
+     *  все точки подвеса этого экрана (типовая практика: одинаковое оборудование
+     *  на всех точках одного экрана). null — не указана, расчёт покажет только
+     *  нагрузку по точкам без проверки превышения. FALLBACK для проектов,
+     *  сохранённых до появления {@link #riggingHoistTypeId} — если тот задан, он
+     *  побеждает (см. {@code service.RiggingCalc#effectiveHoistCapacityKg}), это
+     *  поле игнорируется, но НЕ стирается (позволяет откатиться, если библиотечная
+     *  запись впоследствии удалена на сервере). */
+    private Double riggingHoistCapacityKg;
+    /** FK на {@code HoistType} общей библиотеки (см. RIGGING_CALC_NOTES.md) — по
+     *  образцу {@link #cabinetTypeId}. null — оборудование не выбрано из каталога,
+     *  используется {@link #riggingHoistCapacityKg} напрямую. */
+    private String riggingHoistTypeId;
+
+    /** Наземный конструктив (см. {@code service.StructureCalc}, STRUCTURE_CALC_NOTES.md) —
+     *  поля ниже осмысленны только при {@link #mountType} == STRUCTURE, тот же принцип, что
+     *  и riggingXxx выше для RIGGED. Каждое число — авторасчитанный ДЕФОЛТ, который
+     *  пользователь может напрямую переопределить (по явному требованию: сложные раскладки
+     *  инженер чертит в Vectorworks и считает сам, калькулятор — только отправная точка). */
+    private double structureTowerHeightMm = 3000;
+    private double structureTowerSpacingMm = 1000;
+    private int structureTowerCount = 0;
+    private int structureVerticalFramesPerTower = 0;
+    /** Число уровней перемычек (передний↔задний ряд внутри одной башни) по высоте — номинальная
+     *  граница сетки для {@code service.ScreenLogic#regenerateStructureCells}, шаг между уровнями
+     *  не хранится тут (Phase 2.2 — коэффициент 1.5 от высоты рамы, см. {@code service
+     *  .StructureCalc#peremychkaIntervalMm}), только предложенное количество. */
+    private int structurePeremychkaLevels = 0;
+    /** Число ДОПОЛНИТЕЛЬНЫХ секций выноса базовой рамы под балласт (сверх обязательной секции
+     *  0 — ядра под объёмом башни), каждая — ширина короткой рамы (~0.5м). */
+    private int structureExtendedBaseSections = 0;
+    private boolean structureIncludeBaseFrame = true;
+    private String structureFrameTypeId;
+    private String structureShortFrameTypeId;
+    private String structureCupTypeId;
+    private String structureBallastTypeId;
+    /** Высота нижнего края экрана над землёй, мм — 0 = экран на земле. Влияет только на
+     *  отображение в 3D (виден зазор между истинной землёй, на которой стоит основание башни,
+     *  и приподнятым экраном) — см. {@code ui.Structure3DPanel}. НЕ участвует в проверке
+     *  «высота башни строго меньше высоты экрана» (см. {@code service.StructureCalc#compute}) —
+     *  та сравнивается с СОБСТВЕННОЙ высотой экрана, не с его положением над землёй. */
+    private double structureScreenElevationMm;
+    private String structureNotes;
+    /** Реально существующие вертикальные сегменты/перемычки/секции базовых рам конструктива
+     *  (Phase 2 — интерактивный 3D-редактор, Phase 2.1 — объёмная башня, см.
+     *  STRUCTURE_CALC_NOTES.md) — источник истины о том, что физически стоит,
+     *  structureTowerCount/VerticalFramesPerTower/PeremychkaLevels/ExtendedBaseSections выше
+     *  остаются НОМИНАЛЬНЫМИ границами сетки для «Рассчитать конструктив» (см.
+     *  {@code service.ScreenLogic#regenerateStructureCells}), а не однородной формулой
+     *  количества — тот же принцип, что {@link #cabinets} для формы экрана. Меняются через
+     *  {@code AppModel#toggleStructureFrameCell}/{@code toggleStructurePeremychkaCell}/
+     *  {@code toggleStructureBaseFrameSection}, не напрямую сеттером. */
+    private List<StructureFrameCell> structureFrameCells = new ArrayList<>();
+    private List<StructurePeremychkaCell> structurePeremychkaCells = new ArrayList<>();
+    private List<StructureBaseFrameCell> structureBaseFrameCells = new ArrayList<>();
 
     /** Контроллеры, обслуживающие экран (может быть несколько). Если список не пуст,
      *  суммарное число их портов определяет доступные порты сигнала вместо signalPortCount. */
@@ -125,6 +199,14 @@ public class Screen {
         this.colorBitDepth = colorBitDepth;
     }
 
+    public MaskColorPreset getBackground() {
+        return background != null ? background : MaskColorPreset.NORMAL;
+    }
+
+    public void setBackground(MaskColorPreset background) {
+        this.background = background != null ? background : MaskColorPreset.NORMAL;
+    }
+
     public ScreenMountType getMountType() {
         return mountType;
     }
@@ -149,6 +231,157 @@ public class Screen {
         this.riggingNotes = riggingNotes;
     }
 
+    public double getRiggingSafetyFactorMin() {
+        return riggingSafetyFactorMin > 0 ? riggingSafetyFactorMin : 5.0;
+    }
+
+    public void setRiggingSafetyFactorMin(double riggingSafetyFactorMin) {
+        this.riggingSafetyFactorMin = riggingSafetyFactorMin > 0 ? riggingSafetyFactorMin : 5.0;
+    }
+
+    public Double getRiggingHoistCapacityKg() {
+        return riggingHoistCapacityKg;
+    }
+
+    public void setRiggingHoistCapacityKg(Double riggingHoistCapacityKg) {
+        this.riggingHoistCapacityKg = riggingHoistCapacityKg;
+    }
+
+    public String getRiggingHoistTypeId() {
+        return riggingHoistTypeId;
+    }
+
+    public void setRiggingHoistTypeId(String riggingHoistTypeId) {
+        this.riggingHoistTypeId = riggingHoistTypeId;
+    }
+
+    public double getStructureTowerHeightMm() {
+        return structureTowerHeightMm;
+    }
+
+    public void setStructureTowerHeightMm(double structureTowerHeightMm) {
+        this.structureTowerHeightMm = structureTowerHeightMm;
+    }
+
+    public double getStructureTowerSpacingMm() {
+        return structureTowerSpacingMm > 0 ? structureTowerSpacingMm : 1000;
+    }
+
+    public void setStructureTowerSpacingMm(double structureTowerSpacingMm) {
+        this.structureTowerSpacingMm = structureTowerSpacingMm > 0 ? structureTowerSpacingMm : 1000;
+    }
+
+    public int getStructureTowerCount() {
+        return structureTowerCount;
+    }
+
+    public void setStructureTowerCount(int structureTowerCount) {
+        this.structureTowerCount = Math.max(0, structureTowerCount);
+    }
+
+    public int getStructureVerticalFramesPerTower() {
+        return structureVerticalFramesPerTower;
+    }
+
+    public void setStructureVerticalFramesPerTower(int structureVerticalFramesPerTower) {
+        this.structureVerticalFramesPerTower = Math.max(0, structureVerticalFramesPerTower);
+    }
+
+    public int getStructurePeremychkaLevels() {
+        return structurePeremychkaLevels;
+    }
+
+    public void setStructurePeremychkaLevels(int structurePeremychkaLevels) {
+        this.structurePeremychkaLevels = Math.max(0, structurePeremychkaLevels);
+    }
+
+    public int getStructureExtendedBaseSections() {
+        return structureExtendedBaseSections;
+    }
+
+    public void setStructureExtendedBaseSections(int structureExtendedBaseSections) {
+        this.structureExtendedBaseSections = Math.max(0, structureExtendedBaseSections);
+    }
+
+    public boolean isStructureIncludeBaseFrame() {
+        return structureIncludeBaseFrame;
+    }
+
+    public void setStructureIncludeBaseFrame(boolean structureIncludeBaseFrame) {
+        this.structureIncludeBaseFrame = structureIncludeBaseFrame;
+    }
+
+    public String getStructureFrameTypeId() {
+        return structureFrameTypeId;
+    }
+
+    public void setStructureFrameTypeId(String structureFrameTypeId) {
+        this.structureFrameTypeId = structureFrameTypeId;
+    }
+
+    public String getStructureShortFrameTypeId() {
+        return structureShortFrameTypeId;
+    }
+
+    public void setStructureShortFrameTypeId(String structureShortFrameTypeId) {
+        this.structureShortFrameTypeId = structureShortFrameTypeId;
+    }
+
+    public String getStructureCupTypeId() {
+        return structureCupTypeId;
+    }
+
+    public void setStructureCupTypeId(String structureCupTypeId) {
+        this.structureCupTypeId = structureCupTypeId;
+    }
+
+    public String getStructureBallastTypeId() {
+        return structureBallastTypeId;
+    }
+
+    public void setStructureBallastTypeId(String structureBallastTypeId) {
+        this.structureBallastTypeId = structureBallastTypeId;
+    }
+
+    public double getStructureScreenElevationMm() {
+        return structureScreenElevationMm;
+    }
+
+    public void setStructureScreenElevationMm(double structureScreenElevationMm) {
+        this.structureScreenElevationMm = Math.max(0, structureScreenElevationMm);
+    }
+
+    public String getStructureNotes() {
+        return structureNotes;
+    }
+
+    public void setStructureNotes(String structureNotes) {
+        this.structureNotes = structureNotes;
+    }
+
+    public List<StructureFrameCell> getStructureFrameCells() {
+        return structureFrameCells;
+    }
+
+    public void setStructureFrameCells(List<StructureFrameCell> structureFrameCells) {
+        this.structureFrameCells = structureFrameCells != null ? structureFrameCells : new ArrayList<>();
+    }
+
+    public List<StructurePeremychkaCell> getStructurePeremychkaCells() {
+        return structurePeremychkaCells;
+    }
+
+    public void setStructurePeremychkaCells(List<StructurePeremychkaCell> structurePeremychkaCells) {
+        this.structurePeremychkaCells = structurePeremychkaCells != null ? structurePeremychkaCells : new ArrayList<>();
+    }
+
+    public List<StructureBaseFrameCell> getStructureBaseFrameCells() {
+        return structureBaseFrameCells;
+    }
+
+    public void setStructureBaseFrameCells(List<StructureBaseFrameCell> structureBaseFrameCells) {
+        this.structureBaseFrameCells = structureBaseFrameCells != null ? structureBaseFrameCells : new ArrayList<>();
+    }
 
     public List<ControllerInstance> getControllers() {
         return controllers;
@@ -216,9 +449,48 @@ public class Screen {
         s.signalPortCount = signalPortCount;
         s.refreshRateHz = refreshRateHz;
         s.colorBitDepth = colorBitDepth;
+        s.background = background;
         s.mountType = mountType;
         s.riggingPointsCount = riggingPointsCount;
         s.riggingNotes = riggingNotes;
+        s.riggingSafetyFactorMin = riggingSafetyFactorMin;
+        s.riggingHoistCapacityKg = riggingHoistCapacityKg;
+        s.riggingHoistTypeId = riggingHoistTypeId;
+        s.structureTowerHeightMm = structureTowerHeightMm;
+        s.structureTowerSpacingMm = structureTowerSpacingMm;
+        s.structureTowerCount = structureTowerCount;
+        s.structureVerticalFramesPerTower = structureVerticalFramesPerTower;
+        s.structurePeremychkaLevels = structurePeremychkaLevels;
+        s.structureExtendedBaseSections = structureExtendedBaseSections;
+        s.structureIncludeBaseFrame = structureIncludeBaseFrame;
+        s.structureFrameTypeId = structureFrameTypeId;
+        s.structureShortFrameTypeId = structureShortFrameTypeId;
+        s.structureCupTypeId = structureCupTypeId;
+        s.structureBallastTypeId = structureBallastTypeId;
+        s.structureScreenElevationMm = structureScreenElevationMm;
+        s.structureNotes = structureNotes;
+        s.structureFrameCells = new ArrayList<>();
+        for (StructureFrameCell c : structureFrameCells) {
+            // Баг-репорт (найден при переносе на объёмную башню): 2-арг конструктор не сохранял
+            // hidden -- undo-снимок/черновая копия (см. calculateStructure()) молча "возвращали"
+            // все убранные пользователем ячейки. Копируем через сеттер, чтобы hidden выжил.
+            StructureFrameCell copy = new StructureFrameCell(c.getTowerIndex(), c.getRow(), c.getSegmentIndex());
+            copy.setHidden(c.isHidden());
+            copy.setFrameTypeId(c.getFrameTypeId());
+            s.structureFrameCells.add(copy);
+        }
+        s.structurePeremychkaCells = new ArrayList<>();
+        for (StructurePeremychkaCell c : structurePeremychkaCells) {
+            StructurePeremychkaCell copy = new StructurePeremychkaCell(c.getTowerIndex(), c.getLevelIndex());
+            copy.setHidden(c.isHidden());
+            s.structurePeremychkaCells.add(copy);
+        }
+        s.structureBaseFrameCells = new ArrayList<>();
+        for (StructureBaseFrameCell c : structureBaseFrameCells) {
+            StructureBaseFrameCell copy = new StructureBaseFrameCell(c.getTowerIndex(), c.getSectionIndex());
+            copy.setHidden(c.isHidden());
+            s.structureBaseFrameCells.add(copy);
+        }
         s.controllers = new ArrayList<>();
         for (ControllerInstance c : controllers) {
             s.controllers.add(c.copy());

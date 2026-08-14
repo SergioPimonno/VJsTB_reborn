@@ -422,7 +422,7 @@ public class VisualizationStagePanel extends JPanel {
                 case 5 -> pl.getX();
                 case 6 -> pl.getY();
                 case 7 -> pl.getName() != null ? pl.getName() : "";
-                case 8 -> pl.getBackground();
+                case 8 -> scr != null ? scr.getBackground() : MaskColorPreset.NORMAL;
                 case 9 -> pl.isShowGrid();
                 case 10 -> pl.isShowRaster();
                 case 11 -> pl.isShowIds();
@@ -442,31 +442,38 @@ public class VisualizationStagePanel extends JPanel {
                 case 6 -> model.movePlacement(pl, pl.getX(), (Integer) value);
                 case 7 -> {
                     String name = value == null || ((String) value).isBlank() ? null : (String) value;
-                    model.updatePlacementMaskConfig(pl, name, pl.getBackground(), pl.isShowGrid(), pl.isShowRaster(),
+                    model.updatePlacementMaskConfig(pl, name, pl.isShowGrid(), pl.isShowRaster(),
                             pl.isShowIds(), pl.isShowCircle(), pl.isShowCross(), pl.isShowCorner(), pl.isShowLogo());
                 }
-                case 8 -> model.updatePlacementMaskConfig(pl, pl.getName(), (MaskColorPreset) value, pl.isShowGrid(),
+                case 8 -> {
+                    // Цвет маски -- ОБЩИЙ для экрана (не per-placement, см. class-javadoc
+                    // Screen#getBackground) -- пишем через экран, не через это размещение,
+                    // чтобы то же самое значение сразу отразилось во ВСЕХ канвасах, где
+                    // этот экран тоже размещён (см. AppModel.setMaskColor).
+                    Screen scr = screenById(pl.getScreenId());
+                    if (scr != null) {
+                        model.setMaskColor(scr, (MaskColorPreset) value);
+                    }
+                }
+                case 9 -> model.updatePlacementMaskConfig(pl, pl.getName(), (Boolean) value,
                         pl.isShowRaster(), pl.isShowIds(), pl.isShowCircle(), pl.isShowCross(), pl.isShowCorner(),
                         pl.isShowLogo());
-                case 9 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.getBackground(), (Boolean) value,
-                        pl.isShowRaster(), pl.isShowIds(), pl.isShowCircle(), pl.isShowCross(), pl.isShowCorner(),
-                        pl.isShowLogo());
-                case 10 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.getBackground(), pl.isShowGrid(),
+                case 10 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.isShowGrid(),
                         (Boolean) value, pl.isShowIds(), pl.isShowCircle(), pl.isShowCross(), pl.isShowCorner(),
                         pl.isShowLogo());
-                case 11 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.getBackground(), pl.isShowGrid(),
+                case 11 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.isShowGrid(),
                         pl.isShowRaster(), (Boolean) value, pl.isShowCircle(), pl.isShowCross(), pl.isShowCorner(),
                         pl.isShowLogo());
-                case 12 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.getBackground(), pl.isShowGrid(),
+                case 12 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.isShowGrid(),
                         pl.isShowRaster(), pl.isShowIds(), (Boolean) value, pl.isShowCross(), pl.isShowCorner(),
                         pl.isShowLogo());
-                case 13 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.getBackground(), pl.isShowGrid(),
+                case 13 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.isShowGrid(),
                         pl.isShowRaster(), pl.isShowIds(), pl.isShowCircle(), (Boolean) value, pl.isShowCorner(),
                         pl.isShowLogo());
-                case 14 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.getBackground(), pl.isShowGrid(),
+                case 14 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.isShowGrid(),
                         pl.isShowRaster(), pl.isShowIds(), pl.isShowCircle(), pl.isShowCross(), (Boolean) value,
                         pl.isShowLogo());
-                case 15 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.getBackground(), pl.isShowGrid(),
+                case 15 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.isShowGrid(),
                         pl.isShowRaster(), pl.isShowIds(), pl.isShowCircle(), pl.isShowCross(), pl.isShowCorner(),
                         (Boolean) value);
                 default -> { }
@@ -517,12 +524,13 @@ public class VisualizationStagePanel extends JPanel {
                     BufferedImage img = PixelGridRenderer.renderMask(scr, type, model.getWorkspace(),
                             PixelGridRenderer.GridRenderOptions.defaultForScreen(scr));
                     String fname = OutputPaths.sanitize(scene.getName()) + "_" + OutputPaths.sanitize(scr.getName())
-                            + "_Маска.png";
+                            + "_Маска_" + img.getWidth() + "x" + img.getHeight() + ".png";
                     images.add(new NamedImage(fname, img));
                 }
                 for (ContentCanvas c : scene.getCanvases()) {
                     BufferedImage img = PixelGridRenderer.renderCanvasMask(c, model, settings);
-                    String fname = OutputPaths.sanitize(scene.getName()) + "_канвас_" + OutputPaths.sanitize(c.getName()) + ".png";
+                    String fname = OutputPaths.sanitize(scene.getName()) + "_канвас_" + OutputPaths.sanitize(c.getName())
+                            + "_" + img.getWidth() + "x" + img.getHeight() + ".png";
                     images.add(new NamedImage(fname, img));
                 }
             }

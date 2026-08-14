@@ -1513,10 +1513,11 @@ public class SchemaCanvasPanel extends JPanel {
                 }
                 com.vjstb.ledscheme.service.SchemaLoadCalc.NodeLoad load =
                         com.vjstb.ledscheme.service.SchemaLoadCalc.evaluate(n, loadScene, model);
+                boolean kw = settings.activeProfile().isPowerUnitKw();
                 return "<html>Перегрузка узла «" + escapeHtml(n.getLabel() != null && !n.getLabel().isEmpty()
                         ? n.getLabel() : model.categoryLabel(n.getType())) + "»<br>"
-                        + "Нагрузка через исходящие связи: " + UiKit.fmt(load.loadWatts()) + " Вт<br>"
-                        + "Ёмкость входных разъёмов: " + UiKit.fmt(load.capacityWatts()) + " Вт<br>"
+                        + "Нагрузка через исходящие связи: " + UiKit.fmtPower(load.loadWatts(), kw) + "<br>"
+                        + "Ёмкость входных разъёмов: " + UiKit.fmtPower(load.capacityWatts(), kw) + "<br>"
                         + "Подтвердить/изменить запас — «Разъёмы питания…» этого узла.</html>";
             }
         }
@@ -1952,7 +1953,8 @@ public class SchemaCanvasPanel extends JPanel {
         Graphics2D clipped = (Graphics2D) g2.create();
         clipped.clipRect((int) n.getX(), (int) n.getY(), nw, nh);
         SchemeRenderer.paintWiringDiagram(clipped, g.screen(), g.type(), mode == SchemaMode.POWER,
-                g.cellW(), g.cellH(), g.left(), g.top(), model.getWorkspace(), powerChains, signalChains);
+                g.cellW(), g.cellH(), g.left(), g.top(), model.getWorkspace(), powerChains, signalChains,
+                settings.activeProfile().isPowerUnitKw());
         if (barH > 0) {
             SchemeRenderer.drawControllerSummaryBar(clipped, g.screen(), model.getWorkspace(),
                     g.left(), g.top() + g.screen().getRows() * g.cellH() + 2, availW);

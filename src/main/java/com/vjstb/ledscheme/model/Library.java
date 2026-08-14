@@ -28,6 +28,14 @@ public class Library {
     /** Каталоги доступных длин катушек по типам провода (см. CableLengthProfile) —
      *  для автоокругления в спецификации коммутации (service.CableSpecCalc). */
     private List<CableLengthProfile> cableLengthProfiles = new ArrayList<>();
+    /** Библиотека моделей подъёмного оборудования (лебёдки/тали) с паспортной
+     *  грузоподъёмностью (WLL) — см. HoistType, RIGGING_CALC_NOTES.md и
+     *  {@code Screen#riggingHoistTypeId}. */
+    private List<HoistType> hoistTypes = new ArrayList<>();
+    /** Библиотека элементов наземного конструктива (рамы/короткие рамы/стаканы/
+     *  контейнеры балласта) — см. StructureFrameType, STRUCTURE_CALC_NOTES.md и
+     *  {@code Screen#structureFrameTypeId} и соседние FK-поля. */
+    private List<StructureFrameType> structureFrameTypes = new ArrayList<>();
     /** Подкатегории оборудования под "Прочее оборудование" — общая справочная
      *  данные (Task #135/v2.0), редактируется только через отдельную админ-консоль
      *  (ledscheme-admin), синхронизируется с сервера (вид EQUIPMENT_CUSTOM_CATEGORY,
@@ -70,6 +78,8 @@ public class Library {
     private List<CableType> sharedCableTypes = new ArrayList<>();
     private List<InterfaceType> sharedInterfaceTypes = new ArrayList<>();
     private List<CableLengthProfile> sharedCableLengthProfiles = new ArrayList<>();
+    private List<HoistType> sharedHoistTypes = new ArrayList<>();
+    private List<StructureFrameType> sharedStructureFrameTypes = new ArrayList<>();
 
     public List<CabinetType> getCabinetTypes() {
         return cabinetTypes;
@@ -117,6 +127,22 @@ public class Library {
 
     public void setCableLengthProfiles(List<CableLengthProfile> cableLengthProfiles) {
         this.cableLengthProfiles = cableLengthProfiles;
+    }
+
+    public List<HoistType> getHoistTypes() {
+        return hoistTypes;
+    }
+
+    public void setHoistTypes(List<HoistType> hoistTypes) {
+        this.hoistTypes = hoistTypes;
+    }
+
+    public List<StructureFrameType> getStructureFrameTypes() {
+        return structureFrameTypes;
+    }
+
+    public void setStructureFrameTypes(List<StructureFrameType> structureFrameTypes) {
+        this.structureFrameTypes = structureFrameTypes;
     }
 
     public Map<String, String> getServerCustomEquipmentCategoriesById() {
@@ -207,6 +233,22 @@ public class Library {
         this.sharedCableLengthProfiles = sharedCableLengthProfiles;
     }
 
+    public List<HoistType> getSharedHoistTypes() {
+        return sharedHoistTypes;
+    }
+
+    public void setSharedHoistTypes(List<HoistType> sharedHoistTypes) {
+        this.sharedHoistTypes = sharedHoistTypes;
+    }
+
+    public List<StructureFrameType> getSharedStructureFrameTypes() {
+        return sharedStructureFrameTypes;
+    }
+
+    public void setSharedStructureFrameTypes(List<StructureFrameType> sharedStructureFrameTypes) {
+        this.sharedStructureFrameTypes = sharedStructureFrameTypes;
+    }
+
     /** Общее, затем личное — см. class-javadoc про общую/личную библиотеку. */
     public CabinetType cabinetTypeById(String id) {
         if (id == null) {
@@ -237,6 +279,42 @@ public class Library {
         for (ControllerType ct : controllerTypes) {
             if (ct.getId().equals(id)) {
                 return ct;
+            }
+        }
+        return null;
+    }
+
+    /** Общее, затем личное — см. class-javadoc про общую/личную библиотеку. */
+    public HoistType hoistTypeById(String id) {
+        if (id == null) {
+            return null;
+        }
+        for (HoistType h : sharedHoistTypes) {
+            if (h.getId().equals(id)) {
+                return h;
+            }
+        }
+        for (HoistType h : hoistTypes) {
+            if (h.getId().equals(id)) {
+                return h;
+            }
+        }
+        return null;
+    }
+
+    /** Общее, затем личное — см. class-javadoc про общую/личную библиотеку. */
+    public StructureFrameType structureFrameTypeById(String id) {
+        if (id == null) {
+            return null;
+        }
+        for (StructureFrameType t : sharedStructureFrameTypes) {
+            if (t.getId().equals(id)) {
+                return t;
+            }
+        }
+        for (StructureFrameType t : structureFrameTypes) {
+            if (t.getId().equals(id)) {
+                return t;
             }
         }
         return null;

@@ -58,6 +58,15 @@ class NovaLctCombineHelperTest {
         return ct;
     }
 
+    private ControllerType twoCardController() {
+        ControllerType ct = new ControllerType();
+        ct.setName("Test 2-card controller");
+        ct.setPortCount(8);
+        ct.getCards().add(new SchemaCard("Карта 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 4))));
+        ct.getCards().add(new SchemaCard("Карта 2", List.of(new CardPort("Ethernet", PortDirection.OUT, 4))));
+        return ct;
+    }
+
     @Test
     void degenerateSingleScreenMatchesDirectWrite(@TempDir Path dir) {
         AppModel model = freshModel(dir);
@@ -354,5 +363,69 @@ class NovaLctCombineHelperTest {
         }
         // separate (B) -- полностью расключён, дыр нет.
         assertTrue(separate.cells().values().stream().noneMatch(r -> r.card() == 255));
+    }
+
+    @Test
+    void combineAssignsDifferentSendingCardsToDifferentCellsOfOneGrid(@TempDir Path dir) {
+        // Пробел из NOVALCT_EXPORT.md секция 10: комбинирование нескольких экранов уже
+        // покрыто, но нигде не проверено, что РАЗНЫЕ ячейки одной объединённой сетки
+        // корректно несут РАЗНЫЕ физические Sending Card (не просто разные порты одной
+        // карты, как в остальных тестах этого файла) -- контроллер с 2 картами, экран A
+        // расключён через карту 1, экран B -- через карту 2, оба в одной объединённой сетке.
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(type128("T"));
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen a = model.addScreen("A", type.getId(), 1, 2, 0, 0); // 1 row, 2 cols
+        Screen b = model.addScreen("B", type.getId(), 1, 2, 0, 0); // 1 row, 2 cols
+        model.selectScreen(a);
+
+        ControllerType ct = model.addControllerType(twoCardController());
+        ControllerInstance controller = model.addControllerToScreen(a, ct.getId());
+
+        // Сквозной номер порта 1 -> карта 0/порт 0 (первые 4 порта -- карта 1);
+        // номер 5 -> карта 1/порт 0 (первый порт следующей карты).
+        model.addSignalChain(1, false, List.of(a.cabinetAt(0, 0).getId(), a.cabinetAt(0, 1).getId()));
+        model.addSignalChain(5, false, List.of(b.cabinetAt(0, 0).getId(), b.cabinetAt(0, 1).getId()));
+
+        List<NovaLctCombineHelper.ScreenSlot> slots = List.of(
+                new NovaLctCombineHelper.ScreenSlot(a, 0, 0),
+                new NovaLctCombineHelper.ScreenSlot(b, 2, 0)); // B сразу справа от A
+
+        List<NovaLctControllerResolver.CabinetRec> recs =
+                NovaLctControllerResolver.resolve(scene, controller, model);
+        assertNull(NovaLctCombineHelper.validateSlots(slots, model));
+        NovaLctCombineHelper.CombineResult combined =
+                NovaLctCombineHelper.combine(slots, 4, 1, recs, model);
+
+        assertEquals(4, combined.cols());
+        assertEquals(1, combined.rows());
+        for (int col = 0; col <= 1; col++) {
+            NovaLctScrWriter.Rec rec = combined.cells().get(new NovaLctScrWriter.CellKey(col, 0));
+            assertNotNull(rec, "col=" + col + " принадлежит экрану A -- обязана быть запись");
+            assertEquals(0, rec.card(), "экран A расключён через карту 0 (col=" + col + ")");
+            assertEquals(0, rec.port(), "экран A -- порт 0 своей карты (col=" + col + ")");
+        }
+        for (int col = 2; col <= 3; col++) {
+            NovaLctScrWriter.Rec rec = combined.cells().get(new NovaLctScrWriter.CellKey(col, 0));
+            assertNotNull(rec, "col=" + col + " принадлежит экрану B -- обязана быть запись");
+            assertEquals(1, rec.card(), "экран B расключён через карту 1, ДРУГУЮ, чем A (col=" + col + ")");
+            assertEquals(0, rec.port(), "экран B -- порт 0 своей карты (col=" + col + ")");
+        }
+
+        // Итоговый .scr обязан быть валиден структурно: писатель -> наш собственный
+        // парсер (round-trip, см. NovaLctScrParserTest) -- 2 разные цепочки по
+        // (card,port), обе длиной 2, с восстановленной (0,0) в цепочке карты 0.
+        byte[] bytes = NovaLctScrWriter.writeStandardCombined(combined);
+        NovaLctScrParser.ImportResult parsed = NovaLctScrParser.parse(bytes);
+        assertEquals(1, parsed.screens().size());
+        NovaLctScrParser.ImportedScreen screen = parsed.screens().get(0);
+        assertEquals(4, screen.width);
+        assertEquals(1, screen.height);
+        Map<String, List<NovaLctScrParser.CabinetEntry>> chains = screen.chainsByCardPort();
+        assertEquals(2, chains.size(), "2 разные (карта,порт) -- по одной на каждый исходный экран");
+        assertEquals(2, chains.get("0/0").size());
+        assertEquals(2, chains.get("1/0").size());
     }
 }

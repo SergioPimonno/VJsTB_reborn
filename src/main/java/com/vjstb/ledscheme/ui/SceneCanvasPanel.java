@@ -622,14 +622,14 @@ public class SceneCanvasPanel extends JPanel {
                         Graphics2D go = (Graphics2D) g2.create();
                         go.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.55f));
                         SchemeRenderer.paintScheme(go, s, t, detailPower, cellW, cellH, gridX, gridY, model.getWorkspace(),
-                                scenePowerChains, sceneSignalChains);
+                                scenePowerChains, sceneSignalChains, settings.activeProfile().isPowerUnitKw());
                         if (chainController != null && chainController.isChainBuilding()) {
                             drawChainBuildingOverlay(go, s, cellW, cellH, gridX, gridY);
                         }
                         go.dispose();
                     } else {
                         SchemeRenderer.paintScheme(g2, s, t, detailPower, cellW, cellH, gridX, gridY, model.getWorkspace(),
-                                scenePowerChains, sceneSignalChains);
+                                scenePowerChains, sceneSignalChains, settings.activeProfile().isPowerUnitKw());
                         if (chainController != null && chainController.isChainBuilding()) {
                             drawChainBuildingOverlay(g2, s, cellW, cellH, gridX, gridY);
                         }

@@ -1,10 +1,12 @@
 package com.vjstb.ledscheme;
 
-import com.formdev.flatlaf.FlatDarkLaf;
+import com.formdev.flatlaf.FlatLaf;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.settings.SettingsManager;
 import com.vjstb.ledscheme.settings.SettingsStore;
+import com.vjstb.ledscheme.settings.UserProfile;
 import com.vjstb.ledscheme.store.WorkspaceStore;
+import com.vjstb.ledscheme.ui.LafStyle;
 import com.vjstb.ledscheme.ui.MainFrame;
 import com.vjstb.ledscheme.ui.OnboardingDialog;
 import com.vjstb.ledscheme.ui.Palette;
@@ -22,15 +24,24 @@ public class App {
 
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> {
+            // Настройки читаются ДО выбора L&F — стиль оформления (Тёмная/Светлая/
+            // Darcula/IntelliJ, см. ui.LafStyle) и шрифт персистентны по профилю,
+            // больше не жёстко FlatDarkLaf при каждом запуске.
+            SettingsManager settings = new SettingsManager(new SettingsStore());
+            UserProfile activeProfile = settings.activeProfile();
+            LafStyle style = LafStyle.byId(activeProfile.getLafStyle());
+            if (activeProfile.getFontFamily() != null) {
+                FlatLaf.setPreferredFontFamily(activeProfile.getFontFamily());
+            }
             try {
-                UIManager.setLookAndFeel(new FlatDarkLaf());
+                UIManager.setLookAndFeel(style.createLaf());
             } catch (Exception e) {
                 // не критично — останется системная тема
             }
+            Palette.applyTheme(style.isDark());
             try {
                 WorkspaceStore store = new WorkspaceStore();
                 AppModel model = new AppModel(store);
-                SettingsManager settings = new SettingsManager(new SettingsStore());
                 Palette.applyProfile(settings.activeProfile());
                 MainFrame frame = new MainFrame(model, settings);
                 frame.setVisible(true);

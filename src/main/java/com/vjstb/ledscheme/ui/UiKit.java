@@ -259,6 +259,25 @@ public final class UiKit {
         return String.format("%.1f", v);
     }
 
+    /** Мощность/нагрузка с единицей — {@code watts} всегда в ваттах (внутреннее хранение/
+     *  расчёт этого не меняет, см. {@code CabinetType#powerConsumptionW}), {@code kw}
+     *  выбирает отображение (см. {@code UserProfile#isPowerUnitKw}) — единая точка
+     *  форматирования для ВСЕХ мест, где мощность показывается пользователю, чтобы
+     *  переключатель единиц в «Персонализация → Предпочтения» действовал одинаково
+     *  везде, а не только там, где кто-то не забыл его учесть. кВт — 2 знака после
+     *  запятой (иначе {@link #fmt}'s один знак стирал бы разницу вроде 1200 Вт vs
+     *  1290 Вт, обе стали бы "1.2 кВт" или "1.3 кВт" в зависимости от округления). */
+    public static String fmtPower(double watts, boolean kw) {
+        if (!kw) {
+            return fmt(watts) + " Вт";
+        }
+        double kilowatts = watts / 1000.0;
+        String rounded = kilowatts == Math.rint(kilowatts)
+                ? String.valueOf((long) kilowatts)
+                : String.format("%.2f", kilowatts);
+        return rounded + " кВт";
+    }
+
     /**
      * Делает позицию разделителя JSplitPane персонализируемой: восстанавливает долю,
      * сохранённую в активном профиле пользователя (или defaultProportion, если ещё

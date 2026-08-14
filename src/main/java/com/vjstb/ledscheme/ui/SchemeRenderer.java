@@ -101,6 +101,18 @@ public final class SchemeRenderer {
     public static void paintScheme(Graphics2D g2, Screen scr, CabinetType type, boolean power,
                                    int cellW, int cellH, int offX, int offY, Workspace workspace,
                                    List<PowerChain> powerChains, List<SignalChain> signalChains) {
+        paintScheme(g2, scr, type, power, cellW, cellH, offX, offY, workspace, powerChains, signalChains, false);
+    }
+
+    /** {@code powerUnitKw} — единица отображения мощности в подписи ячейки (см.
+     *  {@code UserProfile#isPowerUnitKw}), только для {@code power == true}. Оставлен
+     *  как перегрузка (не единственная сигнатура) — большинство вызывающих кодов вне
+     *  Питание/Сигнал этапов не имеют под рукой SettingsManager и рисуют схему без
+     *  учёта юнитов (сигнальный режим — там power всегда false, юнит не участвует). */
+    public static void paintScheme(Graphics2D g2, Screen scr, CabinetType type, boolean power,
+                                   int cellW, int cellH, int offX, int offY, Workspace workspace,
+                                   List<PowerChain> powerChains, List<SignalChain> signalChains,
+                                   boolean powerUnitKw) {
         // Подпись «строка,столбец» физически не помещается в мелкую ячейку (мини-
         // обзор сцены с несколькими экранами целиком, сильный зум-аут) — рисуем её,
         // только если в ячейке реально есть место, иначе текст соседних кабинетов
@@ -174,6 +186,14 @@ public final class SchemeRenderer {
     public static void paintWiringDiagram(Graphics2D g2, Screen scr, CabinetType type, boolean power,
                                            int cellW, int cellH, int offX, int offY, Workspace workspace,
                                            List<PowerChain> powerChains, List<SignalChain> signalChains) {
+        paintWiringDiagram(g2, scr, type, power, cellW, cellH, offX, offY, workspace, powerChains, signalChains, false);
+    }
+
+    /** {@code powerUnitKw} — см. javadoc {@link #paintScheme}'s перегрузка с тем же параметром. */
+    public static void paintWiringDiagram(Graphics2D g2, Screen scr, CabinetType type, boolean power,
+                                           int cellW, int cellH, int offX, int offY, Workspace workspace,
+                                           List<PowerChain> powerChains, List<SignalChain> signalChains,
+                                           boolean powerUnitKw) {
         Map<String, ChainMembership> byCab = new HashMap<>();
         if (power) {
             for (int ci = 0; ci < powerChains.size(); ci++) {
@@ -226,7 +246,7 @@ public final class SchemeRenderer {
                 lines.add(power ? "L" + m.phase() : portLabel(scr, workspace, m.port() != null ? m.port() : 0));
                 lines.add("#" + m.seq());
                 if (effective != null) {
-                    lines.add(power ? trim(effective.getPowerConsumptionW()) + "Вт"
+                    lines.add(power ? UiKit.fmtPower(effective.getPowerConsumptionW(), powerUnitKw)
                             : effective.getResolutionWidth() + "×" + effective.getResolutionHeight());
                 }
                 // Непрямоугольная ячейка закрашена не целиком (треугольник/круг —
@@ -815,7 +835,7 @@ public final class SchemeRenderer {
 
     /** Рендерит схему экрана в изображение (с заголовком и характеристиками). */
     public static BufferedImage renderImage(Screen scr, CabinetType type, boolean power, int base) {
-        return renderImage(scr, type, power, base, null, List.of(), List.of());
+        return renderImage(scr, type, power, base, null, List.of(), List.of(), false);
     }
 
     /** То же, но вес/мощность в заголовке учитывают переопределение типа кабинета по ячейкам.
@@ -825,6 +845,15 @@ public final class SchemeRenderer {
     public static BufferedImage renderImage(Screen scr, CabinetType type, boolean power, int base,
                                              Workspace workspace, List<PowerChain> powerChains,
                                              List<SignalChain> signalChains) {
+        return renderImage(scr, type, power, base, workspace, powerChains, signalChains, false);
+    }
+
+    /** {@code powerUnitKw} — единица отображения мощности в заголовке/ячейках (см.
+     *  {@code UserProfile#isPowerUnitKw}), см. javadoc {@link #paintScheme}'s перегрузка
+     *  для того же параметра. */
+    public static BufferedImage renderImage(Screen scr, CabinetType type, boolean power, int base,
+                                             Workspace workspace, List<PowerChain> powerChains,
+                                             List<SignalChain> signalChains, boolean powerUnitKw) {
         Dimension c = cellSize(type, base);
         int pad = 24;
         int headerH = 52;
@@ -852,11 +881,11 @@ public final class SchemeRenderer {
         String sub = scr.getCols() + "×" + scr.getRows() + " каб. · "
                 + stats.resolutionWidthPx() + "×" + stats.resolutionHeightPx() + " px · "
                 + trim(stats.physicalWidthMm()) + "×" + trim(stats.physicalHeightMm()) + " мм · "
-                + trim(stats.totalPowerW()) + " Вт · " + trim(stats.totalWeightKg()) + " кг";
+                + UiKit.fmtPower(stats.totalPowerW(), powerUnitKw) + " · " + trim(stats.totalWeightKg()) + " кг";
         g2.drawString(sub, pad, 42);
 
         paintScheme(g2, scr, type, power, c.width, c.height, pad, pad + headerH, workspace,
-                powerChains, signalChains);
+                powerChains, signalChains, powerUnitKw);
         g2.dispose();
         return img;
     }
