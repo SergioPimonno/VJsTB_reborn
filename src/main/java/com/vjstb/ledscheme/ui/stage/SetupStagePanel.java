@@ -110,7 +110,6 @@ public class SetupStagePanel extends JPanel {
     private final JSpinner pStructureVerticalFrames = new JSpinner(new SpinnerNumberModel(0, 0, 100, 1));
     private final JSpinner pStructurePeremychkaLevels = new JSpinner(new SpinnerNumberModel(0, 0, 100, 1));
     private final JSpinner pStructureExtendedBaseSections = new JSpinner(new SpinnerNumberModel(0, 0, 20, 1));
-    private final javax.swing.JCheckBox pStructureIncludeBase = new javax.swing.JCheckBox("Базовая (опорная) рама под каждой башней", true);
     private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pStructureFrameType = new JComboBox<>();
     private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pStructureShortFrameType = new JComboBox<>();
     private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pStructureCupType = new JComboBox<>();
@@ -513,9 +512,6 @@ public class SetupStagePanel extends JPanel {
                 + " под балласт.");
         structureFieldsPanel.add(UiKit.formRow("Доп. секций выноса под балласт", pStructureExtendedBaseSections));
         structureFieldsPanel.add(UiKit.vgap());
-        pStructureIncludeBase.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
-        structureFieldsPanel.add(pStructureIncludeBase);
-        structureFieldsPanel.add(UiKit.vgap());
 
         setStructureFrameRenderer(pStructureFrameType);
         setStructureFrameRenderer(pStructureShortFrameType);
@@ -789,7 +785,6 @@ public class SetupStagePanel extends JPanel {
         }
         double towerHeight = ((Number) pStructureTowerHeight.getValue()).doubleValue();
         double spacing = ((Number) pStructureTowerSpacing.getValue()).doubleValue();
-        boolean includeBase = pStructureIncludeBase.isSelected();
         double screenElevation = parseScreenElevation();
         String frameTypeId = structureFrameTypeId(pStructureFrameType);
         String shortFrameTypeId = structureFrameTypeId(pStructureShortFrameType);
@@ -819,7 +814,7 @@ public class SetupStagePanel extends JPanel {
         pStructureExtendedBaseSections.setValue(suggestedExtendedBaseSections);
 
         model.updateScreenStructure(scr, towerHeight, spacing, suggestedTowers, suggestedVertical,
-                suggestedPeremychkaLevels, suggestedExtendedBaseSections, includeBase, frameTypeId, shortFrameTypeId,
+                suggestedPeremychkaLevels, suggestedExtendedBaseSections, frameTypeId, shortFrameTypeId,
                 cupTypeId, ballastTypeId, screenElevation, pStructureNotes.getText());
 
         com.vjstb.ledscheme.service.StructureCalc.Result result =
@@ -1066,7 +1061,6 @@ public class SetupStagePanel extends JPanel {
                 pStructureVerticalFrames.setValue(scr.getStructureVerticalFramesPerTower());
                 pStructurePeremychkaLevels.setValue(scr.getStructurePeremychkaLevels());
                 pStructureExtendedBaseSections.setValue(scr.getStructureExtendedBaseSections());
-                pStructureIncludeBase.setSelected(scr.isStructureIncludeBaseFrame());
                 populateStructureFrameCombo(pStructureFrameType,
                         com.vjstb.ledscheme.model.StructureFrameType.Kind.FRAME, scr.getStructureFrameTypeId());
                 populateStructureFrameCombo(pStructureShortFrameType,

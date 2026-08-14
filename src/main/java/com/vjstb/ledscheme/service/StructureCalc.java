@@ -153,9 +153,9 @@ public final class StructureCalc {
         // перемычка/секция базы не должен попадать в закупку.
         int verticalFrameCount = (int) screen.getStructureFrameCells().stream().filter(c -> !c.isHidden()).count();
         int peremychkaCount = (int) screen.getStructurePeremychkaCells().stream().filter(c -> !c.isHidden()).count();
-        boolean includeBase = screen.isStructureIncludeBaseFrame();
-        int baseFrameCount = includeBase
-                ? (int) screen.getStructureBaseFrameCells().stream().filter(c -> !c.isHidden()).count() : 0;
+        // Round 4: опорная рама больше не вкл/выкл (прямое указание пользователя — "опорные
+        // рамы должны быть всегда"), считаем безусловно.
+        int baseFrameCount = (int) screen.getStructureBaseFrameCells().stream().filter(c -> !c.isHidden()).count();
 
         // Стыки вертикальных рам — только РЕАЛЬНО смежные пары (segmentIndex, segmentIndex+1)
         // ОБА присутствующие (не hidden) в ОДНОМ И ТОМ ЖЕ (башня, ряд) — передний и задний ряд
