@@ -7,6 +7,8 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Window;
 import javax.swing.BorderFactory;
+import javax.swing.Box;
+import javax.swing.BoxLayout;
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
@@ -52,16 +54,24 @@ public class Structure3DDialog extends JDialog {
         viewRow.add(viewButton(panel, "Сбоку", 90, 0));
         viewRow.add(viewButton(panel, "Сзади", 180, 0));
         viewRow.add(viewButton(panel, "Сверху", 0, 89));
+
         // Легенда цветов индикатора осей в углу вида (Structure3DPanel.drawAxisGizmo) --
         // обычным Swing-текстом, не GL-шрифтом (в этом проекте GL-текст нигде не рендерится,
         // заводить его ради 3 подписей избыточно) -- запрошено пользователем: "чтобы я мог
-        // сказать, вокруг какой оси тебе надо элементы выстраивать".
-        JLabel axisLegend = new JLabel("Оси: X — <b><font color='#F24D4D'>красный</font></b>"
+        // сказать, вокруг какой оси тебе надо элементы выстраивать". СВОЯ строка, а не в одном
+        // FlowLayout-ряду с кнопками видов -- баг-репорт "легенда не видна": в узком окне
+        // FlowLayout сжимал/переносил её так, что она пропадала из видимой области.
+        JPanel legendRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        JLabel axisLegend = new JLabel("<html>Оси: X — <b><font color='#F24D4D'>красный</font></b>"
                 + " (право/лево), Y — <b><font color='#39C639'>зелёный</font></b> (верх/низ),"
-                + " Z — <b><font color='#4D8CFF'>синий</font></b> (к экрану/вглубь башни)");
-        axisLegend.setText("<html>" + axisLegend.getText() + "</html>");
-        viewRow.add(axisLegend);
-        content.add(viewRow, BorderLayout.NORTH);
+                + " Z — <b><font color='#4D8CFF'>синий</font></b> (к экрану/вглубь башни)</html>");
+        legendRow.add(axisLegend);
+
+        JPanel topStack = new JPanel();
+        topStack.setLayout(new BoxLayout(topStack, BoxLayout.Y_AXIS));
+        topStack.add(viewRow);
+        topStack.add(legendRow);
+        content.add(topStack, BorderLayout.NORTH);
 
         JPanel bottom = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         bottom.add(new JLabel("Рама для добавления:"));

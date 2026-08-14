@@ -44,18 +44,19 @@ class StructureCalcTest {
         // compute() читает РЕАЛЬНЫЕ ячейки (Phase 2), не просто числа выше -- обычно их
         // заполняет AppModel.updateScreenStructure, здесь эмулируем то же самое напрямую.
         // 3 башни, 3 сегмента на башню (В КАЖДОМ из 2 рядов), 3 уровня перемычек, ядро без
-        // выноса (extendedBaseSections=0 -> 1 секция базы на башню).
+        // выноса (extendedBaseSections=0 -> 1 секция базы на башню). Round 5: перемычка
+        // соединяет СОСЕДНИЕ башни в пределах ряда -- 3 башни = 2 зазора x 2 ряда x 3 уровня.
         ScreenLogic.regenerateStructureCells(screen, t, 3, 3, 3, 3, 0);
 
         StructureCalc.Result result = StructureCalc.compute(screen, t, model.getWorkspace());
 
         assertEquals(18, result.verticalFrameCount(), "3 башни x 2 ряда x 3 сегмента");
-        assertEquals(9, result.peremychkaCount(), "3 башни x 3 уровня");
+        assertEquals(12, result.peremychkaCount(), "2 зазора x 2 ряда x 3 уровня");
         assertEquals(3, result.baseFrameCount(), "3 башни x 1 секция (ядро)");
-        // Стыков: вертикальных (3-1)*2ряда*3башни=12, перемычек 9, базовых 3 -> 24 * 2 = 48.
-        assertEquals(48, result.cupCount());
-        // Всего рам 18+9+3=30, болты = ceil(30*1.5) = 45.
-        assertEquals(45, result.boltCount());
+        // Стыков: вертикальных (3-1)*2ряда*3башни=12, перемычек 12, базовых 3 -> 27 * 2 = 54.
+        assertEquals(54, result.cupCount());
+        // Всего рам 18+12+3=33, болты = ceil(33*1.5) = 50 (49.5 округляется вверх).
+        assertEquals(50, result.boltCount());
     }
 
     @Test
@@ -360,5 +361,39 @@ class StructureCalcTest {
         // Рама 1500мм -> ровно 1 сегмент.
         assertEquals(1, StructureCalc.suggestBackRowSegments(1500));
         assertEquals(1, StructureCalc.suggestBackRowSegments(0), "нет рамы -- хотя бы 1 сегмент, не делить на 0");
+    }
+
+    @Test
+    void peremychkaConnectsAdjacentTowersOnlyWhenBothAreValid(@TempDir Path dir) {
+        // Round 5, баг-репорт с обведённым фото реальной башни: перемычка соединяет СОСЕДНИЕ
+        // башни В ПРЕДЕЛАХ ОДНОГО ряда, не передний/задний ряд одной башни -- и, как следствие,
+        // не может появиться там, где одной из двух соседних башен физически нет.
+        AppModel model = freshModel(dir);
+        CabinetType t = model.addCabinetType(type(500, 500));
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("E", t.getId(), 1, 6, 0, 0); // 6 колонок x 500мм = 3000мм
+        screen.setStructureTowerSpacingMm(1000);
+        // Прячем столбцы 3-5 (X=1500..3000мм) -- вся зона ответственности башни 2
+        // (X=2000мм, ±500мм = [1500..2500)) остаётся без видимых кабинетов.
+        for (var cab : screen.getCabinets()) {
+            if (cab.getColIndex() >= 3) {
+                cab.setHidden(true);
+            }
+        }
+        // 3 номинальные башни (0,1000,2000мм), 1 уровень перемычек.
+        ScreenLogic.regenerateStructureCells(screen, t, 3, 1, 1, 1, 0);
+
+        var peremychkaTowers = screen.getStructurePeremychkaCells().stream()
+                .map(com.vjstb.ledscheme.model.StructurePeremychkaCell::getTowerIndex).distinct().sorted().toList();
+        // Башня 2 не строится (нет кабинетов) -> зазор 0-1 (между валидными башнями 0 и 1)
+        // остаётся, зазор 1-2 не создаётся (башня 2 отсутствует).
+        assertEquals(java.util.List.of(0), peremychkaTowers, "только зазор между валидными башнями 0 и 1");
+
+        // Каждая перемычка -- и передний, и задний ряд независимо (row=0 и row=1).
+        var rows = screen.getStructurePeremychkaCells().stream()
+                .map(com.vjstb.ledscheme.model.StructurePeremychkaCell::getRow).distinct().sorted().toList();
+        assertEquals(java.util.List.of(0, 1), rows);
     }
 }

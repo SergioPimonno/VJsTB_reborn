@@ -302,19 +302,30 @@ public final class ScreenLogic {
         }
         screen.setStructureFrameCells(keptFrames);
 
+        // Round 5: перемычка соединяет ДВЕ СОСЕДНИЕ БАШНИ (towerIndex, towerIndex+1) В ПРЕДЕЛАХ
+        // ОДНОГО ряда, не передний/задний ряд одной башни (эта роль упразднена) -- зазор
+        // (towerIndex, towerIndex+1) валиден, только если ОБЕ башни валидны (нечего соединять,
+        // если соседняя башня не строится, см. towerHasCabinetContent).
         List<StructurePeremychkaCell> peremychki = screen.getStructurePeremychkaCells();
         List<StructurePeremychkaCell> keptPeremychki = new ArrayList<>();
         for (StructurePeremychkaCell c : peremychki) {
-            if (validTowers.contains(c.getTowerIndex()) && c.getLevelIndex() < peremychkaLevels) {
+            boolean gapValid = validTowers.contains(c.getTowerIndex()) && validTowers.contains(c.getTowerIndex() + 1);
+            if (gapValid && c.getLevelIndex() < peremychkaLevels) {
                 keptPeremychki.add(c);
             }
         }
         for (int t : validTowers) {
-            for (int level = 0; level < peremychkaLevels; level++) {
-                int ft = t;
-                int fl = level;
-                if (keptPeremychki.stream().noneMatch(c -> c.matches(ft, fl))) {
-                    keptPeremychki.add(new StructurePeremychkaCell(ft, fl));
+            if (!validTowers.contains(t + 1)) {
+                continue;
+            }
+            for (int row = 0; row < 2; row++) {
+                for (int level = 0; level < peremychkaLevels; level++) {
+                    int ft = t;
+                    int fr = row;
+                    int fl = level;
+                    if (keptPeremychki.stream().noneMatch(c -> c.matches(ft, fr, fl))) {
+                        keptPeremychki.add(new StructurePeremychkaCell(ft, fr, fl));
+                    }
                 }
             }
         }
