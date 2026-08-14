@@ -52,6 +52,15 @@ public class Structure3DDialog extends JDialog {
         viewRow.add(viewButton(panel, "Сбоку", 90, 0));
         viewRow.add(viewButton(panel, "Сзади", 180, 0));
         viewRow.add(viewButton(panel, "Сверху", 0, 89));
+        // Легенда цветов индикатора осей в углу вида (Structure3DPanel.drawAxisGizmo) --
+        // обычным Swing-текстом, не GL-шрифтом (в этом проекте GL-текст нигде не рендерится,
+        // заводить его ради 3 подписей избыточно) -- запрошено пользователем: "чтобы я мог
+        // сказать, вокруг какой оси тебе надо элементы выстраивать".
+        JLabel axisLegend = new JLabel("Оси: X — <b><font color='#F24D4D'>красный</font></b>"
+                + " (право/лево), Y — <b><font color='#39C639'>зелёный</font></b> (верх/низ),"
+                + " Z — <b><font color='#4D8CFF'>синий</font></b> (к экрану/вглубь башни)");
+        axisLegend.setText("<html>" + axisLegend.getText() + "</html>");
+        viewRow.add(axisLegend);
         content.add(viewRow, BorderLayout.NORTH);
 
         JPanel bottom = new JPanel(new FlowLayout(FlowLayout.RIGHT));
