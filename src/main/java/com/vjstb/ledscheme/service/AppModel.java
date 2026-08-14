@@ -899,16 +899,18 @@ public class AppModel {
         changed();
     }
 
-    /** Точечно включает/выключает ОДНУ перемычку (передний↔задний ряд ВНУТРИ одной башни) —
-     *  см. {@link #toggleStructureFrameCell}. */
-    public void toggleStructurePeremychkaCell(Screen screen, int towerIndex, int levelIndex) {
+    /** Точечно включает/выключает ОДНУ перемычку — Round 5: соединяет ДВЕ СОСЕДНИЕ БАШНИ
+     *  {@code towerIndex}/{@code towerIndex+1} В ПРЕДЕЛАХ ОДНОГО ряда ({@code row}), не
+     *  передний↔задний ряд одной башни (эта роль упразднена, см. {@code
+     *  StructurePeremychkaCell} class-javadoc) — см. {@link #toggleStructureFrameCell}. */
+    public void toggleStructurePeremychkaCell(Screen screen, int towerIndex, int row, int levelIndex) {
         pushUndo();
         List<com.vjstb.ledscheme.model.StructurePeremychkaCell> cells = screen.getStructurePeremychkaCells();
-        var existing = cells.stream().filter(c -> c.matches(towerIndex, levelIndex)).findFirst();
+        var existing = cells.stream().filter(c -> c.matches(towerIndex, row, levelIndex)).findFirst();
         if (existing.isPresent()) {
             existing.get().setHidden(!existing.get().isHidden());
         } else {
-            cells.add(new com.vjstb.ledscheme.model.StructurePeremychkaCell(towerIndex, levelIndex));
+            cells.add(new com.vjstb.ledscheme.model.StructurePeremychkaCell(towerIndex, row, levelIndex));
         }
         changed();
     }

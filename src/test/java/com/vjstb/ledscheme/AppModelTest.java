@@ -2402,9 +2402,9 @@ class AppModelTest {
         Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
         model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 2, 0, null, null, null, null, 0, null);
 
-        model.toggleStructurePeremychkaCell(screen, 0, 1);
+        model.toggleStructurePeremychkaCell(screen, 0, 0, 1);
         assertEquals(3, screen.getStructurePeremychkaCells().stream().filter(c -> !c.isHidden()).count(),
-                "4 всего - 1 спрятанная");
+                "4 всего (1 зазор x 2 ряда x 2 уровня) - 1 спрятанная");
 
         model.toggleStructureBaseFrameSection(screen, 1, 0);
         assertTrue(screen.getStructureBaseFrameCells().stream().anyMatch(c -> c.matches(1, 0) && c.isHidden()));

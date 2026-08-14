@@ -507,9 +507,9 @@ public class SetupStagePanel extends JPanel {
                 + " выноса, НЕ вторая полноразмерная башня (с фронта видна одна лестничная рама). Обычно 1-2м.");
         structureFieldsPanel.add(UiKit.formRow("Сегментов рамы заднего ряда (короткий)", pStructureBackRowSegments));
         structureFieldsPanel.add(UiKit.vgap());
-        pStructurePeremychkaLevels.setToolTipText("Число уровней перемычек (передний↔задний ряд внутри одной"
-                + " башни) по высоте — стартовое предложение по интервалу из Персонализации, конкретная"
-                + " расстановка редактируется поячеечно прямо в 3D-превью.");
+        pStructurePeremychkaLevels.setToolTipText("Число уровней перемычек (соединяют соседние башни в пределах"
+                + " одного ряда) по высоте — интервал считается от высоты рамы, конкретная расстановка"
+                + " редактируется поячеечно прямо в 3D-превью.");
         structureFieldsPanel.add(UiKit.formRow("Уровней перемычек", pStructurePeremychkaLevels));
         structureFieldsPanel.add(UiKit.vgap());
         pStructureExtendedBaseSections.setToolTipText("Доп. секции выноса базовой рамы назад (каждая — ширина"

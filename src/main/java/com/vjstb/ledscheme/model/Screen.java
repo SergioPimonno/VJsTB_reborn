@@ -486,7 +486,7 @@ public class Screen {
         }
         s.structurePeremychkaCells = new ArrayList<>();
         for (StructurePeremychkaCell c : structurePeremychkaCells) {
-            StructurePeremychkaCell copy = new StructurePeremychkaCell(c.getTowerIndex(), c.getLevelIndex());
+            StructurePeremychkaCell copy = new StructurePeremychkaCell(c.getTowerIndex(), c.getRow(), c.getLevelIndex());
             copy.setHidden(c.isHidden());
             s.structurePeremychkaCells.add(copy);
         }
