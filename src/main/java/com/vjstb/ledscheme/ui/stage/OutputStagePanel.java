@@ -189,8 +189,9 @@ public class OutputStagePanel extends JPanel {
         report.append("=== ИТОГО ПО ПРОЕКТУ ===\n");
         report.append(String.format("Экранов: %d, сцен: %d, кабинетов: %d%n",
                 totalScreens, project.getScenes().size(), totalCabinets));
-        report.append(String.format("Суммарная мощность: %s Вт, суммарный вес: %s кг%n%n",
-                UiKit.fmt(totalPower), UiKit.fmt(totalWeight)));
+        boolean kw = settings.activeProfile().isPowerUnitKw();
+        report.append(String.format("Суммарная мощность: %s, суммарный вес: %s кг%n%n",
+                UiKit.fmtPower(totalPower, kw), UiKit.fmt(totalWeight)));
 
         // Рендер схемы сцены целиком (SceneCanvasPanel) и маски канваса
         // (PixelGridRenderer.renderCanvasMask) читают "текущую" сцену модели, а не
@@ -209,8 +210,9 @@ public class OutputStagePanel extends JPanel {
 
                 SceneStats ss = ScreenLogic.sceneStats(scene, model.getWorkspace());
                 report.append("Сцена: ").append(scene.getName()).append('\n');
-                report.append(String.format("  Экранов: %d, кабинетов: %d, мощность: %s Вт, вес: %s кг%n",
-                        ss.screenCount(), ss.totalCabinetCount(), UiKit.fmt(ss.totalPowerW()), UiKit.fmt(ss.totalWeightKg())));
+                report.append(String.format("  Экранов: %d, кабинетов: %d, мощность: %s, вес: %s кг%n",
+                        ss.screenCount(), ss.totalCabinetCount(), UiKit.fmtPower(ss.totalPowerW(), kw),
+                        UiKit.fmt(ss.totalWeightKg())));
 
                 // Схемы и маски раньше сохранялись плоско в папку ПРОЕКТА — из-за
                 // этого схемы всех сцен смешивались в одном месте, и не было видно,
@@ -233,8 +235,8 @@ public class OutputStagePanel extends JPanel {
                     report.append(String.format("    Разрешение: %d×%d px, физический размер: %s×%s мм%n",
                             st.resolutionWidthPx(), st.resolutionHeightPx(),
                             UiKit.fmt(st.physicalWidthMm()), UiKit.fmt(st.physicalHeightMm())));
-                    report.append(String.format("    Мощность: %s Вт, вес: %s кг%n",
-                            UiKit.fmt(st.totalPowerW()), UiKit.fmt(st.totalWeightKg())));
+                    report.append(String.format("    Мощность: %s, вес: %s кг%n",
+                            UiKit.fmtPower(st.totalPowerW(), kw), UiKit.fmt(st.totalWeightKg())));
                     report.append(String.format("    Точек подвеса: %d%n", scr.getRiggingPointsCount()));
                     report.append('\n');
 
@@ -247,13 +249,13 @@ public class OutputStagePanel extends JPanel {
                     List<SignalChain> scrSignalChains = model.signalChainsTouchingScreen(scr);
 
                     BufferedImage powerImg = SchemeRenderer.renderImage(scr, type, true, 120, model.getWorkspace(),
-                            scrPowerChains, scrSignalChains);
+                            scrPowerChains, scrSignalChains, kw);
                     SchemeRenderer.writeJpeg(powerImg,
                             new File(powerFolder, OutputPaths.sanitize(scr.getName()) + ".jpg"));
                     jpegCount++;
 
                     BufferedImage signalImg = SchemeRenderer.renderImage(scr, type, false, 120, model.getWorkspace(),
-                            scrPowerChains, scrSignalChains);
+                            scrPowerChains, scrSignalChains, kw);
                     SchemeRenderer.writeJpeg(signalImg,
                             new File(signalFolder, OutputPaths.sanitize(scr.getName()) + ".jpg"));
                     jpegCount++;
@@ -377,13 +379,23 @@ public class OutputStagePanel extends JPanel {
                 }
             }
         }
+        // Заголовок и числовые ячейки мощности переключаются вместе (Вт<->кВт) --
+        // единица в заголовке обязана совпадать с тем, что реально лежит в ячейках,
+        // иначе таблица врёт молча (в отличие от текстовых мест выше, здесь нельзя
+        // просто использовать UiKit.fmtPower -- ячейка должна остаться числом для
+        // формул/сортировки в Excel, не строкой с суффиксом единицы).
+        boolean xlsxKw = settings.activeProfile().isPowerUnitKw();
+        double powerScale = xlsxKw ? 1.0 / 1000.0 : 1.0;
+        String powerUnit = xlsxKw ? "кВт" : "Вт";
         Sheet cabinetsSheet = com.vjstb.ledscheme.service.SpecXlsxWriter.addSheet(wb, "Кабинеты",
-                "Тип", "Кол-во, шт", "Мощность, Вт/шт", "Мощность всего, Вт", "Вес, кг/шт", "Вес всего, кг");
+                "Тип", "Кол-во, шт", "Мощность, " + powerUnit + "/шт", "Мощность всего, " + powerUnit,
+                "Вес, кг/шт", "Вес всего, кг");
         for (var entry : cabinets.entrySet()) {
             CabinetType t = entry.getKey();
             int qty = entry.getValue();
             com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(cabinetsSheet, t.getName(), qty,
-                    t.getPowerConsumptionW(), t.getPowerConsumptionW() * qty, t.getWeightKg(), t.getWeightKg() * qty);
+                    t.getPowerConsumptionW() * powerScale, t.getPowerConsumptionW() * qty * powerScale,
+                    t.getWeightKg(), t.getWeightKg() * qty);
         }
         com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(cabinetsSheet, 6);
 
@@ -418,19 +430,19 @@ public class OutputStagePanel extends JPanel {
         return wb;
     }
 
-    /** Спецификация проекторов, экспортированных из «Калькулятора проектора» (Task
-     *  #135/v2.0) — независимо от графа общей схемы (см. class-javadoc
-     *  ui.ProjectorCalculatorDialog: калькулятор самостоятельный). */
+    /** Спецификация проекторов, добавленных в проект программно/через прежний
+     *  калькулятор (выпилен из UI, модель {@code ProjectorInstance} и её отображение
+     *  здесь оставлены — см. план по выпиливанию калькулятора) — независимо от графа
+     *  общей схемы. Освещённость = ANSI-люмены * gain / площадь экрана (м²) —
+     *  упрощённая формула без учёта угла падения/оптических потерь. */
     private void addProjectorSheet(Workbook wb, Project project) {
         Sheet sheet = com.vjstb.ledscheme.service.SpecXlsxWriter.addSheet(wb, "Проекторы",
                 "Сцена", "Метка", "ANSI лм", "Объектив", "Throw мин", "Throw макс", "Расстояние, м",
                 "Экран Ш, м", "Экран В, м", "Освещённость, лк");
         for (Scene scene : project.getScenes()) {
             for (com.vjstb.ledscheme.model.ProjectorInstance p : scene.getProjectors()) {
-                com.vjstb.ledscheme.service.ProjectorCalc.ImageSize size =
-                        new com.vjstb.ledscheme.service.ProjectorCalc.ImageSize(p.getImageWidthM(), p.getImageHeightM());
-                double lux = com.vjstb.ledscheme.service.ProjectorCalc.screenIlluminanceLux(
-                        p.getAnsiLumens(), p.getScreenGain(), size);
+                double areaM2 = p.getImageWidthM() * p.getImageHeightM();
+                double lux = areaM2 > 0 ? p.getAnsiLumens() * p.getScreenGain() / areaM2 : 0;
                 com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, scene.getName(), p.getLabel(),
                         p.getAnsiLumens(), p.getLensName(), p.getLensMinThrowRatio(), p.getLensMaxThrowRatio(),
                         p.getThrowDistanceM(), p.getImageWidthM(), p.getImageHeightM(), lux);

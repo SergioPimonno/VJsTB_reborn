@@ -55,6 +55,7 @@ public class CanvasPanel extends JPanel {
     private static final int BASE = 84;
 
     private final AppModel model;
+    private final com.vjstb.ledscheme.settings.SettingsManager settings;
     private final Controller controller;
     private double zoom = 1.0;
     private String lastDragCabId;
@@ -63,8 +64,9 @@ public class CanvasPanel extends JPanel {
     private Point marqueeStart;
     private Point marqueeEnd;
 
-    public CanvasPanel(AppModel model, Controller controller) {
+    public CanvasPanel(AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings, Controller controller) {
         this.model = model;
+        this.settings = settings;
         this.controller = controller;
         setBackground(Palette.BG);
         setFocusable(true);
@@ -401,7 +403,7 @@ public class CanvasPanel extends JPanel {
         List<PowerChain> scenePowerChains = scene != null ? scene.getPowerChains() : List.of();
         List<SignalChain> sceneSignalChains = scene != null ? scene.getSignalChains() : List.of();
         SchemeRenderer.paintScheme(g2, scr, model.typeOf(scr), power, cw, ch, PADDING, PADDING, model.getWorkspace(),
-                scenePowerChains, sceneSignalChains);
+                scenePowerChains, sceneSignalChains, settings.activeProfile().isPowerUnitKw());
 
         // Кабинеты, уже занятые сигнальной цепочкой, но без видимого локального
         // отрезка на ЭТОМ экране (например, кабинет — единственный представитель

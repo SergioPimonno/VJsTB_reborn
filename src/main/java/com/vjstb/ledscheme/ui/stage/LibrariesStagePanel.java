@@ -272,7 +272,8 @@ public class LibrariesStagePanel extends JPanel {
                 CabinetType::getName, ct ->
                 UiKit.fmt(ct.getWidthMm()) + "×" + UiKit.fmt(ct.getHeightMm()) + "мм · "
                         + ct.getResolutionWidth() + "×" + ct.getResolutionHeight() + "px · "
-                        + UiKit.fmt(ct.getPowerConsumptionW()) + "Вт · " + UiKit.fmt(ct.getWeightKg()) + "кг"
+                        + UiKit.fmtPower(ct.getPowerConsumptionW(), settings.activeProfile().isPowerUnitKw())
+                        + " · " + UiKit.fmt(ct.getWeightKg()) + "кг"
                         + (ct.getCompany() == null || ct.getCompany().isEmpty() ? "" : " · Компания: " + ct.getCompany()),
                 ct -> model.isSharedCabinetType(ct.getId()));
         libList.setCellRenderer(libRenderer);

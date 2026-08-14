@@ -47,6 +47,7 @@ public class PreferencesDialog extends JDialog {
     private JCheckBox powerConnectorDisplayModeCheck;
     private JCheckBox connectorsVerticalCheck;
     private JCheckBox loadTrackingCheck;
+    private JCheckBox powerUnitKwCheck;
     private JLabel maskLogoPathLabel;
 
     public PreferencesDialog(Window owner, SettingsManager settings) {
@@ -299,6 +300,15 @@ public class PreferencesDialog extends JDialog {
                 settings.setLoadTrackingEnabled(loadTrackingCheck.isSelected()));
         body.add(loadTrackingCheck);
 
+        powerUnitKwCheck = new JCheckBox("Показывать мощность/нагрузку в киловаттах (кВт), а не ваттах (Вт)",
+                settings.activeProfile().isPowerUnitKw());
+        powerUnitKwCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        powerUnitKwCheck.setToolTipText("Меняет единицы отображения мощности везде в приложении (карточки узлов,"
+                + " статистика этапов, экспортные документы) — на внутренний расчёт нагрузки не влияет.");
+        powerUnitKwCheck.addActionListener(e ->
+                settings.setPowerUnitKw(powerUnitKwCheck.isSelected()));
+        body.add(powerUnitKwCheck);
+
         return (JPanel) UiKit.section("Общая схема — нагрузка", body);
     }
 
@@ -372,6 +382,7 @@ public class PreferencesDialog extends JDialog {
                 settings.activeProfile().getPowerConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL);
         connectorsVerticalCheck.setSelected(settings.activeProfile().isConnectorsVertical());
         loadTrackingCheck.setSelected(settings.activeProfile().isLoadTrackingEnabled());
+        powerUnitKwCheck.setSelected(settings.activeProfile().isPowerUnitKw());
         String logoPath = settings.activeProfile().getMaskLogoImagePath();
         maskLogoPathLabel.setText(logoPath != null ? new File(logoPath).getName() : "не задан");
     }

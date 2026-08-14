@@ -26,9 +26,10 @@ public class Scene {
      *  при загрузке (см. WorkspaceStore). */
     private List<PowerChain> powerChains = new ArrayList<>();
     private List<SignalChain> signalChains = new ArrayList<>();
-    /** Проекторы, экспортированные из калькулятора проектора (Task #135/v2.0) —
-     *  независимый список, как canvases/powerChains, БЕЗ привязки к графу общей
-     *  схемы (калькулятор самостоятельный, см. class-javadoc ui.ProjectorCalculatorDialog). */
+    /** Проекторы сцены — независимый список, как canvases/powerChains, БЕЗ привязки
+     *  к графу общей схемы (UI-калькулятор для их создания выпилен, см.
+     *  {@code AppModel#addProjector}/{@code OutputStagePanel#addProjectorSheet} —
+     *  модель и её отображение в спецификации оставлены). */
     private List<ProjectorInstance> projectors = new ArrayList<>();
 
     public Scene() {

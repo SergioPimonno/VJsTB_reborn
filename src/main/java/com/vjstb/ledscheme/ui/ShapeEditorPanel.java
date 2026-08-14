@@ -37,6 +37,7 @@ public class ShapeEditorPanel extends JPanel {
     private static final double MAX_ZOOM = 3.0;
 
     private final AppModel model;
+    private final com.vjstb.ledscheme.settings.SettingsManager settings;
     private String lastDragCabId;
     private String hoveredCabId;
     /** true, пока открыто радиальное меню (от ПКМ до выбора пункта/отмены). Клики
@@ -52,8 +53,9 @@ public class ShapeEditorPanel extends JPanel {
     private boolean userZoomed;
     private String lastScreenId;
 
-    public ShapeEditorPanel(AppModel model) {
+    public ShapeEditorPanel(AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings) {
         this.model = model;
+        this.settings = settings;
         setBackground(Palette.BG);
         setFocusable(true);
         setToolTipText(" "); // непустое значение регистрирует компонент в ToolTipManager
@@ -186,7 +188,8 @@ public class ShapeEditorPanel extends JPanel {
         return "<html><b>" + t.getName() + "</b>" + (cab.getCabinetTypeId() != null ? " (переопределён)" : "")
                 + "<br>" + UiKit.fmt(t.getWidthMm()) + "×" + UiKit.fmt(t.getHeightMm()) + " мм · "
                 + t.getResolutionWidth() + "×" + t.getResolutionHeight() + " px"
-                + "<br>" + UiKit.fmt(t.getPowerConsumptionW()) + " Вт · " + UiKit.fmt(t.getWeightKg()) + " кг"
+                + "<br>" + UiKit.fmtPower(t.getPowerConsumptionW(), settings.activeProfile().isPowerUnitKw())
+                + " · " + UiKit.fmt(t.getWeightKg()) + " кг"
                 + "<br>форма: " + shapeLabel + "</html>";
     }
 

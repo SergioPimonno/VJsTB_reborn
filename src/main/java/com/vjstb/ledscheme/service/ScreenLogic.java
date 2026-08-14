@@ -9,6 +9,9 @@ import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.SchemaCard;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SignalChain;
+import com.vjstb.ledscheme.model.StructureBaseFrameCell;
+import com.vjstb.ledscheme.model.StructureFrameCell;
+import com.vjstb.ledscheme.model.StructurePeremychkaCell;
 import com.vjstb.ledscheme.model.Workspace;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -182,6 +185,152 @@ public final class ScreenLogic {
             }
             scene.getSignalChains().removeIf(ch -> ch.getCabinetInstanceIds().isEmpty());
         }
+    }
+
+    /** Башня в позиции {@code towerX} (мм, центр) поддерживает хотя бы один РЕАЛЬНО
+     *  существующий (не {@code hidden}) кабинет НА САМОМ НИЖНЕМ РЯДУ экрана в своей зоне
+     *  ответственности ({@code towerX} ± половина шага башен) — по прямому указанию
+     *  пользователя (Phase 2.2): "если в экране есть отсутствующие кабинеты, то для них башни
+     *  не строятся". Проверяется ИМЕННО нижний ряд (не любой ряд в столбце) — баг-репорт:
+     *  экран с проёмом-аркой (вырезаны нижние ряды, верхние остались) всё равно "видел"
+     *  видимый кабинет где-то выше в столбце и считал башню нужной, хотя башне, растущей от
+     *  земли, физически нечего поддерживать под этим проёмом — башня опирается на землю и
+     *  растёт вверх, а не "телепортируется" через пустоту к оставшимся верхним кабинетам.
+     *  {@code type == null} — форма экрана неизвестна, не фильтруем (безопасный дефолт —
+     *  строить, а не молча пропускать). */
+    private static boolean towerHasCabinetContent(Screen screen, CabinetType type, double towerX, double spacing) {
+        if (type == null) {
+            return true;
+        }
+        double halfSpan = spacing / 2.0;
+        double cellW = type.getWidthMm();
+        int bottomRow = screen.getRows() - 1;
+        for (CabinetInstance cab : screen.getCabinets()) {
+            if (cab.isHidden() || cab.getRowIndex() != bottomRow) {
+                continue;
+            }
+            double left = cab.getColIndex() * cellW;
+            double right = left + cellW;
+            if (right > towerX - halfSpan && left < towerX + halfSpan) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Пересобирает списки реально существующих ячеек ОБЪЁМНОЙ башни наземного конструктива
+     *  ({@link Screen#getStructureFrameCells()}/{@code getStructurePeremychkaCells()}/
+     *  {@code getStructureBaseFrameCells()}) под новые номинальные границы сетки — ТОТ ЖЕ
+     *  приём, что {@link #resizeGrid} для {@link CabinetInstance}: позиции, всё ещё
+     *  попадающие в новые границы, СОХРАНЯЮТ СВОЮ ЗАПИСЬ КАК ЕСТЬ (включая {@code hidden} —
+     *  «Рассчитать конструктив» после правки только высоты башни не должно молча возвращать
+     *  вручную убранные пользователем сегменты, тот же принцип, что {@code hidden} у
+     *  {@link CabinetInstance} переживает resize сетки экрана), позиции без записи ВНУТРИ
+     *  новых границ получают новую видимую (hidden=false) запись, а записи ВНЕ новых границ
+     *  выбрасываются целиком (как у resizeGrid). Четыре независимые оси (Phase 2.1 — башня
+     *  объёмная, не плоская; Phase 2.2 — добавлены усилительные рамы выноса): вертикальные рамы
+     *  ядра по (башня × ряд[перед/зад] × сегмент), перемычки — по (башня × уровень), базовые
+     *  рамы — по (башня × секция выноса, 0=ядро), усилительные рамы выноса — по (башня × секция
+     *  выноса, начиная с 1, {@code row == 2} в том же списке, что и рамы ядра, см.
+     *  {@code StructureFrameCell} class-javadoc). {@code Screen#isStructureIncludeBaseFrame()}
+     *  сюда сознательно НЕ передаётся — этот чекбокс влияет только на то, показывает/считает ли
+     *  конструктив базовые/усилительные рамы вообще (см. {@code StructureCalc}/
+     *  {@code ui.Structure3DPanel}), сама расстановка внутри списка от него не зависит,
+     *  вызывающая сторона ({@code AppModel#updateScreenStructure}) сохраняет флаг на
+     *  {@code Screen} отдельно.
+     *
+     * <p><b>Форма экрана (Phase 2.2)</b>: башня по номинальному шагу, под которой на экране НЕТ
+     *  ни одного видимого кабинета (см. {@link #towerHasCabinetContent}), ПОЛНОСТЬЮ исключается
+     *  из всех трёх осей — как если бы её индекс был вне {@code towerCount} — это касается и
+     *  сохранения уже существующих (в т.ч. вручную отредактированных) ячеек: если форма экрана
+     *  изменилась и башня осталась без кабинетов под собой, её ячейки выбрасываются при
+     *  следующем «Рассчитать». Ручное добавление кликом в 3D ({@code AppModel
+     *  #toggleStructureFrameCell}) этому правилу НЕ подчиняется — фильтр действует только здесь,
+     *  при автогенерации. */
+    public static void regenerateStructureCells(Screen screen, CabinetType type, int towerCount,
+            int verticalFramesPerTower, int peremychkaLevels, int extendedBaseSections) {
+        double spacing = screen.getStructureTowerSpacingMm();
+        Set<Integer> validTowers = new HashSet<>();
+        for (int t = 0; t < towerCount; t++) {
+            if (towerHasCabinetContent(screen, type, t * spacing, spacing)) {
+                validTowers.add(t);
+            }
+        }
+
+        List<StructureFrameCell> frames = screen.getStructureFrameCells();
+        List<StructureFrameCell> keptFrames = new ArrayList<>();
+        for (StructureFrameCell c : frames) {
+            if (validTowers.contains(c.getTowerIndex()) && c.getRow() < 2
+                    && c.getSegmentIndex() < verticalFramesPerTower) {
+                keptFrames.add(c);
+            }
+        }
+        for (int t : validTowers) {
+            for (int row = 0; row < 2; row++) {
+                for (int seg = 0; seg < verticalFramesPerTower; seg++) {
+                    int ft = t;
+                    int fr = row;
+                    int fs = seg;
+                    if (keptFrames.stream().noneMatch(c -> c.matches(ft, fr, fs))) {
+                        keptFrames.add(new StructureFrameCell(ft, fr, fs));
+                    }
+                }
+            }
+        }
+
+        int sectionCount = 1 + Math.max(0, extendedBaseSections);
+        for (StructureFrameCell c : frames) {
+            if (validTowers.contains(c.getTowerIndex()) && c.getRow() == 2
+                    && c.getSegmentIndex() >= 1 && c.getSegmentIndex() < sectionCount) {
+                keptFrames.add(c);
+            }
+        }
+        for (int t : validTowers) {
+            for (int section = 1; section < sectionCount; section++) {
+                int ft = t;
+                int fsec = section;
+                if (keptFrames.stream().noneMatch(c -> c.matches(ft, 2, fsec))) {
+                    keptFrames.add(new StructureFrameCell(ft, 2, fsec));
+                }
+            }
+        }
+        screen.setStructureFrameCells(keptFrames);
+
+        List<StructurePeremychkaCell> peremychki = screen.getStructurePeremychkaCells();
+        List<StructurePeremychkaCell> keptPeremychki = new ArrayList<>();
+        for (StructurePeremychkaCell c : peremychki) {
+            if (validTowers.contains(c.getTowerIndex()) && c.getLevelIndex() < peremychkaLevels) {
+                keptPeremychki.add(c);
+            }
+        }
+        for (int t : validTowers) {
+            for (int level = 0; level < peremychkaLevels; level++) {
+                int ft = t;
+                int fl = level;
+                if (keptPeremychki.stream().noneMatch(c -> c.matches(ft, fl))) {
+                    keptPeremychki.add(new StructurePeremychkaCell(ft, fl));
+                }
+            }
+        }
+        screen.setStructurePeremychkaCells(keptPeremychki);
+
+        List<StructureBaseFrameCell> baseCells = screen.getStructureBaseFrameCells();
+        List<StructureBaseFrameCell> keptBase = new ArrayList<>();
+        for (StructureBaseFrameCell c : baseCells) {
+            if (validTowers.contains(c.getTowerIndex()) && c.getSectionIndex() < sectionCount) {
+                keptBase.add(c);
+            }
+        }
+        for (int t : validTowers) {
+            for (int section = 0; section < sectionCount; section++) {
+                int ft = t;
+                int fsec = section;
+                if (keptBase.stream().noneMatch(c -> c.matches(ft, fsec))) {
+                    keptBase.add(new StructureBaseFrameCell(ft, fsec));
+                }
+            }
+        }
+        screen.setStructureBaseFrameCells(keptBase);
     }
 
     /** Фактический тип кабинета: переопределение по ячейке (если задано и разрешимо
@@ -369,14 +518,17 @@ public final class ScreenLogic {
         return new SceneStats(scene.getScreens().size(), cabinets, power, weight, byType);
     }
 
-    /** Авторасчёт количества точек подвеса по формуле из референсных таблиц
-     *  риг-тех расчёта заказчика: «Hanging bar» = ширина экрана в модулях / 2
-     *  (стандартный сегмент несущей балки перекрывает 2 модуля по ширине) —
-     *  трактуется как минимальное число точек подвеса, округлённое вверх, не
-     *  меньше 2 (подвес не бывает на одной точке). Даёт лишь стартовое значение —
-     *  пользователь может скорректировать вручную под конкретную ферму/траверс. */
-    public static int suggestRiggingPoints(Screen screen) {
-        return Math.max(2, (int) Math.ceil(screen.getCols() / 2.0));
+    /** Авторасчёт КОЛИЧЕСТВА точек подвеса — минимум из референсных таблиц риг-тех
+     *  расчёта заказчика: «Hanging bar» = ширина экрана в модулях / 2 (стандартный
+     *  сегмент несущей балки перекрывает 2 модуля по ширине), не меньше 2 (подвес
+     *  не бывает на одной точке) — УВЕЛИЧЕННЫЙ, если реальная нагрузка на точку
+     *  превышает грузоподъёмность выбранной лебёдки (см. javadoc
+     *  {@link RiggingCalc#suggestPointCount}, которому этот метод делегирует —
+     *  оставлен здесь для обратной совместимости вызывающего кода). Пользователь
+     *  может скорректировать количество вручную под конкретную ферму/траверс. */
+    public static int suggestRiggingPoints(Screen screen, com.vjstb.ledscheme.model.CabinetType defaultType,
+                                            com.vjstb.ledscheme.model.Workspace workspace) {
+        return RiggingCalc.suggestPointCount(screen, defaultType, workspace);
     }
 
     // ---- undo: снимок и восстановление состояния экрана ----
@@ -399,6 +551,8 @@ public final class ScreenLogic {
         live.setMountType(snapshot.getMountType());
         live.setRiggingPointsCount(snapshot.getRiggingPointsCount());
         live.setRiggingNotes(snapshot.getRiggingNotes());
+        live.setRiggingSafetyFactorMin(snapshot.getRiggingSafetyFactorMin());
+        live.setRiggingHoistCapacityKg(snapshot.getRiggingHoistCapacityKg());
 
         List<CabinetInstance> cabs = new ArrayList<>();
         for (CabinetInstance c : snapshot.getCabinets()) {

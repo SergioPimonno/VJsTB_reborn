@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.CableLengthProfile;
+import com.vjstb.ledscheme.model.HoistType;
+import com.vjstb.ledscheme.model.StructureFrameType;
 import com.vjstb.ledscheme.model.CableType;
 import com.vjstb.ledscheme.model.CanvasPlacement;
 import com.vjstb.ledscheme.model.CardPort;
@@ -40,6 +42,7 @@ import java.io.File;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -60,7 +63,7 @@ public class AppModel {
         void onModelChanged();
     }
 
-    private static final int UNDO_LIMIT = 100;
+    private static final int UNDO_LIMIT = 200;
 
     private final WorkspaceStore store;
     private final LibraryStore libraryStore;
@@ -73,12 +76,17 @@ public class AppModel {
     private Mode mode = Mode.POWER;
     private int activePhase = 1;
 
-    /** Снимок для «отменить»: состояние текущего экрана + цепочки его сцены на тот
-     *  момент. Цепочки хранятся на уровне сцены, а не экрана (см. Task #78), поэтому
-     *  снимок ОДНОГО экрана (как было раньше) больше не покрывает отмену
-     *  добавления/удаления/разрыва цепочки — нужен отдельный снимок списков сцены. */
+    /** Снимок для «отменить»: состояние текущего экрана (null, если на момент записи
+     *  экран не был выбран — например, правка велась на этапе «Генерация масок», где
+     *  выбор экрана не требуется) + цепочки и канвасы сцены на тот момент. Цепочки и
+     *  канвасы хранятся на уровне сцены, а не экрана (см. Task #78), поэтому снимок
+     *  ОДНОГО экрана (как было раньше) не покрывает их отмену — нужен отдельный
+     *  снимок списков сцены. {@code actionLabel} — человекочитаемое описание для
+     *  будущего UI истории действий (по образцу лога команд grandMA) — пока не
+     *  проставляется на всех местах вызова, только там, где уже осмысленно (маски). */
     private record UndoEntry(Screen screenSnapshot, List<PowerChain> powerChainsSnapshot,
-                              List<SignalChain> signalChainsSnapshot) {
+                              List<SignalChain> signalChainsSnapshot, List<ContentCanvas> canvasesSnapshot,
+                              String actionLabel) {
     }
 
     private final Deque<UndoEntry> undoStack = new ArrayDeque<>();
@@ -90,6 +98,9 @@ public class AppModel {
         this.workspace = store.load();
         this.workspace.setLibrary(libraryStore.loadOrMigrate(store.getWorkspaceFile()));
         seedDefaultInterfaceTypesIfEmpty();
+        for (Project project : workspace.getProjects()) {
+            seedScreenMaskColorsFromLegacyPlacements(project);
+        }
     }
 
     /** Заполняет справочник видов интерфейса встроенными значениями при первом
@@ -224,7 +235,7 @@ public class AppModel {
     }
 
     public boolean canUndo() {
-        return currentScreen != null && !undoStack.isEmpty();
+        return currentScene != null && !undoStack.isEmpty();
     }
 
     public int undoDepth() {
@@ -775,7 +786,7 @@ public class AppModel {
         scr.setPosXMm(posX);
         scr.setPosYMm(posY);
         ScreenLogic.buildGrid(scr);
-        scr.setRiggingPointsCount(ScreenLogic.suggestRiggingPoints(scr));
+        scr.setRiggingPointsCount(ScreenLogic.suggestRiggingPoints(scr, typeOf(scr), workspace));
         currentScene.getScreens().add(scr);
         changed();
         return scr;
@@ -799,12 +810,115 @@ public class AppModel {
         changed();
     }
 
-    /** Заготовка под расчёт точек подвеса: способ монтажа + вручную вводимое кол-во/заметки. */
-    public void updateScreenMount(Screen screen, ScreenMountType mountType, int riggingPointsCount, String riggingNotes) {
+    /** Способ монтажа + количество/заметки точек подвеса (см. {@link RiggingCalc}
+     *  для авторасчёта распределения нагрузки) + требуемый минимальный коэффициент
+     *  запаса прочности сертификации оборудования и грузоподъёмность (WLL, кг)
+     *  реально выбранной лебёдки/тали — null, если ещё не выбрана (расчёт тогда
+     *  только показывает нагрузку, без проверки превышения). {@code riggingHoistTypeId} —
+     *  FK на библиотечный {@link HoistType} (см. {@link RiggingCalc#effectiveHoistCapacityKg}),
+     *  {@code null} — оборудование не выбрано из каталога, используется
+     *  {@code riggingHoistCapacityKg} напрямую (ручной ввод/fallback для старых проектов). */
+    public void updateScreenMount(Screen screen, ScreenMountType mountType, int riggingPointsCount,
+                                   String riggingNotes, double riggingSafetyFactorMin, Double riggingHoistCapacityKg,
+                                   String riggingHoistTypeId) {
         pushUndo();
         screen.setMountType(mountType);
         screen.setRiggingPointsCount(Math.max(0, riggingPointsCount));
         screen.setRiggingNotes(riggingNotes);
+        screen.setRiggingSafetyFactorMin(riggingSafetyFactorMin);
+        screen.setRiggingHoistCapacityKg(riggingHoistCapacityKg);
+        screen.setRiggingHoistTypeId(riggingHoistTypeId);
+        changed();
+    }
+
+    /** Параметры наземного конструктива (см. {@link StructureCalc}, STRUCTURE_CALC_NOTES.md)
+     *  — все числа/FK-поля, осмысленные только при {@code mountType == STRUCTURE}, тем же
+     *  единым вызовом, что и {@link #updateScreenMount} для rigging-полей. Phase 2.1 — объёмная
+     *  башня: {@code peremychkaLevels}/{@code extendedBaseSections} заменили прежние
+     *  {@code horizontalBraceRows}/расчёт ветра (см. {@code StructureCalc} class-javadoc). */
+    public void updateScreenStructure(Screen screen, double towerHeightMm, double towerSpacingMm,
+                                       int towerCount, int verticalFramesPerTower, int peremychkaLevels,
+                                       int extendedBaseSections, boolean includeBaseFrame, String frameTypeId,
+                                       String shortFrameTypeId, String cupTypeId, String ballastTypeId,
+                                       double screenElevationMm, String notes) {
+        pushUndo();
+        screen.setStructureTowerHeightMm(towerHeightMm);
+        screen.setStructureTowerSpacingMm(towerSpacingMm);
+        screen.setStructureTowerCount(towerCount);
+        screen.setStructureVerticalFramesPerTower(verticalFramesPerTower);
+        screen.setStructurePeremychkaLevels(peremychkaLevels);
+        screen.setStructureExtendedBaseSections(extendedBaseSections);
+        screen.setStructureIncludeBaseFrame(includeBaseFrame);
+        screen.setStructureFrameTypeId(frameTypeId);
+        screen.setStructureShortFrameTypeId(shortFrameTypeId);
+        screen.setStructureCupTypeId(cupTypeId);
+        screen.setStructureBallastTypeId(ballastTypeId);
+        screen.setStructureScreenElevationMm(screenElevationMm);
+        screen.setStructureNotes(notes);
+        ScreenLogic.regenerateStructureCells(screen, typeOf(screen), towerCount, verticalFramesPerTower,
+                peremychkaLevels, extendedBaseSections);
+        changed();
+    }
+
+    /** Точечно включает/выключает ОДИН сегмент вертикальной рамы башни, в переднем ИЛИ заднем
+     *  ряду, либо усилительную раму выноса ({@code row == 2}, Phase 2.2 — см.
+     *  STRUCTURE_CALC_NOTES.md) — клик по существующему сегменту в {@code ui.Structure3DPanel}
+     *  прячет его ({@code hidden=true}, запись НЕ удаляется — см. {@code StructureFrameCell
+     *  #isHidden} и {@code ScreenLogic#regenerateStructureCells} про то, почему это важно при
+     *  следующем «Рассчитать»), клик по пустому/призрачному месту либо снимает {@code hidden} с
+     *  уже существующей записи, либо (если позиция ещё вообще не встречалась — например, новая
+     *  башня за пределами номинальной сетки) создаёт новую видимую запись. */
+    public void toggleStructureFrameCell(Screen screen, int towerIndex, int row, int segmentIndex) {
+        toggleStructureFrameCell(screen, towerIndex, row, segmentIndex, null);
+    }
+
+    /** То же самое, но для НОВОЙ ячейки позволяет сразу задать переопределение типа рамы (см.
+     *  {@code StructureFrameCell#getFrameTypeId()}) — "менюшка с выбором текущей рамы для
+     *  построения" ({@code ui.Structure3DDialog}), нужна для мест, где номинальная рама физически
+     *  не помещается (край экрана) или где нужна конкретно короткая/метровая рама. У УЖЕ
+     *  существующей ячейки (переключение hidden туда-обратно) тип НЕ трогается — параметр имеет
+     *  значение только в момент первого создания записи. */
+    public void toggleStructureFrameCell(Screen screen, int towerIndex, int row, int segmentIndex,
+            String frameTypeIdForNewCell) {
+        pushUndo();
+        List<com.vjstb.ledscheme.model.StructureFrameCell> cells = screen.getStructureFrameCells();
+        var existing = cells.stream().filter(c -> c.matches(towerIndex, row, segmentIndex)).findFirst();
+        if (existing.isPresent()) {
+            existing.get().setHidden(!existing.get().isHidden());
+        } else {
+            com.vjstb.ledscheme.model.StructureFrameCell cell =
+                    new com.vjstb.ledscheme.model.StructureFrameCell(towerIndex, row, segmentIndex);
+            cell.setFrameTypeId(frameTypeIdForNewCell);
+            cells.add(cell);
+        }
+        changed();
+    }
+
+    /** Точечно включает/выключает ОДНУ перемычку (передний↔задний ряд ВНУТРИ одной башни) —
+     *  см. {@link #toggleStructureFrameCell}. */
+    public void toggleStructurePeremychkaCell(Screen screen, int towerIndex, int levelIndex) {
+        pushUndo();
+        List<com.vjstb.ledscheme.model.StructurePeremychkaCell> cells = screen.getStructurePeremychkaCells();
+        var existing = cells.stream().filter(c -> c.matches(towerIndex, levelIndex)).findFirst();
+        if (existing.isPresent()) {
+            existing.get().setHidden(!existing.get().isHidden());
+        } else {
+            cells.add(new com.vjstb.ledscheme.model.StructurePeremychkaCell(towerIndex, levelIndex));
+        }
+        changed();
+    }
+
+    /** Точечно включает/выключает ОДНУ секцию базовой (опорной) рамы ОДНОЙ башни (0 = ядро под
+     *  объёмом башни, 1+ = вынос под балласт) — см. {@link #toggleStructureFrameCell}. */
+    public void toggleStructureBaseFrameSection(Screen screen, int towerIndex, int sectionIndex) {
+        pushUndo();
+        List<com.vjstb.ledscheme.model.StructureBaseFrameCell> cells = screen.getStructureBaseFrameCells();
+        var existing = cells.stream().filter(c -> c.matches(towerIndex, sectionIndex)).findFirst();
+        if (existing.isPresent()) {
+            existing.get().setHidden(!existing.get().isHidden());
+        } else {
+            cells.add(new com.vjstb.ledscheme.model.StructureBaseFrameCell(towerIndex, sectionIndex));
+        }
         changed();
     }
 
@@ -1606,6 +1720,89 @@ public class AppModel {
         changed();
     }
 
+    /** Общая библиотека ("GTO") ++ личная — см. javadoc {@link #getCabinetTypes()}
+     *  про то же разделение. */
+    public List<HoistType> getHoistTypes() {
+        List<HoistType> union = new ArrayList<>(workspace.getSharedHoistTypes());
+        union.addAll(workspace.getHoistTypes());
+        return union;
+    }
+
+    public boolean isSharedHoistType(String id) {
+        return id != null && workspace.getSharedHoistTypes().stream().anyMatch(h -> h.getId().equals(id));
+    }
+
+    private void requireUniqueHoistTypeName(String name, String ignoreId) {
+        for (HoistType h : getHoistTypes()) {
+            if (h.getName().equalsIgnoreCase(name) && !h.getId().equals(ignoreId)) {
+                throw new IllegalStateException("Модель лебёдки «" + name + "» уже есть в библиотеке");
+            }
+        }
+    }
+
+    public HoistType addHoistType(HoistType hoist) {
+        requireUniqueHoistTypeName(hoist.getName(), null);
+        workspace.getHoistTypes().add(hoist);
+        changed();
+        return hoist;
+    }
+
+    public void updateHoistType(HoistType edited) {
+        requireUniqueHoistTypeName(edited.getName(), edited.getId());
+        HoistType existing = getHoistTypes().stream()
+                .filter(h -> h.getId().equals(edited.getId())).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Модель лебёдки не найдена в библиотеке"));
+        existing.applyEditedValues(edited);
+        changed();
+    }
+
+    public void deleteHoistType(String id) {
+        workspace.getHoistTypes().removeIf(h -> h.getId().equals(id));
+        changed();
+    }
+
+    /** Общая библиотека ("GTO") ++ личная — см. javadoc {@link #getCabinetTypes()}
+     *  про то же разделение. */
+    public List<StructureFrameType> getStructureFrameTypes() {
+        List<StructureFrameType> union = new ArrayList<>(workspace.getSharedStructureFrameTypes());
+        union.addAll(workspace.getStructureFrameTypes());
+        return union;
+    }
+
+    public boolean isSharedStructureFrameType(String id) {
+        return id != null
+                && workspace.getSharedStructureFrameTypes().stream().anyMatch(t -> t.getId().equals(id));
+    }
+
+    private void requireUniqueStructureFrameTypeName(String name, String ignoreId) {
+        for (StructureFrameType t : getStructureFrameTypes()) {
+            if (t.getName().equalsIgnoreCase(name) && !t.getId().equals(ignoreId)) {
+                throw new IllegalStateException("Элемент конструктива «" + name + "» уже есть в библиотеке");
+            }
+        }
+    }
+
+    public StructureFrameType addStructureFrameType(StructureFrameType type) {
+        requireUniqueStructureFrameTypeName(type.getName(), null);
+        workspace.getStructureFrameTypes().add(type);
+        changed();
+        return type;
+    }
+
+    public void updateStructureFrameType(StructureFrameType edited) {
+        requireUniqueStructureFrameTypeName(edited.getName(), edited.getId());
+        StructureFrameType existing = getStructureFrameTypes().stream()
+                .filter(t -> t.getId().equals(edited.getId())).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Элемент конструктива не найден в библиотеке"));
+        existing.applyEditedValues(edited);
+        changed();
+    }
+
+    public void deleteStructureFrameType(String id) {
+        workspace.getStructureFrameTypes().removeIf(t -> t.getId().equals(id));
+        changed();
+    }
+
     /** Тип библиотеки, которым файл экспорта себя маркирует (Task #5) — null, если
      *  файл в старом формате или маркер не распознан; тогда UI возвращается к
      *  ручному выбору типа в комбобоксе, как раньше. */
@@ -1671,6 +1868,13 @@ public class AppModel {
                             workspace.getCableLengthProfiles(), dto, CableLengthProfile.class,
                             CableLengthProfile::getId, CableLengthProfile::setId, CableLengthProfile::getName,
                             NO_REFERENCE_MIGRATION);
+                    case "HOIST" -> applyOne(workspace.getSharedHoistTypes(), workspace.getHoistTypes(), dto,
+                            HoistType.class, HoistType::getId, HoistType::setId, HoistType::getName,
+                            this::migrateHoistTypeReferences);
+                    case "STRUCTURE_FRAME" -> applyOne(workspace.getSharedStructureFrameTypes(),
+                            workspace.getStructureFrameTypes(), dto, StructureFrameType.class,
+                            StructureFrameType::getId, StructureFrameType::setId, StructureFrameType::getName,
+                            this::migrateStructureFrameTypeReferences);
                     case "EQUIPMENT_CUSTOM_CATEGORY" -> applyCustomCategory(dto);
                     case "GUIDE_TEXT" -> applySingletonSections(dto, workspace.getLibrary()::setGuideSections);
                     case "ONBOARDING_TEXT" -> applySingletonSections(dto, workspace.getLibrary()::setOnboardingSections);
@@ -1718,6 +1922,10 @@ public class AppModel {
             case "INTERFACE" -> workspace.getSharedInterfaceTypes().removeIf(t -> t.getId().equals(dto.id()));
             case "CABLE_LENGTH_PROFILE" ->
                     workspace.getSharedCableLengthProfiles().removeIf(p -> p.getId().equals(dto.id()));
+            case "HOIST" -> removeSharedIfUnreferenced(workspace.getSharedHoistTypes(), dto.id(),
+                    HoistType::getId, this::isHoistTypeReferenced);
+            case "STRUCTURE_FRAME" -> removeSharedIfUnreferenced(workspace.getSharedStructureFrameTypes(), dto.id(),
+                    StructureFrameType::getId, this::isStructureFrameTypeReferenced);
             default -> false; // остальные виды (тексты/сценарии/параметры) не поддерживают удаление синком
         };
     }
@@ -1764,6 +1972,40 @@ public class AppModel {
                         if (id.equals(controller.getControllerTypeId())) {
                             return true;
                         }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean isHoistTypeReferenced(String id) {
+        for (Project project : workspace.getProjects()) {
+            for (Scene scene : project.getScenes()) {
+                for (Screen screen : scene.getScreens()) {
+                    if (id.equals(screen.getRiggingHoistTypeId())) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Один вид библиотеки (STRUCTURE_FRAME) обслуживает ЧЕТЫРЕ разных FK-поля Screen
+     *  (рама/короткая рама/стакан/балласт — все ссылаются на записи ОДНОЙ библиотеки,
+     *  различаемые по {@code StructureFrameType.kind}, см. class-javadoc модели) —
+     *  поэтому проверка ссылок и перенос при "продвижении" смотрят на все четыре сразу,
+     *  а не на одно поле, как у HOIST/CABINET. */
+    private boolean isStructureFrameTypeReferenced(String id) {
+        for (Project project : workspace.getProjects()) {
+            for (Scene scene : project.getScenes()) {
+                for (Screen screen : scene.getScreens()) {
+                    if (id.equals(screen.getStructureFrameTypeId())
+                            || id.equals(screen.getStructureShortFrameTypeId())
+                            || id.equals(screen.getStructureCupTypeId())
+                            || id.equals(screen.getStructureBallastTypeId())) {
+                        return true;
                     }
                 }
             }
@@ -1878,6 +2120,43 @@ public class AppModel {
                         if (oldId.equals(controller.getControllerTypeId())) {
                             controller.setControllerTypeId(newId);
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    /** Переносит {@link Screen#getRiggingHoistTypeId()} по всем проектам/сценам/
+     *  экранам workspace с {@code oldId} на {@code newId} — см. javadoc {@link #applyOne}. */
+    private void migrateHoistTypeReferences(String oldId, String newId) {
+        for (Project project : workspace.getProjects()) {
+            for (Scene scene : project.getScenes()) {
+                for (Screen screen : scene.getScreens()) {
+                    if (oldId.equals(screen.getRiggingHoistTypeId())) {
+                        screen.setRiggingHoistTypeId(newId);
+                    }
+                }
+            }
+        }
+    }
+
+    /** Переносит ЛЮБОЕ из четырёх FK-полей Screen на элементы STRUCTURE_FRAME — см.
+     *  javadoc {@link #isStructureFrameTypeReferenced} про то же разделение на 4 поля. */
+    private void migrateStructureFrameTypeReferences(String oldId, String newId) {
+        for (Project project : workspace.getProjects()) {
+            for (Scene scene : project.getScenes()) {
+                for (Screen screen : scene.getScreens()) {
+                    if (oldId.equals(screen.getStructureFrameTypeId())) {
+                        screen.setStructureFrameTypeId(newId);
+                    }
+                    if (oldId.equals(screen.getStructureShortFrameTypeId())) {
+                        screen.setStructureShortFrameTypeId(newId);
+                    }
+                    if (oldId.equals(screen.getStructureCupTypeId())) {
+                        screen.setStructureCupTypeId(newId);
+                    }
+                    if (oldId.equals(screen.getStructureBallastTypeId())) {
+                        screen.setStructureBallastTypeId(newId);
                     }
                 }
             }
@@ -2195,6 +2474,7 @@ public class AppModel {
         if (currentScene == null) {
             throw new IllegalStateException("Не выбрана сцена");
         }
+        pushUndo("Добавление канваса «" + name + "»");
         ContentCanvas c = new ContentCanvas();
         c.setName(name);
         c.setWidthPx(Math.max(1, widthPx));
@@ -2205,6 +2485,7 @@ public class AppModel {
     }
 
     public void updateCanvas(ContentCanvas canvas, String name, int widthPx, int heightPx) {
+        pushUndo("Правка канваса «" + canvas.getName() + "»");
         canvas.setName(name);
         canvas.setWidthPx(Math.max(1, widthPx));
         canvas.setHeightPx(Math.max(1, heightPx));
@@ -2215,11 +2496,13 @@ public class AppModel {
         if (currentScene == null) {
             return;
         }
+        pushUndo("Удаление канваса «" + canvas.getName() + "»");
         currentScene.getCanvases().remove(canvas);
         changed();
     }
 
-    // ---- проекторы (калькулятор проектора, сцена-scoped, Task #135/v2.0) ----
+    // ---- проекторы (сцена-scoped данные; UI-калькулятор выпилен, модель и её
+    //      отображение в спецификации OutputStagePanel оставлены) ----
 
     public List<ProjectorInstance> projectorsForCurrentScene() {
         return currentScene == null ? List.of() : currentScene.getProjectors();
@@ -2248,6 +2531,7 @@ public class AppModel {
                 return p; // уже размещён — не дублируем
             }
         }
+        pushUndo("Добавление экрана в канвас «" + canvas.getName() + "»");
         CanvasPlacement p = new CanvasPlacement(screenId, x, y);
         canvas.getPlacements().add(p);
         changed();
@@ -2255,26 +2539,28 @@ public class AppModel {
     }
 
     public void movePlacement(CanvasPlacement placement, int x, int y) {
+        pushUndo("Перемещение размещения в канвасе");
         placement.setX(x);
         placement.setY(y);
         changed();
     }
 
     public void removePlacement(ContentCanvas canvas, String placementId) {
+        pushUndo("Удаление размещения из канваса «" + canvas.getName() + "»");
         canvas.getPlacements().removeIf(p -> p.getId().equals(placementId));
         changed();
     }
 
     /** Настройка маски одного грида (размещённого на канвасе экрана) — имя-override,
-     *  цвет чек-борда, набор включённых элементов (см. class-javadoc CanvasPlacement/
-     *  PixelGridRenderer.GridRenderOptions). Не проходит через pushUndo() — чисто
-     *  визуальная настройка, тот же случай, что был у прежнего setScreenMaskColorPreset. */
-    public void updatePlacementMaskConfig(CanvasPlacement pl, String name, MaskColorPreset background,
+     *  набор включённых элементов (см. class-javadoc CanvasPlacement/
+     *  PixelGridRenderer.GridRenderOptions). Цвет чек-борда сюда больше НЕ входит
+     *  (2026-08-13) — он общий для экрана, см. {@link #setMaskColor}. */
+    public void updatePlacementMaskConfig(CanvasPlacement pl, String name,
                                            boolean showGrid, boolean showRaster, boolean showIds,
                                            boolean showCircle, boolean showCross, boolean showCorner,
                                            boolean showLogo) {
+        pushUndo("Настройка маски «" + (name == null || name.isBlank() ? pl.getId() : name) + "»");
         pl.setName(name);
-        pl.setBackground(background);
         pl.setShowGrid(showGrid);
         pl.setShowRaster(showRaster);
         pl.setShowIds(showIds);
@@ -2285,10 +2571,52 @@ public class AppModel {
         changed();
     }
 
+    /** Цвет чек-борда маски — ОДИН на экран, применяется во ВСЕХ канвасах, где он
+     *  размещён (см. class-javadoc {@link Screen#getBackground()} про историю этого
+     *  поля — раньше хранился per-{@link CanvasPlacement}). */
+    public void setMaskColor(Screen screen, MaskColorPreset color) {
+        pushUndo("Цвет маски «" + screen.getName() + "»");
+        screen.setBackground(color);
+        changed();
+    }
+
+    /** Одноразовая миграция при загрузке проекта (2026-08-13, см. class-javadoc
+     *  {@link CanvasPlacement}): раньше цвет чек-борда хранился per-{@link
+     *  CanvasPlacement}, теперь общий на {@link Screen}. Не молча обнуляет уже
+     *  выбранные пользователем цвета в старых проектах — для каждого экрана без
+     *  явно установленного (дефолтного NORMAL) цвета ищет ПЕРВОЕ размещение этого
+     *  экрана в любом канвасе любой сцены проекта и переносит его цвет; если экран
+     *  нигде не размещён (или его размещения тоже все NORMAL) — остаётся NORMAL,
+     *  что и так было дефолтом, реального решения не теряем. Идемпотентно: повторный
+     *  вызов на уже смигрированном проекте ничего не меняет (условие "== NORMAL").
+     *  Не использует pushUndo/changed() — часть загрузки, не пользовательское
+     *  действие, не должно попадать в историю отмены. */
+    private void seedScreenMaskColorsFromLegacyPlacements(Project project) {
+        for (Scene scene : project.getScenes()) {
+            Map<String, Screen> screensById = new HashMap<>();
+            for (Screen screen : scene.getScreens()) {
+                screensById.put(screen.getId(), screen);
+            }
+            for (ContentCanvas canvas : scene.getCanvases()) {
+                for (CanvasPlacement pl : canvas.getPlacements()) {
+                    Screen screen = screensById.get(pl.getScreenId());
+                    if (screen == null || screen.getBackground() != MaskColorPreset.NORMAL) {
+                        continue; // уже смигрирован/явно оставлен NORMAL, либо экран не найден
+                    }
+                    MaskColorPreset legacy = pl.getBackground();
+                    if (legacy != MaskColorPreset.NORMAL) {
+                        screen.setBackground(legacy);
+                    }
+                }
+            }
+        }
+    }
+
     /** Настройки подписи имени, общие для ВСЕХ гридов этого канваса (в отличие от
-     *  updatePlacementMaskConfig — per-грид). Тоже без pushUndo. */
+     *  updatePlacementMaskConfig — per-грид). */
     public void updateCanvasMaskSettings(ContentCanvas canvas, boolean largeGridNames, Integer textColorRgb,
                                           boolean dropShadow) {
+        pushUndo("Настройка подписей канваса «" + canvas.getName() + "»");
         canvas.setLargeGridNames(largeGridNames);
         canvas.setTextColorRgb(textColorRgb);
         canvas.setDropShadow(dropShadow);
@@ -3667,38 +3995,50 @@ public class AppModel {
 
     // ---- undo ----
 
+    /** Записывает снимок без метки (большинство существующих ~25 точек вызова —
+     *  снимки состояния экрана/схемы/цепочек, где имя действия пока не нужно UI). */
     private void pushUndo() {
-        if (currentScreen == null) {
+        pushUndo(null);
+    }
+
+    /** Снимает текущее состояние сцены (экран, если выбран, + цепочки + канвасы) для
+     *  «отменить». Требует только currentScene — НЕ currentScreen, т.к. правка масок
+     *  (см. {@link #updatePlacementMaskConfig}/{@link #updateCanvasMaskSettings} и
+     *  канвас-CRUD ниже) идёт без выбора конкретного экрана. */
+    private void pushUndo(String actionLabel) {
+        if (currentScene == null) {
             return;
         }
-        Scene scene = sceneContaining(currentScreen);
+        Screen screenSnap = currentScreen != null ? ScreenLogic.snapshot(currentScreen) : null;
         List<PowerChain> pc = new ArrayList<>();
-        List<SignalChain> sc = new ArrayList<>();
-        if (scene != null) {
-            for (PowerChain c : scene.getPowerChains()) {
-                pc.add(c.copy());
-            }
-            for (SignalChain c : scene.getSignalChains()) {
-                sc.add(c.copy());
-            }
+        for (PowerChain c : currentScene.getPowerChains()) {
+            pc.add(c.copy());
         }
-        undoStack.push(new UndoEntry(ScreenLogic.snapshot(currentScreen), pc, sc));
+        List<SignalChain> sc = new ArrayList<>();
+        for (SignalChain c : currentScene.getSignalChains()) {
+            sc.add(c.copy());
+        }
+        List<ContentCanvas> cv = new ArrayList<>();
+        for (ContentCanvas c : currentScene.getCanvases()) {
+            cv.add(c.copy());
+        }
+        undoStack.push(new UndoEntry(screenSnap, pc, sc, cv, actionLabel));
         while (undoStack.size() > UNDO_LIMIT) {
             undoStack.removeLast();
         }
     }
 
     public void undo() {
-        if (currentScreen == null || undoStack.isEmpty()) {
+        if (currentScene == null || undoStack.isEmpty()) {
             return;
         }
         UndoEntry snap = undoStack.pop();
-        ScreenLogic.restore(currentScreen, snap.screenSnapshot());
-        Scene scene = sceneContaining(currentScreen);
-        if (scene != null) {
-            scene.setPowerChains(snap.powerChainsSnapshot());
-            scene.setSignalChains(snap.signalChainsSnapshot());
+        if (snap.screenSnapshot() != null && currentScreen != null) {
+            ScreenLogic.restore(currentScreen, snap.screenSnapshot());
         }
+        currentScene.setPowerChains(snap.powerChainsSnapshot());
+        currentScene.setSignalChains(snap.signalChainsSnapshot());
+        currentScene.setCanvases(snap.canvasesSnapshot());
         changed();
     }
 }

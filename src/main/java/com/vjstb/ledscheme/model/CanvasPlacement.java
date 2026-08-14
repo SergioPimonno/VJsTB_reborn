@@ -3,10 +3,14 @@ package com.vjstb.ledscheme.model;
 import java.util.UUID;
 
 /** Экран, размещённый внутри канваса (компоновка контента) — позиция в пикселях
- *  канваса, плюс собственная настройка маски этого "грида" (см. class-javadoc
- *  PixelGridRenderer.GridRenderOptions) — раньше цвет чек-борда хранился на самом
- *  {@code Screen} и был общим для всех канвасов, теперь у каждого размещения он
- *  свой, как и набор включённых элементов маски. */
+ *  канваса, плюс собственная настройка ЭЛЕМЕНТОВ маски этого "грида" (см. class-javadoc
+ *  PixelGridRenderer.GridRenderOptions) — набор show* полей ниже. Цвет чек-борда —
+ *  см. {@link #background} — 2026-08-13, вернулись к тому, что он снова общий для
+ *  экрана (см. {@code Screen#getBackground}), не per-placement: та же запись,
+ *  размещённая в двух канвасах, показывала РАЗНЫЙ цвет маски, что оказалось не тем,
+ *  что нужно (баг-репорт). Между этим и предыдущим (общий на Screen) заходом был
+ *  короткий период per-placement цвета — если видите код/комментарии,
+ *  предполагающие цвет на CanvasPlacement, они устарели. */
 public class CanvasPlacement {
 
     private String id = UUID.randomUUID().toString();
@@ -16,6 +20,12 @@ public class CanvasPlacement {
     /** null — использовать имя экрана как есть; иначе замещает его только в маске
      *  (Setup не трогает). */
     private String name;
+    /** УСТАРЕЛО (2026-08-13) — цвет чек-борда снова общий для экрана, см.
+     *  {@code Screen#getBackground}/{@code AppModel#setMaskColor}. Поле и геттер/сеттер
+     *  оставлены ТОЛЬКО для десериализации уже сохранённых проектов (Jackson не должен
+     *  падать на старом JSON) и для одноразовой миграции при загрузке (см.
+     *  {@code AppModel#seedScreenMaskColorsFromLegacyPlacements}) — новый код должен
+     *  читать/писать цвет через {@code Screen}, не через это поле. */
     private MaskColorPreset background = MaskColorPreset.NORMAL;
     /** Дефолты трёх ниже — true, чтобы уже сохранённые (до появления этих полей)
      *  проекты продолжали рисовать маску ровно как раньше (сетка+растр+номера были
@@ -78,10 +88,14 @@ public class CanvasPlacement {
         this.name = name;
     }
 
+    /** @deprecated см. class-javadoc — читайте {@code Screen#getBackground()}. */
+    @Deprecated
     public MaskColorPreset getBackground() {
         return background != null ? background : MaskColorPreset.NORMAL;
     }
 
+    /** @deprecated см. class-javadoc — пишите через {@code AppModel#setMaskColor}. */
+    @Deprecated
     public void setBackground(MaskColorPreset background) {
         this.background = background != null ? background : MaskColorPreset.NORMAL;
     }

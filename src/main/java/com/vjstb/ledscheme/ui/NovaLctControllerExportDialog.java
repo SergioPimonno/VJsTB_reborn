@@ -141,6 +141,32 @@ public final class NovaLctControllerExportDialog {
             defaultName = screen.getName();
             exportedCabinetType = model.typeOf(screen);
         } else {
+            // Combine/splitSeparateGrouped (см. NovaLctCombineHelper) полагаются на
+            // равномерную row/col-сетку LctPresetMasterDialog и понятия не имеют про
+            // произвольные Complex-прямоугольники (см. class-javadoc NovaLctScrWriter,
+            // раздел про Complex Screen) — молча применённая Standard-математика к
+            // Complex-экрану дала бы непредсказуемый результат без единой ошибки.
+            // Блокируем весь мультиэкранный путь, если хоть один из затронутых экранов
+            // неровный — единственный экрана-центричный путь (write/writeComplex),
+            // уже подтверждённый побайтово, всё ещё доступен через контроллер,
+            // обслуживающий ТОЛЬКО этот экран.
+            List<String> complexScreenNames = new ArrayList<>();
+            for (Screen s : involvedScreens) {
+                if (NovaLctScrWriter.isComplexExport(s, model.getWorkspace())) {
+                    complexScreenNames.add(s.getName());
+                }
+            }
+            if (!complexScreenNames.isEmpty()) {
+                JOptionPane.showMessageDialog(owner,
+                        "<html><body style='width:340px'>Контроллер затрагивает несколько экранов сразу, а"
+                                + " экран(ы) «" + String.join("», «", complexScreenNames) + "» имеют неровную"
+                                + " (Complex) раскладку кабинетов. Объединение и раздельный мультиэкранный"
+                                + " экспорт рассчитаны на равномерную сетку и не поддерживают Complex-раскладку."
+                                + "<br><br>Экспортируйте такой экран отдельно — через контроллер, обслуживающий"
+                                + " только его: этот путь Complex уже полностью поддерживает.</body></html>",
+                        "Экспорт NovaLCT для контроллера", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
             ExportMode mode = pickExportMode(owner, involvedScreens.size());
             if (mode == null) {
                 return; // отменено пользователем

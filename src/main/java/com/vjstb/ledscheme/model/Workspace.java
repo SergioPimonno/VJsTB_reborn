@@ -24,9 +24,9 @@ import java.util.Map;
  * попадут в workspace.json прямо через геттеры, в обход поля.
  */
 @JsonIgnoreProperties({"cabinetTypes", "controllerTypes", "equipmentPresets", "cableTypes", "interfaceTypes",
-        "cableLengthProfiles",
+        "cableLengthProfiles", "hoistTypes", "structureFrameTypes",
         "sharedCabinetTypes", "sharedControllerTypes", "sharedEquipmentPresets", "sharedCableTypes",
-        "sharedInterfaceTypes", "sharedCableLengthProfiles",
+        "sharedInterfaceTypes", "sharedCableLengthProfiles", "sharedHoistTypes", "sharedStructureFrameTypes",
         "customEquipmentCategories", "equipmentCategoryLabelOverrides"})
 public class Workspace {
 
@@ -90,6 +90,22 @@ public class Workspace {
         library.setCableLengthProfiles(cableLengthProfiles);
     }
 
+    public List<HoistType> getHoistTypes() {
+        return library.getHoistTypes();
+    }
+
+    public void setHoistTypes(List<HoistType> hoistTypes) {
+        library.setHoistTypes(hoistTypes);
+    }
+
+    public List<StructureFrameType> getStructureFrameTypes() {
+        return library.getStructureFrameTypes();
+    }
+
+    public void setStructureFrameTypes(List<StructureFrameType> structureFrameTypes) {
+        library.setStructureFrameTypes(structureFrameTypes);
+    }
+
     public List<CabinetType> getSharedCabinetTypes() {
         return library.getSharedCabinetTypes();
     }
@@ -138,6 +154,22 @@ public class Workspace {
         library.setSharedCableLengthProfiles(sharedCableLengthProfiles);
     }
 
+    public List<HoistType> getSharedHoistTypes() {
+        return library.getSharedHoistTypes();
+    }
+
+    public void setSharedHoistTypes(List<HoistType> sharedHoistTypes) {
+        library.setSharedHoistTypes(sharedHoistTypes);
+    }
+
+    public List<StructureFrameType> getSharedStructureFrameTypes() {
+        return library.getSharedStructureFrameTypes();
+    }
+
+    public void setSharedStructureFrameTypes(List<StructureFrameType> sharedStructureFrameTypes) {
+        library.setSharedStructureFrameTypes(sharedStructureFrameTypes);
+    }
+
     public Map<String, String> getServerCustomEquipmentCategoriesById() {
         return library.getServerCustomEquipmentCategoriesById();
     }
@@ -168,5 +200,13 @@ public class Workspace {
 
     public ControllerType controllerTypeById(String id) {
         return library.controllerTypeById(id);
+    }
+
+    public HoistType hoistTypeById(String id) {
+        return library.hoistTypeById(id);
+    }
+
+    public StructureFrameType structureFrameTypeById(String id) {
+        return library.structureFrameTypeById(id);
     }
 }

@@ -6,21 +6,39 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Цвета интерфейса и схемы. BG/PANEL/BORDER/TEXT/MUTED привязаны к теме (тёмная/
- * светлая) и не персонализируются; PHASE1-3/PHASE_NONE/ACCENT/SIGNAL — переопределяются
- * пользовательским профилем через {@link #applyProfile(UserProfile)} (палитра цветов
- * цепочек питания/сигнала и блоков, см. меню «Персонализация»).
+ * Цвета интерфейса и схемы. BG/PANEL/BORDER/TEXT/MUTED переключаются темой (тёмная/
+ * светлая, см. {@link #applyTheme(boolean)}) — сами по себе не персонализируются
+ * (нет отдельного пользовательского оверрайда, в отличие от акцента); PHASE1-3/
+ * PHASE_NONE/ACCENT/SIGNAL — переопределяются пользовательским профилем через
+ * {@link #applyProfile(UserProfile)} (палитра цветов цепочек питания/сигнала и
+ * блоков, см. меню «Персонализация»). Обе оси независимы: тема и акцентные цвета
+ * можно менять по отдельности.
  */
 public final class Palette {
 
     private Palette() {
     }
 
-    public static final Color BG = new Color(0x0d1117);
-    public static final Color PANEL = new Color(0x161b22);
-    public static final Color BORDER = new Color(0x30363d);
-    public static final Color TEXT = new Color(0xe6edf3);
-    public static final Color MUTED = new Color(0x7d8590);
+    private static final Color DARK_BG = new Color(0x0d1117);
+    private static final Color DARK_PANEL = new Color(0x161b22);
+    private static final Color DARK_BORDER = new Color(0x30363d);
+    private static final Color DARK_TEXT = new Color(0xe6edf3);
+    private static final Color DARK_MUTED = new Color(0x7d8590);
+
+    /** Светлый вариант — цвета в духе GitHub Light (тот же источник, что и
+     *  тёмный набор выше — GitHub Dark), чтобы контраст текст/фон/бордер был
+     *  выверен так же, а не подобран на глаз. */
+    private static final Color LIGHT_BG = new Color(0xffffff);
+    private static final Color LIGHT_PANEL = new Color(0xf6f8fa);
+    private static final Color LIGHT_BORDER = new Color(0xd0d7de);
+    private static final Color LIGHT_TEXT = new Color(0x1f2328);
+    private static final Color LIGHT_MUTED = new Color(0x656d76);
+
+    public static Color BG = DARK_BG;
+    public static Color PANEL = DARK_PANEL;
+    public static Color BORDER = DARK_BORDER;
+    public static Color TEXT = DARK_TEXT;
+    public static Color MUTED = DARK_MUTED;
     /** Предупреждение о перегрузке (Task #81/#87) — фиксированный цвет, не персонализируется. */
     public static final Color WARN = new Color(0xf0883e);
     /** Метка "общий элемент библиотеки" (см. NamedRenderer) — фиксированный цвет, НЕ
@@ -44,6 +62,18 @@ public final class Palette {
     public static Color PHASE2 = DEFAULT_PHASE2;
     public static Color PHASE3 = DEFAULT_PHASE3;
     public static Color[] SIGNAL = DEFAULT_SIGNAL;
+
+    /** Переключает BG/PANEL/BORDER/TEXT/MUTED между тёмным и светлым набором —
+     *  вызывается при старте (см. App) и при живом переключении темы в меню
+     *  «Персонализация» (см. MainMenuBar). Акцентные цвета (applyProfile) не
+     *  трогает — независимая ось. */
+    public static void applyTheme(boolean dark) {
+        BG = dark ? DARK_BG : LIGHT_BG;
+        PANEL = dark ? DARK_PANEL : LIGHT_PANEL;
+        BORDER = dark ? DARK_BORDER : LIGHT_BORDER;
+        TEXT = dark ? DARK_TEXT : LIGHT_TEXT;
+        MUTED = dark ? DARK_MUTED : LIGHT_MUTED;
+    }
 
     public static Color phaseColor(int phase) {
         return switch (phase) {

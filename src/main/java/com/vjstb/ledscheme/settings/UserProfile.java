@@ -149,6 +149,13 @@ public class UserProfile {
      *  и дальше считает нагрузку сам. */
     private boolean loadTrackingEnabled = true;
 
+    /** Единицы отображения мощности/нагрузки везде в UI (карточки узлов, статистика
+     *  этапов Питание/Сигнал, экспортные документы) — false (по умолчанию) = ватты,
+     *  true = киловатты. Влияет ТОЛЬКО на отображение — внутренний расчёт и хранение
+     *  (CabinetType.powerConsumptionW и производные) остаются в ваттах, см.
+     *  {@code ui.UiKit#fmtPower}. */
+    private boolean powerUnitKw = false;
+
     /** Переназначенные горячие клавиши, по id {@link HotkeyAction}. Действие, для
      *  которого здесь нет записи, использует {@link HotkeyAction#getDefaultCombo()}. */
     private Map<String, KeyCombo> keyBindings = new LinkedHashMap<>();
@@ -159,6 +166,17 @@ public class UserProfile {
      *  применяется на любом гриде с включённым чекбоксом «Лого», в любом проекте —
      *  не нужно выбирать файл заново на каждом канвасе. null — логотип не задан. */
     private String maskLogoImagePath;
+
+    /** Id варианта отрисовки FlatLaf (см. {@code ui.LafStyle}) — свободная строка,
+     *  а не FK на enum UI-слоя (та же конвенция, что и у остальных моделей, см.
+     *  {@code ProjectorInstance#ambientLight}). "flatdark" по умолчанию — раньше
+     *  переключатель в MainMenuBar ничего не сохранял (при каждом запуске сбрасывался
+     *  на тёмную, независимо от последнего выбора). */
+    private String lafStyle = "flatdark";
+
+    /** Название семейства шрифта для {@code FlatLaf.setPreferredFontFamily} —
+     *  null/пусто = использовать встроенный шрифт FlatLaf, ничего не переопределять. */
+    private String fontFamily;
 
     public UserProfile() {
     }
@@ -387,12 +405,50 @@ public class UserProfile {
         this.loadTrackingEnabled = loadTrackingEnabled;
     }
 
+    public boolean isPowerUnitKw() {
+        return powerUnitKw;
+    }
+
+    public void setPowerUnitKw(boolean powerUnitKw) {
+        this.powerUnitKw = powerUnitKw;
+    }
+
     public String getMaskLogoImagePath() {
         return maskLogoImagePath;
     }
 
     public void setMaskLogoImagePath(String maskLogoImagePath) {
         this.maskLogoImagePath = maskLogoImagePath;
+    }
+
+    public String getLafStyle() {
+        return lafStyle != null && !lafStyle.isBlank() ? lafStyle : "flatdark";
+    }
+
+    public void setLafStyle(String lafStyle) {
+        this.lafStyle = lafStyle == null || lafStyle.isBlank() ? "flatdark" : lafStyle;
+    }
+
+    public String getFontFamily() {
+        return fontFamily;
+    }
+
+    public void setFontFamily(String fontFamily) {
+        this.fontFamily = fontFamily == null || fontFamily.isBlank() ? null : fontFamily;
+    }
+
+    /** true — тёмный бакет цветов Palette (см. Palette#applyTheme); ПРОИЗВОДНОЕ от
+     *  {@link #lafStyle}, не отдельное состояние (Darcula считается тёмным,
+     *  IntelliJ — светлым, см. {@code ui.LafStyle#isDark}). */
+    public boolean isDarkTheme() {
+        return !"flatlight".equals(getLafStyle()) && !"intellij".equals(getLafStyle());
+    }
+
+    /** Быстрый переключатель (см. MainMenuBar) — сбрасывает на "стандартный"
+     *  вариант выбранной темы (flatdark/flatlight), теряя выбор Darcula/IntelliJ,
+     *  если он был. Полный выбор из 4 вариантов — в PersonalizationDialog. */
+    public void setDarkTheme(boolean darkTheme) {
+        this.lafStyle = darkTheme ? "flatdark" : "flatlight";
     }
 
     public Map<String, KeyCombo> getKeyBindings() {
@@ -437,7 +493,10 @@ public class UserProfile {
         p.powerConnectorDisplayMode = powerConnectorDisplayMode;
         p.connectorsVertical = connectorsVertical;
         p.loadTrackingEnabled = loadTrackingEnabled;
+        p.powerUnitKw = powerUnitKw;
         p.maskLogoImagePath = maskLogoImagePath;
+        p.lafStyle = lafStyle;
+        p.fontFamily = fontFamily;
         p.keyBindings = new LinkedHashMap<>();
         for (Map.Entry<String, KeyCombo> en : keyBindings.entrySet()) {
             p.keyBindings.put(en.getKey(), en.getValue().copy());

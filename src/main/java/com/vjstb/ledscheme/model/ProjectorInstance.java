@@ -2,10 +2,10 @@ package com.vjstb.ledscheme.model;
 
 import java.util.UUID;
 
-/** Один проектор, сконфигурированный в калькуляторе проектора и экспортированный в
- *  спецификацию проекта (Task #135/v2.0) — снапшот введённых/расчётных чисел на
- *  момент экспорта. Не входит в граф общей схемы (SchemaNode) — калькулятор
- *  самостоятельный, см. class-javadoc ui.ProjectorCalculatorDialog. */
+/** Один проектор в спецификации проекта — снапшот введённых/расчётных чисел на
+ *  момент добавления. Не входит в граф общей схемы (SchemaNode). Раньше
+ *  заполнялся из отдельного UI-калькулятора (выпилен) — модель и её отображение
+ *  в {@code OutputStagePanel} оставлены для уже сохранённых данных. */
 public class ProjectorInstance {
 
     private String id = UUID.randomUUID().toString();
@@ -19,10 +19,9 @@ public class ProjectorInstance {
     private double imageWidthM;
     private double imageHeightM;
     private double verticalOffsetPercent;
-    /** Имя константы {@code service.ProjectorCalc.AmbientLight}, выбранной в калькуляторе
-     *  на момент экспорта — храним как строку, чтобы модель не зависела от пакета service
-     *  (см. остальные модели: свободная строка вместо FK на enum сервисного слоя,
-     *  как SchemaEdge.wireType). */
+    /** Условия освещения на момент добавления — храним как свободную строку, чтобы
+     *  модель не зависела от пакета service (см. остальные модели: свободная строка
+     *  вместо FK на enum сервисного слоя, как SchemaEdge.wireType). */
     private String ambientLight = "DIM";
 
     public ProjectorInstance() {

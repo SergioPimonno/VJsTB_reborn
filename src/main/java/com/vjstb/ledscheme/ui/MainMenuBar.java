@@ -143,13 +143,6 @@ public class MainMenuBar extends JMenuBar {
         videoTiming.addActionListener(e -> new VideoTimingCalculatorDialog(owner).setVisible(true));
         menu.add(videoTiming);
 
-        JMenuItem projectorCalc = new JMenuItem("Калькулятор проектора…");
-        projectorCalc.setToolTipText("Расчёт требуемого throw ratio объектива, диапазона дистанции и"
-                + " освещённости экрана по ANSI-люменам/gain — с экспортом проектора в спецификацию проекта");
-        projectorCalc.addActionListener(e ->
-                new com.vjstb.ledscheme.ui.ProjectorCalculatorDialog(owner, model).setVisible(true));
-        menu.add(projectorCalc);
-
         return menu;
     }
 
@@ -161,10 +154,11 @@ public class MainMenuBar extends JMenuBar {
         JMenu menu = new JMenu("Персонализация");
         ButtonGroup group = new ButtonGroup();
 
-        JRadioButtonMenuItem dark = new JRadioButtonMenuItem("Тёмная тема", true);
-        JRadioButtonMenuItem light = new JRadioButtonMenuItem("Светлая тема", false);
-        dark.addActionListener(e -> applyTheme(owner, new FlatDarkLaf()));
-        light.addActionListener(e -> applyTheme(owner, new FlatLightLaf()));
+        boolean currentlyDark = settings.activeProfile().isDarkTheme();
+        JRadioButtonMenuItem dark = new JRadioButtonMenuItem("Тёмная тема", currentlyDark);
+        JRadioButtonMenuItem light = new JRadioButtonMenuItem("Светлая тема", !currentlyDark);
+        dark.addActionListener(e -> applyTheme(true, settings));
+        light.addActionListener(e -> applyTheme(false, settings));
         group.add(dark);
         group.add(light);
         menu.add(dark);
@@ -204,13 +198,24 @@ public class MainMenuBar extends JMenuBar {
         return menu;
     }
 
-    private void applyTheme(JFrame owner, javax.swing.LookAndFeel laf) {
+    /** Живое переключение темы: L&F-скин + палитра (BG/PANEL/BORDER/TEXT/MUTED, см.
+     *  {@link Palette#applyTheme}) применяются сразу на ВСЕХ открытых окнах (не только
+     *  владельце меню) — иначе уже открытые диалоги/панели с кастомной отрисовкой
+     *  (читающей Palette-константы напрямую в paintComponent) не подхватили бы новые
+     *  цвета до перезапуска. Выбор персистентен (см. UserProfile#isDarkTheme) — при
+     *  следующем запуске App применит его же, а не всегда FlatDarkLaf. */
+    private void applyTheme(boolean dark, SettingsManager settings) {
         try {
-            UIManager.setLookAndFeel(laf);
-            SwingUtilities.updateComponentTreeUI(owner);
+            UIManager.setLookAndFeel(dark ? new FlatDarkLaf() : new FlatLightLaf());
         } catch (Exception ignored) {
-            // не критично — останется текущая тема
+            return;
         }
+        Palette.applyTheme(dark);
+        for (java.awt.Window w : java.awt.Window.getWindows()) {
+            SwingUtilities.updateComponentTreeUI(w);
+            w.repaint();
+        }
+        settings.setDarkTheme(dark);
     }
 
     private JMenu buildHelpMenu(Runnable onShowShortcuts) {

@@ -68,6 +68,15 @@ public class SetupStagePanel extends JPanel {
     private final JLabel prerigWeight = new JLabel();
     private final com.vjstb.ledscheme.ui.SceneCanvasPanel prerigPreview;
     private final JButton calcRiggingBtn = new JButton("Рассчитать точки подвеса");
+    private final JButton toggleShapeBtn = new JButton("Изменить форму экрана");
+    /** «Форма экрана» раньше показывалась ВСЕГДА, пока выбран экран — редактор нужен
+     *  редко (только вырезание/переформовка ячеек), а место в правой колонке отнимал
+     *  постоянно (баг-репорт: "мешается"). Теперь секция скрыта по умолчанию и
+     *  появляется только по кнопке {@link #toggleShapeBtn} — см. {@code refresh()}
+     *  (условие {@code scr != null && shapeEditorRequested}). НЕ персистентно
+     *  (сбрасывается на скрыто при каждом запуске) — сознательно, это разовое
+     *  действие "хочу поправить форму", а не постоянный режим работы. */
+    private boolean shapeEditorRequested = false;
 
     private final JPanel paramsSection;
     // Явное число колонок (а не пустой конструктор) — предпочтительная ширина поля
@@ -84,8 +93,45 @@ public class SetupStagePanel extends JPanel {
             new JComboBox<>(com.vjstb.ledscheme.model.ScreenMountType.values());
     private final JSpinner pRiggingPoints = new JSpinner(new SpinnerNumberModel(0, 0, 500, 1));
     private final JTextField pRiggingNotes = new JTextField(10);
+    private final JSpinner pRiggingSafetyFactor = new JSpinner(new SpinnerNumberModel(5.0, 1.0, 20.0, 0.5));
+    /** Пусто — грузоподъёмность лебёдки не указана (см. Screen#getRiggingHoistCapacityKg). */
+    private final JTextField pRiggingHoistCapacity = new JTextField(10);
+    /** Библиотечная модель лебёдки (см. HoistType/Screen#getRiggingHoistTypeId) —
+     *  {@code null} = «Ввести вручную», тогда действует {@link #pRiggingHoistCapacity}. */
+    private final JComboBox<com.vjstb.ledscheme.model.HoistType> pRiggingHoistType = new JComboBox<>();
     private final JComboBox<Integer> pRefreshHz = new JComboBox<>(new Integer[]{50, 60, 120, 144, 240});
     private final JComboBox<Integer> pBitDepth = new JComboBox<>(new Integer[]{8, 10, 12});
+
+    // ---- наземный конструктив (см. service.StructureCalc, STRUCTURE_CALC_NOTES.md) ----
+    private final JButton calcStructureBtn = new JButton("Рассчитать конструктив");
+    private final JSpinner pStructureTowerHeight = new JSpinner(new SpinnerNumberModel(3000.0, 0.0, 50_000.0, 100.0));
+    private final JSpinner pStructureTowerSpacing = new JSpinner(new SpinnerNumberModel(1000.0, 100.0, 50_000.0, 50.0));
+    private final JSpinner pStructureTowerCount = new JSpinner(new SpinnerNumberModel(0, 0, 500, 1));
+    private final JSpinner pStructureVerticalFrames = new JSpinner(new SpinnerNumberModel(0, 0, 100, 1));
+    private final JSpinner pStructurePeremychkaLevels = new JSpinner(new SpinnerNumberModel(0, 0, 100, 1));
+    private final JSpinner pStructureExtendedBaseSections = new JSpinner(new SpinnerNumberModel(0, 0, 20, 1));
+    private final javax.swing.JCheckBox pStructureIncludeBase = new javax.swing.JCheckBox("Базовая (опорная) рама под каждой башней", true);
+    private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pStructureFrameType = new JComboBox<>();
+    private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pStructureShortFrameType = new JComboBox<>();
+    private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pStructureCupType = new JComboBox<>();
+    private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pStructureBallastType = new JComboBox<>();
+    /** 0 = экран стоит на земле. */
+    private final JTextField pStructureScreenElevation = new JTextField(6);
+    private final JTextField pStructureNotes = new JTextField(10);
+    private final JButton toggle3DBtn = new JButton("Показать 3D");
+    /** Отдельное всплывающее окно (не встроенная панель — баг-репорт "вынеси в отдельное
+     *  окно, как калькулятор видеотайминга", см. {@code ui.Structure3DDialog}), ленивое —
+     *  GL-контекст создаётся только по первому нажатию {@link #toggle3DBtn}. {@code null} —
+     *  ещё не открывалось в этой сессии редактора экрана. */
+    private com.vjstb.ledscheme.ui.Structure3DDialog structure3DDialog;
+
+    /** Поля подвеса и поля конструктива показываются ТОЛЬКО для своего способа монтажа
+     *  (см. refresh()/{@link #applyMountTypeVisibility}) — баг-репорт: с обоими блоками
+     *  видимыми одновременно всегда «Прериг сцены» разрасталась настолько, что кнопки
+     *  расчёта уезжали за пределы окна без прокрутки, а сам способ монтажа экрана делает
+     *  осмысленным ровно ОДИН из двух блоков за раз. */
+    private JPanel riggingFieldsPanel;
+    private JPanel structureFieldsPanel;
 
     private final JPanel shapeSection;
     private final ShapeEditorPanel shapeEditor;
@@ -135,7 +181,7 @@ public class SetupStagePanel extends JPanel {
         prerigPreview = new com.vjstb.ledscheme.ui.SceneCanvasPanel(model, settings);
         prerigPreview.setShowRiggingPoints(true);
         prerigSection = buildPrerig();
-        shapeEditor = new ShapeEditorPanel(model);
+        shapeEditor = new ShapeEditorPanel(model, settings);
         shapeScroll = new JScrollPane(shapeEditor);
         shapeSection = buildShapeEditor();
         // Одноразовая миграция: до фикса UiKit.stretchToViewport «Форма экрана» была
@@ -179,6 +225,10 @@ public class SetupStagePanel extends JPanel {
         }
 
         model.addListener(this::rebuild);
+        // Переключатель Вт/кВт (Персонализация) не меняет модель — без этого подписчика
+        // prerigPower оставался бы со старым текстом до следующего model-триггерного
+        // rebuild (баг-репорт: галочка включена, но «Мощность сцены» не поменялась).
+        settings.addListener(this::rebuild);
         rebuild();
     }
 
@@ -387,17 +437,150 @@ public class SetupStagePanel extends JPanel {
         canvasArea.add(canvasFooter, BorderLayout.SOUTH);
 
         JPanel riggingArea = UiKit.vbox();
-        riggingArea.add(UiKit.formRow("Точек подвеса", pRiggingPoints));
+
+        // Кнопка формы экрана -- не привязана к способу монтажа, видна всегда (в отличие
+        // от rigging/structure блоков ниже, каждый из которых имеет смысл только для
+        // СВОЕГО mountType).
+        toggleShapeBtn.setToolTipText("Показать/скрыть редактор формы экрана (вырезание ячеек, арки и т.п.) —"
+                + " по умолчанию скрыт, чтобы не занимать место, когда форма не редактируется.");
+        toggleShapeBtn.addActionListener(e -> {
+            shapeEditorRequested = !shapeEditorRequested;
+            rebuild();
+        });
+        JPanel alwaysVisibleButtonsRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        alwaysVisibleButtonsRow.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        alwaysVisibleButtonsRow.add(toggleShapeBtn);
+        riggingArea.add(alwaysVisibleButtonsRow);
+        riggingArea.add(UiKit.vgap(10));
+
+        riggingFieldsPanel = UiKit.vbox();
+        riggingFieldsPanel.add(UiKit.formRow("Точек подвеса", pRiggingPoints));
         MathFields.enableExpressions(pRiggingPoints);
-        riggingArea.add(UiKit.vgap());
-        riggingArea.add(UiKit.formRow("Заметки по подвесу", pRiggingNotes));
+        riggingFieldsPanel.add(UiKit.vgap());
+        riggingFieldsPanel.add(UiKit.formRow("Заметки по подвесу", pRiggingNotes));
+        riggingFieldsPanel.add(UiKit.vgap());
+        riggingFieldsPanel.add(UiKit.formRow("Мин. коэфф. запаса прочности оборудования", pRiggingSafetyFactor));
+        riggingFieldsPanel.add(UiKit.vgap());
+        pRiggingHoistType.setRenderer(new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public java.awt.Component getListCellRendererComponent(JList<?> list, Object value, int index,
+                    boolean isSelected, boolean cellHasFocus) {
+                java.awt.Component c = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                if (value == null) {
+                    setText("Ввести вручную…");
+                } else if (value instanceof com.vjstb.ledscheme.model.HoistType h) {
+                    setText(h.getName() + " — WLL " + UiKit.fmt(h.getWllKg()) + " кг");
+                }
+                return c;
+            }
+        });
+        pRiggingHoistType.setToolTipText("Модель лебёдки/тали из общей библиотеки — грузоподъёмность (WLL) берётся"
+                + " из паспортного значения записи. «Ввести вручную…» — использовать поле ниже.");
+        pRiggingHoistType.addActionListener(e -> {
+            if (refreshing) return;
+            pRiggingHoistCapacity.setEnabled(pRiggingHoistType.getSelectedItem() == null);
+        });
+        riggingFieldsPanel.add(UiKit.formRow("Модель лебёдки (библиотека)", pRiggingHoistType));
+        riggingFieldsPanel.add(UiKit.vgap());
+        pRiggingHoistCapacity.setToolTipText("Грузоподъёмность (WLL) выбранной лебёдки/тали, кг — одна модель на"
+                + " все точки этого экрана. Пусто — не проверять превышение, только показать нагрузку."
+                + " Игнорируется, если выше выбрана модель из библиотеки.");
+        riggingFieldsPanel.add(UiKit.formRow("Грузоподъёмность лебёдки, кг (вручную)", pRiggingHoistCapacity));
+        riggingFieldsPanel.add(UiKit.vgap());
+
+        calcRiggingBtn.setToolTipText("Способ монтажа задаётся в «Параметры экрана».");
+        calcRiggingBtn.addActionListener(e -> calculateRiggingPoints());
+        riggingFieldsPanel.add(calcRiggingBtn);
+        riggingArea.add(riggingFieldsPanel);
+        riggingArea.add(UiKit.vgap(10));
+
+        structureFieldsPanel = UiKit.vbox();
+        structureFieldsPanel.add(UiKit.formRow("Высота башни, мм", pStructureTowerHeight));
+        structureFieldsPanel.add(UiKit.vgap());
+        structureFieldsPanel.add(UiKit.formRow("Шаг башен, мм", pStructureTowerSpacing));
+        structureFieldsPanel.add(UiKit.vgap());
+        structureFieldsPanel.add(UiKit.formRow("Башен", pStructureTowerCount));
+        structureFieldsPanel.add(UiKit.vgap());
+        structureFieldsPanel.add(UiKit.formRow("Сегментов рамы на башню (в каждом из 2 рядов)", pStructureVerticalFrames));
+        structureFieldsPanel.add(UiKit.vgap());
+        pStructurePeremychkaLevels.setToolTipText("Число уровней перемычек (передний↔задний ряд внутри одной"
+                + " башни) по высоте — стартовое предложение по интервалу из Персонализации, конкретная"
+                + " расстановка редактируется поячеечно прямо в 3D-превью.");
+        structureFieldsPanel.add(UiKit.formRow("Уровней перемычек", pStructurePeremychkaLevels));
+        structureFieldsPanel.add(UiKit.vgap());
+        pStructureExtendedBaseSections.setToolTipText("Доп. секции выноса базовой рамы назад (каждая — ширина"
+                + " короткой рамы, ~0.5м) сверх обязательного ядра под объёмом башни — увеличивают площадь опоры"
+                + " под балласт.");
+        structureFieldsPanel.add(UiKit.formRow("Доп. секций выноса под балласт", pStructureExtendedBaseSections));
+        structureFieldsPanel.add(UiKit.vgap());
+        pStructureIncludeBase.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        structureFieldsPanel.add(pStructureIncludeBase);
+        structureFieldsPanel.add(UiKit.vgap());
+
+        setStructureFrameRenderer(pStructureFrameType);
+        setStructureFrameRenderer(pStructureShortFrameType);
+        setStructureFrameRenderer(pStructureCupType);
+        setStructureFrameRenderer(pStructureBallastType);
+        structureFieldsPanel.add(UiKit.formRow("Тип рамы (библиотека)", pStructureFrameType));
+        structureFieldsPanel.add(UiKit.vgap());
+        structureFieldsPanel.add(UiKit.formRow("Тип короткой рамы (библиотека)", pStructureShortFrameType));
+        structureFieldsPanel.add(UiKit.vgap());
+        structureFieldsPanel.add(UiKit.formRow("Тип стакана (библиотека)", pStructureCupType));
+        structureFieldsPanel.add(UiKit.vgap());
+        structureFieldsPanel.add(UiKit.formRow("Тип контейнера балласта (библиотека)", pStructureBallastType));
+        structureFieldsPanel.add(UiKit.vgap());
+        pStructureScreenElevation.setToolTipText("Высота нижнего края экрана над землёй, мм — 0 = экран стоит на"
+                + " земле. Влияет только на отображение в 3D (виден зазор между истинной землёй и приподнятым"
+                + " экраном), НЕ на проверку «высота башни < высоты экрана».");
+        structureFieldsPanel.add(UiKit.formRow("Подъём экрана от земли, мм", pStructureScreenElevation));
+        structureFieldsPanel.add(UiKit.vgap());
+        structureFieldsPanel.add(UiKit.formRow("Заметки по конструктиву", pStructureNotes));
+        structureFieldsPanel.add(UiKit.vgap());
+
+        calcStructureBtn.setToolTipText("Способ монтажа задаётся в «Параметры экрана». Требует независимой"
+                + " инженерной перепроверки перед монтажом — см. STRUCTURE_CALC_NOTES.md.");
+        calcStructureBtn.addActionListener(e -> calculateStructure());
+        structureFieldsPanel.add(calcStructureBtn);
+        structureFieldsPanel.add(UiKit.vgap());
+
+        toggle3DBtn.setToolTipText("Открыть/закрыть отдельное окно с 3D-превью посчитанного конструктива"
+                + " (только просмотр -- числа по-прежнему редактируются полями выше; клик по существующей"
+                + " детали в 3D убирает её, по подсвеченному \"призраку\" -- добавляет). Требует OpenGL, на"
+                + " некоторых системах может быть недоступно -- тогда вместо картинки покажется сообщение.");
+        toggle3DBtn.addActionListener(e -> {
+            if (structure3DDialog != null && structure3DDialog.isShowing()) {
+                structure3DDialog.dispose();
+                return;
+            }
+            structure3DDialog = new com.vjstb.ledscheme.ui.Structure3DDialog(topWindow(), model);
+            // Сброс текста кнопки, если окно закрыли крестиком, а не этой же кнопкой --
+            // иначе кнопка молча осталась бы говорить «Скрыть 3D» для уже закрытого окна.
+            structure3DDialog.addWindowListener(new java.awt.event.WindowAdapter() {
+                @Override
+                public void windowClosed(java.awt.event.WindowEvent e) {
+                    toggle3DBtn.setText("Показать 3D");
+                }
+            });
+            structure3DDialog.setVisible(true);
+            toggle3DBtn.setText("Скрыть 3D");
+        });
+        structureFieldsPanel.add(toggle3DBtn);
+        riggingArea.add(structureFieldsPanel);
         riggingArea.add(UiKit.vgap());
 
-        calcRiggingBtn.setToolTipText("Активно только для экрана с монтажом «Подвес» — способ монтажа задаётся"
-                + " в «Параметры экрана».");
-        calcRiggingBtn.addActionListener(e -> calculateRiggingPoints());
-        riggingArea.add(calcRiggingBtn);
-        riggingArea.add(UiKit.vgap());
+        // Собственный JScrollPane для riggingArea (тот же приём, что у canvasArea/
+        // prerigScroll и shapeSection/shapeScroll выше) -- riggingArea НЕ Scrollable и
+        // ничем не ограничена по высоте (поля подвеса/конструктива), а prerigSplit может
+        // выделить ей меньше места, чем нужно для показа всего сразу. Без своего скролла
+        // содержимое, не поместившееся в отведённую разделителем высоту, было бы просто
+        // обрезано без какого-либо способа до него докрутить -- баг-репорт «окно 3D
+        // появляется где-то за рамками, не могу открыть» (актуально ДО того, как 3D
+        // переехало в отдельное окно, см. Structure3DDialog, но остальным полям блока
+        // конструктива этот скролл всё ещё нужен), см. также javadoc dynamicSection выше.
+        JScrollPane riggingScroll = new JScrollPane(riggingArea);
+        riggingScroll.setBorder(null);
+        riggingScroll.getVerticalScrollBar().setUnitIncrement(16);
+        riggingScroll.setMinimumSize(new Dimension(120, 90));
 
         // Разделитель, а не фиксированная высота (Task #7/v1.6, доработка) — тянуть
         // можно мышью за границу, «растягивая» окно прерига под текущую задачу
@@ -407,40 +590,267 @@ public class SetupStagePanel extends JPanel {
         // ещё маленькой высоты prerigSection (тот же класс гонки, что и у самого
         // rightSplit) и "запекает" сплюснутый холст навсегда (баг-репорт: окно
         // визуализации прерига не растягивается по высоте, хотя место есть).
-        prerigSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, canvasArea, riggingArea);
+        prerigSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, canvasArea, riggingScroll);
         prerigSplit.setContinuousLayout(true);
         prerigSplit.setResizeWeight(1.0);
         UiKit.persistentDivider(settings, "setup.prerigCanvas", prerigSplit, 0.68);
 
-        return (JPanel) UiKit.section("Прериг сцены", prerigSplit);
+        // dynamicSection, НЕ section -- содержимое riggingArea меняется уже ПОСЛЕ
+        // первой сборки (видимость riggingFieldsPanel/structureFieldsPanel по способу
+        // монтажа, лениво добавляемый structure3DContainer при первом «Показать 3D»).
+        // section() фиксирует maximumSize ОДИН раз при конструировании -- если бы мы
+        // использовали её тут, эта высота навсегда осталась бы такой, какой была ДО
+        // появления 3D-панели, а BasicSplitPaneUI ограничивает перетаскивание
+        // разделителя ИМЕННО этим maximumSize (см. getMaximumDividerLocation) -- ни
+        // прокрутка, ни ручное перетаскивание разделителя не могли бы после этого
+        // показать вновь появившееся содержимое (баг-репорт: «окно 3D появляется где-то
+        // за рамками, не могу открыть»). Вместо этого пересчитываем потолок явно в
+        // applyMountTypeVisibility() и в обработчике toggle3DBtn -- см. там же.
+        return (JPanel) UiKit.dynamicSection("Прериг сцены", prerigSplit);
     }
 
-    /** Пересчитывает точки подвеса выбранного экрана, обновляет их на схеме сцены
-     *  (мини-превью прерига) и сохраняет эту схему отдельным PNG в папку вывода
-     *  проекта/сцены — «нельзя экспортировать то, что нельзя сначала увидеть». */
+    /** Показывает ТОЛЬКО блок полей, осмысленный для {@code mountType} (rigging для
+     *  RIGGED, конструктив для STRUCTURE, ни один — для LAYER/FLOOR/{@code null}) —
+     *  баг-репорт: оба блока видимыми одновременно разрастались настолько, что кнопки
+     *  расчёта уезжали за пределы окна прерига без прокрутки. */
+    private void applyMountTypeVisibility(com.vjstb.ledscheme.model.ScreenMountType mountType) {
+        riggingFieldsPanel.setVisible(mountType == com.vjstb.ledscheme.model.ScreenMountType.RIGGED);
+        structureFieldsPanel.setVisible(mountType == com.vjstb.ledscheme.model.ScreenMountType.STRUCTURE);
+        riggingFieldsPanel.revalidate();
+        structureFieldsPanel.revalidate();
+        if (prerigSplit != null) {
+            prerigSplit.revalidate();
+            prerigSplit.repaint();
+        }
+        // См. javadoc dynamicSection в buildPrerig() -- потолок высоты «Прериг сцены»
+        // должен пересчитываться при каждой смене видимого блока полей, иначе он
+        // останется таким, каким был ДО переключения (слишком маленьким или слишком
+        // большим), и разделитель rightSplit физически не даст показать содержимое.
+        if (prerigSection != null) {
+            UiKit.recapHeight(prerigSection);
+        }
+    }
+
+    /** Пересчитывает точки подвеса выбранного экрана (количество — см.
+     *  {@code ScreenLogic#suggestRiggingPoints}, нагрузку по каждой точке — см.
+     *  {@link com.vjstb.ledscheme.service.RiggingCalc#compute}, читает всегда
+     *  СВЕЖИЙ вес типов кабинетов — правка веса типа сразу отражается на
+     *  следующем расчёте, ничего не кэшируется), обновляет их на схеме сцены
+     *  (мини-превью прерига) и сохраняет ОТДЕЛЬНУЮ схему PNG в папку вывода
+     *  проекта/сцены через {@link com.vjstb.ledscheme.ui.RiggingSchemaImageWriter}
+     *  — сетка ЯЧЕЕК экрана (не общий вид сцены сверху, тот не показывал отдельные
+     *  кабинеты/вырезы — баг-репорт «экспортируемая схема не информативна») с
+     *  точками подвеса на верхней кромке и таблицей нагрузки по каждой точке снизу. */
     private void calculateRiggingPoints() {
         Screen scr = model.getCurrentScreen();
         if (scr == null) {
             return;
         }
-        int suggested = com.vjstb.ledscheme.service.ScreenLogic.suggestRiggingPoints(scr);
-        model.updateScreenMount(scr, scr.getMountType(), suggested, scr.getRiggingNotes());
+        double safetyFactor = ((Number) pRiggingSafetyFactor.getValue()).doubleValue();
+        Double hoistCapacity = parseHoistCapacity();
+        String hoistTypeId = selectedHoistTypeId();
+        // suggestRiggingPoints должен видеть ИМЕННО то, что выбрано на форме сейчас
+        // (лебёдку/грузоподъёмность пользователь мог только что поменять и ещё не
+        // сохранить) -- считаем на ЧЕРНОВОЙ копии экрана, не трогая сохранённый scr,
+        // иначе первое нажатие «Рассчитать» после смены лебёдки использовало бы
+        // старое значение (баг-репорт: «при перерасчёте количество лебёдок не меняется»).
+        Screen preview = scr.copy();
+        preview.setRiggingHoistCapacityKg(hoistCapacity);
+        preview.setRiggingHoistTypeId(hoistTypeId);
+        int suggested = com.vjstb.ledscheme.service.ScreenLogic.suggestRiggingPoints(
+                preview, model.typeOf(scr), model.getWorkspace());
+        model.updateScreenMount(scr, scr.getMountType(), suggested, scr.getRiggingNotes(), safetyFactor, hoistCapacity,
+                hoistTypeId);
         pRiggingPoints.setValue(suggested);
         prerigPreview.revalidate();
         prerigPreview.repaint();
+
+        com.vjstb.ledscheme.service.RiggingCalc.Result result = com.vjstb.ledscheme.service.RiggingCalc.compute(
+                scr, model.typeOf(scr), model.getWorkspace(), suggested);
+        StringBuilder loadMsg = new StringBuilder();
+        loadMsg.append(String.format("Точек подвеса: %d%n", suggested));
+        loadMsg.append(String.format("Вес кабинетов: %.1f кг, с наценкой на крепёж (+%d%%): %.1f кг%n",
+                result.totalCabinetWeightKg(), (int) Math.round(com.vjstb.ledscheme.service.RiggingCalc.HARDWARE_ALLOWANCE * 100),
+                result.totalWeightWithHardwareKg()));
+        loadMsg.append(String.format("Требуемая min WLL на точку: %.1f кг (мин. коэфф. запаса оборудования %.1f:1)%n",
+                result.requiredWllPerPointKg(), safetyFactor));
+        boolean anyOver = false;
+        for (com.vjstb.ledscheme.service.RiggingCalc.PointLoad p : result.points()) {
+            loadMsg.append(String.format("  Точка %d: %.1f кг%s%n", p.index() + 1, p.loadKg(),
+                    p.overCapacity() ? " — ПРЕВЫШЕНИЕ грузоподъёмности лебёдки!" : ""));
+            anyOver |= p.overCapacity();
+        }
 
         try {
             java.io.File folder = com.vjstb.ledscheme.ui.OutputPaths.defaultFolder(
                     model.getCurrentProject(), model.getCurrentScene());
             java.io.File out = new java.io.File(folder,
                     "rigging_" + com.vjstb.ledscheme.ui.OutputPaths.sanitize(scr.getName()) + ".png");
-            java.awt.image.BufferedImage img = prerigPreview.renderImage(900, 500);
+            java.awt.image.BufferedImage img = com.vjstb.ledscheme.ui.RiggingSchemaImageWriter.render(
+                    scr, model.typeOf(scr), result);
             javax.imageio.ImageIO.write(img, "png", out);
-            JOptionPane.showMessageDialog(this, "Точек подвеса: " + suggested
-                    + "\nСхема сохранена: " + out.getAbsolutePath(), "Готово", JOptionPane.INFORMATION_MESSAGE);
+            loadMsg.append("\nСхема сохранена: ").append(out.getAbsolutePath());
+            JOptionPane.showMessageDialog(this, loadMsg.toString(), "Готово",
+                    anyOver ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE);
         } catch (java.io.IOException ex) {
             JOptionPane.showMessageDialog(this, ex.getMessage(), "Ошибка сохранения", JOptionPane.ERROR_MESSAGE);
         }
+    }
+
+    /** Пусто/некорректно — считаем, что грузоподъёмность лебёдки не указана (тот же
+     *  паттерн, что у остальных опциональных числовых текстовых полей проекта). */
+    private Double parseHoistCapacity() {
+        String text = pRiggingHoistCapacity.getText();
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        try {
+            double v = Double.parseDouble(text.trim().replace(',', '.'));
+            return v > 0 ? v : null;
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    /** {@code null} -- выбрано «Ввести вручную» (см. {@link #pRiggingHoistType}), тогда
+     *  действует {@link #parseHoistCapacity()}. */
+    private String selectedHoistTypeId() {
+        Object sel = pRiggingHoistType.getSelectedItem();
+        return sel instanceof com.vjstb.ledscheme.model.HoistType h ? h.getId() : null;
+    }
+
+    /** Пусто/некорректно -- 0 (экран на земле, см. Screen#getStructureScreenElevationMm). */
+    private double parseScreenElevation() {
+        String text = pStructureScreenElevation.getText();
+        if (text == null || text.isBlank()) {
+            return 0;
+        }
+        try {
+            double v = Double.parseDouble(text.trim().replace(',', '.'));
+            return Math.max(0, v);
+        } catch (NumberFormatException ex) {
+            return 0;
+        }
+    }
+
+    private void setStructureFrameRenderer(JComboBox<com.vjstb.ledscheme.model.StructureFrameType> combo) {
+        combo.setRenderer(new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public java.awt.Component getListCellRendererComponent(JList<?> list, Object value, int index,
+                    boolean isSelected, boolean cellHasFocus) {
+                java.awt.Component c = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                if (value == null) {
+                    setText("Не выбрано");
+                } else if (value instanceof com.vjstb.ledscheme.model.StructureFrameType t) {
+                    setText(t.getName());
+                }
+                return c;
+            }
+        });
+    }
+
+    /** Заполняет комбобокс элементами библиотеки конструктива указанного вида (одна
+     *  библиотека {@code StructureFrameType} на все 4 вида, см. class-javadoc модели) —
+     *  {@code null} в начале списка означает «не выбрано». */
+    private void populateStructureFrameCombo(JComboBox<com.vjstb.ledscheme.model.StructureFrameType> combo,
+            com.vjstb.ledscheme.model.StructureFrameType.Kind kind, String selectId) {
+        DefaultComboBoxModel<com.vjstb.ledscheme.model.StructureFrameType> m = new DefaultComboBoxModel<>();
+        m.addElement(null);
+        com.vjstb.ledscheme.model.StructureFrameType toSelect = null;
+        for (com.vjstb.ledscheme.model.StructureFrameType t : model.getStructureFrameTypes()) {
+            if (t.getKind() != kind) {
+                continue;
+            }
+            m.addElement(t);
+            if (selectId != null && selectId.equals(t.getId())) {
+                toSelect = t;
+            }
+        }
+        combo.setModel(m);
+        combo.setSelectedItem(toSelect);
+    }
+
+    private static String structureFrameTypeId(JComboBox<com.vjstb.ledscheme.model.StructureFrameType> combo) {
+        Object sel = combo.getSelectedItem();
+        return sel instanceof com.vjstb.ledscheme.model.StructureFrameType t ? t.getId() : null;
+    }
+
+    /** Пересчитывает количество железа наземного конструктива (см. {@code StructureCalc})
+     *  для выбранного экрана: сначала предлагает башни/сегменты рамы/уровни перемычек/
+     *  секции выноса по текущим (возможно, ещё не сохранённым) значениям формы -- на
+     *  ЧЕРНОВОЙ копии экрана, тем же приёмом, что и {@link #calculateRiggingPoints()} для
+     *  лебёдки -- затем сохраняет всё через {@link AppModel#updateScreenStructure} и
+     *  показывает итоговую сводку (счётчики + предупреждения о превышении безопасной/
+     *  экранной высоты). */
+    private void calculateStructure() {
+        Screen scr = model.getCurrentScreen();
+        if (scr == null) {
+            return;
+        }
+        double towerHeight = ((Number) pStructureTowerHeight.getValue()).doubleValue();
+        double spacing = ((Number) pStructureTowerSpacing.getValue()).doubleValue();
+        boolean includeBase = pStructureIncludeBase.isSelected();
+        double screenElevation = parseScreenElevation();
+        String frameTypeId = structureFrameTypeId(pStructureFrameType);
+        String shortFrameTypeId = structureFrameTypeId(pStructureShortFrameType);
+        String cupTypeId = structureFrameTypeId(pStructureCupType);
+        String ballastTypeId = structureFrameTypeId(pStructureBallastType);
+        CabinetType screenType = model.typeOf(scr);
+
+        Screen preview = scr.copy();
+        preview.setStructureTowerHeightMm(towerHeight);
+        preview.setStructureTowerSpacingMm(spacing);
+        int suggestedTowers = com.vjstb.ledscheme.service.StructureCalc.suggestTowerCount(preview, screenType);
+        com.vjstb.ledscheme.model.StructureFrameType frameType =
+                (com.vjstb.ledscheme.model.StructureFrameType) pStructureFrameType.getSelectedItem();
+        int suggestedVertical = com.vjstb.ledscheme.service.StructureCalc.suggestVerticalFramesPerTower(preview, frameType);
+        double frameHeightMm = frameType != null && frameType.getHeightMm() != null && frameType.getHeightMm() > 0
+                ? frameType.getHeightMm() : 950.0;
+        int suggestedPeremychkaLevels =
+                com.vjstb.ledscheme.service.StructureCalc.suggestPeremychkaLevels(towerHeight, frameHeightMm);
+        double screenHeightMm = screenType != null ? scr.getRows() * screenType.getHeightMm() : 0;
+        double screenWidthMm = screenType != null ? scr.getCols() * screenType.getWidthMm() : 0;
+        int suggestedExtendedBaseSections =
+                com.vjstb.ledscheme.service.StructureCalc.suggestExtendedBaseSections(screenHeightMm, screenWidthMm);
+
+        pStructureTowerCount.setValue(suggestedTowers);
+        pStructureVerticalFrames.setValue(suggestedVertical);
+        pStructurePeremychkaLevels.setValue(suggestedPeremychkaLevels);
+        pStructureExtendedBaseSections.setValue(suggestedExtendedBaseSections);
+
+        model.updateScreenStructure(scr, towerHeight, spacing, suggestedTowers, suggestedVertical,
+                suggestedPeremychkaLevels, suggestedExtendedBaseSections, includeBase, frameTypeId, shortFrameTypeId,
+                cupTypeId, ballastTypeId, screenElevation, pStructureNotes.getText());
+
+        com.vjstb.ledscheme.service.StructureCalc.Result result =
+                com.vjstb.ledscheme.service.StructureCalc.compute(scr, screenType, model.getWorkspace());
+
+        StringBuilder msg = new StringBuilder();
+        msg.append(String.format("Башен: %d, сегментов рамы на башню: %d, уровней перемычек: %d%n",
+                suggestedTowers, suggestedVertical, suggestedPeremychkaLevels));
+        msg.append(String.format("Вертикальных рам: %d%n", result.verticalFrameCount()));
+        msg.append(String.format("Перемычек: %d%n", result.peremychkaCount()));
+        msg.append(String.format("Секций базовых рам: %d%n", result.baseFrameCount()));
+        msg.append(String.format("Стаканов: %d%n", result.cupCount()));
+        msg.append(String.format("Болтов: %d%n", result.boltCount()));
+        if (result.requiredBallastKg() > 0) {
+            msg.append(String.format("Требуемый балласт (≈ вес экрана): %.1f кг (%d контейнеров)%n",
+                    result.requiredBallastKg(), result.ballastContainerCount()));
+        }
+        boolean warnSafe = result.exceedsSafeHeightWarning();
+        boolean warnScreen = result.exceedsScreenHeightWarning();
+        if (warnSafe) {
+            msg.append(String.format("%nВНИМАНИЕ: высота башни %.0f мм превышает безопасный предел %.0f мм —"
+                            + " конструктив такой высоты без отдельного инженерного расчёта не строим!%n",
+                    result.totalTowerHeightMm(), com.vjstb.ledscheme.service.StructureCalc.MAX_SAFE_TOWER_HEIGHT_MM));
+        }
+        if (warnScreen) {
+            msg.append(String.format("%nВНИМАНИЕ: высота башни %.0f мм должна быть строго меньше высоты экрана"
+                    + " %.0f мм!%n", result.totalTowerHeightMm(), screenHeightMm));
+        }
+        msg.append("\nТребует независимой инженерной перепроверки перед монтажом — см. STRUCTURE_CALC_NOTES.md.");
+        JOptionPane.showMessageDialog(this, msg.toString(), "Готово",
+                (warnSafe || warnScreen) ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE);
     }
 
     // ---- параметры экрана ----
@@ -477,9 +887,10 @@ public class SetupStagePanel extends JPanel {
             if (scr == null) return;
             if (pMountType.getSelectedItem() == com.vjstb.ledscheme.model.ScreenMountType.RIGGED
                     && (Integer) pRiggingPoints.getValue() == 0) {
-                pRiggingPoints.setValue(com.vjstb.ledscheme.service.ScreenLogic.suggestRiggingPoints(scr));
+                pRiggingPoints.setValue(com.vjstb.ledscheme.service.ScreenLogic.suggestRiggingPoints(
+                        scr, model.typeOf(scr), model.getWorkspace()));
             }
-            calcRiggingBtn.setEnabled(pMountType.getSelectedItem() == com.vjstb.ledscheme.model.ScreenMountType.RIGGED);
+            applyMountTypeVisibility((com.vjstb.ledscheme.model.ScreenMountType) pMountType.getSelectedItem());
         });
 
         body.add(UiKit.vgap(10));
@@ -501,7 +912,9 @@ public class SetupStagePanel extends JPanel {
                 model.updateScreenPosition(scr, parseDouble(pX.getText()), parseDouble(pY.getText()));
                 com.vjstb.ledscheme.model.ScreenMountType mt =
                         (com.vjstb.ledscheme.model.ScreenMountType) pMountType.getSelectedItem();
-                model.updateScreenMount(scr, mt, (Integer) pRiggingPoints.getValue(), pRiggingNotes.getText());
+                model.updateScreenMount(scr, mt, (Integer) pRiggingPoints.getValue(), pRiggingNotes.getText(),
+                        ((Number) pRiggingSafetyFactor.getValue()).doubleValue(), parseHoistCapacity(),
+                        selectedHoistTypeId());
                 model.updateScreenSignalSpec(scr, (Integer) pRefreshHz.getSelectedItem(),
                         (Integer) pBitDepth.getSelectedItem());
             } catch (RuntimeException ex) {
@@ -615,8 +1028,10 @@ public class SetupStagePanel extends JPanel {
                 rebuildPrerig();
             }
 
-            shapeSection.setVisible(scr != null);
-            if ((hasScene && !prerigWasVisible) || (scr != null && !shapeWasVisible)) {
+            shapeSection.setVisible(scr != null && shapeEditorRequested);
+            toggleShapeBtn.setEnabled(scr != null);
+            toggleShapeBtn.setText(shapeEditorRequested ? "Скрыть форму экрана" : "Изменить форму экрана");
+            if ((hasScene && !prerigWasVisible) || (scr != null && shapeEditorRequested && !shapeWasVisible)) {
                 UiKit.restoreDividerProportion(rightSplit, settings, "setup.prerigShape", 0.58);
                 // prerigSplit (холст vs точки подвеса ВНУТРИ "Прериг сцены") зависит от
                 // высоты prerigSection, которую только что поменял вызов выше — если
@@ -637,11 +1052,34 @@ public class SetupStagePanel extends JPanel {
                 pMountType.setSelectedItem(scr.getMountType());
                 pRiggingPoints.setValue(scr.getRiggingPointsCount());
                 pRiggingNotes.setText(scr.getRiggingNotes() != null ? scr.getRiggingNotes() : "");
+                pRiggingSafetyFactor.setValue(scr.getRiggingSafetyFactorMin());
+                pRiggingHoistCapacity.setText(scr.getRiggingHoistCapacityKg() != null
+                        ? UiKit.fmt(scr.getRiggingHoistCapacityKg()) : "");
+                populateHoistTypeCombo(scr.getRiggingHoistTypeId());
+                pRiggingHoistCapacity.setEnabled(pRiggingHoistType.getSelectedItem() == null);
                 pRefreshHz.setSelectedItem(scr.getRefreshRateHz());
                 pBitDepth.setSelectedItem(scr.getColorBitDepth());
+
+                pStructureTowerHeight.setValue(scr.getStructureTowerHeightMm());
+                pStructureTowerSpacing.setValue(scr.getStructureTowerSpacingMm());
+                pStructureTowerCount.setValue(scr.getStructureTowerCount());
+                pStructureVerticalFrames.setValue(scr.getStructureVerticalFramesPerTower());
+                pStructurePeremychkaLevels.setValue(scr.getStructurePeremychkaLevels());
+                pStructureExtendedBaseSections.setValue(scr.getStructureExtendedBaseSections());
+                pStructureIncludeBase.setSelected(scr.isStructureIncludeBaseFrame());
+                populateStructureFrameCombo(pStructureFrameType,
+                        com.vjstb.ledscheme.model.StructureFrameType.Kind.FRAME, scr.getStructureFrameTypeId());
+                populateStructureFrameCombo(pStructureShortFrameType,
+                        com.vjstb.ledscheme.model.StructureFrameType.Kind.SHORT_FRAME, scr.getStructureShortFrameTypeId());
+                populateStructureFrameCombo(pStructureCupType,
+                        com.vjstb.ledscheme.model.StructureFrameType.Kind.CUP, scr.getStructureCupTypeId());
+                populateStructureFrameCombo(pStructureBallastType,
+                        com.vjstb.ledscheme.model.StructureFrameType.Kind.BALLAST_CONTAINER, scr.getStructureBallastTypeId());
+                pStructureScreenElevation.setText(scr.getStructureScreenElevationMm() > 0
+                        ? UiKit.fmt(scr.getStructureScreenElevationMm()) : "");
+                pStructureNotes.setText(scr.getStructureNotes() != null ? scr.getStructureNotes() : "");
             }
-            calcRiggingBtn.setEnabled(scr != null
-                    && scr.getMountType() == com.vjstb.ledscheme.model.ScreenMountType.RIGGED);
+            applyMountTypeVisibility(scr != null ? scr.getMountType() : null);
 
         } finally {
             refreshing = false;
@@ -665,7 +1103,7 @@ public class SetupStagePanel extends JPanel {
         if (s == null) return;
         prerigScreens.setText(String.valueOf(s.screenCount()));
         prerigCabinets.setText(s.totalCabinetCount() + cabinetBreakdownSuffix(s));
-        prerigPower.setText(UiKit.fmt(s.totalPowerW()) + " Вт");
+        prerigPower.setText(UiKit.fmtPower(s.totalPowerW(), settings.activeProfile().isPowerUnitKw()));
         prerigWeight.setText(UiKit.fmt(s.totalWeightKg()) + " кг");
     }
 
@@ -702,6 +1140,24 @@ public class SetupStagePanel extends JPanel {
         if (select != null) {
             combo.setSelectedItem(select);
         }
+    }
+
+    /** {@code null} в начале списка -- пункт «Ввести вручную», см. javadoc
+     *  {@link #pRiggingHoistType}. {@code selectId} не найден в текущей библиотеке
+     *  (запись удалена) -- остаёмся на «Ввести вручную», НЕ стираем
+     *  {@code riggingHoistTypeId} молча (пользователь увидит несовпадение и решит сам). */
+    private void populateHoistTypeCombo(String selectId) {
+        DefaultComboBoxModel<com.vjstb.ledscheme.model.HoistType> m = new DefaultComboBoxModel<>();
+        m.addElement(null);
+        com.vjstb.ledscheme.model.HoistType toSelect = null;
+        for (com.vjstb.ledscheme.model.HoistType h : model.getHoistTypes()) {
+            m.addElement(h);
+            if (selectId != null && selectId.equals(h.getId())) {
+                toSelect = h;
+            }
+        }
+        pRiggingHoistType.setModel(m);
+        pRiggingHoistType.setSelectedItem(toSelect);
     }
 
     private static <T> void syncList(DefaultListModel<T> lm, List<T> items) {
