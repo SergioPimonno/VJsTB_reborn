@@ -265,9 +265,16 @@ public class Structure3DPanel extends JPanel {
         return new CameraState(new Vec3(eyeX, eyeY, eyeZ), new Vec3(centerX, centerY, centerZ));
     }
 
+    /** Длинное ребро короткой рамы (её собственная "высота" в библиотеке, ~859мм) — Round 5:
+     *  перемычка/основание лежат ГОРИЗОНТАЛЬНО, но повёрнуты так, что именно ЭТО ребро смотрит
+     *  на зрителя (X), а не {@code frameW} главной рамы, как ошибочно было раньше — баг-репорт
+     *  "измени ориентацию коротких рам по вертикальной оси на 90°, чтобы они длинным своим
+     *  ребром смотрели на зрителя". */
+    private static final double DEFAULT_SHORT_FRAME_LENGTH_MM = 859;
+
     private record StructureGeometry(double frameH, double frameW, double frameD, double sectionDepthMm,
-            double baseThickness, double peremychkaThickness, double spacing, double frontZ, double backZ,
-            double peremychkaIntervalMm) {
+            double shortFrameLengthMm, double baseThickness, double peremychkaThickness, double spacing,
+            double frontZ, double backZ, double peremychkaIntervalMm) {
     }
 
     private StructureGeometry computeGeometry(Screen screen) {
@@ -278,6 +285,8 @@ public class Structure3DPanel extends JPanel {
         double frameW = dim(frameType != null ? frameType.getWidthMm() : null, DEFAULT_FRAME_WIDTH_MM);
         double frameD = dim(frameType != null ? frameType.getDepthMm() : null, DEFAULT_FRAME_DEPTH_MM);
         double sectionDepthMm = dim(shortType != null ? shortType.getWidthMm() : null, DEFAULT_SECTION_DEPTH_MM);
+        double shortFrameLengthMm = dim(shortType != null ? shortType.getHeightMm() : null,
+                DEFAULT_SHORT_FRAME_LENGTH_MM);
         double baseThickness = dim(shortType != null ? shortType.getDepthMm() : null, DEFAULT_FRAME_DEPTH_MM);
         double peremychkaThickness = dim(shortType != null ? shortType.getDepthMm() : null, DEFAULT_FRAME_DEPTH_MM);
         double spacing = screen.getStructureTowerSpacingMm();
@@ -298,8 +307,8 @@ public class Structure3DPanel extends JPanel {
         // сдвигаться на sectionDepthMm.
         double backZ = frontZ - frameW - sectionDepthMm;
         double peremychkaIntervalMm = StructureCalc.peremychkaIntervalMm(frameH);
-        return new StructureGeometry(frameH, frameW, frameD, sectionDepthMm, baseThickness, peremychkaThickness,
-                spacing, frontZ, backZ, peremychkaIntervalMm);
+        return new StructureGeometry(frameH, frameW, frameD, sectionDepthMm, shortFrameLengthMm, baseThickness,
+                peremychkaThickness, spacing, frontZ, backZ, peremychkaIntervalMm);
     }
 
     private static double dim(Double value, double fallback) {
@@ -448,7 +457,10 @@ public class Structure3DPanel extends JPanel {
      *  переднего ряда до ближней грани заднего, длина зазора = {@code sectionDepthMm} (ширина
      *  короткой рамы). Крепится к перекладине переднего/заднего ряда по высоте — {@code y}
      *  формула ({@code peremychkaIntervalMm} = 1.5×frameH) уже гарантирует попадание ровно на
-     *  перекладину, см. {@code drawTowerSegment} javadoc. */
+     *  перекладину, см. {@code drawTowerSegment} javadoc. Round 5: X-протяжённость (то, что
+     *  смотрит на зрителя) — {@code shortFrameLengthMm} (~859мм, собственное длинное ребро
+     *  короткой рамы), НЕ {@code frameW} главной рамы (~500мм) — баг-репорт "короткие рамы
+     *  должны длинным ребром смотреть на зрителя". */
     private List<Candidate> peremychkaCandidates(Screen screen, StructureGeometry g) {
         FrameEnvelope env = frameEnvelope(screen);
         var cells = screen.getStructurePeremychkaCells();
@@ -460,9 +472,9 @@ public class Structure3DPanel extends JPanel {
                 final int ft = t;
                 final int fl = level;
                 boolean exists = cells.stream().anyMatch(c -> c.matches(ft, fl) && !c.isHidden());
-                double x = t * g.spacing() - g.frameW() / 2.0;
+                double x = t * g.spacing() - g.shortFrameLengthMm() / 2.0;
                 double y = (level + 1) * g.peremychkaIntervalMm() - g.peremychkaThickness() / 2.0;
-                double[] bounds = {x, y, gapStart, g.frameW(), g.peremychkaThickness(), gapSpan};
+                double[] bounds = {x, y, gapStart, g.shortFrameLengthMm(), g.peremychkaThickness(), gapSpan};
                 result.add(new Candidate(new PickKey("peremychka", ft, fl, 0), bounds, List.of(bounds), exists,
                         () -> model.toggleStructurePeremychkaCell(screen, ft, fl)));
             }
@@ -486,6 +498,8 @@ public class Structure3DPanel extends JPanel {
         return new double[]{frontZ, frontZ - g.sectionDepthMm()};
     }
 
+    /** Round 5: X-протяжённость (лицом к зрителю) — {@code shortFrameLengthMm}, как у
+     *  перемычки (тот же тип "короткая рама", то же требование "длинным ребром к зрителю"). */
     private List<Candidate> baseCandidates(Screen screen, StructureGeometry g) {
         FrameEnvelope env = frameEnvelope(screen);
         var cells = screen.getStructureBaseFrameCells();
@@ -495,10 +509,11 @@ public class Structure3DPanel extends JPanel {
                 final int ft = t;
                 final int fsec = section;
                 boolean exists = cells.stream().anyMatch(c -> c.matches(ft, fsec) && !c.isHidden());
-                double x = t * g.spacing() - g.frameW() / 2.0;
+                double x = t * g.spacing() - g.shortFrameLengthMm() / 2.0;
                 double[] zr = baseSectionZRange(g, section);
                 double sectionSpan = zr[0] - zr[1];
-                double[] bounds = {x, -g.baseThickness(), zr[1], g.frameW(), g.baseThickness(), sectionSpan};
+                double[] bounds = {x, -g.baseThickness(), zr[1], g.shortFrameLengthMm(), g.baseThickness(),
+                        sectionSpan};
                 result.add(new Candidate(new PickKey("base", ft, fsec, 0), bounds, List.of(bounds), exists,
                         () -> model.toggleStructureBaseFrameSection(screen, ft, fsec)));
             }
@@ -649,6 +664,52 @@ public class Structure3DPanel extends JPanel {
             if (screen != null && screen.getMountType() == ScreenMountType.STRUCTURE) {
                 drawStructure(gl, screen);
             }
+            drawAxisGizmo(gl, cam);
+        }
+
+        /** Индикатор осей в углу вида (запрошено пользователем: "чтобы я хотя бы мог сказать
+         *  вокруг какой оси тебе надо элементы выстраивать и вращать") — красный=X (право/лево
+         *  сцены), зелёный=Y (верх/низ), синий=Z (к экрану/от экрана, "глубина" башни).
+         *  Направление совпадает с текущим поворотом камеры (та же yaw/pitch), но БЕЗ её
+         *  положения/зума/панорамы — отдельный крохотный вьюпорт в углу с своей проекцией,
+         *  восстанавливается сразу после отрисовки. */
+        private void drawAxisGizmo(GL2 gl, CameraState cam) {
+            int size = 84;
+            int margin = 10;
+            int panelW = Math.max(1, gljPanel.getWidth());
+            int panelH = Math.max(1, gljPanel.getHeight());
+            gl.glViewport(margin, panelH - size - margin, size, size);
+            gl.glMatrixMode(GL2.GL_PROJECTION);
+            gl.glPushMatrix();
+            gl.glLoadIdentity();
+            glu.gluPerspective(35, 1.0, 0.1, 10);
+            gl.glMatrixMode(GL2.GL_MODELVIEW);
+            gl.glPushMatrix();
+            gl.glLoadIdentity();
+            Vec3 dir = cam.eye().minus(cam.center()).normalized();
+            double dist = 3.0;
+            glu.gluLookAt(dir.x() * dist, dir.y() * dist, dir.z() * dist, 0, 0, 0, 0, 1, 0);
+            gl.glClear(GL2.GL_DEPTH_BUFFER_BIT);
+            gl.glDisable(GL2.GL_LIGHTING);
+            gl.glLineWidth(3f);
+            gl.glBegin(GL2.GL_LINES);
+            gl.glColor3f(0.95f, 0.3f, 0.3f);
+            gl.glVertex3f(0, 0, 0);
+            gl.glVertex3f(1, 0, 0);
+            gl.glColor3f(0.35f, 0.9f, 0.35f);
+            gl.glVertex3f(0, 0, 0);
+            gl.glVertex3f(0, 1, 0);
+            gl.glColor3f(0.35f, 0.55f, 1f);
+            gl.glVertex3f(0, 0, 0);
+            gl.glVertex3f(0, 0, 1);
+            gl.glEnd();
+            gl.glLineWidth(1f);
+            gl.glEnable(GL2.GL_LIGHTING);
+            gl.glPopMatrix();
+            gl.glMatrixMode(GL2.GL_PROJECTION);
+            gl.glPopMatrix();
+            gl.glMatrixMode(GL2.GL_MODELVIEW);
+            gl.glViewport(0, 0, panelW, panelH);
         }
 
         /** Земля лежит НИЖЕ опорной рамы, а не вперемешку с ней по Y (баг-репорт: "опорные рамы
@@ -759,6 +820,7 @@ public class Structure3DPanel extends JPanel {
             double tube = Math.min(40, g.frameD());
             double cupSize = tube * 1.5;
             double frameRail = railThickness(g.frameW());
+            double shortRail = railThickness(g.shortFrameLengthMm());
             gl.glColor3f(CUP_COLOR.getRed() / 255f, CUP_COLOR.getGreen() / 255f, CUP_COLOR.getBlue() / 255f);
 
             java.util.Map<String, SortedSet<Integer>> segmentsByTowerRow = new TreeMap<>();
@@ -794,9 +856,9 @@ public class Structure3DPanel extends JPanel {
                 }
                 double towerX = c.getTowerIndex() * g.spacing();
                 double y = (c.getLevelIndex() + 1) * g.peremychkaIntervalMm() - cupSize / 2.0;
-                box(gl, towerX - g.frameW() / 2.0 + tube / 2.0 - cupSize / 2.0, y,
+                box(gl, towerX - g.shortFrameLengthMm() / 2.0 + shortRail / 2.0 - cupSize / 2.0, y,
                         gapNearZ - cupSize / 2.0, cupSize, cupSize, cupSize);
-                box(gl, towerX - g.frameW() / 2.0 + tube / 2.0 - cupSize / 2.0, y,
+                box(gl, towerX - g.shortFrameLengthMm() / 2.0 + shortRail / 2.0 - cupSize / 2.0, y,
                         gapFarZ - cupSize / 2.0, cupSize, cupSize, cupSize);
             }
 
@@ -806,9 +868,9 @@ public class Structure3DPanel extends JPanel {
                 }
                 double towerX = c.getTowerIndex() * g.spacing();
                 double sectionFrontZ = baseSectionZRange(g, c.getSectionIndex())[0];
-                box(gl, towerX - g.frameW() / 2.0 + tube / 2.0 - cupSize / 2.0, -cupSize / 2.0,
+                box(gl, towerX - g.shortFrameLengthMm() / 2.0 + shortRail / 2.0 - cupSize / 2.0, -cupSize / 2.0,
                         sectionFrontZ - cupSize / 2.0, cupSize, cupSize, cupSize);
-                box(gl, towerX + g.frameW() / 2.0 - tube / 2.0 - cupSize / 2.0, -cupSize / 2.0,
+                box(gl, towerX + g.shortFrameLengthMm() / 2.0 - shortRail / 2.0 - cupSize / 2.0, -cupSize / 2.0,
                         sectionFrontZ - cupSize / 2.0, cupSize, cupSize, cupSize);
             }
 
