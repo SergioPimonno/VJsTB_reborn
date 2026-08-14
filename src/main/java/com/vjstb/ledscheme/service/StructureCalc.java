@@ -90,7 +90,8 @@ public final class StructureCalc {
         return Math.max(2, (int) Math.ceil(widthMm / spacing) + 1);
     }
 
-    /** Число сегментов рамы на башню (в КАЖДОМ из двух рядов) — высота башни ÷ высота одной
+    /** Число сегментов рамы на ПЕРЕДНИЙ ряд башни (Round 5 — задний ряд короче, см.
+     *  {@link #suggestBackRowSegments}, у него своя формула) — высота башни ÷ высота одной
      *  рамы, округление вверх. {@code null}/непригодная высота рамы в библиотеке — 0 (нечего
      *  предложить, пользователь вводит вручную). */
     public static int suggestVerticalFramesPerTower(Screen screen, StructureFrameType frameType) {
@@ -98,6 +99,17 @@ public final class StructureCalc {
             return 0;
         }
         return Math.max(1, (int) Math.ceil(screen.getStructureTowerHeightMm() / frameType.getHeightMm()));
+    }
+
+    /** Число сегментов ЗАДНЕГО ряда башни (row=1) — Round 5, баг-репорт по фото реальной башни:
+     *  с фронта видна ОДНА полноразмерная лестничная рама, задний ряд — короткий (~1-2м), опора
+     *  для перемычек и выноса, не вторая полноразмерная башня. Формула — сколько сегментов
+     *  рамы укладывается в 1.5м (середина диапазона "1-2м"), не меньше 1. */
+    public static int suggestBackRowSegments(double frameHeightMm) {
+        if (frameHeightMm <= 0) {
+            return 1;
+        }
+        return Math.max(1, (int) Math.round(1500.0 / frameHeightMm));
     }
 
     /** Интервал перемычек в мм для рамы данной высоты — см. {@link #PEREMYCHKA_INTERVAL_FRAME_MULTIPLE}. */

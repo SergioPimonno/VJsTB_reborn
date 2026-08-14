@@ -315,24 +315,34 @@ public class Structure3DPanel extends JPanel {
         return value != null && value > 0 ? value : fallback;
     }
 
-    /** Диапазон номинальной сетки РАСШИРЕННЫЙ на один шаг с каждой стороны по каждой из трёх
-     *  осей, чтобы всегда было видно, куда навести курсор для "добавить лишнюю башню сбоку"/
-     *  "добавить сегмент повыше"/"добавить перемычку выше"/"добавить секцию выноса дальше". */
-    private record FrameEnvelope(int minTower, int maxTower, int maxSegment, int maxLevel, int maxSection) {
+    /** Диапазон номинальной сетки РАСШИРЕННЫЙ на один шаг с каждой стороны по каждой из осей,
+     *  чтобы всегда было видно, куда навести курсор для "добавить лишнюю башню сбоку"/
+     *  "добавить сегмент повыше"/"добавить перемычку выше"/"добавить секцию выноса дальше".
+     *  Round 5: {@code maxFrontSegment}/{@code maxBackSegment} разделены — задний ряд (row=1)
+     *  теперь короткий и независим от переднего (row=0), см. {@code ScreenLogic
+     *  #regenerateStructureCells}. */
+    private record FrameEnvelope(int minTower, int maxTower, int maxFrontSegment, int maxBackSegment, int maxLevel,
+            int maxSection) {
     }
 
     private FrameEnvelope frameEnvelope(Screen screen) {
         int towerCount = Math.max(0, screen.getStructureTowerCount());
         int verticalPerTower = Math.max(0, screen.getStructureVerticalFramesPerTower());
+        int backRowSegments = Math.max(0, screen.getStructureBackRowSegments());
         int peremychkaLevels = Math.max(0, screen.getStructurePeremychkaLevels());
         int baseSections = 1 + Math.max(0, screen.getStructureExtendedBaseSections());
         int minTower = 0;
         int maxTower = towerCount - 1;
-        int maxSeg = verticalPerTower - 1;
+        int maxFrontSeg = verticalPerTower - 1;
+        int maxBackSeg = backRowSegments - 1;
         for (StructureFrameCell c : screen.getStructureFrameCells()) {
             minTower = Math.min(minTower, c.getTowerIndex());
             maxTower = Math.max(maxTower, c.getTowerIndex());
-            maxSeg = Math.max(maxSeg, c.getSegmentIndex());
+            if (c.getRow() == 0) {
+                maxFrontSeg = Math.max(maxFrontSeg, c.getSegmentIndex());
+            } else if (c.getRow() == 1) {
+                maxBackSeg = Math.max(maxBackSeg, c.getSegmentIndex());
+            }
         }
         int maxLevel = peremychkaLevels - 1;
         for (var c : screen.getStructurePeremychkaCells()) {
@@ -347,7 +357,8 @@ public class Structure3DPanel extends JPanel {
                 maxSection = Math.max(maxSection, c.getSegmentIndex());
             }
         }
-        return new FrameEnvelope(minTower - 1, maxTower + 1, maxSeg + 1, maxLevel + 1, maxSection + 1);
+        return new FrameEnvelope(minTower - 1, maxTower + 1, maxFrontSeg + 1, maxBackSeg + 1, maxLevel + 1,
+                maxSection + 1);
     }
 
     private record PickKey(String kind, int a, int b, int c) {
@@ -397,7 +408,8 @@ public class Structure3DPanel extends JPanel {
         for (int t = env.minTower(); t <= env.maxTower(); t++) {
             for (int row = 0; row < 2; row++) {
                 double zCenter = row == 0 ? g.frontZ() : g.backZ();
-                for (int seg = 0; seg <= env.maxSegment(); seg++) {
+                int maxSeg = row == 0 ? env.maxFrontSegment() : env.maxBackSegment();
+                for (int seg = 0; seg <= maxSeg; seg++) {
                     final int ft = t;
                     final int frow = row;
                     final int fs = seg;

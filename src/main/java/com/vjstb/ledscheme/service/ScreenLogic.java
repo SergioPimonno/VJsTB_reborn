@@ -239,6 +239,11 @@ public final class ScreenLogic {
      *  вызывающая сторона ({@code AppModel#updateScreenStructure}) сохраняет флаг на
      *  {@code Screen} отдельно.
      *
+     * <p><b>Round 5 — задний ряд короче переднего</b> (баг-репорт по фото реальной башни: с
+     *  фронта видна ОДНА полноразмерная лестничная рама, задний ряд — просто короткая опора):
+     *  {@code row == 0} (передний) ограничен {@code verticalFramesPerTower}, {@code row == 1}
+     *  (задний) — отдельным, обычно намного меньшим {@code backRowSegments}.
+     *
      * <p><b>Форма экрана (Phase 2.2)</b>: башня по номинальному шагу, под которой на экране НЕТ
      *  ни одного видимого кабинета (см. {@link #towerHasCabinetContent}), ПОЛНОСТЬЮ исключается
      *  из всех трёх осей — как если бы её индекс был вне {@code towerCount} — это касается и
@@ -248,7 +253,7 @@ public final class ScreenLogic {
      *  #toggleStructureFrameCell}) этому правилу НЕ подчиняется — фильтр действует только здесь,
      *  при автогенерации. */
     public static void regenerateStructureCells(Screen screen, CabinetType type, int towerCount,
-            int verticalFramesPerTower, int peremychkaLevels, int extendedBaseSections) {
+            int verticalFramesPerTower, int backRowSegments, int peremychkaLevels, int extendedBaseSections) {
         double spacing = screen.getStructureTowerSpacingMm();
         Set<Integer> validTowers = new HashSet<>();
         for (int t = 0; t < towerCount; t++) {
@@ -260,14 +265,15 @@ public final class ScreenLogic {
         List<StructureFrameCell> frames = screen.getStructureFrameCells();
         List<StructureFrameCell> keptFrames = new ArrayList<>();
         for (StructureFrameCell c : frames) {
-            if (validTowers.contains(c.getTowerIndex()) && c.getRow() < 2
-                    && c.getSegmentIndex() < verticalFramesPerTower) {
+            int rowLimit = c.getRow() == 0 ? verticalFramesPerTower : backRowSegments;
+            if (validTowers.contains(c.getTowerIndex()) && c.getRow() < 2 && c.getSegmentIndex() < rowLimit) {
                 keptFrames.add(c);
             }
         }
         for (int t : validTowers) {
             for (int row = 0; row < 2; row++) {
-                for (int seg = 0; seg < verticalFramesPerTower; seg++) {
+                int rowLimit = row == 0 ? verticalFramesPerTower : backRowSegments;
+                for (int seg = 0; seg < rowLimit; seg++) {
                     int ft = t;
                     int fr = row;
                     int fs = seg;

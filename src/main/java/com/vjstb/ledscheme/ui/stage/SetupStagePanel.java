@@ -108,6 +108,7 @@ public class SetupStagePanel extends JPanel {
     private final JSpinner pStructureTowerSpacing = new JSpinner(new SpinnerNumberModel(1000.0, 100.0, 50_000.0, 50.0));
     private final JSpinner pStructureTowerCount = new JSpinner(new SpinnerNumberModel(0, 0, 500, 1));
     private final JSpinner pStructureVerticalFrames = new JSpinner(new SpinnerNumberModel(0, 0, 100, 1));
+    private final JSpinner pStructureBackRowSegments = new JSpinner(new SpinnerNumberModel(0, 0, 100, 1));
     private final JSpinner pStructurePeremychkaLevels = new JSpinner(new SpinnerNumberModel(0, 0, 100, 1));
     private final JSpinner pStructureExtendedBaseSections = new JSpinner(new SpinnerNumberModel(0, 0, 20, 1));
     private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pStructureFrameType = new JComboBox<>();
@@ -500,7 +501,11 @@ public class SetupStagePanel extends JPanel {
         structureFieldsPanel.add(UiKit.vgap());
         structureFieldsPanel.add(UiKit.formRow("Башен", pStructureTowerCount));
         structureFieldsPanel.add(UiKit.vgap());
-        structureFieldsPanel.add(UiKit.formRow("Сегментов рамы на башню (в каждом из 2 рядов)", pStructureVerticalFrames));
+        structureFieldsPanel.add(UiKit.formRow("Сегментов рамы переднего ряда (полная высота)", pStructureVerticalFrames));
+        structureFieldsPanel.add(UiKit.vgap());
+        pStructureBackRowSegments.setToolTipText("Задний ряд (row=1) короткий — просто опора для перемычек и"
+                + " выноса, НЕ вторая полноразмерная башня (с фронта видна одна лестничная рама). Обычно 1-2м.");
+        structureFieldsPanel.add(UiKit.formRow("Сегментов рамы заднего ряда (короткий)", pStructureBackRowSegments));
         structureFieldsPanel.add(UiKit.vgap());
         pStructurePeremychkaLevels.setToolTipText("Число уровней перемычек (передний↔задний ряд внутри одной"
                 + " башни) по высоте — стартовое предложение по интервалу из Персонализации, конкретная"
@@ -801,8 +806,12 @@ public class SetupStagePanel extends JPanel {
         int suggestedVertical = com.vjstb.ledscheme.service.StructureCalc.suggestVerticalFramesPerTower(preview, frameType);
         double frameHeightMm = frameType != null && frameType.getHeightMm() != null && frameType.getHeightMm() > 0
                 ? frameType.getHeightMm() : 950.0;
+        int suggestedBackRowSegments = com.vjstb.ledscheme.service.StructureCalc.suggestBackRowSegments(frameHeightMm);
+        // Уровни перемычек ограничены ФИЗИЧЕСКОЙ высотой заднего ряда (Round 5) -- перемычка
+        // крепится к его перекладине, выше короткого заднего ряда крепить не к чему.
+        double backRowHeightMm = suggestedBackRowSegments * frameHeightMm;
         int suggestedPeremychkaLevels =
-                com.vjstb.ledscheme.service.StructureCalc.suggestPeremychkaLevels(towerHeight, frameHeightMm);
+                com.vjstb.ledscheme.service.StructureCalc.suggestPeremychkaLevels(backRowHeightMm, frameHeightMm);
         double screenHeightMm = screenType != null ? scr.getRows() * screenType.getHeightMm() : 0;
         double screenWidthMm = screenType != null ? scr.getCols() * screenType.getWidthMm() : 0;
         int suggestedExtendedBaseSections =
@@ -810,19 +819,20 @@ public class SetupStagePanel extends JPanel {
 
         pStructureTowerCount.setValue(suggestedTowers);
         pStructureVerticalFrames.setValue(suggestedVertical);
+        pStructureBackRowSegments.setValue(suggestedBackRowSegments);
         pStructurePeremychkaLevels.setValue(suggestedPeremychkaLevels);
         pStructureExtendedBaseSections.setValue(suggestedExtendedBaseSections);
 
         model.updateScreenStructure(scr, towerHeight, spacing, suggestedTowers, suggestedVertical,
-                suggestedPeremychkaLevels, suggestedExtendedBaseSections, frameTypeId, shortFrameTypeId,
-                cupTypeId, ballastTypeId, screenElevation, pStructureNotes.getText());
+                suggestedBackRowSegments, suggestedPeremychkaLevels, suggestedExtendedBaseSections, frameTypeId,
+                shortFrameTypeId, cupTypeId, ballastTypeId, screenElevation, pStructureNotes.getText());
 
         com.vjstb.ledscheme.service.StructureCalc.Result result =
                 com.vjstb.ledscheme.service.StructureCalc.compute(scr, screenType, model.getWorkspace());
 
         StringBuilder msg = new StringBuilder();
-        msg.append(String.format("Башен: %d, сегментов рамы на башню: %d, уровней перемычек: %d%n",
-                suggestedTowers, suggestedVertical, suggestedPeremychkaLevels));
+        msg.append(String.format("Башен: %d, сегментов переднего ряда: %d, заднего: %d, уровней перемычек: %d%n",
+                suggestedTowers, suggestedVertical, suggestedBackRowSegments, suggestedPeremychkaLevels));
         msg.append(String.format("Вертикальных рам: %d%n", result.verticalFrameCount()));
         msg.append(String.format("Перемычек: %d%n", result.peremychkaCount()));
         msg.append(String.format("Секций базовых рам: %d%n", result.baseFrameCount()));
@@ -1059,6 +1069,7 @@ public class SetupStagePanel extends JPanel {
                 pStructureTowerSpacing.setValue(scr.getStructureTowerSpacingMm());
                 pStructureTowerCount.setValue(scr.getStructureTowerCount());
                 pStructureVerticalFrames.setValue(scr.getStructureVerticalFramesPerTower());
+                pStructureBackRowSegments.setValue(scr.getStructureBackRowSegments());
                 pStructurePeremychkaLevels.setValue(scr.getStructurePeremychkaLevels());
                 pStructureExtendedBaseSections.setValue(scr.getStructureExtendedBaseSections());
                 populateStructureFrameCombo(pStructureFrameType,

@@ -75,6 +75,12 @@ public class Screen {
     private double structureTowerSpacingMm = 1000;
     private int structureTowerCount = 0;
     private int structureVerticalFramesPerTower = 0;
+    /** Число сегментов ЗАДНЕГО ряда (row=1) — Round 5, баг-репорт с фото реальной башни: с
+     *  фронта видна ОДНА полноразмерная лестничная рама (передний ряд, {@code
+     *  structureVerticalFramesPerTower}), задний ряд — короткий (~1-2м), просто опора для
+     *  перемычек и выноса, НЕ полноразмерная вторая башня. Независим от переднего ряда, номинальная
+     *  граница сетки для {@code service.ScreenLogic#regenerateStructureCells}. */
+    private int structureBackRowSegments = 0;
     /** Число уровней перемычек (передний↔задний ряд внутри одной башни) по высоте — номинальная
      *  граница сетки для {@code service.ScreenLogic#regenerateStructureCells}, шаг между уровнями
      *  не хранится тут (Phase 2.2 — коэффициент 1.5 от высоты рамы, см. {@code service
@@ -286,6 +292,14 @@ public class Screen {
         this.structureVerticalFramesPerTower = Math.max(0, structureVerticalFramesPerTower);
     }
 
+    public int getStructureBackRowSegments() {
+        return structureBackRowSegments;
+    }
+
+    public void setStructureBackRowSegments(int structureBackRowSegments) {
+        this.structureBackRowSegments = Math.max(0, structureBackRowSegments);
+    }
+
     public int getStructurePeremychkaLevels() {
         return structurePeremychkaLevels;
     }
@@ -451,6 +465,7 @@ public class Screen {
         s.structureTowerSpacingMm = structureTowerSpacingMm;
         s.structureTowerCount = structureTowerCount;
         s.structureVerticalFramesPerTower = structureVerticalFramesPerTower;
+        s.structureBackRowSegments = structureBackRowSegments;
         s.structurePeremychkaLevels = structurePeremychkaLevels;
         s.structureExtendedBaseSections = structureExtendedBaseSections;
         s.structureFrameTypeId = structureFrameTypeId;
