@@ -289,7 +289,14 @@ public class Structure3DPanel extends JPanel {
         // а не от узкой frameD (~51мм), как было раньше -- иначе ближний край рамы вылезал бы
         // за пределы предполагаемого зазора.
         double frontZ = -(SCREEN_CLEARANCE_MM + frameW / 2.0);
-        double backZ = frontZ - sectionDepthMm;
+        // Round 4 (баг-репорт: "рамы не могут пересекаться или накладываться"): раньше здесь
+        // было backZ = frontZ - sectionDepthMm -- расстояние МЕЖДУ ЦЕНТРАМИ переднего и
+        // заднего ряда, что при развёрнутой (широкой по Z) раме почти или полностью хоронило
+        // задний ряд ВНУТРИ переднего (frameW сопоставим с sectionDepthMm). Теперь
+        // sectionDepthMm -- это ЧИСТЫЙ ЗАЗОР между гранями рядов (там и стоит перемычка, см.
+        // peremychkaCandidates), поэтому вычитаем ещё и frameW переднего ряда, прежде чем
+        // сдвигаться на sectionDepthMm.
+        double backZ = frontZ - frameW - sectionDepthMm;
         double peremychkaIntervalMm = StructureCalc.peremychkaIntervalMm(frameH);
         return new StructureGeometry(frameH, frameW, frameD, sectionDepthMm, baseThickness, peremychkaThickness,
                 spacing, frontZ, backZ, peremychkaIntervalMm);
@@ -412,9 +419,6 @@ public class Structure3DPanel extends JPanel {
      *  выноса (section 0 = ядро, там не нужна — уже есть полноразмерный ряд 0/1), центрирована
      *  по глубине секции. */
     private List<Candidate> reinforcementCandidates(Screen screen, StructureGeometry g) {
-        if (!screen.isStructureIncludeBaseFrame()) {
-            return List.of();
-        }
         FrameEnvelope env = frameEnvelope(screen);
         List<StructureFrameCell> cells = screen.getStructureFrameCells();
         List<Candidate> result = new ArrayList<>();
@@ -427,8 +431,8 @@ public class Structure3DPanel extends JPanel {
                 boolean exists = existingCell != null;
                 double[] dims = resolveFrameDims(existingCell, g, true);
                 double x = t * g.spacing() - dims[2] / 2.0;
-                double sectionFrontZ = g.frontZ() - section * g.sectionDepthMm();
-                double sectionCenterZ = sectionFrontZ - g.sectionDepthMm() / 2.0;
+                double[] zr = baseSectionZRange(g, section);
+                double sectionCenterZ = (zr[0] + zr[1]) / 2.0;
                 double z = sectionCenterZ - dims[0] / 2.0;
                 double[] bounds = {x, 0, z, dims[2], dims[1], dims[0]};
                 String newCellType = activeNewCellFrameTypeId;
@@ -439,10 +443,17 @@ public class Structure3DPanel extends JPanel {
         return result;
     }
 
+    /** Перемычка заполняет РОВНО зазор между гранями переднего и заднего ряда (не залезает ни
+     *  в один из них — "рамы не могут пересекаться", баг-репорт) — от дальней (по Z) грани
+     *  переднего ряда до ближней грани заднего, длина зазора = {@code sectionDepthMm} (ширина
+     *  короткой рамы). Крепится к перекладине переднего/заднего ряда по высоте — {@code y}
+     *  формула ({@code peremychkaIntervalMm} = 1.5×frameH) уже гарантирует попадание ровно на
+     *  перекладину, см. {@code drawTowerSegment} javadoc. */
     private List<Candidate> peremychkaCandidates(Screen screen, StructureGeometry g) {
         FrameEnvelope env = frameEnvelope(screen);
         var cells = screen.getStructurePeremychkaCells();
-        double span = g.frontZ() - g.backZ();
+        double gapStart = g.frontZ() - g.frameW() / 2.0 - g.sectionDepthMm();
+        double gapSpan = g.sectionDepthMm();
         List<Candidate> result = new ArrayList<>();
         for (int t = env.minTower(); t <= env.maxTower(); t++) {
             for (int level = 0; level <= env.maxLevel(); level++) {
@@ -451,7 +462,7 @@ public class Structure3DPanel extends JPanel {
                 boolean exists = cells.stream().anyMatch(c -> c.matches(ft, fl) && !c.isHidden());
                 double x = t * g.spacing() - g.frameW() / 2.0;
                 double y = (level + 1) * g.peremychkaIntervalMm() - g.peremychkaThickness() / 2.0;
-                double[] bounds = {x, y, g.backZ(), g.frameW(), g.peremychkaThickness(), span};
+                double[] bounds = {x, y, gapStart, g.frameW(), g.peremychkaThickness(), gapSpan};
                 result.add(new Candidate(new PickKey("peremychka", ft, fl, 0), bounds, List.of(bounds), exists,
                         () -> model.toggleStructurePeremychkaCell(screen, ft, fl)));
             }
@@ -459,10 +470,23 @@ public class Structure3DPanel extends JPanel {
         return result;
     }
 
-    private List<Candidate> baseCandidates(Screen screen, StructureGeometry g) {
-        if (!screen.isStructureIncludeBaseFrame()) {
-            return List.of();
+    /** Диапазон Z одной секции опорной рамы — {@code {frontZ, backZ}} (оба отрицательные,
+     *  frontZ ближе к экрану). Секция 0 ("ядро") — ЕДИНАЯ плита под ВСЕЙ объёмной частью
+     *  башни: от ближней грани переднего ряда до дальней грани заднего (round 4 — раньше
+     *  секция 0 занимала только зазор между рядами и физически ПЕРЕСЕКАЛАСЬ с обоими рядами,
+     *  "рамы не могут пересекаться"). Секции 1+ — вынос той же глубины {@code sectionDepthMm},
+     *  что и зазор между рядами, продолжают ядро назад. */
+    private static double[] baseSectionZRange(StructureGeometry g, int section) {
+        double coreNearZ = g.frontZ() + g.frameW() / 2.0;
+        double coreFarZ = g.backZ() - g.frameW() / 2.0;
+        if (section <= 0) {
+            return new double[]{coreNearZ, coreFarZ};
         }
+        double frontZ = coreFarZ - (section - 1) * g.sectionDepthMm();
+        return new double[]{frontZ, frontZ - g.sectionDepthMm()};
+    }
+
+    private List<Candidate> baseCandidates(Screen screen, StructureGeometry g) {
         FrameEnvelope env = frameEnvelope(screen);
         var cells = screen.getStructureBaseFrameCells();
         List<Candidate> result = new ArrayList<>();
@@ -472,10 +496,9 @@ public class Structure3DPanel extends JPanel {
                 final int fsec = section;
                 boolean exists = cells.stream().anyMatch(c -> c.matches(ft, fsec) && !c.isHidden());
                 double x = t * g.spacing() - g.frameW() / 2.0;
-                double sectionFrontZ = g.frontZ() - section * g.sectionDepthMm();
-                double sectionBackZ = sectionFrontZ - g.sectionDepthMm();
-                double[] bounds = {x, -g.baseThickness(), sectionBackZ, g.frameW(), g.baseThickness(),
-                        g.sectionDepthMm()};
+                double[] zr = baseSectionZRange(g, section);
+                double sectionSpan = zr[0] - zr[1];
+                double[] bounds = {x, -g.baseThickness(), zr[1], g.frameW(), g.baseThickness(), sectionSpan};
                 result.add(new Candidate(new PickKey("base", ft, fsec, 0), bounds, List.of(bounds), exists,
                         () -> model.toggleStructureBaseFrameSection(screen, ft, fsec)));
             }
@@ -613,7 +636,11 @@ public class Structure3DPanel extends JPanel {
             glu.gluLookAt(cam.eye().x(), cam.eye().y(), cam.eye().z(),
                     cam.center().x(), cam.center().y(), cam.center().z(), 0, 1, 0);
 
-            drawGroundPlane(gl, Math.max(widthMm, heightMm) * 1.5);
+            // Земля лежит НИЖЕ опорной рамы (не пересекает её, см. javadoc drawGroundPlane) --
+            // если экран/конструктив ещё не выбраны, опорной рамы не будет и толщина не важна.
+            double baseThicknessMm = screen != null && screen.getMountType() == ScreenMountType.STRUCTURE
+                    ? computeGeometry(screen).baseThickness() : 0;
+            drawGroundPlane(gl, Math.max(widthMm, heightMm) * 1.5, baseThicknessMm);
             if (screen != null && type != null) {
                 drawScreenCabinets(gl, screen, type, model.getWorkspace(), elevationMm);
             } else {
@@ -624,9 +651,15 @@ public class Structure3DPanel extends JPanel {
             }
         }
 
-        private void drawGroundPlane(GL2 gl, double halfExtentMm) {
+        /** Земля лежит НИЖЕ опорной рамы, а не вперемешку с ней по Y (баг-репорт: "опорные рамы
+         *  пересекаются с полом, рендерятся с переменным успехом" -- classic Z-fighting: земля
+         *  раньше всегда занимала Y=[-20,0], опорная рама -- Y=[-baseThicknessMm,0], полностью
+         *  перекрываясь). {@code groundTopY = -baseThicknessMm} -- поверхность земли ровно под
+         *  нижней гранью опорной рамы, без нахлёста ни на пиксель. */
+        private void drawGroundPlane(GL2 gl, double halfExtentMm, double baseThicknessMm) {
+            double groundTopY = -baseThicknessMm;
             gl.glColor3f(0.16f, 0.17f, 0.19f);
-            box(gl, -halfExtentMm, -20, -halfExtentMm * 0.3, halfExtentMm * 2, 20, halfExtentMm * 1.6);
+            box(gl, -halfExtentMm, groundTopY - 20, -halfExtentMm * 0.3, halfExtentMm * 2, 20, halfExtentMm * 1.6);
         }
 
         private void drawScreenPlaneFallback(GL2 gl, double widthMm, double heightMm, double elevationMm) {
@@ -700,11 +733,10 @@ public class Structure3DPanel extends JPanel {
                 }
             }
 
-            gl.glColor3f(0.42f, 0.43f, 0.45f);
             for (Candidate c : bases) {
                 double[] b = c.bounds();
                 if (c.exists()) {
-                    box(gl, b[0], b[1], b[2], b[3], b[4], b[5]);
+                    drawBaseFrame(gl, b[0], b[1], b[2], b[3], b[4], b[5]);
                 } else if (c.key().equals(hoveredGhostKey)) {
                     drawWireBoxGhost(gl, b[0], b[1], b[2], b[3], b[4], b[5]);
                 }
@@ -754,6 +786,8 @@ public class Structure3DPanel extends JPanel {
                 }
             }
 
+            double gapNearZ = g.frontZ() - g.frameW() / 2.0;
+            double gapFarZ = g.backZ() + g.frameW() / 2.0;
             for (var c : screen.getStructurePeremychkaCells()) {
                 if (c.isHidden()) {
                     continue;
@@ -761,9 +795,9 @@ public class Structure3DPanel extends JPanel {
                 double towerX = c.getTowerIndex() * g.spacing();
                 double y = (c.getLevelIndex() + 1) * g.peremychkaIntervalMm() - cupSize / 2.0;
                 box(gl, towerX - g.frameW() / 2.0 + tube / 2.0 - cupSize / 2.0, y,
-                        g.frontZ() - cupSize / 2.0, cupSize, cupSize, cupSize);
+                        gapNearZ - cupSize / 2.0, cupSize, cupSize, cupSize);
                 box(gl, towerX - g.frameW() / 2.0 + tube / 2.0 - cupSize / 2.0, y,
-                        g.backZ() - cupSize / 2.0, cupSize, cupSize, cupSize);
+                        gapFarZ - cupSize / 2.0, cupSize, cupSize, cupSize);
             }
 
             for (var c : screen.getStructureBaseFrameCells()) {
@@ -771,7 +805,7 @@ public class Structure3DPanel extends JPanel {
                     continue;
                 }
                 double towerX = c.getTowerIndex() * g.spacing();
-                double sectionFrontZ = g.frontZ() - c.getSectionIndex() * g.sectionDepthMm();
+                double sectionFrontZ = baseSectionZRange(g, c.getSectionIndex())[0];
                 box(gl, towerX - g.frameW() / 2.0 + tube / 2.0 - cupSize / 2.0, -cupSize / 2.0,
                         sectionFrontZ - cupSize / 2.0, cupSize, cupSize, cupSize);
                 box(gl, towerX + g.frameW() / 2.0 - tube / 2.0 - cupSize / 2.0, -cupSize / 2.0,
@@ -786,8 +820,8 @@ public class Structure3DPanel extends JPanel {
                     continue;
                 }
                 double towerX = c.getTowerIndex() * g.spacing();
-                double sectionFrontZ = g.frontZ() - c.getSegmentIndex() * g.sectionDepthMm();
-                double reinforcementZCenter = sectionFrontZ - g.sectionDepthMm() / 2.0;
+                double[] zr = baseSectionZRange(g, c.getSegmentIndex());
+                double reinforcementZCenter = (zr[0] + zr[1]) / 2.0;
                 double cupX = towerX - cupSize / 2.0;
                 double nearZ = reinforcementZCenter - g.frameW() / 2.0 + frameRail / 2.0 - cupSize / 2.0;
                 double farZ = reinforcementZCenter + g.frameW() / 2.0 - frameRail / 2.0 - cupSize / 2.0;
@@ -826,26 +860,41 @@ public class Structure3DPanel extends JPanel {
             gl.glColor3f(0.6f, 0.61f, 0.63f);
         }
 
-        /** Перемычка — та же самая рама (см. {@link #drawTowerSegment}), просто повёрнутая на
-         *  90°: "длинная" ось лежит вдоль Z (от заднего к переднему ряду, {@code span}), а не
-         *  вдоль Y — 2 рельса по краям X-ширины через весь span, плюс те же 3 перекладины
-         *  (у обоих концов span и посередине), тот же принцип "8-образной" формы. {@code x}/
-         *  {@code y}/{@code z} — левый-нижний-задний угол bounds (как у остальных candidate). */
+        /** Перемычка (и, тем же приёмом, опорная рама — см. перегрузку ниже) — та же самая
+         *  рама (см. {@link #drawTowerSegment}), просто повёрнутая на 90°: "длинная" ось лежит
+         *  вдоль Z, а не вдоль Y — 2 рельса по краям X-ширины через весь span, плюс те же 3
+         *  перекладины (у обоих концов span и посередине), тот же принцип "8-образной" формы.
+         *  {@code x}/{@code y}/{@code z} — левый-нижний-задний угол bounds (как у остальных
+         *  candidate). */
         private void drawPeremychkaFrame(GL2 gl, double x, double y, double z, double frameW, double thickness,
                 double span) {
+            drawHorizontalLadderFrame(gl, x, y, z, frameW, thickness, span, 0.55f, 0.5f, 0.42f, 0.5f, 0.46f, 0.39f);
+        }
+
+        /** Опорная (базовая) рама — тот же горизонтальный "8"-каркас, что у перемычки (round 4,
+         *  баг-репорт "перемычки и основания — горизонтальные рамы, крепящиеся к перекладине",
+         *  раньше опора рисовалась сплошной плитой) — только серая, под цвет вертикальных рам,
+         *  а не бежевая (не путать визуально с перемычкой). */
+        private void drawBaseFrame(GL2 gl, double x, double y, double z, double frameW, double thickness,
+                double span) {
+            drawHorizontalLadderFrame(gl, x, y, z, frameW, thickness, span, 0.42f, 0.43f, 0.45f, 0.37f, 0.38f, 0.4f);
+        }
+
+        private void drawHorizontalLadderFrame(GL2 gl, double x, double y, double z, double frameW, double thickness,
+                double span, float railR, float railG, float railB, float crossR, float crossG, float crossB) {
             double rail = railThickness(frameW);
             double crossThickness = rail * 0.7;
-            gl.glColor3f(0.55f, 0.5f, 0.42f);
+            gl.glColor3f(railR, railG, railB);
             box(gl, x, y, z, rail, thickness, span);
             box(gl, x + frameW - rail, y, z, rail, thickness, span);
 
-            gl.glColor3f(0.5f, 0.46f, 0.39f);
+            gl.glColor3f(crossR, crossG, crossB);
             double crossX = x + rail;
             double crossW = frameW - 2 * rail;
             box(gl, crossX, y, z, crossW, thickness, crossThickness);
             box(gl, crossX, y, z + span / 2.0 - crossThickness / 2.0, crossW, thickness, crossThickness);
             box(gl, crossX, y, z + span - crossThickness, crossW, thickness, crossThickness);
-            gl.glColor3f(0.55f, 0.5f, 0.42f);
+            gl.glColor3f(railR, railG, railB);
         }
 
         private void boxFrontColored(GL2 gl, double x, double y, double z, double w, double h, double d,

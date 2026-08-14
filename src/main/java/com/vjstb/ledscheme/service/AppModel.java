@@ -835,10 +835,12 @@ public class AppModel {
      *  — все числа/FK-поля, осмысленные только при {@code mountType == STRUCTURE}, тем же
      *  единым вызовом, что и {@link #updateScreenMount} для rigging-полей. Phase 2.1 — объёмная
      *  башня: {@code peremychkaLevels}/{@code extendedBaseSections} заменили прежние
-     *  {@code horizontalBraceRows}/расчёт ветра (см. {@code StructureCalc} class-javadoc). */
+     *  {@code horizontalBraceRows}/расчёт ветра (см. {@code StructureCalc} class-javadoc). Round
+     *  4 — параметр {@code includeBaseFrame} убран целиком: опорная рама теперь ВСЕГДА строится
+     *  (прямое указание пользователя — "опорные рамы должны быть всегда"), больше не вкл/выкл. */
     public void updateScreenStructure(Screen screen, double towerHeightMm, double towerSpacingMm,
                                        int towerCount, int verticalFramesPerTower, int peremychkaLevels,
-                                       int extendedBaseSections, boolean includeBaseFrame, String frameTypeId,
+                                       int extendedBaseSections, String frameTypeId,
                                        String shortFrameTypeId, String cupTypeId, String ballastTypeId,
                                        double screenElevationMm, String notes) {
         pushUndo();
@@ -848,7 +850,6 @@ public class AppModel {
         screen.setStructureVerticalFramesPerTower(verticalFramesPerTower);
         screen.setStructurePeremychkaLevels(peremychkaLevels);
         screen.setStructureExtendedBaseSections(extendedBaseSections);
-        screen.setStructureIncludeBaseFrame(includeBaseFrame);
         screen.setStructureFrameTypeId(frameTypeId);
         screen.setStructureShortFrameTypeId(shortFrameTypeId);
         screen.setStructureCupTypeId(cupTypeId);

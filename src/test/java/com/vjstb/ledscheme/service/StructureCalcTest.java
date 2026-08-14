@@ -41,7 +41,6 @@ class StructureCalcTest {
         Scene scene = model.addScene("S");
         model.selectScene(scene);
         Screen screen = model.addScreen("E", t.getId(), 2, 6, 0, 0);
-        screen.setStructureIncludeBaseFrame(true);
         // compute() читает РЕАЛЬНЫЕ ячейки (Phase 2), не просто числа выше -- обычно их
         // заполняет AppModel.updateScreenStructure, здесь эмулируем то же самое напрямую.
         // 3 башни, 3 сегмента на башню (В КАЖДОМ из 2 рядов), 3 уровня перемычек, ядро без
@@ -60,26 +59,6 @@ class StructureCalcTest {
     }
 
     @Test
-    void countsExcludeBaseFrameWhenDisabled(@TempDir Path dir) {
-        AppModel model = freshModel(dir);
-        CabinetType t = model.addCabinetType(type(500, 500));
-        model.selectProject(model.addProject("P"));
-        Scene scene = model.addScene("S");
-        model.selectScene(scene);
-        Screen screen = model.addScreen("E", t.getId(), 2, 6, 0, 0);
-        screen.setStructureIncludeBaseFrame(false);
-        ScreenLogic.regenerateStructureCells(screen, t, 3, 3, 3, 0);
-
-        StructureCalc.Result result = StructureCalc.compute(screen, t, model.getWorkspace());
-
-        assertEquals(0, result.baseFrameCount());
-        // Стыков: 12 вертикальных + 9 перемычек + 0 базовых = 21 * 2 = 42.
-        assertEquals(42, result.cupCount());
-        // Всего рам 18+9+0=27, болты = ceil(27*1.5) = 41 (40.5 округляется вверх).
-        assertEquals(41, result.boltCount());
-    }
-
-    @Test
     void removingMiddleSegmentBreaksItsRowJointsButNotTheOtherRow(@TempDir Path dir) {
         AppModel model = freshModel(dir);
         CabinetType t = model.addCabinetType(type(500, 500));
@@ -88,14 +67,17 @@ class StructureCalcTest {
         model.selectScene(scene);
         Screen screen = model.addScreen("E", t.getId(), 2, 6, 0, 0);
         // 1 башня, 3 сегмента (в ОБОИХ рядах — передний/задний ряд генерируются всегда),
-        // без перемычек/базы -- изолируем именно подсчёт вертикальных стыков по рядам.
-        screen.setStructureIncludeBaseFrame(false);
+        // без перемычек -- изолируем именно подсчёт вертикальных стыков по рядам. Опорная рама
+        // (Round 4: теперь всегда строится, см. StructureCalc#compute) добавляет ровно 1
+        // базовую секцию (тower 0, section 0) независимо от вертикальных сегментов -- считаем
+        // её вклад в стыки/болты явно ниже, а не пытаемся исключить.
         ScreenLogic.regenerateStructureCells(screen, t, 1, 3, 0, 0);
 
         StructureCalc.Result full = StructureCalc.compute(screen, t, model.getWorkspace());
         assertEquals(6, full.verticalFrameCount(), "1 башня x 2 ряда x 3 сегмента");
-        // Стыков: 2 на ряд (0-1, 1-2) x 2 ряда = 4 -> 4*2 = 8 стаканов.
-        assertEquals(8, full.cupCount());
+        assertEquals(1, full.baseFrameCount(), "1 башня x 1 секция (ядро, всегда строится)");
+        // Стыков: 2 на ряд (0-1, 1-2) x 2 ряда = 4 вертикальных + 1 базовый -> 5*2 = 10 стаканов.
+        assertEquals(10, full.cupCount());
 
         // Убираем СРЕДНИЙ сегмент ПЕРЕДНЕГО ряда (row=0, segment=1) -- баг-репорт "не
         // поддерживает вырезание из середины башни": оба стыка ПЕРЕДНЕГО ряда должны
@@ -103,9 +85,10 @@ class StructureCalcTest {
         screen.getStructureFrameCells().removeIf(c -> c.matches(0, 0, 1));
         StructureCalc.Result gapped = StructureCalc.compute(screen, t, model.getWorkspace());
         assertEquals(5, gapped.verticalFrameCount(), "5 из 6 сегментов остались");
-        // Передний ряд потерял оба стыка (0), задний ряд не пострадал (2 стыка) -> 2*2=4.
-        assertEquals(4, gapped.cupCount(), "стыки переднего ряда разорваны, заднего -- нет");
-        assertEquals(8, gapped.boltCount(), "ceil(5 рам * 1.5) = 8 (7.5 округляется вверх)");
+        // Передний ряд потерял оба стыка (0), задний ряд не пострадал (2 стыка) + 1 базовый -> 3*2=6.
+        assertEquals(6, gapped.cupCount(), "стыки переднего ряда разорваны, заднего и базы -- нет");
+        // Всего рам 5(вертикальных)+0(перемычек)+1(база)=6, болты = ceil(6*1.5) = 9.
+        assertEquals(9, gapped.boltCount());
     }
 
     @Test
@@ -245,7 +228,6 @@ class StructureCalcTest {
         Scene scene = model.addScene("S");
         model.selectScene(scene);
         Screen screen = model.addScreen("E", t.getId(), 2, 4, 0, 0);
-        screen.setStructureIncludeBaseFrame(true);
         // 2 башни, 1 сегмент рамы на башню (в каждом ряду), без перемычек, 1 доп. секция
         // выноса -- по 1 усилительной раме (row=2) на башню в секции 1 (Phase 2.2).
         ScreenLogic.regenerateStructureCells(screen, t, 2, 1, 0, 1);

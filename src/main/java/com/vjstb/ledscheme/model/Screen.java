@@ -83,7 +83,6 @@ public class Screen {
     /** Число ДОПОЛНИТЕЛЬНЫХ секций выноса базовой рамы под балласт (сверх обязательной секции
      *  0 — ядра под объёмом башни), каждая — ширина короткой рамы (~0.5м). */
     private int structureExtendedBaseSections = 0;
-    private boolean structureIncludeBaseFrame = true;
     private String structureFrameTypeId;
     private String structureShortFrameTypeId;
     private String structureCupTypeId;
@@ -303,14 +302,6 @@ public class Screen {
         this.structureExtendedBaseSections = Math.max(0, structureExtendedBaseSections);
     }
 
-    public boolean isStructureIncludeBaseFrame() {
-        return structureIncludeBaseFrame;
-    }
-
-    public void setStructureIncludeBaseFrame(boolean structureIncludeBaseFrame) {
-        this.structureIncludeBaseFrame = structureIncludeBaseFrame;
-    }
-
     public String getStructureFrameTypeId() {
         return structureFrameTypeId;
     }
@@ -462,7 +453,6 @@ public class Screen {
         s.structureVerticalFramesPerTower = structureVerticalFramesPerTower;
         s.structurePeremychkaLevels = structurePeremychkaLevels;
         s.structureExtendedBaseSections = structureExtendedBaseSections;
-        s.structureIncludeBaseFrame = structureIncludeBaseFrame;
         s.structureFrameTypeId = structureFrameTypeId;
         s.structureShortFrameTypeId = structureShortFrameTypeId;
         s.structureCupTypeId = structureCupTypeId;
