@@ -45,7 +45,7 @@ class StructureCalcTest {
         // заполняет AppModel.updateScreenStructure, здесь эмулируем то же самое напрямую.
         // 3 башни, 3 сегмента на башню (В КАЖДОМ из 2 рядов), 3 уровня перемычек, ядро без
         // выноса (extendedBaseSections=0 -> 1 секция базы на башню).
-        ScreenLogic.regenerateStructureCells(screen, t, 3, 3, 3, 0);
+        ScreenLogic.regenerateStructureCells(screen, t, 3, 3, 3, 3, 0);
 
         StructureCalc.Result result = StructureCalc.compute(screen, t, model.getWorkspace());
 
@@ -71,7 +71,7 @@ class StructureCalcTest {
         // (Round 4: теперь всегда строится, см. StructureCalc#compute) добавляет ровно 1
         // базовую секцию (тower 0, section 0) независимо от вертикальных сегментов -- считаем
         // её вклад в стыки/болты явно ниже, а не пытаемся исключить.
-        ScreenLogic.regenerateStructureCells(screen, t, 1, 3, 0, 0);
+        ScreenLogic.regenerateStructureCells(screen, t, 1, 3, 3, 0, 0);
 
         StructureCalc.Result full = StructureCalc.compute(screen, t, model.getWorkspace());
         assertEquals(6, full.verticalFrameCount(), "1 башня x 2 ряда x 3 сегмента");
@@ -230,7 +230,7 @@ class StructureCalcTest {
         Screen screen = model.addScreen("E", t.getId(), 2, 4, 0, 0);
         // 2 башни, 1 сегмент рамы на башню (в каждом ряду), без перемычек, 1 доп. секция
         // выноса -- по 1 усилительной раме (row=2) на башню в секции 1 (Phase 2.2).
-        ScreenLogic.regenerateStructureCells(screen, t, 2, 1, 0, 1);
+        ScreenLogic.regenerateStructureCells(screen, t, 2, 1, 1, 0, 1);
 
         long reinforcementCount = screen.getStructureFrameCells().stream().filter(c -> c.getRow() == 2).count();
         assertEquals(2, reinforcementCount, "по 1 усилительной раме на башню в единственной секции выноса");
@@ -263,7 +263,7 @@ class StructureCalcTest {
             }
         }
         // Номинально 3 башни (0, 1000, 2000мм) при шаге 1000мм и ширине 2000мм.
-        ScreenLogic.regenerateStructureCells(screen, t, 3, 1, 0, 0);
+        ScreenLogic.regenerateStructureCells(screen, t, 3, 1, 1, 0, 0);
 
         var towers = screen.getStructureFrameCells().stream()
                 .map(com.vjstb.ledscheme.model.StructureFrameCell::getTowerIndex).distinct().sorted().toList();
@@ -292,7 +292,7 @@ class StructureCalcTest {
                 cab.setHidden(true);
             }
         }
-        ScreenLogic.regenerateStructureCells(screen, t, 3, 1, 0, 0);
+        ScreenLogic.regenerateStructureCells(screen, t, 3, 1, 1, 0, 0);
 
         var towers = screen.getStructureFrameCells().stream()
                 .map(com.vjstb.ledscheme.model.StructureFrameCell::getTowerIndex).distinct().sorted().toList();
@@ -318,10 +318,47 @@ class StructureCalcTest {
                 cab.setHidden(true);
             }
         }
-        ScreenLogic.regenerateStructureCells(screen, t, 3, 1, 0, 0);
+        ScreenLogic.regenerateStructureCells(screen, t, 3, 1, 1, 0, 0);
 
         var towers = screen.getStructureFrameCells().stream()
                 .map(com.vjstb.ledscheme.model.StructureFrameCell::getTowerIndex).distinct().sorted().toList();
         assertEquals(java.util.List.of(0, 1, 2), towers, "нижний ряд виден -- башня 2 всё ещё строится");
+    }
+
+    @Test
+    void backRowIsIndependentAndShorterThanFrontRow(@TempDir Path dir) {
+        // Round 5, баг-репорт по фото реальной башни: с фронта видна ОДНА полноразмерная
+        // лестничная рама (передний ряд), задний ряд -- короткая опора (~1-2м), а не вторая
+        // полноразмерная башня. regenerateStructureCells должен уважать РАЗНЫЕ границы для
+        // row=0 (передний, verticalFramesPerTower) и row=1 (задний, backRowSegments).
+        AppModel model = freshModel(dir);
+        CabinetType t = model.addCabinetType(type(500, 500));
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("E", t.getId(), 2, 6, 0, 0);
+        // 1 башня, передний ряд -- 5 сегментов (высокая башня), задний -- всего 2 (короткая опора).
+        ScreenLogic.regenerateStructureCells(screen, t, 1, 5, 2, 0, 0);
+
+        long frontSegments = screen.getStructureFrameCells().stream().filter(c -> c.getRow() == 0).count();
+        long backSegments = screen.getStructureFrameCells().stream().filter(c -> c.getRow() == 1).count();
+        assertEquals(5, frontSegments, "передний ряд -- полная высота (5 сегментов)");
+        assertEquals(2, backSegments, "задний ряд -- короткая опора (2 сегмента), независимо от переднего");
+
+        // Уменьшили передний ряд до 3 -- задний остаётся 2, независимо (не связаны формулой).
+        ScreenLogic.regenerateStructureCells(screen, t, 1, 3, 2, 0, 0);
+        frontSegments = screen.getStructureFrameCells().stream().filter(c -> c.getRow() == 0 && !c.isHidden()).count();
+        backSegments = screen.getStructureFrameCells().stream().filter(c -> c.getRow() == 1 && !c.isHidden()).count();
+        assertEquals(3, frontSegments);
+        assertEquals(2, backSegments, "задний ряд не зависит от изменения переднего");
+    }
+
+    @Test
+    void suggestBackRowSegmentsTargetsAboutOneAndHalfMeters() {
+        // floor/round(1500/950) = 2 сегмента (~1.9м, ближе к верхней границе "1-2м").
+        assertEquals(2, StructureCalc.suggestBackRowSegments(950));
+        // Рама 1500мм -> ровно 1 сегмент.
+        assertEquals(1, StructureCalc.suggestBackRowSegments(1500));
+        assertEquals(1, StructureCalc.suggestBackRowSegments(0), "нет рамы -- хотя бы 1 сегмент, не делить на 0");
     }
 }

@@ -837,10 +837,13 @@ public class AppModel {
      *  башня: {@code peremychkaLevels}/{@code extendedBaseSections} заменили прежние
      *  {@code horizontalBraceRows}/расчёт ветра (см. {@code StructureCalc} class-javadoc). Round
      *  4 — параметр {@code includeBaseFrame} убран целиком: опорная рама теперь ВСЕГДА строится
-     *  (прямое указание пользователя — "опорные рамы должны быть всегда"), больше не вкл/выкл. */
+     *  (прямое указание пользователя — "опорные рамы должны быть всегда"), больше не вкл/выкл.
+     *  Round 5 — добавлен {@code backRowSegments}: задний ряд (row=1) теперь короткий (~1-2м),
+     *  независимый от {@code verticalFramesPerTower} переднего ряда (см. {@code StructureCalc
+     *  #suggestBackRowSegments}). */
     public void updateScreenStructure(Screen screen, double towerHeightMm, double towerSpacingMm,
-                                       int towerCount, int verticalFramesPerTower, int peremychkaLevels,
-                                       int extendedBaseSections, String frameTypeId,
+                                       int towerCount, int verticalFramesPerTower, int backRowSegments,
+                                       int peremychkaLevels, int extendedBaseSections, String frameTypeId,
                                        String shortFrameTypeId, String cupTypeId, String ballastTypeId,
                                        double screenElevationMm, String notes) {
         pushUndo();
@@ -848,6 +851,7 @@ public class AppModel {
         screen.setStructureTowerSpacingMm(towerSpacingMm);
         screen.setStructureTowerCount(towerCount);
         screen.setStructureVerticalFramesPerTower(verticalFramesPerTower);
+        screen.setStructureBackRowSegments(backRowSegments);
         screen.setStructurePeremychkaLevels(peremychkaLevels);
         screen.setStructureExtendedBaseSections(extendedBaseSections);
         screen.setStructureFrameTypeId(frameTypeId);
@@ -857,7 +861,7 @@ public class AppModel {
         screen.setStructureScreenElevationMm(screenElevationMm);
         screen.setStructureNotes(notes);
         ScreenLogic.regenerateStructureCells(screen, typeOf(screen), towerCount, verticalFramesPerTower,
-                peremychkaLevels, extendedBaseSections);
+                backRowSegments, peremychkaLevels, extendedBaseSections);
         changed();
     }
 
