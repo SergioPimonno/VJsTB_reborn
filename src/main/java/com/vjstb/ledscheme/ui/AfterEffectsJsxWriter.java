@@ -54,7 +54,12 @@ public final class AfterEffectsJsxWriter {
         sb.append("        }\n");
         sb.append("        return app.project.importFile(new ImportOptions(f));\n");
         sb.append("    }\n");
-        sb.append("    var comp = app.project.items.addComp(\"").append(js(canvas.getName())).append("\", ")
+        // Баг-репорт: "в названиях масок также было название экрана + его разрешение, для
+        // канваса аналогично" -- имя композиции/слоя в AE (не только сам PNG-файл маски)
+        // тоже несёт разрешение, тем же "_ШxВ" суффиксом, что и в maskFilename ниже, чтобы
+        // не приходилось открывать свойства слоя/композиции в AE, чтобы узнать габариты.
+        String compName = canvas.getName() + "_" + canvas.getWidthPx() + "x" + canvas.getHeightPx();
+        sb.append("    var comp = app.project.items.addComp(\"").append(js(compName)).append("\", ")
                 .append(canvas.getWidthPx()).append(", ").append(canvas.getHeightPx()).append(", 1.0, ")
                 .append(DEFAULT_DURATION_SEC).append(", ").append(DEFAULT_FRAME_RATE).append(");\n");
 
@@ -73,7 +78,8 @@ public final class AfterEffectsJsxWriter {
             sb.append("    var ").append(var).append(" = importMask(\"").append(js(filename)).append("\");\n");
             sb.append("    if (").append(var).append(") {\n");
             sb.append("        var layer = comp.layers.add(").append(var).append(");\n");
-            sb.append("        layer.name = \"").append(js(scr.getName())).append("\";\n");
+            String layerName = scr.getName() + "_" + w + "x" + h;
+            sb.append("        layer.name = \"").append(js(layerName)).append("\";\n");
             // Явно фиксируем anchor point в центре слоя, не полагаясь на дефолт AE --
             // тогда Position (координата AE-канваса, тоже отсчитываемая от anchor point)
             // однозначно совпадает с левым верхним углом экрана (x0,y0) + половина

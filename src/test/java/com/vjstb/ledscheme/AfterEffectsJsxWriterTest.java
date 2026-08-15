@@ -51,25 +51,25 @@ class AfterEffectsJsxWriterTest {
 
         String jsx = AfterEffectsJsxWriter.buildJsx(canvas, scene, model, "Сцена");
 
-        assertTrue(jsx.contains("app.project.items.addComp(\"Test\", 3584, 1280,"),
-                "композиция должна быть размером с канвас");
+        assertTrue(jsx.contains("app.project.items.addComp(\"Test_3584x1280\", 3584, 1280,"),
+                "имя композиции несёт разрешение канваса, как и имя файла его маски");
 
         // Left_Portal: 768×1280 в (0,0) -> anchor (384,640), position (384,640).
         String leftFile = AfterEffectsJsxWriter.maskFilename("Сцена", left, 768, 1280);
         assertTrue(jsx.contains("importMask(\"" + leftFile + "\")"));
-        assertTrue(jsx.contains("layer.name = \"Left_Portal\";"));
+        assertTrue(jsx.contains("layer.name = \"Left_Portal_768x1280\";"));
         assertTrue(jsx.contains("[384.0, 640.0]"), "anchor/position левого портала");
 
         // Center: 2048×1024 в (768,0) -> anchor (1024,512), position (768+1024, 0+512) = (1792,512).
         String centerFile = AfterEffectsJsxWriter.maskFilename("Сцена", center, 2048, 1024);
         assertTrue(jsx.contains("importMask(\"" + centerFile + "\")"));
-        assertTrue(jsx.contains("layer.name = \"Center\";"));
+        assertTrue(jsx.contains("layer.name = \"Center_2048x1024\";"));
         assertTrue(jsx.contains("[1792.0, 512.0]"), "position центрального экрана");
 
         // Right_Portal: 768×1280 в (2816,0) -> anchor (384,640), position (2816+384, 640) = (3200,640).
         String rightFile = AfterEffectsJsxWriter.maskFilename("Сцена", right, 768, 1280);
         assertTrue(jsx.contains("importMask(\"" + rightFile + "\")"));
-        assertTrue(jsx.contains("layer.name = \"Right_Portal\";"));
+        assertTrue(jsx.contains("layer.name = \"Right_Portal_768x1280\";"));
         assertTrue(jsx.contains("[3200.0, 640.0]"), "position правого портала");
     }
 
