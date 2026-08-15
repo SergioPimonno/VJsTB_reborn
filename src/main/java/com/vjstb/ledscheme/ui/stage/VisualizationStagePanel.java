@@ -8,6 +8,7 @@ import com.vjstb.ledscheme.model.Project;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.ui.AfterEffectsJsxWriter;
 import com.vjstb.ledscheme.ui.CanvasEditorPanel;
 import com.vjstb.ledscheme.ui.ContextBar;
 import com.vjstb.ledscheme.ui.OutputPaths;
@@ -276,9 +277,11 @@ public class VisualizationStagePanel extends JPanel {
         exportMasks.addActionListener(e -> exportMasks());
         JButton exportResolume = new JButton("Экспорт под Resolume…");
         exportResolume.addActionListener(e -> exportResolumePreset());
-        JButton exportAfterEffects = new JButton("Экспорт под After Effects… (скоро)");
-        exportAfterEffects.setEnabled(false);
-        exportAfterEffects.setToolTipText("Появится после получения образца формата от пользователя");
+        JButton exportAfterEffects = new JButton("Экспорт под After Effects…");
+        exportAfterEffects.addActionListener(e -> exportAfterEffectsPreset());
+        exportAfterEffects.setToolTipText("По .jsx-скрипту на каждый канвас текущей сцены — при запуске в AE"
+                + " (File → Scripts → Run Script File) создаёт композицию размером с канвас и по слою на каждый"
+                + " размещённый экран, footage слоя — PNG-маска этого экрана (сохраняется рядом со скриптом).");
         exportRow.add(exportMasks);
         exportRow.add(exportResolume);
         exportRow.add(exportAfterEffects);
@@ -587,6 +590,76 @@ public class VisualizationStagePanel extends JPanel {
         int answer = JOptionPane.showConfirmDialog(this,
                 "Готово.\nФайлов Resolume Screen Setup сохранено: " + count + "\n\nОткрыть папку?",
                 "Пресет Resolume сформирован", JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE);
+        if (answer == JOptionPane.YES_OPTION) {
+            try {
+                if (java.awt.Desktop.isDesktopSupported()) {
+                    java.awt.Desktop.getDesktop().open(folder);
+                }
+            } catch (Exception ignored) {
+                // не критично
+            }
+        }
+    }
+
+    /** Экспорт под After Effects — по прямому запросу пользователя ("jsx скрипт, который
+     *  еще и подставляет в качестве базовых слоев созданные маски. Пресет должен создавать
+     *  композицию по канвасу"), см. {@link AfterEffectsJsxWriter}. По одному .jsx на канвас
+     *  ТЕКУЩЕЙ сцены (тот же принцип, что {@link #exportResolumePreset()}), плюс сами
+     *  PNG-маски экранов, на которые ссылается скрипт, — те же файлы/то же содержимое, что
+     *  и «Экспорт масок» (перезаписываются свежими при каждом запуске, чтобы .jsx никогда
+     *  не сослался на устаревшую картинку). */
+    private void exportAfterEffectsPreset() {
+        Scene scene = model.getCurrentScene();
+        if (scene == null) {
+            JOptionPane.showMessageDialog(this, "Сначала выберите сцену", "Нет сцены", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        if (scene.getCanvases().isEmpty()) {
+            JOptionPane.showMessageDialog(this, "В сцене нет ни одного канваса", "Нечего экспортировать",
+                    JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        File folder = resolveFolder();
+        if (folder == null) {
+            JOptionPane.showMessageDialog(this, "Не удалось определить папку сохранения — выберите её вручную",
+                    "Нет папки", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        folder.mkdirs();
+        String sceneNameSanitized = OutputPaths.sanitize(scene.getName());
+        int scriptCount = 0;
+        int maskCount = 0;
+        try {
+            for (ContentCanvas c : scene.getCanvases()) {
+                for (CanvasPlacement pl : c.getPlacements()) {
+                    Screen scr = screenById(pl.getScreenId());
+                    if (scr == null) {
+                        continue;
+                    }
+                    CabinetType type = model.typeOf(scr);
+                    BufferedImage img = PixelGridRenderer.renderMask(scr, type, model.getWorkspace(),
+                            PixelGridRenderer.GridRenderOptions.defaultForScreen(scr));
+                    String fname = AfterEffectsJsxWriter.maskFilename(sceneNameSanitized, scr, img.getWidth(),
+                            img.getHeight());
+                    javax.imageio.ImageIO.write(img, "png", new File(folder, fname));
+                    maskCount++;
+                }
+                String jsx = AfterEffectsJsxWriter.buildJsx(c, scene, model, sceneNameSanitized);
+                String jsxName = "AE_" + sceneNameSanitized + "_" + OutputPaths.sanitize(c.getName()) + ".jsx";
+                java.nio.file.Files.writeString(new File(folder, jsxName).toPath(), jsx,
+                        java.nio.charset.StandardCharsets.UTF_8);
+                scriptCount++;
+            }
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(this, "Ошибка формирования пресета: " + ex.getMessage(), "Ошибка",
+                    JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        int answer = JOptionPane.showConfirmDialog(this,
+                "Готово.\nСкриптов .jsx сохранено: " + scriptCount + "\nМасок сохранено: " + maskCount
+                        + "\n\nЗапустите .jsx через File → Scripts → Run Script File в After Effects.\n\n"
+                        + "Открыть папку?",
+                "Пресет After Effects сформирован", JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE);
         if (answer == JOptionPane.YES_OPTION) {
             try {
                 if (java.awt.Desktop.isDesktopSupported()) {
