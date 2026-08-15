@@ -283,7 +283,8 @@ public class OutputStagePanel extends JPanel {
                     BufferedImage maskImg = PixelGridRenderer.renderMask(scr, type, model.getWorkspace(),
                             PixelGridRenderer.GridRenderOptions.defaultForScreen(scr));
                     PixelGridRenderer.writePng(maskImg,
-                            new File(masksFolder, OutputPaths.sanitize(scr.getName()) + "_Маска.png"));
+                            new File(masksFolder, OutputPaths.sanitize(scr.getName()) + "_Маска_"
+                                    + maskImg.getWidth() + "x" + maskImg.getHeight() + ".png"));
                     maskCount++;
                 }
 
@@ -333,7 +334,8 @@ public class OutputStagePanel extends JPanel {
                 for (ContentCanvas c : scene.getCanvases()) {
                     BufferedImage img = PixelGridRenderer.renderCanvasMask(c, model, settings);
                     PixelGridRenderer.writePng(img,
-                            new File(masksFolder, "Канвас_" + OutputPaths.sanitize(c.getName()) + ".png"));
+                            new File(masksFolder, "Канвас_" + OutputPaths.sanitize(c.getName()) + "_"
+                                    + img.getWidth() + "x" + img.getHeight() + ".png"));
                     maskCount++;
                 }
 
@@ -448,9 +450,14 @@ public class OutputStagePanel extends JPanel {
         }
         com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(equipmentSheet, 4);
 
-        addProjectorSheet(wb, project);
         addWiringSheets(wb, project);
         addStructureSheet(wb, project);
+        addOverallEquipmentSheet(wb, project, cabinets, equipmentNodes);
+        // Лист "Общий список" физически создаётся последним (нужны уже посчитанные
+        // выше карты/агрегаты остальных листов), но по прямому запросу пользователя
+        // должен идти визуально СРАЗУ ПОСЛЕ "Инфо" — переставляем позицию листа в
+        // книге отдельно от порядка его заполнения (POI: индекс 0 = "Инфо").
+        wb.setSheetOrder("Общий список", 1);
         return wb;
     }
 
@@ -482,30 +489,121 @@ public class OutputStagePanel extends JPanel {
         com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(sheet, 9);
     }
 
-    /** Спецификация проекторов, добавленных в проект программно/через прежний
-     *  калькулятор (выпилен из UI, модель {@code ProjectorInstance} и её отображение
-     *  здесь оставлены — см. план по выпиливанию калькулятора) — независимо от графа
-     *  общей схемы. Освещённость = ANSI-люмены * gain / площадь экрана (м²) —
-     *  упрощённая формула без учёта угла падения/оптических потерь. */
-    private void addProjectorSheet(Workbook wb, Project project) {
-        Sheet sheet = com.vjstb.ledscheme.service.SpecXlsxWriter.addSheet(wb, "Проекторы",
-                "Сцена", "Метка", "ANSI лм", "Объектив", "Throw мин", "Throw макс", "Расстояние, м",
-                "Экран Ш, м", "Экран В, м", "Освещённость, лк");
+    /** Лист «Общий список» — по прямому запросу пользователя, ОДНА сводная таблица
+     *  абсолютно всего оборудования проекта сразу, а не по отдельным листам ниже
+     *  (Кабинеты/Оборудование/Конструктив/Коммутация — те остаются, это ДОПОЛНИТЕЛЬНЫЙ
+     *  обзорный лист, не замена). Каждая категория — те же данные, что и в
+     *  соответствующем детальном листе, просто агрегированные в одну плоскую таблицу
+     *  «Категория / Наименование / Кол-во / Ед.»:
+     *  <ul>
+     *  <li>Кабинеты — из уже посчитанной карты {@code cabinets} (см. вызывающий метод);</li>
+     *  <li>Оборудование общей схемы — из {@code equipmentNodes} (та же карта, что у листа
+     *  «Оборудование»);</li>
+     *  <li>Такелаж — лебёдки/тали (по {@code riggingHoistTypeId}), количество = сумма
+     *  {@code riggingPointsCount} экранов с этой моделью (одна лебёдка на точку подвеса);</li>
+     *  <li>Конструктив — просуммированные по ВСЕМ экранам с {@code mountType == STRUCTURE}
+     *  счётчики {@code StructureCalc.compute} (детализация по экранам — на листе
+     *  «Конструктив»);</li>
+     *  <li>Коммутация — по типу провода суммарное количество линий (детальная разбивка на
+     *  куски определённой длины — на листе «Коммутация — сводная»/«Коммутация —
+     *  сплайсовка»).</li>
+     *  </ul>
+     */
+    private void addOverallEquipmentSheet(Workbook wb, Project project,
+            java.util.Map<CabinetType, Integer> cabinets, java.util.Map<List<String>, Integer> equipmentNodes) {
+        Sheet sheet = com.vjstb.ledscheme.service.SpecXlsxWriter.addSheet(wb, "Общий список",
+                "Категория", "Наименование", "Кол-во", "Ед.");
+
+        for (var entry : cabinets.entrySet()) {
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Кабинеты", entry.getKey().getName(),
+                    entry.getValue(), "шт");
+        }
+        for (var entry : equipmentNodes.entrySet()) {
+            List<String> key = entry.getKey();
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Оборудование",
+                    key.get(1) + ": " + key.get(2) + " (" + key.get(0) + ")", entry.getValue(), "шт");
+        }
+
+        java.util.LinkedHashMap<String, Integer> hoists = new java.util.LinkedHashMap<>();
         for (Scene scene : project.getScenes()) {
-            for (com.vjstb.ledscheme.model.ProjectorInstance p : scene.getProjectors()) {
-                double areaM2 = p.getImageWidthM() * p.getImageHeightM();
-                double lux = areaM2 > 0 ? p.getAnsiLumens() * p.getScreenGain() / areaM2 : 0;
-                com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, scene.getName(), p.getLabel(),
-                        p.getAnsiLumens(), p.getLensName(), p.getLensMinThrowRatio(), p.getLensMaxThrowRatio(),
-                        p.getThrowDistanceM(), p.getImageWidthM(), p.getImageHeightM(), lux);
+            for (Screen scr : scene.getScreens()) {
+                if (scr.getMountType() != com.vjstb.ledscheme.model.ScreenMountType.RIGGED
+                        || scr.getRiggingHoistTypeId() == null) {
+                    continue;
+                }
+                com.vjstb.ledscheme.model.HoistType hoist =
+                        model.getWorkspace().hoistTypeById(scr.getRiggingHoistTypeId());
+                if (hoist != null) {
+                    hoists.merge(hoist.getName(), scr.getRiggingPointsCount(), Integer::sum);
+                }
             }
         }
-        com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(sheet, 10);
+        for (var entry : hoists.entrySet()) {
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Такелаж", entry.getKey(), entry.getValue(),
+                    "шт");
+        }
+
+        int structureVertical = 0;
+        int structurePeremychka = 0;
+        int structureBase = 0;
+        int structureCups = 0;
+        int structureBolts = 0;
+        int structureBallastContainers = 0;
+        double structureBallastKg = 0;
+        for (Scene scene : project.getScenes()) {
+            for (Screen scr : scene.getScreens()) {
+                if (scr.getMountType() != com.vjstb.ledscheme.model.ScreenMountType.STRUCTURE) {
+                    continue;
+                }
+                com.vjstb.ledscheme.service.StructureCalc.Result r = com.vjstb.ledscheme.service.StructureCalc
+                        .compute(scr, model.typeOf(scr), model.getWorkspace());
+                structureVertical += r.verticalFrameCount();
+                structurePeremychka += r.peremychkaCount();
+                structureBase += r.baseFrameCount();
+                structureCups += r.cupCount();
+                structureBolts += r.boltCount();
+                structureBallastContainers += r.ballastContainerCount();
+                structureBallastKg += r.requiredBallastKg();
+            }
+        }
+        if (structureVertical + structurePeremychka + structureBase + structureCups + structureBolts
+                + structureBallastContainers > 0) {
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Конструктив", "Вертикальные рамы",
+                    structureVertical, "шт");
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Конструктив", "Перемычки", structurePeremychka,
+                    "шт");
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Конструктив", "Секции базовых рам",
+                    structureBase, "шт");
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Конструктив", "Стаканы", structureCups, "шт");
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Конструктив", "Болты", structureBolts, "шт");
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Конструктив", "Контейнеры балласта",
+                    structureBallastContainers, "шт (" + UiKit.fmt(structureBallastKg) + " кг балласта)");
+        }
+
+        java.util.LinkedHashMap<String, double[]> wires = new java.util.LinkedHashMap<>();
+        for (Scene scene : project.getScenes()) {
+            for (com.vjstb.ledscheme.model.SchemaEdge edge : scene.getSchemaEdges()) {
+                if (!edge.hasStructuredWire()) {
+                    continue;
+                }
+                String modeLabel = edge.getMode() == com.vjstb.ledscheme.model.SchemaMode.POWER ? "Питание"
+                        : "Сигнал";
+                double[] agg = wires.computeIfAbsent(modeLabel + ": " + edge.getWireType(), k -> new double[2]);
+                agg[0] += edge.getWireCount();
+                agg[1] += (edge.getLengthM() != null ? edge.getLengthM() : 0) * edge.getWireCount();
+            }
+        }
+        for (var entry : wires.entrySet()) {
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Коммутация", entry.getKey(),
+                    entry.getValue()[0], "шт линий (~" + UiKit.fmt(entry.getValue()[1]) + " м суммарно)");
+        }
+
+        com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(sheet, 4);
     }
 
     /** Спецификация коммутации: провода/линии, подписанные структурированно (N×тип)
      *  на стрелках общих схем питания/сигнала всех сцен проекта. Два листа: «Коммутация —
-     *  закупка» (минимально необходимый комплект кусков кабеля каждой длины, см.
+     *  сводная» (минимально необходимый комплект кусков кабеля каждой длины, см.
      *  {@link #addWireTypeRows}) и «Коммутация — сплайсовка» (какие именно линии не
      *  покрылись одним куском и из чего собран их комплект — для наглядности). */
     private void addWiringSheets(Workbook wb, Project project) {
@@ -528,7 +626,7 @@ public class OutputStagePanel extends JPanel {
             }
         }
 
-        Sheet purchase = com.vjstb.ledscheme.service.SpecXlsxWriter.addSheet(wb, "Коммутация — закупка",
+        Sheet purchase = com.vjstb.ledscheme.service.SpecXlsxWriter.addSheet(wb, "Коммутация — сводная",
                 "Схема", "Тип провода", "Длина куска, м", "Кол-во, шт", "Примечание");
         Sheet splices = com.vjstb.ledscheme.service.SpecXlsxWriter.addSheet(wb, "Коммутация — сплайсовка",
                 "Схема", "Тип провода", "Требуемая длина линии, м", "Линий, шт", "Состав комплекта");
