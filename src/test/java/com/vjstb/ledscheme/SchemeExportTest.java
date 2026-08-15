@@ -54,9 +54,12 @@ class SchemeExportTest {
         BufferedImage img = SchemeRenderer.renderImage(scr, type, true, BASE);
 
         assertNotNull(img);
-        // ширина = колонки*ячейка + отступы(24*2); высота = строки*ячейка + отступы + заголовок(52)
+        // ширина = колонки*ячейка + отступы(24*2); высота = строки*ячейка + отступы + заголовок
+        // (104px — фиксированный, вдвое больше исходных 52, см. SchemeRenderer.renderImage
+        // про отказ от прежнего "headerH = 20% полной высоты" — на большой сетке текст
+        // разрастался за пределы картинки).
         assertEquals(2 * BASE + 48, img.getWidth());
-        assertEquals(3 * BASE + 48 + 52, img.getHeight());
+        assertEquals(3 * BASE + 48 + 104, img.getHeight());
     }
 
     @Test
@@ -70,7 +73,7 @@ class SchemeExportTest {
         for (boolean power : new boolean[]{true, false}) {
             BufferedImage img = SchemeRenderer.renderImage(scr, type, power, BASE);
             File file = new File(outDir, "Экран A_" + (power ? "Питание" : "Сигнал") + ".jpg");
-            SchemeRenderer.writeJpeg(img, file);
+            SchemeRenderer.writeJpeg(img, file, 72);
 
             assertTrue(file.exists(), "Файл не создан: " + file);
             assertTrue(file.length() > 0, "Файл пустой: " + file);
@@ -84,5 +87,48 @@ class SchemeExportTest {
         File[] files = outDir.listFiles((d, n) -> n.endsWith(".jpg"));
         assertNotNull(files);
         assertEquals(2, files.length);
+    }
+
+    @Test
+    void writeJpeg_embedsRequestedDpiInJfifMetadata(@TempDir Path dir) throws Exception {
+        Screen scr = buildScreen(dir, 1, 1);
+        CabinetType type = sampleType();
+        BufferedImage img = SchemeRenderer.renderImage(scr, type, true, BASE);
+        File file = new File(dir.toFile(), "dpi300.jpg");
+
+        SchemeRenderer.writeJpeg(img, file, 300);
+
+        assertEquals(300, readJfifDpi(file));
+    }
+
+    @Test
+    void renderImage_dpiScale_multipliesPixelDimensions(@TempDir Path dir) throws Exception {
+        Screen scr = buildScreen(dir, 2, 2);
+        CabinetType type = sampleType();
+        BufferedImage base = SchemeRenderer.renderImage(scr, type, true, BASE, null, List.of(), List.of(), false, 1.0);
+        // 300/72 — как в OutputStagePanel.generate().
+        double scale = 300 / 72.0;
+        BufferedImage scaled = SchemeRenderer.renderImage(scr, type, true, BASE, null, List.of(), List.of(), false, scale);
+
+        assertEquals(Math.round(base.getWidth() * scale), scaled.getWidth());
+        assertEquals(Math.round(base.getHeight() * scale), scaled.getHeight());
+    }
+
+    /** Читает Xdensity из app0JFIF-узла записанного JPEG — если resUnits не 1
+     *  (dots per inch), считаем DPI неопределённым (0), т.к. остальные варианты
+     *  (0 — просто соотношение сторон, 2 — dots per cm) этот код не пишет. */
+    private static int readJfifDpi(File file) throws Exception {
+        try (var iis = ImageIO.createImageInputStream(file)) {
+            var readers = ImageIO.getImageReaders(iis);
+            var reader = readers.next();
+            reader.setInput(iis);
+            var metadata = reader.getImageMetadata(0);
+            var root = (org.w3c.dom.Element) metadata.getAsTree(metadata.getNativeMetadataFormatName());
+            var jfifNodes = root.getElementsByTagName("app0JFIF");
+            assertTrue(jfifNodes.getLength() > 0, "app0JFIF узел не найден в записанном файле");
+            var jfif = (org.w3c.dom.Element) jfifNodes.item(0);
+            assertEquals("1", jfif.getAttribute("resUnits"), "resUnits должен быть 1 (dots per inch)");
+            return Integer.parseInt(jfif.getAttribute("Xdensity"));
+        }
     }
 }

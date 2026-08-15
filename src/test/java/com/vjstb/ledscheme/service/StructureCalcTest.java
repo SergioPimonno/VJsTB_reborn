@@ -7,10 +7,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
+import com.vjstb.ledscheme.model.StructureBaseFrameCell;
 import com.vjstb.ledscheme.model.StructureFrameType;
+import com.vjstb.ledscheme.model.StructurePeremychkaCell;
 import com.vjstb.ledscheme.store.WorkspaceStore;
 import java.io.File;
 import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -44,19 +47,24 @@ class StructureCalcTest {
         // compute() читает РЕАЛЬНЫЕ ячейки (Phase 2), не просто числа выше -- обычно их
         // заполняет AppModel.updateScreenStructure, здесь эмулируем то же самое напрямую.
         // 3 башни, 3 сегмента на башню (В КАЖДОМ из 2 рядов), 3 уровня перемычек, ядро без
-        // выноса (extendedBaseSections=0 -> 1 секция базы на башню). Round 5: перемычка
-        // соединяет СОСЕДНИЕ башни в пределах ряда -- 3 башни = 2 зазора x 2 ряда x 3 уровня.
-        ScreenLogic.regenerateStructureCells(screen, t, 3, 3, 3, 3, 0);
+        // выноса (extendedBaseSections=0 -> 1 секция базы на зазор). Round 14 (откат Round
+        // 13): перемычка/база между соседними башнями снова сеются автоматически -- 3 башни =
+        // 2 зазора x 2 ряда x 3 уровня перемычек, 2 зазора x 1 секция (ядро) базы.
+        ScreenLogic.regenerateStructureCells(screen, t, 3, 3, 3, 3, 0, 1);
 
         StructureCalc.Result result = StructureCalc.compute(screen, t, model.getWorkspace());
 
         assertEquals(18, result.verticalFrameCount(), "3 башни x 2 ряда x 3 сегмента");
         assertEquals(12, result.peremychkaCount(), "2 зазора x 2 ряда x 3 уровня");
-        assertEquals(3, result.baseFrameCount(), "3 башни x 1 секция (ядро)");
-        // Стыков: вертикальных (3-1)*2ряда*3башни=12, перемычек 12, базовых 3 -> 27 * 2 = 54.
-        assertEquals(54, result.cupCount());
-        // Всего рам 18+12+3=33, болты = ceil(33*1.5) = 50 (49.5 округляется вверх).
-        assertEquals(50, result.boltCount());
+        // Round 7: базовые секции тоже строятся между СОСЕДНИМИ башнями (тот же зазор, что и
+        // перемычки), а не по одной на башню -- 2 зазора x 1 секция (ядро) = 2.
+        assertEquals(2, result.baseFrameCount(), "2 зазора x 1 секция (ядро)");
+        // Стыков: ТОЛЬКО вертикальные (рама стоит физически сверху другой рамы того же типа)
+        // -- (3-1)*2ряда*3башни=12 -> 12*2=24. Round 10: перемычка (Round 8) и база больше не
+        // считаются -- ни одна не стоит "сверху" другой рамы (см. StructureCalc.compute javadoc).
+        assertEquals(24, result.cupCount());
+        // Всего рам 18+12+2=32, болты = ceil(32*1.5) = 48.
+        assertEquals(48, result.boltCount());
     }
 
     @Test
@@ -68,17 +76,16 @@ class StructureCalcTest {
         model.selectScene(scene);
         Screen screen = model.addScreen("E", t.getId(), 2, 6, 0, 0);
         // 1 башня, 3 сегмента (в ОБОИХ рядах — передний/задний ряд генерируются всегда),
-        // без перемычек -- изолируем именно подсчёт вертикальных стыков по рядам. Опорная рама
-        // (Round 4: теперь всегда строится, см. StructureCalc#compute) добавляет ровно 1
-        // базовую секцию (тower 0, section 0) независимо от вертикальных сегментов -- считаем
-        // её вклад в стыки/болты явно ниже, а не пытаемся исключить.
-        ScreenLogic.regenerateStructureCells(screen, t, 1, 3, 3, 0, 0);
+        // без перемычек -- изолируем именно подсчёт вертикальных стыков по рядам. Round 7:
+        // базовые секции теперь строятся между СОСЕДНИМИ башнями (как перемычки) -- при
+        // towerCount=1 зазоров нет, значит база = 0 (не пытаемся её здесь считать).
+        ScreenLogic.regenerateStructureCells(screen, t, 1, 3, 3, 0, 0, 1);
 
         StructureCalc.Result full = StructureCalc.compute(screen, t, model.getWorkspace());
         assertEquals(6, full.verticalFrameCount(), "1 башня x 2 ряда x 3 сегмента");
-        assertEquals(1, full.baseFrameCount(), "1 башня x 1 секция (ядро, всегда строится)");
-        // Стыков: 2 на ряд (0-1, 1-2) x 2 ряда = 4 вертикальных + 1 базовый -> 5*2 = 10 стаканов.
-        assertEquals(10, full.cupCount());
+        assertEquals(0, full.baseFrameCount(), "1 башня -- нет зазора, база не строится");
+        // Стыков: 2 на ряд (0-1, 1-2) x 2 ряда = 4 вертикальных, базовых нет -> 4*2 = 8 стаканов.
+        assertEquals(8, full.cupCount());
 
         // Убираем СРЕДНИЙ сегмент ПЕРЕДНЕГО ряда (row=0, segment=1) -- баг-репорт "не
         // поддерживает вырезание из середины башни": оба стыка ПЕРЕДНЕГО ряда должны
@@ -86,10 +93,10 @@ class StructureCalcTest {
         screen.getStructureFrameCells().removeIf(c -> c.matches(0, 0, 1));
         StructureCalc.Result gapped = StructureCalc.compute(screen, t, model.getWorkspace());
         assertEquals(5, gapped.verticalFrameCount(), "5 из 6 сегментов остались");
-        // Передний ряд потерял оба стыка (0), задний ряд не пострадал (2 стыка) + 1 базовый -> 3*2=6.
-        assertEquals(6, gapped.cupCount(), "стыки переднего ряда разорваны, заднего и базы -- нет");
-        // Всего рам 5(вертикальных)+0(перемычек)+1(база)=6, болты = ceil(6*1.5) = 9.
-        assertEquals(9, gapped.boltCount());
+        // Передний ряд потерял оба стыка (0), задний ряд не пострадал (2 стыка), базы нет -> 2*2=4.
+        assertEquals(4, gapped.cupCount(), "стыки переднего ряда разорваны, заднего -- нет, базы нет");
+        // Всего рам 5(вертикальных)+0(перемычек)+0(база)=5, болты = ceil(5*1.5) = 8 (7.5 округляется вверх).
+        assertEquals(8, gapped.boltCount());
     }
 
     @Test
@@ -188,8 +195,9 @@ class StructureCalcTest {
         frame.setKind(StructureFrameType.Kind.FRAME);
         frame.setHeightMm(950.0);
 
-        // ceil(3000/950) = 4 сегмента.
-        assertEquals(4, StructureCalc.suggestVerticalFramesPerTower(screen, frame));
+        // floor(3000/950) = 3 сегмента -- собранная высота (2850мм) не должна ПРЕВЫШАТЬ
+        // запрошенную (баг-репорт: "при высоте 2м строится башня 3м", было Math.ceil).
+        assertEquals(3, StructureCalc.suggestVerticalFramesPerTower(screen, frame));
         assertEquals(0, StructureCalc.suggestVerticalFramesPerTower(screen, null),
                 "без типа рамы в библиотеке -- нечего предложить, не гадать");
     }
@@ -231,7 +239,7 @@ class StructureCalcTest {
         Screen screen = model.addScreen("E", t.getId(), 2, 4, 0, 0);
         // 2 башни, 1 сегмент рамы на башню (в каждом ряду), без перемычек, 1 доп. секция
         // выноса -- по 1 усилительной раме (row=2) на башню в секции 1 (Phase 2.2).
-        ScreenLogic.regenerateStructureCells(screen, t, 2, 1, 1, 0, 1);
+        ScreenLogic.regenerateStructureCells(screen, t, 2, 1, 1, 0, 1, 1);
 
         long reinforcementCount = screen.getStructureFrameCells().stream().filter(c -> c.getRow() == 2).count();
         assertEquals(2, reinforcementCount, "по 1 усилительной раме на башню в единственной секции выноса");
@@ -239,11 +247,60 @@ class StructureCalcTest {
         StructureCalc.Result result = StructureCalc.compute(screen, t, model.getWorkspace());
         // Вертикальных: 2 башни x 2 ряда x 1 сегмент = 4, + 2 усилительные = 6.
         assertEquals(6, result.verticalFrameCount());
-        // Базовых секций: 2 башни x 2 секции (ядро+вынос) = 4.
-        assertEquals(4, result.baseFrameCount());
-        // Стыков: вертикальных 0 (1 сегмент на ряд -- нет смежных пар), базовых 4,
-        // усилительных 2 (каждая стыкуется с базовой секцией под ней) -> 6 * 2 = 12.
-        assertEquals(12, result.cupCount());
+        assertEquals(2, result.baseFrameCount(), "1 зазор x 2 секции (ядро+вынос)");
+        // Стыков: 0 -- вертикальных нет (1 сегмент на ряд, нет смежных пар), а база и
+        // усилительные рамы (Round 10) больше не считаются: ни одна не стоит физически
+        // СВЕРХУ другой рамы того же типа, только вертикальный стек даёт стыки.
+        assertEquals(0, result.cupCount());
+    }
+
+    @Test
+    void coreBaseSectionCountCoversFullFrameDepthInWholeCatalogModules() {
+        // Round 10 (баг-репорт: "эта пластина должна не рендериться как 2 рамы, а являться 2
+        // отдельными рамами. Башни могут быть глубиной 0.5, в таком случае текущее основание не
+        // будет подходить по габаритам") -- ядро покрывает 2*frameW (оба ряда, без зазора), НЕ
+        // одной плитой произвольного размера, а целым числом модулей sectionDepthMm.
+        assertEquals(2, StructureCalc.coreBaseSectionCount(500, 500), "2*500 / 500 = 2 ровно");
+        assertEquals(1, StructureCalc.coreBaseSectionCount(250, 500), "2*250 / 500 = 1 ровно");
+        // Не делится нацело -- округляем ВВЕРХ (модуль либо есть целиком, либо не считается):
+        // 2*400 / 500 = 1.6 -> нужно 2 модуля, чтобы полностью покрыть глубину.
+        assertEquals(2, StructureCalc.coreBaseSectionCount(400, 500), "2*400 / 500 = 1.6 -> округление вверх до 2");
+        assertEquals(1, StructureCalc.coreBaseSectionCount(500, 0), "sectionDepthMm<=0 -- защитный фолбэк, не 0");
+    }
+
+    @Test
+    void coreBaseSectionsAreIndependentlyToggleableAndExtensionStartsAfterThem(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType t = model.addCabinetType(type(500, 500));
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("E", t.getId(), 2, 6, 0, 0);
+        // 2 башни (1 зазор), ядро из 2 модулей (coreBaseSectionCount=2, как при дефолтных
+        // 500х500 габаритах), плюс 1 доп. секция выноса под балласт -- сеется автоматически.
+        ScreenLogic.regenerateStructureCells(screen, t, 2, 1, 1, 0, 1, 2);
+
+        var baseCells = screen.getStructureBaseFrameCells();
+        assertEquals(3, baseCells.size(), "1 зазор x (2 секции ядра + 1 секция выноса) = 3");
+        assertTrue(baseCells.stream().anyMatch(c -> c.matches(0, 0)), "первая секция ядра существует");
+        assertTrue(baseCells.stream().anyMatch(c -> c.matches(0, 1)), "вторая секция ядра существует");
+        assertTrue(baseCells.stream().anyMatch(c -> c.matches(0, 2)), "секция выноса существует отдельно");
+
+        // Обе секции ядра -- РЕАЛЬНО независимые записи: спрятать одну не трогает другую (это и
+        // есть "являться 2 отдельными рамами", а не 2 куска одной плиты).
+        baseCells.stream().filter(c -> c.matches(0, 0)).findFirst().orElseThrow().setHidden(true);
+        assertTrue(baseCells.stream().anyMatch(c -> c.matches(0, 0) && c.isHidden()));
+        assertTrue(baseCells.stream().anyMatch(c -> c.matches(0, 1) && !c.isHidden()),
+                "вторая секция ядра не пострадала от скрытия первой");
+
+        // Усилительная рама (row == 2) выноса должна начинаться СРАЗУ ПОСЛЕ ядра (индекс 2 --
+        // coreBaseSectionCount), не жёстко с 1.
+        boolean reinforcementAtCoreEnd = screen.getStructureFrameCells().stream()
+                .anyMatch(c -> c.getRow() == 2 && c.matches(0, 2, 2) && !c.isHidden());
+        assertTrue(reinforcementAtCoreEnd, "усилительная рама первой (и единственной) секции выноса -- индекс 2");
+        boolean reinforcementInsideCore = screen.getStructureFrameCells().stream()
+                .anyMatch(c -> c.getRow() == 2 && (c.matches(0, 2, 0) || c.matches(0, 2, 1)));
+        assertFalse(reinforcementInsideCore, "усилительных рам внутри ядра быть не должно");
     }
 
     @Test
@@ -264,7 +321,7 @@ class StructureCalcTest {
             }
         }
         // Номинально 3 башни (0, 1000, 2000мм) при шаге 1000мм и ширине 2000мм.
-        ScreenLogic.regenerateStructureCells(screen, t, 3, 1, 1, 0, 0);
+        ScreenLogic.regenerateStructureCells(screen, t, 3, 1, 1, 0, 0, 1);
 
         var towers = screen.getStructureFrameCells().stream()
                 .map(com.vjstb.ledscheme.model.StructureFrameCell::getTowerIndex).distinct().sorted().toList();
@@ -293,7 +350,7 @@ class StructureCalcTest {
                 cab.setHidden(true);
             }
         }
-        ScreenLogic.regenerateStructureCells(screen, t, 3, 1, 1, 0, 0);
+        ScreenLogic.regenerateStructureCells(screen, t, 3, 1, 1, 0, 0, 1);
 
         var towers = screen.getStructureFrameCells().stream()
                 .map(com.vjstb.ledscheme.model.StructureFrameCell::getTowerIndex).distinct().sorted().toList();
@@ -319,7 +376,7 @@ class StructureCalcTest {
                 cab.setHidden(true);
             }
         }
-        ScreenLogic.regenerateStructureCells(screen, t, 3, 1, 1, 0, 0);
+        ScreenLogic.regenerateStructureCells(screen, t, 3, 1, 1, 0, 0, 1);
 
         var towers = screen.getStructureFrameCells().stream()
                 .map(com.vjstb.ledscheme.model.StructureFrameCell::getTowerIndex).distinct().sorted().toList();
@@ -339,7 +396,7 @@ class StructureCalcTest {
         model.selectScene(scene);
         Screen screen = model.addScreen("E", t.getId(), 2, 6, 0, 0);
         // 1 башня, передний ряд -- 5 сегментов (высокая башня), задний -- всего 2 (короткая опора).
-        ScreenLogic.regenerateStructureCells(screen, t, 1, 5, 2, 0, 0);
+        ScreenLogic.regenerateStructureCells(screen, t, 1, 5, 2, 0, 0, 1);
 
         long frontSegments = screen.getStructureFrameCells().stream().filter(c -> c.getRow() == 0).count();
         long backSegments = screen.getStructureFrameCells().stream().filter(c -> c.getRow() == 1).count();
@@ -347,7 +404,7 @@ class StructureCalcTest {
         assertEquals(2, backSegments, "задний ряд -- короткая опора (2 сегмента), независимо от переднего");
 
         // Уменьшили передний ряд до 3 -- задний остаётся 2, независимо (не связаны формулой).
-        ScreenLogic.regenerateStructureCells(screen, t, 1, 3, 2, 0, 0);
+        ScreenLogic.regenerateStructureCells(screen, t, 1, 3, 2, 0, 0, 1);
         frontSegments = screen.getStructureFrameCells().stream().filter(c -> c.getRow() == 0 && !c.isHidden()).count();
         backSegments = screen.getStructureFrameCells().stream().filter(c -> c.getRow() == 1 && !c.isHidden()).count();
         assertEquals(3, frontSegments);
@@ -383,17 +440,40 @@ class StructureCalcTest {
             }
         }
         // 3 номинальные башни (0,1000,2000мм), 1 уровень перемычек.
-        ScreenLogic.regenerateStructureCells(screen, t, 3, 1, 1, 1, 0);
+        ScreenLogic.regenerateStructureCells(screen, t, 3, 1, 1, 1, 0, 1);
 
         var peremychkaTowers = screen.getStructurePeremychkaCells().stream()
-                .map(com.vjstb.ledscheme.model.StructurePeremychkaCell::getTowerIndex).distinct().sorted().toList();
+                .map(StructurePeremychkaCell::getTowerIndex).distinct().sorted().toList();
         // Башня 2 не строится (нет кабинетов) -> зазор 0-1 (между валидными башнями 0 и 1)
         // остаётся, зазор 1-2 не создаётся (башня 2 отсутствует).
-        assertEquals(java.util.List.of(0), peremychkaTowers, "только зазор между валидными башнями 0 и 1");
+        assertEquals(List.of(0), peremychkaTowers, "только зазор между валидными башнями 0 и 1");
 
         // Каждая перемычка -- и передний, и задний ряд независимо (row=0 и row=1).
         var rows = screen.getStructurePeremychkaCells().stream()
-                .map(com.vjstb.ledscheme.model.StructurePeremychkaCell::getRow).distinct().sorted().toList();
-        assertEquals(java.util.List.of(0, 1), rows);
+                .map(StructurePeremychkaCell::getRow).distinct().sorted().toList();
+        assertEquals(List.of(0, 1), rows);
+    }
+
+    @Test
+    void baseFrameConnectsAdjacentTowersOnlyWhenBothAreValid(@TempDir Path dir) {
+        // Round 7, баг-репорт: "рамы основания должны ставиться точно так же как перемычки" --
+        // тот же зазорный принцип (и то же правило валидности), просто на уровне пола.
+        AppModel model = freshModel(dir);
+        CabinetType t = model.addCabinetType(type(500, 500));
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("E", t.getId(), 1, 6, 0, 0);
+        screen.setStructureTowerSpacingMm(1000);
+        for (var cab : screen.getCabinets()) {
+            if (cab.getColIndex() >= 3) {
+                cab.setHidden(true);
+            }
+        }
+        ScreenLogic.regenerateStructureCells(screen, t, 3, 1, 1, 0, 0, 1);
+
+        var baseTowers = screen.getStructureBaseFrameCells().stream()
+                .map(StructureBaseFrameCell::getTowerIndex).distinct().sorted().toList();
+        assertEquals(List.of(0), baseTowers, "только зазор между валидными башнями 0 и 1");
     }
 }

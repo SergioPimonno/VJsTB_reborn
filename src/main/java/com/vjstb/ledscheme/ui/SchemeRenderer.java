@@ -25,8 +25,11 @@ import java.util.List;
 import java.util.Map;
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
+import javax.imageio.ImageTypeSpecifier;
 import javax.imageio.ImageWriteParam;
 import javax.imageio.ImageWriter;
+import javax.imageio.metadata.IIOMetadata;
+import javax.imageio.metadata.IIOMetadataNode;
 import javax.imageio.stream.ImageOutputStream;
 
 /**
@@ -118,7 +121,8 @@ public final class SchemeRenderer {
         // только если в ячейке реально есть место, иначе текст соседних кабинетов
         // наезжает друг на друга и на линии цепочек, превращаясь в нечитаемое пятно.
         boolean showLabels = cellH >= 16 && cellW >= 16;
-        Font labelFont = showLabels ? g2.getFont().deriveFont(Font.PLAIN, Math.max(9f, cellH * 0.14f)) : null;
+        // Round (баг-репорт: "подписи покрупнее раза в 2") -- было max(9, cellH*0.14).
+        Font labelFont = showLabels ? g2.getFont().deriveFont(Font.PLAIN, Math.max(18f, cellH * 0.28f)) : null;
         for (CabinetInstance cab : scr.getCabinets()) {
             // Деактивированная (скрытая) ячейка — по определению "не считается, не
             // рисуется, не участвует в цепочках" (см. CabinetInstance.isHidden) —
@@ -453,6 +457,24 @@ public final class SchemeRenderer {
         return s + "…";
     }
 
+    /** Размер шрифта для строки, которая должна поместиться по ширине {@code maxWidth} —
+     *  {@code standardSize} (стандартный, ожидаемый размер в большинстве случаев), уменьшенный
+     *  пропорционально, если ИМЕННО этот текст (длинное имя экрана, много цепочек в подписи)
+     *  в него не влезает, но не ниже {@code minSize} (используется дальше как обычный шрифт —
+     *  если не влезает и он, {@link #clipToWidth} по месту вызова не задействован здесь
+     *  намеренно: заголовок схемы — не мелкая ячейка сетки, обрезание с "…" в нём выглядело бы
+     *  хуже, чем чуть более мелкий, но полностью читаемый текст). Не меняет текущий шрифт/цвет
+     *  {@code g2} — только измеряет, вызывающая сторона сама выставляет финальный шрифт. */
+    private static float fitFontToWidth(Graphics2D g2, String text, int style, float standardSize, float minSize,
+            int maxWidth) {
+        java.awt.FontMetrics fm = g2.getFontMetrics(g2.getFont().deriveFont(style, standardSize));
+        int textW = fm.stringWidth(text);
+        if (textW <= maxWidth || maxWidth <= 0) {
+            return standardSize;
+        }
+        return Math.max(minSize, standardSize * maxWidth / (float) textW);
+    }
+
     /** Как {@link #drawChain}, но дополнительно рисует небольшой кружок-разъём в
      *  центре каждого кабинета цепочки (не только стрелку между соседними) — как в
      *  профессиональных схемах расключения, где виден сам физический разъём/точка
@@ -674,7 +696,14 @@ public final class SchemeRenderer {
         g2.setStroke(new BasicStroke(1f));
     }
 
-    /** Кружок с меткой в углу ячейки кабинета — конец цепочки. */
+    /** Кружок с меткой порта/фазы на кабинете — начало/конец цепочки. Round (баг-репорт:
+     *  "обозначение портов и фаз предлагаю сделать как на блок-схемах — кружок на
+     *  практически весь блок") — раньше это была тонкая пилюля до 20px в углу ячейки,
+     *  почти незаметная на крупной сетке; теперь полноценный круг, центрированный в самой
+     *  ячейке кабинета и занимающий большую часть её меньшей стороны (как круглые
+     *  бейджи портов на общей блок-схеме площадки). Текст обрезается по ширине круга
+     *  (см. {@link #clipToWidth}) — при длинных подписях (например "C12·P8") на мелкой
+     *  сетке лучше усечь, чем вылезти за пределы кружка. */
     static void drawChainEndpointLabel(Graphics2D g2, Screen scr, String cabId, Color color, CabinetType type,
                                                 int cellW, int cellH, int offX, int offY, String label) {
         CabinetInstance cab = scr.cabinetById(cabId);
@@ -683,20 +712,20 @@ public final class SchemeRenderer {
         }
         int x = cabX(cab, type, cellW, offX);
         int y = cabY(cab, type, cellH, offY);
-        int d = Math.max(14, Math.min(Math.min(cellW, cellH) / 2, 20));
-        int cx = x + cellW - d / 2 - 2;
-        int cy = y + d / 2 + 2;
-        Font f = g2.getFont().deriveFont(Font.BOLD, Math.max(7f, d * 0.4f));
+        int d = Math.max(16, (int) Math.round(Math.min(cellW, cellH) * 0.5));
+        int cx = x + cellW / 2;
+        int cy = y + cellH / 2;
+        Font f = g2.getFont().deriveFont(Font.BOLD, Math.max(9f, d * 0.24f));
         g2.setFont(f);
         java.awt.FontMetrics fm = g2.getFontMetrics();
-        int textW = fm.stringWidth(label);
-        int w = Math.max(d, textW + 6);
+        String clipped = clipToWidth(g2, label, (int) Math.round(d * 0.8));
+        int textW = fm.stringWidth(clipped);
         g2.setColor(color);
-        g2.fillRoundRect(cx - w / 2, cy - d / 2, w, d, d, d);
+        g2.fillOval(cx - d / 2, cy - d / 2, d, d);
         g2.setColor(Color.BLACK);
-        g2.setStroke(new BasicStroke(1f));
-        g2.drawRoundRect(cx - w / 2, cy - d / 2, w, d, d, d);
-        g2.drawString(label, cx - textW / 2, cy + fm.getAscent() / 2 - 1);
+        g2.setStroke(new BasicStroke(Math.max(1f, d * 0.03f)));
+        g2.drawOval(cx - d / 2, cy - d / 2, d, d);
+        g2.drawString(clipped, cx - textW / 2, cy + fm.getAscent() / 2 - 1);
     }
 
     /** Метка формы кабинета (треугольная/угловая/круглая) в углу ячейки — сама сетка
@@ -854,35 +883,62 @@ public final class SchemeRenderer {
     public static BufferedImage renderImage(Screen scr, CabinetType type, boolean power, int base,
                                              Workspace workspace, List<PowerChain> powerChains,
                                              List<SignalChain> signalChains, boolean powerUnitKw) {
+        return renderImage(scr, type, power, base, workspace, powerChains, signalChains, powerUnitKw, 1.0);
+    }
+
+    /** {@code dpiScale} — множитель качества экспорта (см. {@code UserProfile#getDocExportDpi},
+     *  1.0 = 72dpi = прежнее поведение) — весь рисунок (сетка, текст, линии) равномерно
+     *  увеличивается через {@link Graphics2D#scale}, а не пересчётом внутренней геометрии,
+     *  поэтому пропорции остаются ТЕМИ ЖЕ, что при 1.0, просто с бОльшим числом пикселей на
+     *  тот же физический размер при печати (см. {@link #writeJpeg(BufferedImage, File, int)}
+     *  — соответствующее DPI пишется в метаданные файла, иначе увеличенная картинка при
+     *  печати просто вышла бы физически крупнее, а не резче). */
+    public static BufferedImage renderImage(Screen scr, CabinetType type, boolean power, int base,
+                                             Workspace workspace, List<PowerChain> powerChains,
+                                             List<SignalChain> signalChains, boolean powerUnitKw, double dpiScale) {
         Dimension c = cellSize(type, base);
         int pad = 24;
-        int headerH = 52;
         int gridW = scr.getCols() * c.width;
         int gridH = scr.getRows() * c.height;
+        // Round (баг-репорт "перебор" — headerH=20% полной высоты на большой сетке разрослась
+        // в аршинный шрифт, который вылезал за пределы картинки) -- вернулись к ФИКСИРОВАННОМУ
+        // headerH, как до предыдущего раунда, просто вдвое больше (52 -> 104), не зависящему
+        // от gridH. "Вариативность" — не в headerH, а в самом шрифте заголовка/подзаголовка
+        // (см. ниже): стандартный размер — тоже ровно вдвое больше прежнего (16->32, 12->24),
+        // но ужимается, если конкретное имя экрана в него не помещается по ширине.
+        int headerH = 104;
         int w = gridW + pad * 2;
         int h = gridH + pad * 2 + headerH;
 
-        BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+        BufferedImage img = new BufferedImage(Math.max(1, (int) Math.round(w * dpiScale)),
+                Math.max(1, (int) Math.round(h * dpiScale)), BufferedImage.TYPE_INT_RGB);
         Graphics2D g2 = img.createGraphics();
+        g2.scale(dpiScale, dpiScale);
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
 
         g2.setColor(Palette.BG);
         g2.fillRect(0, 0, w, h);
 
-        // заголовок
+        // заголовок -- стандартный размер вдвое больше исходного (16/12 -> 32/24pt), но
+        // ужимается (см. fitFontToWidth), если конкретный текст (длинное имя экрана/много
+        // цепочек в подзаголовке) не помещается по ширине картинки — не обрезаем и не вылезаем
+        // за кадр, а плавно уменьшаем шрифт под конкретный случай.
         ScreenStats stats = ScreenLogic.stats(scr, type, workspace);
-        g2.setColor(Palette.TEXT);
-        g2.setFont(g2.getFont().deriveFont(Font.BOLD, 16f));
+        int availW = w - pad * 2;
         String title = "Экран «" + scr.getName() + "» — " + (power ? "Питание" : "Сигнал");
-        g2.drawString(title, pad, 24);
-        g2.setColor(Palette.MUTED);
-        g2.setFont(g2.getFont().deriveFont(Font.PLAIN, 12f));
+        float titleSize = fitFontToWidth(g2, title, Font.BOLD, 32f, 16f, availW);
+        g2.setColor(Palette.TEXT);
+        g2.setFont(g2.getFont().deriveFont(Font.BOLD, titleSize));
+        g2.drawString(title, pad, 48);
         String sub = scr.getCols() + "×" + scr.getRows() + " каб. · "
                 + stats.resolutionWidthPx() + "×" + stats.resolutionHeightPx() + " px · "
                 + trim(stats.physicalWidthMm()) + "×" + trim(stats.physicalHeightMm()) + " мм · "
                 + UiKit.fmtPower(stats.totalPowerW(), powerUnitKw) + " · " + trim(stats.totalWeightKg()) + " кг";
-        g2.drawString(sub, pad, 42);
+        float subSize = fitFontToWidth(g2, sub, Font.PLAIN, 24f, 11f, availW);
+        g2.setColor(Palette.MUTED);
+        g2.setFont(g2.getFont().deriveFont(Font.PLAIN, subSize));
+        g2.drawString(sub, pad, 84);
 
         paintScheme(g2, scr, type, power, c.width, c.height, pad, pad + headerH, workspace,
                 powerChains, signalChains, powerUnitKw);
@@ -890,17 +946,72 @@ public final class SchemeRenderer {
         return img;
     }
 
-    /** Сохраняет изображение в JPEG с высоким качеством. */
-    public static void writeJpeg(BufferedImage img, File file) throws IOException {
+    /** Сохраняет изображение в JPEG с высоким качеством и {@code dpi} в метаданных
+     *  JFIF (иначе большинство просмотрщиков/принтеров считают файл 72dpi по
+     *  умолчанию — см. {@link #renderImage(Screen, CabinetType, boolean, int, Workspace,
+     *  List, List, boolean, double)} про парный параметр {@code dpiScale}: этот метод
+     *  только подписывает уже отрисованные пиксели, размер картинки увеличивает ТОТ). */
+    public static void writeJpeg(BufferedImage img, File file, int dpi) throws IOException {
         ImageWriter writer = ImageIO.getImageWritersByFormatName("jpg").next();
         try (ImageOutputStream ios = ImageIO.createImageOutputStream(file)) {
             ImageWriteParam param = writer.getDefaultWriteParam();
             param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
             param.setCompressionQuality(0.92f);
             writer.setOutput(ios);
-            writer.write(null, new IIOImage(img, null, null), param);
+            ImageTypeSpecifier typeSpecifier = ImageTypeSpecifier.createFromBufferedImageType(img.getType());
+            IIOMetadata metadata = writer.getDefaultImageMetadata(typeSpecifier, param);
+            setJfifDpi(metadata, dpi);
+            writer.write(null, new IIOImage(img, null, metadata), param);
         } finally {
             writer.dispose();
+        }
+    }
+
+    /** Известный рецепт для javax.imageio (нет прямого API "setDpi") — JFIF-узел
+     *  {@code app0JFIF} с {@code resUnits=1} (dots per inch) и Xdensity/Ydensity =
+     *  DPI; {@code getDefaultImageMetadata} для JPEG отдаёт ПУСТОЕ дерево (без уже
+     *  существующего app0JFIF), поэтому просто добавляем узел, не заменяем. */
+    private static void setJfifDpi(IIOMetadata metadata, int dpi) throws IOException {
+        String format = metadata.getNativeMetadataFormatName();
+        IIOMetadataNode root = (IIOMetadataNode) metadata.getAsTree(format);
+        // getDefaultImageMetadata для JPEG уже отдаёт ПОЛНОЕ дерево с
+        // JPEGvariety/app0JFIF (resUnits=0 — "без единиц, только соотношение
+        // сторон", Xdensity=Ydensity=1) — если добавить ВТОРОЙ app0JFIF рядом
+        // вместо правки существующего, mergeTree молча съедает оба узла без
+        // ошибки, но сам писатель JPEG использует ПЕРВЫЙ (дефолтный, resUnits=0)
+        // при кодировании — записанный DPI тогда тихо игнорируется (проверено
+        // побайтовым чтением метаданных обратно). Поэтому правим узел IN PLACE,
+        // создаём новый только если его в дефолтном дереве вдруг не оказалось.
+        org.w3c.dom.NodeList jfifNodes = root.getElementsByTagName("app0JFIF");
+        IIOMetadataNode jfif;
+        if (jfifNodes.getLength() > 0) {
+            jfif = (IIOMetadataNode) jfifNodes.item(0);
+        } else {
+            jfif = new IIOMetadataNode("app0JFIF");
+            jfif.setAttribute("majorVersion", "1");
+            jfif.setAttribute("minorVersion", "2");
+            jfif.setAttribute("thumbWidth", "0");
+            jfif.setAttribute("thumbHeight", "0");
+            org.w3c.dom.NodeList varietyNodes = root.getElementsByTagName("JPEGvariety");
+            IIOMetadataNode variety;
+            if (varietyNodes.getLength() > 0) {
+                variety = (IIOMetadataNode) varietyNodes.item(0);
+            } else {
+                // Корень нативного формата JPEG ОБЯЗАН иметь ровно двух детей —
+                // JPEGvariety и markerSequence (иначе mergeTree бросает
+                // IIOInvalidTreeException "must be present").
+                variety = new IIOMetadataNode("JPEGvariety");
+                root.insertBefore(variety, root.getFirstChild());
+            }
+            variety.appendChild(jfif);
+        }
+        jfif.setAttribute("resUnits", "1");
+        jfif.setAttribute("Xdensity", Integer.toString(dpi));
+        jfif.setAttribute("Ydensity", Integer.toString(dpi));
+        try {
+            metadata.mergeTree(format, root);
+        } catch (javax.imageio.metadata.IIOInvalidTreeException ex) {
+            throw new IOException("Не удалось записать DPI в метаданные JPEG", ex);
         }
     }
 

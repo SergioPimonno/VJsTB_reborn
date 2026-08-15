@@ -13,22 +13,29 @@ import java.util.Set;
 /**
  * Расчёт количества элементов наземного конструктива (объёмные башни из рам, см.
  * STRUCTURE_CALC_NOTES.md в корне репозитория) для монтажа {@link
- * com.vjstb.ledscheme.model.ScreenMountType#STRUCTURE} — bill of materials (рамы/короткие
- * рамы/стаканы/болты/балласт), а НЕ распределение нагрузки по точкам, как у
- * {@link RiggingCalc} для RIGGED.
+ * com.vjstb.ledscheme.model.ScreenMountType#STRUCTURE} — bill of materials (рамы/стаканы/
+ * болты/балласт), а НЕ распределение нагрузки по точкам, как у {@link RiggingCalc} для
+ * RIGGED.
  *
  * <p><b>Источники данных — важное разграничение</b>: точное соотношение стаканов и болтов
  * на стык/раму задано пользователем НАПРЯМУЮ по его реальному оборудованию (2 стакана на
  * каждый стык рам, болты = число рам × 1.5) — это НЕ догадка.
  *
  * <p><b>Phase 2.1 — объёмная башня (2026-08-14)</b>: башня строится из ДВУХ рядов
- * вертикальных рам (передний — у экрана, задний — на глубину одной короткой рамы позади,
+ * вертикальных рам (передний — у экрана, задний — на глубину одной рамы позади,
  * см. {@link StructureFrameCell#getRow()}), соединённых горизонтальными перемычками
  * (передний↔задний, ВНУТРИ одной башни — НЕ между соседними башнями, эта роль у
  * горизонтальных рам была в исходной версии Phase 2 и упразднена, см. историю
  * {@code StructureBraceCell} в git) каждые ~1.5м высоты (интервал — глобальная настройка
  * Персонализации), плюс базовая рама, которая может выносится назад в дополнительных
- * секциях (каждая — ширина короткой рамы) под балласт. Числа
+ * секциях (каждая — ширина рамы) под балласт. Round 16 — отдельный "короткий" тип рамы
+ * упразднён целиком (по прямому указанию пользователя: "чаще всего перемычка делается из
+ * обычной рамы... уберём короткие рамы, переделываем всё под обычные"), перемычка/база/
+ * усилительные рамы теперь берут габариты из ТОГО ЖЕ типа, что и вертикальные рамы башни
+ * (см. {@code ui.Structure3DPanel#computeGeometry}) — если инженеру на месте нужна именно
+ * короткая рама где-то конкретно, это по-прежнему доступно per-cell (см.
+ * {@link StructureFrameCell#getFrameTypeId()}), просто больше не встроено в номинальный
+ * расчёт всей сетки. Числа
  * {@code structureTowerCount}/{@code structureVerticalFramesPerTower}/
  * {@code structurePeremychkaLevels}/{@code structureExtendedBaseSections} на {@link Screen}
  * остаются только НОМИНАЛЬНЫМИ границами сетки (заполняются в
@@ -78,9 +85,40 @@ public final class StructureCalc {
      *  в библиотеке (см. {@code StructureFrameCell#getFrameTypeId()}), это только фолбэк. */
     public static final double DEFAULT_REINFORCEMENT_FRAME_HEIGHT_MM = 1000;
 
+    /** Фолбэк-размеры рамы/короткой рамы, если тип не выбран в библиотеке вообще — те же
+     *  числа, что использует {@code ui.Structure3DPanel} для рендера (см. её собственные
+     *  {@code DEFAULT_FRAME_WIDTH_MM}/{@code DEFAULT_SECTION_DEPTH_MM}, независимая копия по
+     *  обычной конвенции проекта), нужны здесь для {@link #coreBaseSectionCount} — единственное
+     *  место в этом классе, где расчёт зависит от физических габаритов рамы, а не только от
+     *  номинальных счётчиков экрана. */
+    public static final double DEFAULT_FRAME_WIDTH_MM = 500;
+    public static final double DEFAULT_SECTION_DEPTH_MM = 500;
+
+    /** Round 10 (баг-репорт: "эта пластина должна не рендериться как 2 рамы, а являться 2
+     *  отдельными рамами. Башни могут быть глубиной 0.5, в таком случае текущее основание не
+     *  будет подходить по габаритам") — сколько ЦЕЛЫХ модулей глубиной {@code sectionDepthMm}
+     *  (ширина короткой рамы) нужно, чтобы полностью покрыть "ядро" базовой рамы — общую
+     *  глубину под ОБОИМИ рядами сразу ({@code 2 * frameW}, ряды примыкают друг к другу без
+     *  зазора, см. {@code Structure3DPanel#computeGeometry}). До этого раунда ядро было ОДНОЙ
+     *  {@code StructureBaseFrameCell} произвольного (не каталожного) размера — теперь это
+     *  {@code coreBaseSectionCount} штук РЕАЛЬНЫХ, независимо переключаемых секций (см.
+     *  {@code ScreenLogic#regenerateStructureCells}), что и решает второй пункт репорта:
+     *  какой бы ни была реальная глубина рамы, ядро всегда собирается из целого числа
+     *  каталожных модулей, никогда не "не подходит по габаритам". Не меньше 1 (защита от
+     *  нулевой/отрицательной {@code sectionDepthMm}). */
+    public static int coreBaseSectionCount(double frameW, double sectionDepthMm) {
+        if (sectionDepthMm <= 0) {
+            return 1;
+        }
+        return Math.max(1, (int) Math.ceil((2 * frameW) / sectionDepthMm));
+    }
+
     /** Число башен по ширине экрана — расставлены "как заборные столбы" с шагом
-     *  {@link Screen#getStructureTowerSpacingMm()}: N интервалов требуют N+1 башен,
-     *  не меньше 2. */
+     *  {@link Screen#getStructureTowerSpacingMm()}: N интервалов требуют N+1 башен, не меньше
+     *  2. Round 14 — откат Round 13 ("мало башен, по краям"): пользователь явно попросил
+     *  вернуть сплошную стену конструктива по умолчанию ("пусть для экрана генерится стена
+     *  конструктива, при необходимости инженер сам удалит ненужные рамы") — проще убрать
+     *  лишнее кликом в 3D, чем достраивать недостающее. */
     public static int suggestTowerCount(Screen screen, CabinetType type) {
         double widthMm = screen.getCols() * (type != null ? type.getWidthMm() : 0);
         double spacing = screen.getStructureTowerSpacingMm();
@@ -98,7 +136,13 @@ public final class StructureCalc {
         if (frameType == null || frameType.getHeightMm() == null || frameType.getHeightMm() <= 0) {
             return 0;
         }
-        return Math.max(1, (int) Math.ceil(screen.getStructureTowerHeightMm() / frameType.getHeightMm()));
+        // Баг-репорт: "при выставленной высоте 2м строится башня 3м высотой... высота башни
+        // считается от пола до верхней грани верхней рамы" -- было Math.ceil, что округляет
+        // ВВЕРХ и всегда даёт башню ВЫШЕ запрошенной (2000мм при 950мм раме -> 3 сегмента =
+        // 2850мм, заметно выше 2м). Собранная высота (N * frameHeightMm) не должна ПРЕВЫШАТЬ
+        // запрошенную -- Math.floor вместо ceil, не меньше 1 сегмента даже если рама сама выше
+        // запрошенной высоты (тогда башня неизбежно выше, но это уже не ошибка округления).
+        return Math.max(1, (int) Math.floor(screen.getStructureTowerHeightMm() / frameType.getHeightMm()));
     }
 
     /** Число сегментов ЗАДНЕГО ряда башни (row=1) — Round 5, баг-репорт по фото реальной башни:
@@ -191,14 +235,13 @@ public final class StructureCalc {
                 }
             }
         }
-        // Перемычки/базовые секции/усилительные рамы выноса — та же связь "1 существующий
-        // элемент = 1 стык" (усилительная рама не стоит в стеке, стыкуется только с базовой
-        // секцией под ней).
-        int peremychkaJoints = peremychkaCount;
-        int baseJoints = baseFrameCount;
-        int reinforcementCount = (int) screen.getStructureFrameCells().stream()
-                .filter(c -> !c.isHidden() && c.getRow() == 2).count();
-        int cupCount = (verticalJoints + peremychkaJoints + baseJoints + reinforcementCount) * CUPS_PER_JOINT;
+        // Round 10 (баг-репорт: "стаканы ставятся сверху рам, в случае если над ней ставится
+        // еще одна рама и только тогда") — пользователь сузил правило до единственного случая:
+        // стакан существует ТОЛЬКО там, где рама физически стоит СВЕРХУ другой рамы ТОГО ЖЕ
+        // типа (вертикальный стек, row 0/1 — verticalJoints выше). Перемычка (Round 8), база и
+        // усилительные рамы примыкают сбоку/снизу, а не стоят друг на друге — ни одна из них
+        // больше не участвует в cupCount.
+        int cupCount = verticalJoints * CUPS_PER_JOINT;
 
         int totalFrameCount = verticalFrameCount + peremychkaCount + baseFrameCount;
         int boltCount = (int) Math.ceil(totalFrameCount * BOLTS_PER_FRAME);

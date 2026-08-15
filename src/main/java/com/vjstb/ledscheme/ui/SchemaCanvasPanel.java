@@ -1583,8 +1583,19 @@ public class SchemaCanvasPanel extends JPanel {
      *  связей) в обоих вариантах одна и та же, отличается только содержимое внутри
      *  блоков экранов. */
     public BufferedImage renderImage(int width, int height, boolean renderScreenWiring) {
-        BufferedImage img = new BufferedImage(Math.max(1, width), Math.max(1, height), BufferedImage.TYPE_INT_RGB);
+        return renderImage(width, height, renderScreenWiring, 1.0);
+    }
+
+    /** {@code dpiScale} — множитель качества экспорта (см. {@code UserProfile#getDocExportDpi},
+     *  1.0 = прежнее поведение) — весь рисунок равномерно увеличивается через
+     *  {@link Graphics2D#scale}, планировка (позиции/размеры узлов) считается всё
+     *  так же в логических {@code width}×{@code height}, просто на бОльшее число
+     *  физических пикселей итоговой картинки. */
+    public BufferedImage renderImage(int width, int height, boolean renderScreenWiring, double dpiScale) {
+        BufferedImage img = new BufferedImage(Math.max(1, (int) Math.round(width * dpiScale)),
+                Math.max(1, (int) Math.round(height * dpiScale)), BufferedImage.TYPE_INT_RGB);
         Graphics2D g2 = img.createGraphics();
+        g2.scale(dpiScale, dpiScale);
         paint(g2, width, height, renderScreenWiring);
         g2.dispose();
         return img;

@@ -566,6 +566,18 @@ public class AppModel {
      * один контроллер полностью дублирует все порты другого (в отличие от
      * {@link #setSignalBackupPortLink}, где резерв назначается отдельному порту).
      * Оба контроллера ищутся по всей СЦЕНЕ экрана, не только по нему самому.
+     *
+     * <p>Баг-репорт: "если контроллер назначается бекапным для другого, то порты
+     * основного все еще не знают, что порты бекапного контроллера становятся их
+     * бекапными, из-за этого ломается схема рисования схем" — раньше этот метод
+     * только проставлял {@code backupControllerId}, а {@link SignalChain
+     * #getBackupPortNumber()} на уже существующих цепочках основного контроллера
+     * оставался {@code null} (см. {@link #applyControllerLevelBackupPort}, которую
+     * вызывает {@link #addSignalChain} только для НОВЫХ цепочек). Теперь при
+     * установке связки backupPortNumber пересчитывается на всех уже существующих
+     * цепочках основного контроллера сразу; при снятии связки — сбрасывается на
+     * тех из них, что указывали именно на порт СТАРОГО резервного контроллера
+     * (а не на независимый ручной резерв через {@link #setSignalBackupPortLink}).
      */
     public void setControllerBackupLink(Screen screen, String mainId, String backupId) {
         Scene scene = sceneContaining(screen);
@@ -600,7 +612,33 @@ public class AppModel {
             }
         }
         pushUndo();
+        String oldBackupId = main.getBackupControllerId();
         main.setBackupControllerId(backupId);
+        int mainOffset = portOffsetOf(scene, main);
+        ControllerType mainType = workspace.controllerTypeById(main.getControllerTypeId());
+        int mainCount = mainType != null ? mainType.effectivePortCount() : 0;
+        ControllerInstance oldBackup = oldBackupId != null ? controllerById(scene, oldBackupId) : null;
+        int oldBackupOffset = oldBackup != null ? portOffsetOf(scene, oldBackup) : 0;
+        ControllerType oldBackupType = oldBackup != null
+                ? workspace.controllerTypeById(oldBackup.getControllerTypeId()) : null;
+        int oldBackupCount = oldBackupType != null ? oldBackupType.effectivePortCount() : 0;
+        for (SignalChain c : scene.getSignalChains()) {
+            if (c.isBackup() || c.getPortNumber() == null) {
+                continue;
+            }
+            int p = c.getPortNumber();
+            if (p <= mainOffset || p > mainOffset + mainCount) {
+                continue;
+            }
+            if (backupId != null) {
+                applyControllerLevelBackupPort(scene, c, p);
+            } else if (oldBackup != null && c.getBackupPortNumber() != null) {
+                int bp = c.getBackupPortNumber();
+                if (bp > oldBackupOffset && bp <= oldBackupOffset + oldBackupCount) {
+                    c.setBackupPortNumber(null);
+                }
+            }
+        }
         changed();
     }
 
@@ -840,11 +878,19 @@ public class AppModel {
      *  (прямое указание пользователя — "опорные рамы должны быть всегда"), больше не вкл/выкл.
      *  Round 5 — добавлен {@code backRowSegments}: задний ряд (row=1) теперь короткий (~1-2м),
      *  независимый от {@code verticalFramesPerTower} переднего ряда (см. {@code StructureCalc
-     *  #suggestBackRowSegments}). */
+     *  #suggestBackRowSegments}). Round 10 — "ядро" базовой рамы больше не одна секция
+     *  произвольного размера: здесь (единственное место с одновременным доступом и к {@code
+     *  Workspace}, и к вызову {@code regenerateStructureCells}) считаем реальные габариты
+     *  выбранного {@code frameTypeId} и передаём {@code
+     *  StructureCalc#coreBaseSectionCount(frameW, sectionDepthMm)} — см. её javadoc и
+     *  {@code ScreenLogic#regenerateStructureCells} про смысл параметра. Round 16 — отдельный
+     *  {@code shortFrameTypeId}-параметр убран целиком (баг-репорт: "уберём короткие рамы,
+     *  переделываем всё под обычные") — перемычка/база/усилительные рамы теперь берут габариты
+     *  из ЭТОГО ЖЕ {@code frameTypeId}, см. {@code ui.Structure3DPanel#computeGeometry}. */
     public void updateScreenStructure(Screen screen, double towerHeightMm, double towerSpacingMm,
                                        int towerCount, int verticalFramesPerTower, int backRowSegments,
                                        int peremychkaLevels, int extendedBaseSections, String frameTypeId,
-                                       String shortFrameTypeId, String cupTypeId, String ballastTypeId,
+                                       String cupTypeId, String ballastTypeId,
                                        double screenElevationMm, String notes) {
         pushUndo();
         screen.setStructureTowerHeightMm(towerHeightMm);
@@ -855,13 +901,21 @@ public class AppModel {
         screen.setStructurePeremychkaLevels(peremychkaLevels);
         screen.setStructureExtendedBaseSections(extendedBaseSections);
         screen.setStructureFrameTypeId(frameTypeId);
-        screen.setStructureShortFrameTypeId(shortFrameTypeId);
         screen.setStructureCupTypeId(cupTypeId);
         screen.setStructureBallastTypeId(ballastTypeId);
         screen.setStructureScreenElevationMm(screenElevationMm);
         screen.setStructureNotes(notes);
+        StructureFrameType frameType = getWorkspace().structureFrameTypeById(frameTypeId);
+        double frameW = frameType != null && frameType.getWidthMm() != null && frameType.getWidthMm() > 0
+                ? frameType.getWidthMm() : StructureCalc.DEFAULT_FRAME_WIDTH_MM;
+        // Round 16 -- "короткая рама" как отдельный тип упразднена (баг-репорт: "изменение
+        // типа рамы не влияет на перемычки... давай уберём короткие рамы, переделываем всё под
+        // обычные"). sectionDepthMm (глубина одной секции выноса базы) теперь тоже = ширина
+        // ОБЫЧНОЙ рамы, не отдельного "короткого" типа -- coreBaseSectionCount(frameW, frameW)
+        // всегда даёт РОВНО 2 модуля на ядро (по одному на передний/задний ряд).
+        int coreBaseSectionCount = StructureCalc.coreBaseSectionCount(frameW, frameW);
         ScreenLogic.regenerateStructureCells(screen, typeOf(screen), towerCount, verticalFramesPerTower,
-                backRowSegments, peremychkaLevels, extendedBaseSections);
+                backRowSegments, peremychkaLevels, extendedBaseSections, coreBaseSectionCount);
         changed();
     }
 
@@ -1999,17 +2053,21 @@ public class AppModel {
         return false;
     }
 
-    /** Один вид библиотеки (STRUCTURE_FRAME) обслуживает ЧЕТЫРЕ разных FK-поля Screen
-     *  (рама/короткая рама/стакан/балласт — все ссылаются на записи ОДНОЙ библиотеки,
-     *  различаемые по {@code StructureFrameType.kind}, см. class-javadoc модели) —
-     *  поэтому проверка ссылок и перенос при "продвижении" смотрят на все четыре сразу,
-     *  а не на одно поле, как у HOIST/CABINET. */
+    /** Один вид библиотеки (STRUCTURE_FRAME) обслуживает ТРИ разных FK-поля Screen (рама/
+     *  стакан/балласт — все ссылаются на записи ОДНОЙ библиотеки, различаемые по {@code
+     *  StructureFrameType.kind}, см. class-javadoc модели) — поэтому проверка ссылок и перенос
+     *  при "продвижении" смотрят на все три сразу, а не на одно поле, как у HOIST/CABINET.
+     *  Round 16 — четвёртое поле, {@code structureShortFrameTypeId}, упразднено (см. {@link
+     *  #updateScreenStructure} javadoc); отдельные записи {@code Kind.SHORT_FRAME} в
+     *  библиотеке НИКУДА не делись, просто больше не привязаны к отдельному FK-полю экрана —
+     *  их по-прежнему можно выбрать per-cell (см. {@code StructureFrameCell#getFrameTypeId()}
+     *  и {@code ui.Structure3DDialog}), эта проверка на это не смотрит (per-cell override —
+     *  свободный текст, не отдельное защищённое FK-поле). */
     private boolean isStructureFrameTypeReferenced(String id) {
         for (Project project : workspace.getProjects()) {
             for (Scene scene : project.getScenes()) {
                 for (Screen screen : scene.getScreens()) {
                     if (id.equals(screen.getStructureFrameTypeId())
-                            || id.equals(screen.getStructureShortFrameTypeId())
                             || id.equals(screen.getStructureCupTypeId())
                             || id.equals(screen.getStructureBallastTypeId())) {
                         return true;
@@ -2147,17 +2205,14 @@ public class AppModel {
         }
     }
 
-    /** Переносит ЛЮБОЕ из четырёх FK-полей Screen на элементы STRUCTURE_FRAME — см.
-     *  javadoc {@link #isStructureFrameTypeReferenced} про то же разделение на 4 поля. */
+    /** Переносит ЛЮБОЕ из трёх FK-полей Screen на элементы STRUCTURE_FRAME — см.
+     *  javadoc {@link #isStructureFrameTypeReferenced} про то же разделение на 3 поля. */
     private void migrateStructureFrameTypeReferences(String oldId, String newId) {
         for (Project project : workspace.getProjects()) {
             for (Scene scene : project.getScenes()) {
                 for (Screen screen : scene.getScreens()) {
                     if (oldId.equals(screen.getStructureFrameTypeId())) {
                         screen.setStructureFrameTypeId(newId);
-                    }
-                    if (oldId.equals(screen.getStructureShortFrameTypeId())) {
-                        screen.setStructureShortFrameTypeId(newId);
                     }
                     if (oldId.equals(screen.getStructureCupTypeId())) {
                         screen.setStructureCupTypeId(newId);
@@ -3007,13 +3062,49 @@ public class AppModel {
         // заполняем именно её, а не добавляем вторую запись того же порта: резерв
         // и реальная прокладка — один и тот же порт, а не два разных.
         SignalChain existing = port != null ? signalChainByPortInScene(currentScene, port, backup) : null;
+        SignalChain chain;
         if (existing != null && existing.getCabinetInstanceIds().isEmpty()) {
             existing.setCabinetInstanceIds(new ArrayList<>(cabinetIds));
+            chain = existing;
         } else {
-            currentScene.getSignalChains().add(new SignalChain(port, backup, cabinetIds));
+            chain = new SignalChain(port, backup, cabinetIds);
+            currentScene.getSignalChains().add(chain);
+        }
+        // Баг-репорт: "если контроллер назначается бекапным для другого, то порты
+        // основного все еще не знают, что порты бекапного контроллера становятся их
+        // бекапными" — если у контроллера ЭТОГО порта есть {@code
+        // ControllerInstance#getBackupControllerId()} (см. setControllerBackupLink),
+        // проставляем backupPortNumber сразу при создании/заполнении цепочки, а не
+        // только когда пользователь явно вызовет setSignalBackupPortLink вручную.
+        if (!backup && port != null) {
+            applyControllerLevelBackupPort(currentScene, chain, port);
         }
         resyncSignalSockets(currentScreen);
         changed();
+    }
+
+    /** Если контроллер порта {@code port} целиком отдан под резерв другого (см.
+     *  {@link #setControllerBackupLink}), проставляет цепочке {@code chain}
+     *  {@code backupPortNumber} на СООТВЕТСТВУЮЩИЙ порт резервного контроллера (тот
+     *  же локальный индекс порта, просто на другом контроллере) — иначе рендер схемы
+     *  ({@link com.vjstb.ledscheme.ui.SchemeRenderer#signalChainEndLabel},
+     *  {@link #chainEndpointSocketCabinetIds}) не знает, куда физически заведён
+     *  резерв: {@code backupPortNumber} остаётся {@code null}, и резервная проводка
+     *  просто не рисуется, хотя контроллер-резерв уже назначен. Ничего не делает,
+     *  если у контроллера порта нет резервного контроллера — тогда действует только
+     *  ручной порт-уровневый резерв ({@link #setSignalBackupPortLink}), эта
+     *  автоматика ему не мешает. */
+    private void applyControllerLevelBackupPort(Scene scene, SignalChain chain, int port) {
+        ControllerInstance owner = controllerForPortInScene(scene, port);
+        if (owner == null || owner.getBackupControllerId() == null) {
+            return;
+        }
+        ControllerInstance backupCi = controllerById(scene, owner.getBackupControllerId());
+        if (backupCi == null) {
+            return;
+        }
+        int backupPort = portOffsetOf(scene, backupCi) + (port - portOffsetOf(scene, owner));
+        chain.setBackupPortNumber(backupPort);
     }
 
     public void deletePowerChain(String chainId) {
