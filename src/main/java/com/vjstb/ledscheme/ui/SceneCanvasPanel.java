@@ -510,8 +510,17 @@ public class SceneCanvasPanel extends JPanel {
 
     /** Рендерит текущий вид в изображение заданного размера (для экспорта). */
     public BufferedImage renderImage(int width, int height) {
-        BufferedImage img = new BufferedImage(Math.max(1, width), Math.max(1, height), BufferedImage.TYPE_INT_RGB);
+        return renderImage(width, height, 1.0);
+    }
+
+    /** {@code dpiScale} — множитель качества экспорта (см. {@code UserProfile#getDocExportDpi},
+     *  1.0 = прежнее поведение), см. аналогичный параметр
+     *  {@code SchemaCanvasPanel#renderImage(int, int, boolean, double)}. */
+    public BufferedImage renderImage(int width, int height, double dpiScale) {
+        BufferedImage img = new BufferedImage(Math.max(1, (int) Math.round(width * dpiScale)),
+                Math.max(1, (int) Math.round(height * dpiScale)), BufferedImage.TYPE_INT_RGB);
         Graphics2D g2 = img.createGraphics();
+        g2.scale(dpiScale, dpiScale);
         paint(g2, width, height);
         g2.dispose();
         return img;

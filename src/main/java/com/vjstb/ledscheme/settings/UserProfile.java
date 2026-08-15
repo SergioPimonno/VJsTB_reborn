@@ -178,6 +178,15 @@ public class UserProfile {
      *  null/пусто = использовать встроенный шрифт FlatLaf, ничего не переопределять. */
     private String fontFamily;
 
+    /** Плотность пикселей (DPI) для JPEG-схем пакета документации (питание/сигнал
+     *  экранов, блок-схема площадки, обзор сцены — см. {@code OutputStagePanel}/
+     *  {@code SchemeRenderer}), 72 по умолчанию — прежнее поведение (без явных
+     *  метаданных DPI, большинство просмотрщиков в этом случае показывают 72).
+     *  НЕ применяется к маскам (см. {@code PixelGridRenderer}) — их пиксельный
+     *  размер жёстко привязан к реальному разрешению LED-панели, увеличивать его
+     *  "под печать" физически бессмысленно (растянуло бы контент с панели). */
+    private int docExportDpi = 72;
+
     public UserProfile() {
     }
 
@@ -437,6 +446,14 @@ public class UserProfile {
         this.fontFamily = fontFamily == null || fontFamily.isBlank() ? null : fontFamily;
     }
 
+    public int getDocExportDpi() {
+        return docExportDpi > 0 ? docExportDpi : 72;
+    }
+
+    public void setDocExportDpi(int docExportDpi) {
+        this.docExportDpi = docExportDpi > 0 ? docExportDpi : 72;
+    }
+
     /** true — тёмный бакет цветов Palette (см. Palette#applyTheme); ПРОИЗВОДНОЕ от
      *  {@link #lafStyle}, не отдельное состояние (Darcula считается тёмным,
      *  IntelliJ — светлым, см. {@code ui.LafStyle#isDark}). */
@@ -497,6 +514,7 @@ public class UserProfile {
         p.maskLogoImagePath = maskLogoImagePath;
         p.lafStyle = lafStyle;
         p.fontFamily = fontFamily;
+        p.docExportDpi = docExportDpi;
         p.keyBindings = new LinkedHashMap<>();
         for (Map.Entry<String, KeyCombo> en : keyBindings.entrySet()) {
             p.keyBindings.put(en.getKey(), en.getValue().copy());

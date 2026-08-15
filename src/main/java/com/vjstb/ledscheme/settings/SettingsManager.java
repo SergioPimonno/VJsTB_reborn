@@ -215,6 +215,11 @@ public class SettingsManager {
         persist();
     }
 
+    public void setDocExportDpi(int dpi) {
+        activeProfile().setDocExportDpi(dpi);
+        persist();
+    }
+
     public KeyCombo bindingFor(HotkeyAction action) {
         return activeProfile().bindingFor(action);
     }

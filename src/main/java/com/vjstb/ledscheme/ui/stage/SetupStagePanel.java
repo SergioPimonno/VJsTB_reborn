@@ -103,16 +103,18 @@ public class SetupStagePanel extends JPanel {
     private final JComboBox<Integer> pBitDepth = new JComboBox<>(new Integer[]{8, 10, 12});
 
     // ---- наземный конструктив (см. service.StructureCalc, STRUCTURE_CALC_NOTES.md) ----
-    private final JButton calcStructureBtn = new JButton("Рассчитать конструктив");
+    // Round (баг-репорт: "убирай эти параметры, они только мешают и не помогают") -- пять
+    // номинальных счётчиков сетки (башен/сегментов переднего-заднего ряда/уровней перемычек/
+    // секций выноса) убраны из UI целиком: реальная детальная расстановка правится поячеечно
+    // прямо в 3D-превью (клик по существующей детали/призраку, см. Structure3DPanel), эти
+    // спиннеры лишь дублировали то же самое числом и путались с ним при повторном расчёте.
+    // Кнопка теперь строит только СТАРТОВУЮ сетку по формулам-подсказкам (см.
+    // calculateStructure) -- отсюда и новое название.
+    private final JButton calcStructureBtn = new JButton("Предварительный расчёт конструктива");
+    private final JButton buildStructureSpecBtn = new JButton("Собрать спецификацию");
     private final JSpinner pStructureTowerHeight = new JSpinner(new SpinnerNumberModel(3000.0, 0.0, 50_000.0, 100.0));
     private final JSpinner pStructureTowerSpacing = new JSpinner(new SpinnerNumberModel(1000.0, 100.0, 50_000.0, 50.0));
-    private final JSpinner pStructureTowerCount = new JSpinner(new SpinnerNumberModel(0, 0, 500, 1));
-    private final JSpinner pStructureVerticalFrames = new JSpinner(new SpinnerNumberModel(0, 0, 100, 1));
-    private final JSpinner pStructureBackRowSegments = new JSpinner(new SpinnerNumberModel(0, 0, 100, 1));
-    private final JSpinner pStructurePeremychkaLevels = new JSpinner(new SpinnerNumberModel(0, 0, 100, 1));
-    private final JSpinner pStructureExtendedBaseSections = new JSpinner(new SpinnerNumberModel(0, 0, 20, 1));
     private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pStructureFrameType = new JComboBox<>();
-    private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pStructureShortFrameType = new JComboBox<>();
     private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pStructureCupType = new JComboBox<>();
     private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pStructureBallastType = new JComboBox<>();
     /** 0 = экран стоит на земле. */
@@ -499,32 +501,11 @@ public class SetupStagePanel extends JPanel {
         structureFieldsPanel.add(UiKit.vgap());
         structureFieldsPanel.add(UiKit.formRow("Шаг башен, мм", pStructureTowerSpacing));
         structureFieldsPanel.add(UiKit.vgap());
-        structureFieldsPanel.add(UiKit.formRow("Башен", pStructureTowerCount));
-        structureFieldsPanel.add(UiKit.vgap());
-        structureFieldsPanel.add(UiKit.formRow("Сегментов рамы переднего ряда (полная высота)", pStructureVerticalFrames));
-        structureFieldsPanel.add(UiKit.vgap());
-        pStructureBackRowSegments.setToolTipText("Задний ряд (row=1) короткий — просто опора для перемычек и"
-                + " выноса, НЕ вторая полноразмерная башня (с фронта видна одна лестничная рама). Обычно 1-2м.");
-        structureFieldsPanel.add(UiKit.formRow("Сегментов рамы заднего ряда (короткий)", pStructureBackRowSegments));
-        structureFieldsPanel.add(UiKit.vgap());
-        pStructurePeremychkaLevels.setToolTipText("Число уровней перемычек (соединяют соседние башни в пределах"
-                + " одного ряда) по высоте — интервал считается от высоты рамы, конкретная расстановка"
-                + " редактируется поячеечно прямо в 3D-превью.");
-        structureFieldsPanel.add(UiKit.formRow("Уровней перемычек", pStructurePeremychkaLevels));
-        structureFieldsPanel.add(UiKit.vgap());
-        pStructureExtendedBaseSections.setToolTipText("Доп. секции выноса базовой рамы назад (каждая — ширина"
-                + " короткой рамы, ~0.5м) сверх обязательного ядра под объёмом башни — увеличивают площадь опоры"
-                + " под балласт.");
-        structureFieldsPanel.add(UiKit.formRow("Доп. секций выноса под балласт", pStructureExtendedBaseSections));
-        structureFieldsPanel.add(UiKit.vgap());
 
         setStructureFrameRenderer(pStructureFrameType);
-        setStructureFrameRenderer(pStructureShortFrameType);
         setStructureFrameRenderer(pStructureCupType);
         setStructureFrameRenderer(pStructureBallastType);
         structureFieldsPanel.add(UiKit.formRow("Тип рамы (библиотека)", pStructureFrameType));
-        structureFieldsPanel.add(UiKit.vgap());
-        structureFieldsPanel.add(UiKit.formRow("Тип короткой рамы (библиотека)", pStructureShortFrameType));
         structureFieldsPanel.add(UiKit.vgap());
         structureFieldsPanel.add(UiKit.formRow("Тип стакана (библиотека)", pStructureCupType));
         structureFieldsPanel.add(UiKit.vgap());
@@ -538,16 +519,29 @@ public class SetupStagePanel extends JPanel {
         structureFieldsPanel.add(UiKit.formRow("Заметки по конструктиву", pStructureNotes));
         structureFieldsPanel.add(UiKit.vgap());
 
-        calcStructureBtn.setToolTipText("Способ монтажа задаётся в «Параметры экрана». Требует независимой"
-                + " инженерной перепроверки перед монтажом — см. STRUCTURE_CALC_NOTES.md.");
+        calcStructureBtn.setToolTipText("Строит СТАРТОВУЮ сетку конструктива по формулам-подсказкам (число башен/"
+                + "сегментов/перемычек/секций выноса) — дальнейшая точная расстановка (добавить/убрать отдельную"
+                + " раму, перемычку, секцию) правится кликами прямо в 3D-превью, эта кнопка лишь задаёт разумную"
+                + " отправную точку. Способ монтажа задаётся в «Параметры экрана». Требует независимой инженерной"
+                + " перепроверки перед монтажом — см. STRUCTURE_CALC_NOTES.md.");
         calcStructureBtn.addActionListener(e -> calculateStructure());
         structureFieldsPanel.add(calcStructureBtn);
         structureFieldsPanel.add(UiKit.vgap());
 
-        toggle3DBtn.setToolTipText("Открыть/закрыть отдельное окно с 3D-превью посчитанного конструктива"
-                + " (только просмотр -- числа по-прежнему редактируются полями выше; клик по существующей"
-                + " детали в 3D убирает её, по подсвеченному \"призраку\" -- добавляет). Требует OpenGL, на"
-                + " некоторых системах может быть недоступно -- тогда вместо картинки покажется сообщение.");
+        buildStructureSpecBtn.setToolTipText("Считает спецификацию (ведомость материалов) конструктива по РЕАЛЬНО"
+                + " расставленным в 3D деталям — рамы/перемычки/базовые секции/стаканы/болты/балласт. Тот же"
+                + " список автоматически попадает в общую спецификацию проекта (лист «Конструктив», этап"
+                + " «Вывод»), нажимать её отдельно для этого не обязательно — кнопка нужна, чтобы свериться"
+                + " по текущему экрану сразу здесь.");
+        buildStructureSpecBtn.addActionListener(e -> buildStructureSpec());
+        structureFieldsPanel.add(buildStructureSpecBtn);
+        structureFieldsPanel.add(UiKit.vgap());
+
+        toggle3DBtn.setToolTipText("Открыть/закрыть отдельное окно с 3D-превью конструктива — клик по"
+                + " существующей детали убирает её, по подсвеченному \"призраку\" -- добавляет (это и есть"
+                + " основной способ детальной правки, см. подсказку у «" + calcStructureBtn.getText() + "»)."
+                + " Требует OpenGL, на некоторых системах может быть недоступно -- тогда вместо картинки"
+                + " покажется сообщение.");
         toggle3DBtn.addActionListener(e -> {
             if (structure3DDialog != null && structure3DDialog.isShowing()) {
                 structure3DDialog.dispose();
@@ -777,12 +771,16 @@ public class SetupStagePanel extends JPanel {
     }
 
     /** Пересчитывает количество железа наземного конструктива (см. {@code StructureCalc})
-     *  для выбранного экрана: сначала предлагает башни/сегменты рамы/уровни перемычек/
-     *  секции выноса по текущим (возможно, ещё не сохранённым) значениям формы -- на
-     *  ЧЕРНОВОЙ копии экрана, тем же приёмом, что и {@link #calculateRiggingPoints()} для
-     *  лебёдки -- затем сохраняет всё через {@link AppModel#updateScreenStructure} и
-     *  показывает итоговую сводку (счётчики + предупреждения о превышении безопасной/
-     *  экранной высоты). */
+     *  для выбранного экрана: башни/сегменты рамы/уровни перемычек/секции выноса
+     *  вычисляются ПОЛНОСТЬЮ формулами-подсказками (см. {@code StructureCalc.suggestXxx})
+     *  на ЧЕРНОВОЙ копии экрана, тем же приёмом, что и {@link #calculateRiggingPoints()} для
+     *  лебёдки -- пользователь их больше не подкручивает числом (баг-репорт: "убирай эти
+     *  параметры, они только мешают и не помогают" — номинальные спиннеры Round'ов 8-11
+     *  убраны из UI целиком), только КЛИКАМИ в 3D-превью после того, как эта кнопка
+     *  построит стартовую сетку. Сохраняет через {@link AppModel#updateScreenStructure} и
+     *  показывает короткое подтверждение + предупреждения о превышении безопасной/
+     *  экранной высоты (сама ведомость материалов — отдельно, {@link #buildStructureSpec()},
+     *  по РЕАЛЬНО расставленным в 3D деталям, не по этим стартовым числам). */
     private void calculateStructure() {
         Screen scr = model.getCurrentScreen();
         if (scr == null) {
@@ -792,7 +790,6 @@ public class SetupStagePanel extends JPanel {
         double spacing = ((Number) pStructureTowerSpacing.getValue()).doubleValue();
         double screenElevation = parseScreenElevation();
         String frameTypeId = structureFrameTypeId(pStructureFrameType);
-        String shortFrameTypeId = structureFrameTypeId(pStructureShortFrameType);
         String cupTypeId = structureFrameTypeId(pStructureCupType);
         String ballastTypeId = structureFrameTypeId(pStructureBallastType);
         CabinetType screenType = model.typeOf(scr);
@@ -800,39 +797,68 @@ public class SetupStagePanel extends JPanel {
         Screen preview = scr.copy();
         preview.setStructureTowerHeightMm(towerHeight);
         preview.setStructureTowerSpacingMm(spacing);
-        int suggestedTowers = com.vjstb.ledscheme.service.StructureCalc.suggestTowerCount(preview, screenType);
+        int towers = com.vjstb.ledscheme.service.StructureCalc.suggestTowerCount(preview, screenType);
         com.vjstb.ledscheme.model.StructureFrameType frameType =
                 (com.vjstb.ledscheme.model.StructureFrameType) pStructureFrameType.getSelectedItem();
-        int suggestedVertical = com.vjstb.ledscheme.service.StructureCalc.suggestVerticalFramesPerTower(preview, frameType);
+        int vertical = com.vjstb.ledscheme.service.StructureCalc.suggestVerticalFramesPerTower(preview, frameType);
         double frameHeightMm = frameType != null && frameType.getHeightMm() != null && frameType.getHeightMm() > 0
                 ? frameType.getHeightMm() : 950.0;
-        int suggestedBackRowSegments = com.vjstb.ledscheme.service.StructureCalc.suggestBackRowSegments(frameHeightMm);
+        int backRowSegments = com.vjstb.ledscheme.service.StructureCalc.suggestBackRowSegments(frameHeightMm);
         // Уровни перемычек ограничены ФИЗИЧЕСКОЙ высотой заднего ряда (Round 5) -- перемычка
         // крепится к его перекладине, выше короткого заднего ряда крепить не к чему.
-        double backRowHeightMm = suggestedBackRowSegments * frameHeightMm;
-        int suggestedPeremychkaLevels =
+        double backRowHeightMm = backRowSegments * frameHeightMm;
+        int peremychkaLevels =
                 com.vjstb.ledscheme.service.StructureCalc.suggestPeremychkaLevels(backRowHeightMm, frameHeightMm);
         double screenHeightMm = screenType != null ? scr.getRows() * screenType.getHeightMm() : 0;
         double screenWidthMm = screenType != null ? scr.getCols() * screenType.getWidthMm() : 0;
-        int suggestedExtendedBaseSections =
+        int extendedBaseSections =
                 com.vjstb.ledscheme.service.StructureCalc.suggestExtendedBaseSections(screenHeightMm, screenWidthMm);
 
-        pStructureTowerCount.setValue(suggestedTowers);
-        pStructureVerticalFrames.setValue(suggestedVertical);
-        pStructureBackRowSegments.setValue(suggestedBackRowSegments);
-        pStructurePeremychkaLevels.setValue(suggestedPeremychkaLevels);
-        pStructureExtendedBaseSections.setValue(suggestedExtendedBaseSections);
+        model.updateScreenStructure(scr, towerHeight, spacing, towers, vertical,
+                backRowSegments, peremychkaLevels, extendedBaseSections, frameTypeId,
+                cupTypeId, ballastTypeId, screenElevation, pStructureNotes.getText());
 
-        model.updateScreenStructure(scr, towerHeight, spacing, suggestedTowers, suggestedVertical,
-                suggestedBackRowSegments, suggestedPeremychkaLevels, suggestedExtendedBaseSections, frameTypeId,
-                shortFrameTypeId, cupTypeId, ballastTypeId, screenElevation, pStructureNotes.getText());
+        com.vjstb.ledscheme.service.StructureCalc.Result result =
+                com.vjstb.ledscheme.service.StructureCalc.compute(scr, screenType, model.getWorkspace());
+        boolean warnSafe = result.exceedsSafeHeightWarning();
+        boolean warnScreen = result.exceedsScreenHeightWarning();
 
+        StringBuilder msg = new StringBuilder();
+        msg.append(String.format("Стартовая сетка построена: %d башен, %d сегментов переднего ряда, %d заднего,"
+                + " %d уровней перемычек, %d доп. секций выноса.%n", towers, vertical, backRowSegments,
+                peremychkaLevels, extendedBaseSections));
+        msg.append("Дальнейшая точная расстановка (добавить/убрать раму, перемычку, секцию) — кликами в"
+                + " 3D-превью. Итоговую ведомость материалов смотрите через «" + buildStructureSpecBtn.getText()
+                + "» после того, как закончите правки.");
+        if (warnSafe) {
+            msg.append(String.format("%n%nВНИМАНИЕ: высота башни %.0f мм превышает безопасный предел %.0f мм —"
+                            + " конструктив такой высоты без отдельного инженерного расчёта не строим!%n",
+                    result.totalTowerHeightMm(), com.vjstb.ledscheme.service.StructureCalc.MAX_SAFE_TOWER_HEIGHT_MM));
+        }
+        if (warnScreen) {
+            msg.append(String.format("%n%nВНИМАНИЕ: высота башни %.0f мм должна быть строго меньше высоты экрана"
+                    + " %.0f мм!%n", result.totalTowerHeightMm(), screenHeightMm));
+        }
+        JOptionPane.showMessageDialog(this, msg.toString(), "Стартовая сетка построена",
+                (warnSafe || warnScreen) ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    /** Ведомость материалов конструктива по РЕАЛЬНО расставленным в 3D деталям (не по
+     *  стартовым числам {@link #calculateStructure()}) — тот же {@code StructureCalc.compute},
+     *  что и общая спецификация проекта на этапе «Вывод» (см. {@code OutputStagePanel
+     *  #addStructureSheet}) считает для листа «Конструктив»; кнопка здесь просто даёт
+     *  свериться по текущему экрану сразу на месте, без выгрузки всего проекта. */
+    private void buildStructureSpec() {
+        Screen scr = model.getCurrentScreen();
+        if (scr == null) {
+            return;
+        }
+        CabinetType screenType = model.typeOf(scr);
         com.vjstb.ledscheme.service.StructureCalc.Result result =
                 com.vjstb.ledscheme.service.StructureCalc.compute(scr, screenType, model.getWorkspace());
 
         StringBuilder msg = new StringBuilder();
-        msg.append(String.format("Башен: %d, сегментов переднего ряда: %d, заднего: %d, уровней перемычек: %d%n",
-                suggestedTowers, suggestedVertical, suggestedBackRowSegments, suggestedPeremychkaLevels));
+        msg.append("Спецификация конструктива — экран «").append(scr.getName()).append("»\n\n");
         msg.append(String.format("Вертикальных рам: %d%n", result.verticalFrameCount()));
         msg.append(String.format("Перемычек: %d%n", result.peremychkaCount()));
         msg.append(String.format("Секций базовых рам: %d%n", result.baseFrameCount()));
@@ -842,20 +868,10 @@ public class SetupStagePanel extends JPanel {
             msg.append(String.format("Требуемый балласт (≈ вес экрана): %.1f кг (%d контейнеров)%n",
                     result.requiredBallastKg(), result.ballastContainerCount()));
         }
-        boolean warnSafe = result.exceedsSafeHeightWarning();
-        boolean warnScreen = result.exceedsScreenHeightWarning();
-        if (warnSafe) {
-            msg.append(String.format("%nВНИМАНИЕ: высота башни %.0f мм превышает безопасный предел %.0f мм —"
-                            + " конструктив такой высоты без отдельного инженерного расчёта не строим!%n",
-                    result.totalTowerHeightMm(), com.vjstb.ledscheme.service.StructureCalc.MAX_SAFE_TOWER_HEIGHT_MM));
-        }
-        if (warnScreen) {
-            msg.append(String.format("%nВНИМАНИЕ: высота башни %.0f мм должна быть строго меньше высоты экрана"
-                    + " %.0f мм!%n", result.totalTowerHeightMm(), screenHeightMm));
-        }
+        msg.append("\nЭтот же список войдёт в общую спецификацию проекта (лист «Конструктив») на этапе «Вывод».");
         msg.append("\nТребует независимой инженерной перепроверки перед монтажом — см. STRUCTURE_CALC_NOTES.md.");
-        JOptionPane.showMessageDialog(this, msg.toString(), "Готово",
-                (warnSafe || warnScreen) ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE);
+        JOptionPane.showMessageDialog(this, msg.toString(), "Спецификация конструктива",
+                JOptionPane.INFORMATION_MESSAGE);
     }
 
     // ---- параметры экрана ----
@@ -1067,15 +1083,8 @@ public class SetupStagePanel extends JPanel {
 
                 pStructureTowerHeight.setValue(scr.getStructureTowerHeightMm());
                 pStructureTowerSpacing.setValue(scr.getStructureTowerSpacingMm());
-                pStructureTowerCount.setValue(scr.getStructureTowerCount());
-                pStructureVerticalFrames.setValue(scr.getStructureVerticalFramesPerTower());
-                pStructureBackRowSegments.setValue(scr.getStructureBackRowSegments());
-                pStructurePeremychkaLevels.setValue(scr.getStructurePeremychkaLevels());
-                pStructureExtendedBaseSections.setValue(scr.getStructureExtendedBaseSections());
                 populateStructureFrameCombo(pStructureFrameType,
                         com.vjstb.ledscheme.model.StructureFrameType.Kind.FRAME, scr.getStructureFrameTypeId());
-                populateStructureFrameCombo(pStructureShortFrameType,
-                        com.vjstb.ledscheme.model.StructureFrameType.Kind.SHORT_FRAME, scr.getStructureShortFrameTypeId());
                 populateStructureFrameCombo(pStructureCupType,
                         com.vjstb.ledscheme.model.StructureFrameType.Kind.CUP, scr.getStructureCupTypeId());
                 populateStructureFrameCombo(pStructureBallastType,

@@ -92,7 +92,6 @@ public class Structure3DPanel extends JPanel {
     private static final double DEFAULT_FRAME_HEIGHT_MM = 950;
     private static final double DEFAULT_FRAME_WIDTH_MM = 500;
     private static final double DEFAULT_FRAME_DEPTH_MM = 51;
-    private static final double DEFAULT_SECTION_DEPTH_MM = 500;
     /** Гарантированный зазор (мм) между задней гранью экрана и передним рядом конструктива —
      *  см. javadoc {@code computeGeometry}. */
     private static final double SCREEN_CLEARANCE_MM = 400;
@@ -264,30 +263,33 @@ public class Structure3DPanel extends JPanel {
         return new CameraState(new Vec3(eyeX, eyeY, eyeZ), new Vec3(centerX, centerY, centerZ));
     }
 
-    /** Длинное ребро короткой рамы (её собственная "высота" в библиотеке, ~859мм) — Round 5:
-     *  перемычка/основание лежат ГОРИЗОНТАЛЬНО, но повёрнуты так, что именно ЭТО ребро смотрит
-     *  на зрителя (X), а не {@code frameW} главной рамы, как ошибочно было раньше — баг-репорт
-     *  "измени ориентацию коротких рам по вертикальной оси на 90°, чтобы они длинным своим
-     *  ребром смотрели на зрителя". */
-    private static final double DEFAULT_SHORT_FRAME_LENGTH_MM = 859;
-
     private record StructureGeometry(double frameH, double frameW, double frameD, double sectionDepthMm,
-            double shortFrameLengthMm, double baseThickness, double peremychkaThickness, double spacing,
-            double frontZ, double backZ, double peremychkaIntervalMm) {
+            double baseThickness, double peremychkaThickness, double spacing,
+            double frontZ, double backZ, double peremychkaIntervalMm, double reinforcementHeightMm) {
     }
 
     private StructureGeometry computeGeometry(Screen screen) {
         Workspace ws = model.getWorkspace();
         StructureFrameType frameType = ws.structureFrameTypeById(screen.getStructureFrameTypeId());
-        StructureFrameType shortType = ws.structureFrameTypeById(screen.getStructureShortFrameTypeId());
         double frameH = dim(frameType != null ? frameType.getHeightMm() : null, DEFAULT_FRAME_HEIGHT_MM);
         double frameW = dim(frameType != null ? frameType.getWidthMm() : null, DEFAULT_FRAME_WIDTH_MM);
         double frameD = dim(frameType != null ? frameType.getDepthMm() : null, DEFAULT_FRAME_DEPTH_MM);
-        double sectionDepthMm = dim(shortType != null ? shortType.getWidthMm() : null, DEFAULT_SECTION_DEPTH_MM);
-        double shortFrameLengthMm = dim(shortType != null ? shortType.getHeightMm() : null,
-                DEFAULT_SHORT_FRAME_LENGTH_MM);
-        double baseThickness = dim(shortType != null ? shortType.getDepthMm() : null, DEFAULT_FRAME_DEPTH_MM);
-        double peremychkaThickness = dim(shortType != null ? shortType.getDepthMm() : null, DEFAULT_FRAME_DEPTH_MM);
+        // Round 16 (баг-репорт: "чаще всего перемычка делается из обычной рамы... уберём
+        // короткие рамы, переделываем всё под обычные") -- отдельный "короткий" тип рамы
+        // (structureShortFrameTypeId) упразднён целиком. Перемычка/база/усилительные рамы
+        // выноса теперь берут габариты из ТОГО ЖЕ frameType, что и вертикальные рамы башни:
+        // sectionDepthMm/reinforcementHeightMm = широкая/высокая грань рамы (frameW/frameH,
+        // те же величины, что уже посчитаны выше), baseThickness/peremychkaThickness = узкая
+        // грань (frameD, толщина рельса) -- физически перемычка/база РЕАЛЬНО чаще всего
+        // делаются из обычной рамы, отдельного каталожного типа для них не требуется. Если
+        // инженеру на месте нужна именно короткая рама где-то конкретно -- это по-прежнему
+        // доступно per-cell через селектор "Рама для добавления" в Structure3DDialog (см.
+        // {@code StructureFrameCell#getFrameTypeId()}), просто больше не встроено в номинальный
+        // расчёт всей сетки.
+        double sectionDepthMm = frameW;
+        double baseThickness = frameD;
+        double peremychkaThickness = frameD;
+        double reinforcementHeightMm = frameH;
         double spacing = screen.getStructureTowerSpacingMm();
         // Зазор до экрана -- камера по умолчанию стоит со стороны ПОЛОЖИТЕЛЬНОГО Z и смотрит
         // на центр сцены, то есть большее Z означает БЛИЖЕ к зрителю -- конструктив на
@@ -305,8 +307,8 @@ public class Structure3DPanel extends JPanel {
         // совпадает с ближней гранью заднего (backZ+frameW/2).
         double backZ = frontZ - frameW;
         double peremychkaIntervalMm = StructureCalc.peremychkaIntervalMm(frameH);
-        return new StructureGeometry(frameH, frameW, frameD, sectionDepthMm, shortFrameLengthMm, baseThickness,
-                peremychkaThickness, spacing, frontZ, backZ, peremychkaIntervalMm);
+        return new StructureGeometry(frameH, frameW, frameD, sectionDepthMm, baseThickness,
+                peremychkaThickness, spacing, frontZ, backZ, peremychkaIntervalMm, reinforcementHeightMm);
     }
 
     private static double dim(Double value, double fallback) {
@@ -323,12 +325,15 @@ public class Structure3DPanel extends JPanel {
             int maxSection) {
     }
 
-    private FrameEnvelope frameEnvelope(Screen screen) {
+    private FrameEnvelope frameEnvelope(Screen screen, StructureGeometry g) {
         int towerCount = Math.max(0, screen.getStructureTowerCount());
         int verticalPerTower = Math.max(0, screen.getStructureVerticalFramesPerTower());
         int backRowSegments = Math.max(0, screen.getStructureBackRowSegments());
         int peremychkaLevels = Math.max(0, screen.getStructurePeremychkaLevels());
-        int baseSections = 1 + Math.max(0, screen.getStructureExtendedBaseSections());
+        // Round 10 -- "ядро" базовой рамы больше не 1 фиксированная секция, а
+        // StructureCalc#coreBaseSectionCount реальных модулей (см. её javadoc).
+        int coreSections = StructureCalc.coreBaseSectionCount(g.frameW(), g.sectionDepthMm());
+        int baseSections = coreSections + Math.max(0, screen.getStructureExtendedBaseSections());
         int minTower = 0;
         int maxTower = towerCount - 1;
         int maxFrontSeg = verticalPerTower - 1;
@@ -379,11 +384,36 @@ public class Structure3DPanel extends JPanel {
         String overrideId = cell != null ? cell.getFrameTypeId() : activeNewCellFrameTypeId;
         StructureFrameType override = overrideId != null
                 ? model.getWorkspace().structureFrameTypeById(overrideId) : null;
-        double fallbackH = reinforcement ? StructureCalc.DEFAULT_REINFORCEMENT_FRAME_HEIGHT_MM : g.frameH();
+        double fallbackH = reinforcement ? g.reinforcementHeightMm() : g.frameH();
         if (override == null) {
             return new double[]{g.frameW(), fallbackH, g.frameD()};
         }
         return new double[]{dim(override.getWidthMm(), g.frameW()), dim(override.getHeightMm(), fallbackH),
+                dim(override.getDepthMm(), g.frameD())};
+    }
+
+    /** Реальные габариты стойки КОНКРЕТНОЙ башни/ряда — по первому переопределению типа рамы
+     *  среди уже существующих (не hidden) ячеек этой башни+ряда (типичный случай — вся башня/
+     *  ряд собрана из одного типа, см. {@link #activeNewCellFrameTypeId}), иначе номинальный
+     *  тип экрана ({@code g}). Баг-репорт: "изменение типа рамы не влияет на перемычки, а
+     *  должно, башня может быть уже за счёт коротких рам" — {@link #resolveFrameDims} уже
+     *  учитывает per-cell override ПРИ ОТРИСОВКЕ самой стойки, но {@link #peremychkaCandidates}/
+     *  {@link #baseCandidates} использовали только номинальные {@code g.frameD()}/{@code
+     *  g.frameW()}, поэтому зазор между башнями не сужался/расширялся вслед за реальной
+     *  переопределённой шириной стойки. Этот метод — та же логика {@code resolveFrameDims}, но
+     *  по факту существующих ячеек башни, без ветки "призрака". */
+    private double[] resolveTowerPostDims(Screen screen, StructureGeometry g, int towerIndex, int row) {
+        String overrideId = screen.getStructureFrameCells().stream()
+                .filter(c -> c.getTowerIndex() == towerIndex && c.getRow() == row && !c.isHidden()
+                        && c.getFrameTypeId() != null)
+                .map(StructureFrameCell::getFrameTypeId)
+                .findFirst().orElse(null);
+        StructureFrameType override = overrideId != null
+                ? model.getWorkspace().structureFrameTypeById(overrideId) : null;
+        if (override == null) {
+            return new double[]{g.frameW(), g.frameH(), g.frameD()};
+        }
+        return new double[]{dim(override.getWidthMm(), g.frameW()), dim(override.getHeightMm(), g.frameH()),
                 dim(override.getDepthMm(), g.frameD())};
     }
 
@@ -400,7 +430,7 @@ public class Structure3DPanel extends JPanel {
      *  широкая грань уходит в глубину башни, там же — перекладины, видны ИЗНУТРИ башни
      *  тому, кто стоит между передним и задним рядом, как у настоящей лестничной рамы). */
     private List<Candidate> frameCandidates(Screen screen, StructureGeometry g) {
-        FrameEnvelope env = frameEnvelope(screen);
+        FrameEnvelope env = frameEnvelope(screen, g);
         List<StructureFrameCell> cells = screen.getStructureFrameCells();
         List<Candidate> result = new ArrayList<>();
         for (int t = env.minTower(); t <= env.maxTower(); t++) {
@@ -435,14 +465,16 @@ public class Structure3DPanel extends JPanel {
 
     /** Усилительные рамы выноса (row == 2 в {@link Screen#getStructureFrameCells()}, Phase 2.2
      *  — "1 метровая рама на секцию, вкл/выкл как всё остальное") — по одной на КАЖДУЮ секцию
-     *  выноса (section 0 = ядро, там не нужна — уже есть полноразмерный ряд 0/1), центрирована
-     *  по глубине секции. */
+     *  выноса (ядро, {@code [0, coreBaseSectionCount)}, там не нужна — уже есть полноразмерный
+     *  ряд 0/1, см. Round 10 в {@code StructureCalc#coreBaseSectionCount}), центрирована по
+     *  глубине секции. */
     private List<Candidate> reinforcementCandidates(Screen screen, StructureGeometry g) {
-        FrameEnvelope env = frameEnvelope(screen);
+        FrameEnvelope env = frameEnvelope(screen, g);
         List<StructureFrameCell> cells = screen.getStructureFrameCells();
         List<Candidate> result = new ArrayList<>();
+        int coreSections = StructureCalc.coreBaseSectionCount(g.frameW(), g.sectionDepthMm());
         for (int t = env.minTower(); t <= env.maxTower(); t++) {
-            for (int section = 1; section <= env.maxSection(); section++) {
+            for (int section = coreSections; section <= env.maxSection(); section++) {
                 final int ft = t;
                 final int fsec = section;
                 StructureFrameCell existingCell = cells.stream()
@@ -454,8 +486,19 @@ public class Structure3DPanel extends JPanel {
                 double sectionCenterZ = (zr[0] + zr[1]) / 2.0;
                 double z = sectionCenterZ - dims[0] / 2.0;
                 double[] bounds = {x, 0, z, dims[2], dims[1], dims[0]};
+                // Баг-репорт: "определение того, на что нацелен курсор считается криво" --
+                // усилительная рама рисуется тем же drawTowerSegment, что и вертикальная (полая
+                // "8"-форма, рельсы у ближнего/дальнего Z-края, между ними видно насквозь), но
+                // pickBox тут был ВСЕЙ сплошной bounds-коробкой -- клик по пустому месту между
+                // рельсами засчитывался как попадание. Тот же тесный pickBox по рельсам, что
+                // уже был у frameCandidates (см. её javadoc), просто раньше не применили сюда.
+                double rail = railThickness(dims[0]);
+                List<double[]> pickBoxes = exists
+                        ? List.of(new double[]{x, 0, z, dims[2], dims[1], rail},
+                                new double[]{x, 0, z + dims[0] - rail, dims[2], dims[1], rail})
+                        : List.of(bounds);
                 String newCellType = activeNewCellFrameTypeId;
-                result.add(new Candidate(new PickKey("reinforcement", ft, fsec, 0), bounds, List.of(bounds), exists,
+                result.add(new Candidate(new PickKey("reinforcement", ft, fsec, 0), bounds, pickBoxes, exists,
                         () -> model.toggleStructureFrameCell(screen, ft, 2, fsec, newCellType)));
             }
         }
@@ -468,28 +511,56 @@ public class Structure3DPanel extends JPanel {
      *  РОВНО заполняет зазор между рамами по X (не залезает ни в одну из них), полной глубины
      *  {@code frameW} по Z (совпадает с footprint-ом ряда, вплотную к обоим постам). Крепится к
      *  перекладине по высоте — {@code y} формула ({@code peremychkaIntervalMm} = 1.5×frameH)
-     *  гарантирует попадание ровно на перекладину, см. {@code drawTowerSegment} javadoc. */
+     *  гарантирует попадание ровно на перекладину, см. {@code drawTowerSegment} javadoc.
+     *
+     * <p>Round 8 (баг-репорт: "перемычка слишком короткая, не соответствует длине даже
+     *  короткой рамы") — зазор по X считался как {@code spacing - frameW}, но после Round 3
+     *  (узкая грань рамы {@code frameD} смотрит на зрителя, см. {@code frameCandidates})
+     *  реальная ширина стойки по X — это {@code frameD} (~51мм), а НЕ {@code frameW} (~500мм,
+     *  та грань ушла в глубину вдоль Z ещё в Round 3). Использование {@code frameW} тут
+     *  вычитало из зазора на порядок больше, чем реально занимает стойка, отсюда перемычка
+     *  получалась вдвое короче настоящего зазора. Все X-величины ниже переведены на
+     *  {@code frameD}; Z (глубина/footprint ряда) по-прежнему {@code frameW} — эта ось не
+     *  менялась. */
     private List<Candidate> peremychkaCandidates(Screen screen, StructureGeometry g) {
-        FrameEnvelope env = frameEnvelope(screen);
+        FrameEnvelope env = frameEnvelope(screen, g);
         var cells = screen.getStructurePeremychkaCells();
-        double xSpan = g.spacing() - g.frameW();
         List<Candidate> result = new ArrayList<>();
-        if (xSpan <= 0) {
-            return result;
-        }
         for (int gapIdx = env.minTower(); gapIdx < env.maxTower(); gapIdx++) {
             for (int row = 0; row < 2; row++) {
                 double zCenter = row == 0 ? g.frontZ() : g.backZ();
+                // Баг-репорт: "изменение типа рамы не влияет на перемычки, а должно, башня
+                // может быть уже за счёт коротких рам" -- зазор/глубина считались от НОМИНАЛЬНОГО
+                // типа экрана (g.frameD()/g.frameW()), даже если конкретная стойка соседней башни
+                // переопределена per-cell на другой (например, более узкий) тип. Берём реальные
+                // габариты СТОЕК этого зазора (resolveTowerPostDims), а не номинал.
+                double[] leftDims = resolveTowerPostDims(screen, g, gapIdx, row);
+                double[] rightDims = resolveTowerPostDims(screen, g, gapIdx + 1, row);
+                double xSpan = g.spacing() - leftDims[2] / 2.0 - rightDims[2] / 2.0;
+                if (xSpan <= 0) {
+                    continue;
+                }
+                double zDepth = Math.min(leftDims[0], rightDims[0]);
+                double rail = railThickness(xSpan);
                 for (int level = 0; level <= env.maxLevel(); level++) {
                     final int fg = gapIdx;
                     final int fr = row;
                     final int fl = level;
                     boolean exists = cells.stream().anyMatch(c -> c.matches(fg, fr, fl) && !c.isHidden());
-                    double x = gapIdx * g.spacing() + g.frameW() / 2.0;
+                    double x = gapIdx * g.spacing() + leftDims[2] / 2.0;
                     double y = (level + 1) * g.peremychkaIntervalMm() - g.peremychkaThickness() / 2.0;
-                    double z = zCenter - g.frameW() / 2.0;
-                    double[] bounds = {x, y, z, xSpan, g.peremychkaThickness(), g.frameW()};
-                    result.add(new Candidate(new PickKey("peremychka", fg, fr, fl), bounds, List.of(bounds), exists,
+                    double z = zCenter - zDepth / 2.0;
+                    double[] bounds = {x, y, z, xSpan, g.peremychkaThickness(), zDepth};
+                    // Баг-репорт: "определение того, на что нацелен курсор считается криво" --
+                    // drawGapSpanningLadderFrame рисует полую "8"-форму (рельсы вдоль X у
+                    // ближнего/дальнего Z-края, между ними видно насквозь), но pickBox был ВСЕЙ
+                    // сплошной bounds-коробкой -- клик в пустоту между рельсами засчитывался.
+                    // Тесный pickBox по рельсам (тот же railThickness, что и в самой отрисовке).
+                    List<double[]> pickBoxes = exists
+                            ? List.of(new double[]{x, y, z, xSpan, g.peremychkaThickness(), rail},
+                                    new double[]{x, y, z + zDepth - rail, xSpan, g.peremychkaThickness(), rail})
+                            : List.of(bounds);
+                    result.add(new Candidate(new PickKey("peremychka", fg, fr, fl), bounds, pickBoxes, exists,
                             () -> model.toggleStructurePeremychkaCell(screen, fg, fr, fl)));
                 }
             }
@@ -498,39 +569,67 @@ public class Structure3DPanel extends JPanel {
     }
 
     /** Диапазон Z одной секции опорной рамы — {@code {frontZ, backZ}} (оба отрицательные,
-     *  frontZ ближе к экрану). Секция 0 ("ядро") — ЕДИНАЯ плита под ВСЕЙ объёмной частью
-     *  башни: от ближней грани переднего ряда до дальней грани заднего (round 4 — раньше
-     *  секция 0 занимала только зазор между рядами и физически ПЕРЕСЕКАЛАСЬ с обоими рядами,
-     *  "рамы не могут пересекаться"). Секции 1+ — вынос той же глубины {@code sectionDepthMm},
-     *  что и зазор между рядами, продолжают ядро назад. */
+     *  frontZ ближе к экрану). Round 10 (баг-репорт: "эта пластина должна не рендериться как
+     *  N рам, а являться N отдельными рамами") — КАЖДАЯ секция, включая "ядро", теперь
+     *  ОДИНАКОВОЙ глубины {@code sectionDepthMm} (ширина короткой рамы, реальный каталожный
+     *  размер), считая от ближней грани переднего ряда назад — раньше секция 0 была ОДНОЙ
+     *  сплошной плитой на всю глубину {@code 2*frameW} под обоими рядами сразу (произвольный
+     *  размер, см. историю Round 4/7 в STRUCTURE_CALC_NOTES.md); сколько таких секций реально
+     *  покрывает "ядро" до начала выноса под балласт — считает {@code StructureCalc
+     *  #coreBaseSectionCount}, вызывающая сторона ({@code ScreenLogic
+     *  #regenerateStructureCells} на стороне данных, {@code reinforcementCandidates}/{@code
+     *  frameEnvelope} на стороне рендера) знает эту границу отдельно — сама функция теперь
+     *  не различает "ядро"/"вынос", это чисто равномерный шаг. */
     private static double[] baseSectionZRange(StructureGeometry g, int section) {
         double coreNearZ = g.frontZ() + g.frameW() / 2.0;
-        double coreFarZ = g.backZ() - g.frameW() / 2.0;
-        if (section <= 0) {
-            return new double[]{coreNearZ, coreFarZ};
-        }
-        double frontZ = coreFarZ - (section - 1) * g.sectionDepthMm();
+        double frontZ = coreNearZ - section * g.sectionDepthMm();
         return new double[]{frontZ, frontZ - g.sectionDepthMm()};
     }
 
-    /** Round 5: X-протяжённость (лицом к зрителю) — {@code shortFrameLengthMm}, как у
-     *  перемычки (тот же тип "короткая рама", то же требование "длинным ребром к зрителю"). */
+    /** Round 7 (баг-репорт: "рамы основания должны ставиться точно так же как перемычки, но на
+     *  уровне пола, сейчас они центрируются по вертикальным рамам, это неверно") — опорная рама
+     *  соединяет ДВЕ СОСЕДНИЕ БАШНИ по X (тот же {@code xSpan}, что у {@link
+     *  #peremychkaCandidates}), не центрируется на одной башне. {@code y = -baseThickness}
+     *  (уровень пола) вместо высоты перекладины — единственное содержательное отличие от
+     *  перемычки. */
     private List<Candidate> baseCandidates(Screen screen, StructureGeometry g) {
-        FrameEnvelope env = frameEnvelope(screen);
+        FrameEnvelope env = frameEnvelope(screen, g);
         var cells = screen.getStructureBaseFrameCells();
         List<Candidate> result = new ArrayList<>();
-        for (int t = env.minTower(); t <= env.maxTower(); t++) {
+        for (int gapIdx = env.minTower(); gapIdx < env.maxTower(); gapIdx++) {
+            // Баг-репорт: "изменение типа рамы не влияет на перемычки/базу, а должно" -- та же
+            // причина, что у peremychkaCandidates (см. её javadoc): зазор считался от НОМИНАЛЬНОГО
+            // g.frameD(), игнорируя per-cell override реальной стойки. База лежит ПОД обоими
+            // рядами сразу, поэтому берём ШИРШУЮ из стоек переднего/заднего ряда каждой башни --
+            // так плита гарантированно не перекрывает ни одну реальную стойку, независимо от того,
+            // какой ряд переопределён.
+            double leftD = Math.max(resolveTowerPostDims(screen, g, gapIdx, 0)[2],
+                    resolveTowerPostDims(screen, g, gapIdx, 1)[2]);
+            double rightD = Math.max(resolveTowerPostDims(screen, g, gapIdx + 1, 0)[2],
+                    resolveTowerPostDims(screen, g, gapIdx + 1, 1)[2]);
+            double xSpan = g.spacing() - leftD / 2.0 - rightD / 2.0;
+            if (xSpan <= 0) {
+                continue;
+            }
+            double rail = railThickness(xSpan);
             for (int section = 0; section <= env.maxSection(); section++) {
-                final int ft = t;
+                final int fg = gapIdx;
                 final int fsec = section;
-                boolean exists = cells.stream().anyMatch(c -> c.matches(ft, fsec) && !c.isHidden());
-                double x = t * g.spacing() - g.shortFrameLengthMm() / 2.0;
+                boolean exists = cells.stream().anyMatch(c -> c.matches(fg, fsec) && !c.isHidden());
+                double x = gapIdx * g.spacing() + leftD / 2.0;
                 double[] zr = baseSectionZRange(g, section);
                 double sectionSpan = zr[0] - zr[1];
-                double[] bounds = {x, -g.baseThickness(), zr[1], g.shortFrameLengthMm(), g.baseThickness(),
-                        sectionSpan};
-                result.add(new Candidate(new PickKey("base", ft, fsec, 0), bounds, List.of(bounds), exists,
-                        () -> model.toggleStructureBaseFrameSection(screen, ft, fsec)));
+                double[] bounds = {x, -g.baseThickness(), zr[1], xSpan, g.baseThickness(), sectionSpan};
+                // Баг-репорт: "определение того, на что нацелен курсор считается криво" -- та же
+                // причина, что у peremychkaCandidates выше: полая "8"-форма отрисовки, но
+                // pickBox был ВСЕЙ сплошной bounds-коробкой. Тесный pickBox по рельсам.
+                List<double[]> pickBoxes = exists
+                        ? List.of(new double[]{x, -g.baseThickness(), zr[1], xSpan, g.baseThickness(), rail},
+                                new double[]{x, -g.baseThickness(), zr[1] + sectionSpan - rail, xSpan,
+                                        g.baseThickness(), rail})
+                        : List.of(bounds);
+                result.add(new Candidate(new PickKey("base", fg, fsec, 0), bounds, pickBoxes, exists,
+                        () -> model.toggleStructureBaseFrameSection(screen, fg, fsec)));
             }
         }
         return result;
@@ -836,19 +935,26 @@ public class Structure3DPanel extends JPanel {
          *
          * <p>Round 3: у вертикальных/усилительных рам рельсы теперь стоят у БЛИЖНЕГО/ДАЛЬНЕГО
          *  по Z края (см. {@link #drawTowerSegment}), не слева/справа по X — стыковые стаканы
-         *  на них передвинуты туда же. Стаканы перемычек/базовых секций остались X-based —
-         *  геометрия самих перемычек и баз в этом раунде не менялась (см. {@code
-         *  #drawPeremychkaFrame}), там стыки по-прежнему у соответствующих рельсов. */
+         *  на них передвинуты туда же. Стаканы перемычек/базы (Round 5/7) — у обоих концов
+         *  X-пролёта между соседними башнями, на Z-глубине соответствующего ряда/секции. */
         private void drawCups(GL2 gl, Screen screen, StructureGeometry g) {
             double tube = Math.min(40, g.frameD());
             double cupSize = tube * 1.5;
             double frameRail = railThickness(g.frameW());
-            double shortRail = railThickness(g.shortFrameLengthMm());
             gl.glColor3f(CUP_COLOR.getRed() / 255f, CUP_COLOR.getGreen() / 255f, CUP_COLOR.getBlue() / 255f);
 
+            // Round 9 (баг-репорт: "при добавлении рам вглубь появляются стаканы вверх в
+            // воздухе") -- этот блок группирует по (towerIndex, row) и трактует segmentIndex
+            // как позицию В СТЕКЕ (y = (seg+1)*frameH), что верно ТОЛЬКО для row 0/1. Для
+            // row == 2 (усилительные рамы выноса) segmentIndex на самом деле означает НОМЕР
+            // СЕКЦИИ ВЫНОСА (см. class-javadoc StructureFrameCell), не позицию по высоте --
+            // без фильтра `row < 2` две соседние по номеру секции усилительные рамы читались
+            // как "смежный стык в стеке" и стакан улетал на y=(section+1)*frameH, в воздух.
+            // StructureCalc.compute уже фильтрует так же при подсчёте verticalJoints -- этот
+            // рендер-цикл просто не был приведён в соответствие.
             java.util.Map<String, SortedSet<Integer>> segmentsByTowerRow = new TreeMap<>();
             for (StructureFrameCell c : screen.getStructureFrameCells()) {
-                if (!c.isHidden()) {
+                if (!c.isHidden() && c.getRow() < 2) {
                     segmentsByTowerRow.computeIfAbsent(c.getTowerIndex() + ":" + c.getRow(), k -> new TreeSet<>())
                             .add(c.getSegmentIndex());
                 }
@@ -871,49 +977,16 @@ public class Structure3DPanel extends JPanel {
                 }
             }
 
-            // Round 5: перемычка соединяет соседние башни ОДНОГО ряда -- стаканы у обоих
-            // концов X-пролёта (к левой и к правой башне), на Z-глубине этого ряда.
-            for (var c : screen.getStructurePeremychkaCells()) {
-                if (c.isHidden()) {
-                    continue;
-                }
-                double zCenter = c.getRow() == 0 ? g.frontZ() : g.backZ();
-                double leftX = c.getTowerIndex() * g.spacing() + g.frameW() / 2.0 - cupSize / 2.0;
-                double rightX = (c.getTowerIndex() + 1) * g.spacing() - g.frameW() / 2.0 - cupSize / 2.0;
-                double y = (c.getLevelIndex() + 1) * g.peremychkaIntervalMm() - cupSize / 2.0;
-                double cupZ = zCenter - cupSize / 2.0;
-                box(gl, leftX, y, cupZ, cupSize, cupSize, cupSize);
-                box(gl, rightX, y, cupZ, cupSize, cupSize, cupSize);
-            }
-
-            for (var c : screen.getStructureBaseFrameCells()) {
-                if (c.isHidden()) {
-                    continue;
-                }
-                double towerX = c.getTowerIndex() * g.spacing();
-                double sectionFrontZ = baseSectionZRange(g, c.getSectionIndex())[0];
-                box(gl, towerX - g.shortFrameLengthMm() / 2.0 + shortRail / 2.0 - cupSize / 2.0, -cupSize / 2.0,
-                        sectionFrontZ - cupSize / 2.0, cupSize, cupSize, cupSize);
-                box(gl, towerX + g.shortFrameLengthMm() / 2.0 - shortRail / 2.0 - cupSize / 2.0, -cupSize / 2.0,
-                        sectionFrontZ - cupSize / 2.0, cupSize, cupSize, cupSize);
-            }
-
-            // Усилительные рамы выноса (row == 2) -- по одной паре стаканов в основании,
-            // соединяющей с базовой секцией под ней (не стоят в стеке, см. class-javadoc) --
-            // рельсы усилительной рамы тоже у ближнего/дальнего Z-края (см. drawTowerSegment).
-            for (StructureFrameCell c : screen.getStructureFrameCells()) {
-                if (c.isHidden() || c.getRow() != 2) {
-                    continue;
-                }
-                double towerX = c.getTowerIndex() * g.spacing();
-                double[] zr = baseSectionZRange(g, c.getSegmentIndex());
-                double reinforcementZCenter = (zr[0] + zr[1]) / 2.0;
-                double cupX = towerX - cupSize / 2.0;
-                double nearZ = reinforcementZCenter - g.frameW() / 2.0 + frameRail / 2.0 - cupSize / 2.0;
-                double farZ = reinforcementZCenter + g.frameW() / 2.0 - frameRail / 2.0 - cupSize / 2.0;
-                box(gl, cupX, -cupSize / 2.0, nearZ, cupSize, cupSize, cupSize);
-                box(gl, cupX, -cupSize / 2.0, farZ, cupSize, cupSize, cupSize);
-            }
+            // Round 10 (баг-репорт: "теперь стаканы появляются на 0 высоте, они там не нужны.
+            // стаканы ставятся сверху рам, в случае если над ней ставится еще одна рама и
+            // только тогда") -- пользователь сузил правило до единственного случая, уже
+            // реализованного выше: стакан существует ТОЛЬКО там, где одна рама физически стоит
+            // СВЕРХУ другой рамы ТОГО ЖЕ типа (вертикальный стек, row 0/1, цикл выше). Ни
+            // перемычка (Round 8), ни база, ни усилительная рама этому условию не отвечают --
+            // они примыкают сбоку/снизу, а не стоят друг на друге -- стаканы для базы и
+            // усилительных рам (были на уровне пола, "0 высоты") убраны вслед за перемычкой.
+            // StructureCalc.compute больше НЕ учитывает baseJoints/reinforcementCount в
+            // cupCount -- см. её javadoc.
         }
 
         /** Один сегмент вертикальной рамы башни — 2 стойки (толстые рельсы у ближнего/дальнего
@@ -946,53 +1019,43 @@ public class Structure3DPanel extends JPanel {
             gl.glColor3f(0.6f, 0.61f, 0.63f);
         }
 
-        /** Перемычка между соседними башнями (Round 5) — та же самая рама, просто РАЗВЁРНУТАЯ
-         *  ТАК, ЧТОБЫ РЕЛЬСЫ ШЛИ ВДОЛЬ X (направление к соседней башне, {@code xSpan}) — рельсы
-         *  у ближнего/дальнего по Z края (совпадают с footprint-ом ряда), 3 перекладины
-         *  перпендикулярно (вдоль Z) в начале/середине/конце X-пролёта — та же "8-образная"
-         *  форма, просто третья ось-permutация (см. {@link #drawTowerSegment} — рельсы вдоль Z;
-         *  {@link #drawHorizontalLadderFrame} — рельсы вдоль Z, длина вдоль тоже Z, для
-         *  основания). {@code x}/{@code y}/{@code z} — левый-нижний-задний угол bounds. */
+        /** Перемычка между соседними башнями (Round 5) — форма см. {@link
+         *  #drawGapSpanningLadderFrame}. {@code x}/{@code y}/{@code z} — левый-нижний-задний
+         *  угол bounds. */
         private void drawInterTowerPeremychka(GL2 gl, double x, double y, double z, double xSpan, double thickness,
                 double zWidth) {
+            drawGapSpanningLadderFrame(gl, x, y, z, xSpan, thickness, zWidth, 0.55f, 0.5f, 0.42f, 0.5f, 0.46f, 0.39f);
+        }
+
+        /** Опорная (базовая) рама — Round 7 (баг-репорт: "рамы основания должны ставиться точно
+         *  так же как перемычки, но на уровне пола") — тот же "гэп-каркас" (рельсы вдоль X,
+         *  между соседними башнями), что у {@link #drawInterTowerPeremychka}, только серая, под
+         *  цвет вертикальных рам, а не бежевая (не путать визуально с перемычкой), и на уровне
+         *  пола вместо высоты перекладины. */
+        private void drawBaseFrame(GL2 gl, double x, double y, double z, double xSpan, double thickness,
+                double zWidth) {
+            drawGapSpanningLadderFrame(gl, x, y, z, xSpan, thickness, zWidth, 0.42f, 0.43f, 0.45f, 0.37f, 0.38f, 0.4f);
+        }
+
+        /** Общая форма для перемычки/опоры (Round 7) — рельсы вдоль X (между соседними
+         *  башнями, {@code xSpan}) у ближнего/дальнего по Z края (совпадают с footprint-ом
+         *  ряда, {@code zWidth}), 3 перекладины перпендикулярно (вдоль Z) в начале/середине/
+         *  конце X-пролёта — та же "8-образная" форма, что у {@link #drawTowerSegment}, просто
+         *  третья axis-permutation. */
+        private void drawGapSpanningLadderFrame(GL2 gl, double x, double y, double z, double xSpan, double thickness,
+                double zWidth, float railR, float railG, float railB, float crossR, float crossG, float crossB) {
             double rail = railThickness(xSpan);
             double crossThickness = rail * 0.7;
-            gl.glColor3f(0.55f, 0.5f, 0.42f);
+            gl.glColor3f(railR, railG, railB);
             box(gl, x, y, z, xSpan, thickness, rail);
             box(gl, x, y, z + zWidth - rail, xSpan, thickness, rail);
 
-            gl.glColor3f(0.5f, 0.46f, 0.39f);
+            gl.glColor3f(crossR, crossG, crossB);
             double crossZLen = zWidth - 2 * rail;
             double crossZ = z + rail;
             box(gl, x, y, crossZ, crossThickness, thickness, crossZLen);
             box(gl, x + xSpan / 2.0 - crossThickness / 2.0, y, crossZ, crossThickness, thickness, crossZLen);
             box(gl, x + xSpan - crossThickness, y, crossZ, crossThickness, thickness, crossZLen);
-            gl.glColor3f(0.55f, 0.5f, 0.42f);
-        }
-
-        /** Опорная (базовая) рама — тот же горизонтальный "8"-каркас, что у перемычки (round 4,
-         *  баг-репорт "перемычки и основания — горизонтальные рамы, крепящиеся к перекладине",
-         *  раньше опора рисовалась сплошной плитой) — только серая, под цвет вертикальных рам,
-         *  а не бежевая (не путать визуально с перемычкой). */
-        private void drawBaseFrame(GL2 gl, double x, double y, double z, double frameW, double thickness,
-                double span) {
-            drawHorizontalLadderFrame(gl, x, y, z, frameW, thickness, span, 0.42f, 0.43f, 0.45f, 0.37f, 0.38f, 0.4f);
-        }
-
-        private void drawHorizontalLadderFrame(GL2 gl, double x, double y, double z, double frameW, double thickness,
-                double span, float railR, float railG, float railB, float crossR, float crossG, float crossB) {
-            double rail = railThickness(frameW);
-            double crossThickness = rail * 0.7;
-            gl.glColor3f(railR, railG, railB);
-            box(gl, x, y, z, rail, thickness, span);
-            box(gl, x + frameW - rail, y, z, rail, thickness, span);
-
-            gl.glColor3f(crossR, crossG, crossB);
-            double crossX = x + rail;
-            double crossW = frameW - 2 * rail;
-            box(gl, crossX, y, z, crossW, thickness, crossThickness);
-            box(gl, crossX, y, z + span / 2.0 - crossThickness / 2.0, crossW, thickness, crossThickness);
-            box(gl, crossX, y, z + span - crossThickness, crossW, thickness, crossThickness);
             gl.glColor3f(railR, railG, railB);
         }
 

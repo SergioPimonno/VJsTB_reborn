@@ -251,9 +251,24 @@ public final class ScreenLogic {
      *  изменилась и башня осталась без кабинетов под собой, её ячейки выбрасываются при
      *  следующем «Рассчитать». Ручное добавление кликом в 3D ({@code AppModel
      *  #toggleStructureFrameCell}) этому правилу НЕ подчиняется — фильтр действует только здесь,
-     *  при автогенерации. */
+     *  при автогенерации.
+     *
+     * <p><b>Round 10 — {@code coreBaseSectionCount}</b> (баг-репорт: "плита должна не
+     *  рендериться как N рам, а являться N отдельными рамами. Башни могут быть глубиной 0.5,
+     *  в таком случае текущее основание не будет подходить по габаритам") — "ядро" базовой рамы
+     *  (секция выноса, ближайшая к экрану) раньше было ВСЕГДА ровно одной {@code
+     *  StructureBaseFrameCell} (index 0), покрывающей ВСЮ глубину под обоими рядами сразу
+     *  (произвольный, не каталожный размер). Теперь вызывающая сторона ({@code
+     *  AppModel#updateScreenStructure}, знающая реальные габариты выбранных типов рамы через
+     *  {@code Workspace}) сама считает {@code StructureCalc#coreBaseSectionCount(frameW,
+     *  sectionDepthMm)} и передаёт сюда — ядро занимает индексы {@code [0, coreBaseSectionCount)},
+     *  каждый — РЕАЛЬНЫЙ, независимо переключаемый модуль каталожного размера, а не одна
+     *  большая плита; секции выноса начинаются с {@code coreBaseSectionCount}, а не жёстко с 1.
+     *  {@code ScreenLogic} сам не знает габаритов рамы (нет доступа к {@code Workspace}) —
+     *  параметр всегда приходит уже вычисленным, как и остальные номинальные счётчики здесь. */
     public static void regenerateStructureCells(Screen screen, CabinetType type, int towerCount,
-            int verticalFramesPerTower, int backRowSegments, int peremychkaLevels, int extendedBaseSections) {
+            int verticalFramesPerTower, int backRowSegments, int peremychkaLevels, int extendedBaseSections,
+            int coreBaseSectionCount) {
         double spacing = screen.getStructureTowerSpacingMm();
         Set<Integer> validTowers = new HashSet<>();
         for (int t = 0; t < towerCount; t++) {
@@ -284,15 +299,22 @@ public final class ScreenLogic {
             }
         }
 
-        int sectionCount = 1 + Math.max(0, extendedBaseSections);
+        // Round 10 (баг-репорт: "эта пластина должна не рендериться как 2 рамы, а являться 2
+        // отдельными рамами") -- "ядро" базовой рамы больше не ОДНА секция (index 0), а
+        // {@code coreSections} штук РЕАЛЬНЫХ, независимо переключаемых модулей каталожного
+        // размера (см. StructureCalc#coreBaseSectionCount) -- усилительные рамы выноса
+        // (row == 2) по-прежнему идут ТОЛЬКО в секциях выноса, но те теперь начинаются с
+        // {@code coreSections}, а не жёстко с 1.
+        int coreSections = Math.max(1, coreBaseSectionCount);
+        int sectionCount = coreSections + Math.max(0, extendedBaseSections);
         for (StructureFrameCell c : frames) {
             if (validTowers.contains(c.getTowerIndex()) && c.getRow() == 2
-                    && c.getSegmentIndex() >= 1 && c.getSegmentIndex() < sectionCount) {
+                    && c.getSegmentIndex() >= coreSections && c.getSegmentIndex() < sectionCount) {
                 keptFrames.add(c);
             }
         }
         for (int t : validTowers) {
-            for (int section = 1; section < sectionCount; section++) {
+            for (int section = coreSections; section < sectionCount; section++) {
                 int ft = t;
                 int fsec = section;
                 if (keptFrames.stream().noneMatch(c -> c.matches(ft, 2, fsec))) {
@@ -302,10 +324,13 @@ public final class ScreenLogic {
         }
         screen.setStructureFrameCells(keptFrames);
 
-        // Round 5: перемычка соединяет ДВЕ СОСЕДНИЕ БАШНИ (towerIndex, towerIndex+1) В ПРЕДЕЛАХ
-        // ОДНОГО ряда, не передний/задний ряд одной башни (эта роль упразднена) -- зазор
-        // (towerIndex, towerIndex+1) валиден, только если ОБЕ башни валидны (нечего соединять,
-        // если соседняя башня не строится, см. towerHasCabinetContent).
+        // Round 14 — откат Round 13: пользователь явно попросил вернуть сплошную стену
+        // конструктива по умолчанию ("пусть для экрана генерится стена конструктива, при
+        // необходимости инженер сам удалит ненужные рамы") — перемычка/база между СОСЕДНИМИ
+        // башнями (Round 5-7) снова заполняют автоматически ЛЮБОЙ валидный зазор (обе башни
+        // валидны, см. towerHasCabinetContent), а не только сохраняют то, что расставлено
+        // вручную — убрать лишнее одним кликом по существующей детали в 3D проще, чем
+        // достраивать недостающее по одному призраку за раз.
         List<StructurePeremychkaCell> peremychki = screen.getStructurePeremychkaCells();
         List<StructurePeremychkaCell> keptPeremychki = new ArrayList<>();
         for (StructurePeremychkaCell c : peremychki) {
@@ -331,14 +356,20 @@ public final class ScreenLogic {
         }
         screen.setStructurePeremychkaCells(keptPeremychki);
 
+        // То же самое для опорной рамы (Round 7) — соединение соседних башен основанием тоже
+        // снова заполняется автоматически, тем же правилом, что и перемычка выше.
         List<StructureBaseFrameCell> baseCells = screen.getStructureBaseFrameCells();
         List<StructureBaseFrameCell> keptBase = new ArrayList<>();
         for (StructureBaseFrameCell c : baseCells) {
-            if (validTowers.contains(c.getTowerIndex()) && c.getSectionIndex() < sectionCount) {
+            boolean gapValid = validTowers.contains(c.getTowerIndex()) && validTowers.contains(c.getTowerIndex() + 1);
+            if (gapValid && c.getSectionIndex() < sectionCount) {
                 keptBase.add(c);
             }
         }
         for (int t : validTowers) {
+            if (!validTowers.contains(t + 1)) {
+                continue;
+            }
             for (int section = 0; section < sectionCount; section++) {
                 int ft = t;
                 int fsec = section;

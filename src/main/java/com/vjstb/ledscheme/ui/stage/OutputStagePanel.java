@@ -31,7 +31,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
+import javax.swing.JComboBox;
 import javax.swing.JFileChooser;
+import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JTextField;
@@ -49,6 +51,7 @@ public class OutputStagePanel extends JPanel {
     private final AppModel model;
     private final com.vjstb.ledscheme.settings.SettingsManager settings;
     private final JTextField folderField = new JTextField();
+    private final JComboBox<Integer> dpiCombo = new JComboBox<>(new Integer[]{72, 150, 300});
     private File chosenFolder;
 
     public OutputStagePanel(AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings) {
@@ -89,6 +92,17 @@ public class OutputStagePanel extends JPanel {
         folderRow.add(folderField, BorderLayout.CENTER);
         folderRow.add(choose, BorderLayout.EAST);
         body.add(UiKit.section("Папка вывода", folderRow));
+
+        body.add(UiKit.vgap(10));
+        JPanel dpiRow = new JPanel(new BorderLayout(6, 0));
+        dpiCombo.setSelectedItem(settings.activeProfile().getDocExportDpi());
+        dpiCombo.setToolTipText("Плотность пикселей JPEG-схем (питание/сигнал экранов, блок-схема площадки,"
+                + " обзор сцены) — 72 (текущий стандарт для экрана) до 300 (стандарт для печати). НЕ влияет на"
+                + " PNG-маски — их размер жёстко привязан к реальному разрешению LED-панели.");
+        dpiCombo.addActionListener(e -> settings.setDocExportDpi((Integer) dpiCombo.getSelectedItem()));
+        dpiRow.add(new JLabel("Качество, DPI"), BorderLayout.WEST);
+        dpiRow.add(dpiCombo, BorderLayout.CENTER);
+        body.add(UiKit.section("Качество экспортируемых схем", dpiRow));
 
         body.add(UiKit.vgap(10));
         JButton generate = new JButton("Сформировать пакет документации проекта");
@@ -151,6 +165,10 @@ public class OutputStagePanel extends JPanel {
             return;
         }
         File folder = resolveFolder();
+        // Качество JPEG-схем (питание/сигнал/блок-схема/обзор сцены), НЕ масок —
+        // см. dpiCombo/UserProfile#getDocExportDpi. 1.0 = 72dpi = прежнее поведение.
+        int docExportDpi = settings.activeProfile().getDocExportDpi();
+        double dpiScale = docExportDpi / 72.0;
 
         StringBuilder report = new StringBuilder();
         report.append("Отчёт по проекту: ").append(project.getName()).append('\n');
@@ -249,15 +267,17 @@ public class OutputStagePanel extends JPanel {
                     List<SignalChain> scrSignalChains = model.signalChainsTouchingScreen(scr);
 
                     BufferedImage powerImg = SchemeRenderer.renderImage(scr, type, true, 120, model.getWorkspace(),
-                            scrPowerChains, scrSignalChains, kw);
+                            scrPowerChains, scrSignalChains, kw, dpiScale);
                     SchemeRenderer.writeJpeg(powerImg,
-                            new File(powerFolder, OutputPaths.sanitize(scr.getName()) + ".jpg"));
+                            new File(powerFolder, OutputPaths.sanitize(scr.getName() + " Сила") + ".jpg"),
+                            docExportDpi);
                     jpegCount++;
 
                     BufferedImage signalImg = SchemeRenderer.renderImage(scr, type, false, 120, model.getWorkspace(),
-                            scrPowerChains, scrSignalChains, kw);
+                            scrPowerChains, scrSignalChains, kw, dpiScale);
                     SchemeRenderer.writeJpeg(signalImg,
-                            new File(signalFolder, OutputPaths.sanitize(scr.getName()) + ".jpg"));
+                            new File(signalFolder, OutputPaths.sanitize(scr.getName() + " Сигнал") + ".jpg"),
+                            docExportDpi);
                     jpegCount++;
 
                     BufferedImage maskImg = PixelGridRenderer.renderMask(scr, type, model.getWorkspace(),
@@ -278,9 +298,9 @@ public class OutputStagePanel extends JPanel {
                         SceneCanvasPanel overview = new SceneCanvasPanel(model, settings);
                         overview.setDetailMode(true, power, false);
                         Dimension size = overview.getPreferredSize();
-                        BufferedImage img = overview.renderImage(size.width, size.height);
+                        BufferedImage img = overview.renderImage(size.width, size.height, dpiScale);
                         File target = new File(power ? powerFolder : signalFolder, "_Все экраны сцены.jpg");
-                        SchemeRenderer.writeJpeg(img, target);
+                        SchemeRenderer.writeJpeg(img, target, docExportDpi);
                         jpegCount++;
                     }
                 }
@@ -302,8 +322,11 @@ public class OutputStagePanel extends JPanel {
                     File modeFolder = schemaMode == SchemaMode.POWER ? powerFolder : signalFolder;
                     SchemaCanvasPanel schemaCanvas = new SchemaCanvasPanel(model, schemaMode, settings);
                     Dimension size = schemaCanvas.getPreferredSize();
-                    BufferedImage img = schemaCanvas.renderImage(size.width, size.height, screensAsWiring);
-                    SchemeRenderer.writeJpeg(img, new File(modeFolder, "_Блок-схема.jpg"));
+                    BufferedImage img = schemaCanvas.renderImage(size.width, size.height, screensAsWiring, dpiScale);
+                    String modeSuffix = schemaMode == SchemaMode.POWER ? " Сила" : " Сигнал";
+                    SchemeRenderer.writeJpeg(img,
+                            new File(modeFolder, OutputPaths.sanitize(scene.getName() + modeSuffix) + ".jpg"),
+                            docExportDpi);
                     jpegCount++;
                 }
 
@@ -427,7 +450,36 @@ public class OutputStagePanel extends JPanel {
 
         addProjectorSheet(wb, project);
         addWiringSheets(wb, project);
+        addStructureSheet(wb, project);
         return wb;
+    }
+
+    /** Спецификация наземного конструктива (см. {@code service.StructureCalc},
+     *  STRUCTURE_CALC_NOTES.md) — по одной строке на КАЖДЫЙ экран с {@code mountType ==
+     *  STRUCTURE}, посчитанной от РЕАЛЬНО расставленных в 3D деталей ({@code
+     *  StructureCalc.compute}, тот же вызов, что и {@code SetupStagePanel
+     *  #buildStructureSpec} — единственный источник правды, не отдельно
+     *  накапливаемый список). Экранов без этого способа монтажа просто нет в списке —
+     *  лист может остаться пустым (только заголовок), это нормально для проекта без
+     *  ни одного конструктива. */
+    private void addStructureSheet(Workbook wb, Project project) {
+        Sheet sheet = com.vjstb.ledscheme.service.SpecXlsxWriter.addSheet(wb, "Конструктив",
+                "Сцена", "Экран", "Вертикальных рам, шт", "Перемычек, шт", "Секций базовых рам, шт",
+                "Стаканов, шт", "Болтов, шт", "Требуемый балласт, кг", "Контейнеров балласта, шт");
+        for (Scene scene : project.getScenes()) {
+            for (Screen scr : scene.getScreens()) {
+                if (scr.getMountType() != com.vjstb.ledscheme.model.ScreenMountType.STRUCTURE) {
+                    continue;
+                }
+                CabinetType type = model.typeOf(scr);
+                com.vjstb.ledscheme.service.StructureCalc.Result r =
+                        com.vjstb.ledscheme.service.StructureCalc.compute(scr, type, model.getWorkspace());
+                com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, scene.getName(), scr.getName(),
+                        r.verticalFrameCount(), r.peremychkaCount(), r.baseFrameCount(), r.cupCount(),
+                        r.boltCount(), r.requiredBallastKg(), r.ballastContainerCount());
+            }
+        }
+        com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(sheet, 9);
     }
 
     /** Спецификация проекторов, добавленных в проект программно/через прежний

@@ -958,6 +958,11 @@ class AppModelTest {
         List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).limit(1).toList();
         assertTrue(assertThrowsRuntime(() -> model.addSignalChain(5, false, ids)));
         model.addSignalChain(1, false, ids); // порт основного контроллера по-прежнему доступен
+        // Баг-репорт: "порты основного все еще не знают, что порты бекапного контроллера
+        // становятся их бекапными" -- цепочка на порту 1 основного должна САМА получить
+        // backupPortNumber=5 (тот же локальный индекс порта на резервном контроллере),
+        // без отдельного ручного вызова setSignalBackupPortLink.
+        assertEquals(5, model.signalChainByPort(screen, 1, false).getBackupPortNumber());
 
         // нельзя назначить резервным контроллер, у которого уже есть собственная цепочка (порт 9 — у third)
         model.addSignalChain(9, false, ids);
@@ -966,6 +971,43 @@ class AppModelTest {
         // удаление резервного контроллера снимает связку с основного (не остаётся висячей ссылки)
         model.removeControllerFromScreen(screen, backup.getId());
         assertNull(main.getBackupControllerId());
+    }
+
+    @Test
+    void controllerBackupLinkBackfillsExistingChainsAndClearsOnUnlink(@TempDir Path dir) {
+        // Баг-репорт: "если контроллер назначается бекапным для другого, то порты
+        // основного все еще не знают, что порты бекапного контроллера становятся их
+        // бекапными, из-за этого ломается схема рисования схем" -- в отличие от
+        // controllerLevelBackupReservesAllItsPorts (там цепочка на порту 1 создаётся
+        // ПОСЛЕ setControllerBackupLink), здесь цепочка на порту 1 уже существует
+        // ДО связки -- setControllerBackupLink сам обязан пересчитать её
+        // backupPortNumber (не только новые цепочки через addSignalChain).
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+        model.selectScreen(screen);
+
+        ControllerType ct = new ControllerType();
+        ct.setName("VX1000");
+        ct.setPortCount(4);
+        model.addControllerType(ct);
+
+        ControllerInstance main = model.addControllerToScreen(screen, ct.getId());
+        ControllerInstance backup = model.addControllerToScreen(screen, ct.getId());
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).limit(1).toList();
+        model.addSignalChain(1, false, ids); // цепочка ДО установки связки контроллеров
+        assertNull(model.signalChainByPort(screen, 1, false).getBackupPortNumber());
+
+        model.setControllerBackupLink(screen, main.getId(), backup.getId());
+        assertEquals(5, model.signalChainByPort(screen, 1, false).getBackupPortNumber(),
+                "существующая цепочка порта 1 задним числом получила зеркальный порт резерва (5)");
+
+        model.setControllerBackupLink(screen, main.getId(), null);
+        assertNull(model.signalChainByPort(screen, 1, false).getBackupPortNumber(),
+                "снятие связки сбрасывает backupPortNumber, указывавший на порт старого резервного контроллера");
     }
 
     @Test
@@ -2360,13 +2402,15 @@ class AppModelTest {
 
         // towerCount=2, verticalFramesPerTower=3 (в КАЖДОМ из 2 рядов), peremychkaLevels=2,
         // extendedBaseSections=0 (только ядро).
-        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 2, 0, null, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 2, 0, null, null, null, 0, null);
 
         assertEquals(12, screen.getStructureFrameCells().size(), "2 башни x 2 ряда x 3 сегмента");
         assertTrue(screen.getStructureFrameCells().stream().noneMatch(com.vjstb.ledscheme.model.StructureFrameCell::isHidden),
                 "свежесгенерированная сетка целиком видима");
-        assertEquals(4, screen.getStructurePeremychkaCells().size(), "2 башни x 2 уровня перемычек");
-        assertEquals(2, screen.getStructureBaseFrameCells().size(), "2 башни x 1 секция (ядро)");
+        assertEquals(4, screen.getStructurePeremychkaCells().size(), "1 зазор x 2 ряда x 2 уровня перемычек");
+        // Round 10: ядро больше не 1 фиксированная секция -- coreBaseSectionCount при
+        // дефолтных габаритах (нет выбранного типа рамы/короткой рамы) = ceil(2*500/500) = 2.
+        assertEquals(2, screen.getStructureBaseFrameCells().size(), "1 зазор x 2 секции (ядро)");
         assertTrue(screen.getStructureBaseFrameCells().stream()
                 .noneMatch(com.vjstb.ledscheme.model.StructureBaseFrameCell::isHidden));
     }
@@ -2382,7 +2426,7 @@ class AppModelTest {
         model.selectProject(model.addProject("P"));
         model.selectScene(model.addScene("S"));
         Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
-        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 2, 0, null, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 2, 0, null, null, null, 0, null);
 
         model.toggleStructureFrameCell(screen, 0, 0, 1);
         assertEquals(12, screen.getStructureFrameCells().size(), "запись остаётся, просто прячется");
@@ -2399,17 +2443,19 @@ class AppModelTest {
         CabinetType type = model.addCabinetType(sampleType());
         model.selectProject(model.addProject("P"));
         model.selectScene(model.addScene("S"));
+        // 3 башни -> 2 зазора (0-1 и 1-2), нужно хотя бы 2 для проверки "соседний зазор не
+        // пострадал" (Round 7: и перемычки, и опора теперь по зазорам, не по башням).
         Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
-        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 2, 0, null, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3000, 1000, 3, 3, 3, 2, 0, null, null, null, 0, null);
 
         model.toggleStructurePeremychkaCell(screen, 0, 0, 1);
-        assertEquals(3, screen.getStructurePeremychkaCells().stream().filter(c -> !c.isHidden()).count(),
-                "4 всего (1 зазор x 2 ряда x 2 уровня) - 1 спрятанная");
+        assertEquals(7, screen.getStructurePeremychkaCells().stream().filter(c -> !c.isHidden()).count(),
+                "8 всего (2 зазора x 2 ряда x 2 уровня) - 1 спрятанная");
 
         model.toggleStructureBaseFrameSection(screen, 1, 0);
         assertTrue(screen.getStructureBaseFrameCells().stream().anyMatch(c -> c.matches(1, 0) && c.isHidden()));
         assertTrue(screen.getStructureBaseFrameCells().stream().anyMatch(c -> c.matches(0, 0) && !c.isHidden()),
-                "башня 0 не должна была пострадать");
+                "зазор 0-1 не должен был пострадать");
     }
 
     @Test
@@ -2422,13 +2468,13 @@ class AppModelTest {
         model.selectProject(model.addProject("P"));
         model.selectScene(model.addScene("S"));
         Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
-        model.updateScreenStructure(screen, 3000, 1000, 3, 3, 3, 3, 0, null, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3000, 1000, 3, 3, 3, 3, 0, null, null, null, 0, null);
 
         // Убрали средний сегмент ПЕРЕДНЕГО ряда башни 1.
         model.toggleStructureFrameCell(screen, 1, 0, 1);
 
         // Те же границы сетки (3 башни x 3 сегмента) -- пересчёт НЕ должен вернуть убранное.
-        model.updateScreenStructure(screen, 3200, 1000, 3, 3, 3, 3, 0, null, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3200, 1000, 3, 3, 3, 3, 0, null, null, null, 0, null);
         assertEquals(17, visibleFrames(screen), "18 (3 башни x 2 ряда x 3 сегмента) - 1 убранный");
         assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(1, 0, 1) && c.isHidden()),
                 "убранный сегмент не должен молча вернуться видимым при пересчёте в тех же границах");
@@ -2436,7 +2482,7 @@ class AppModelTest {
         // Уменьшили сетку, но убранная ячейка (1,0,1) ВСЁ РАВНО внутри новых границ
         // (1<2 башня, 1<2 сегмент) -- остаётся скрытой как есть, а не воскресает только
         // потому что сетка сжалась.
-        model.updateScreenStructure(screen, 3200, 1000, 2, 2, 2, 2, 0, null, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3200, 1000, 2, 2, 2, 2, 0, null, null, null, 0, null);
         assertEquals(8, screen.getStructureFrameCells().size(),
                 "2 башни x 2 ряда x 2 сегмента, включая скрытую (1,0,1)");
         assertEquals(7, visibleFrames(screen));
@@ -2454,7 +2500,7 @@ class AppModelTest {
         model.selectProject(model.addProject("P"));
         model.selectScene(model.addScene("S"));
         Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
-        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 0, 0, null, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 0, 0, null, null, null, 0, null);
 
         // Позиция (5, 0, 0) вне номинальной сетки (только 2 башни, индексы 0/1) -- создаётся
         // новая запись с переопределением типа.
@@ -2480,14 +2526,17 @@ class AppModelTest {
         model.selectScene(model.addScene("S"));
         Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
         // 1 доп. секция выноса -> regenerateStructureCells уже посеял 1 усилительную раму на
-        // башню в секции 1 (см. StructureCalcTest.reinforcementFramesInExtensionSectionsCounts...).
-        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 0, 1, null, null, null, null, 0, null);
+        // башню в СЕКЦИИ ВЫНОСА (см. StructureCalcTest.reinforcementFramesInExtensionSectionsCounts...).
+        // Round 10: секции выноса начинаются с coreBaseSectionCount, не жёстко с 1 -- при
+        // дефолтных габаритах coreBaseSectionCount = ceil(2*500/500) = 2, значит первая (и
+        // единственная) секция выноса тут -- индекс 2, а не 1.
+        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 0, 1, null, null, null, 0, null);
 
-        assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(0, 2, 1) && !c.isHidden()),
-                "усилительная рама башни 0 в секции 1 сгенерирована и видима");
+        assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(0, 2, 2) && !c.isHidden()),
+                "усилительная рама башни 0 в первой секции выноса сгенерирована и видима");
 
-        model.toggleStructureFrameCell(screen, 0, 2, 1);
-        assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(0, 2, 1) && c.isHidden()),
+        model.toggleStructureFrameCell(screen, 0, 2, 2);
+        assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(0, 2, 2) && c.isHidden()),
                 "клик по существующей усилительной раме прячет её");
     }
 }
