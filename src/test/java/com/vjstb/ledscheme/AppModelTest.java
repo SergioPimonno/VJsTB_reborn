@@ -2402,7 +2402,7 @@ class AppModelTest {
 
         // towerCount=2, verticalFramesPerTower=3 (в КАЖДОМ из 2 рядов), peremychkaLevels=2,
         // extendedBaseSections=0 (только ядро).
-        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 2, 0, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 2, 0, null, null, null, null, 0, null);
 
         assertEquals(12, screen.getStructureFrameCells().size(), "2 башни x 2 ряда x 3 сегмента");
         assertTrue(screen.getStructureFrameCells().stream().noneMatch(com.vjstb.ledscheme.model.StructureFrameCell::isHidden),
@@ -2426,7 +2426,7 @@ class AppModelTest {
         model.selectProject(model.addProject("P"));
         model.selectScene(model.addScene("S"));
         Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
-        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 2, 0, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 2, 0, null, null, null, null, 0, null);
 
         model.toggleStructureFrameCell(screen, 0, 0, 1);
         assertEquals(12, screen.getStructureFrameCells().size(), "запись остаётся, просто прячется");
@@ -2446,7 +2446,7 @@ class AppModelTest {
         // 3 башни -> 2 зазора (0-1 и 1-2), нужно хотя бы 2 для проверки "соседний зазор не
         // пострадал" (Round 7: и перемычки, и опора теперь по зазорам, не по башням).
         Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
-        model.updateScreenStructure(screen, 3000, 1000, 3, 3, 3, 2, 0, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3000, 1000, 3, 3, 3, 2, 0, null, null, null, null, 0, null);
 
         model.toggleStructurePeremychkaCell(screen, 0, 0, 1);
         assertEquals(7, screen.getStructurePeremychkaCells().stream().filter(c -> !c.isHidden()).count(),
@@ -2468,13 +2468,13 @@ class AppModelTest {
         model.selectProject(model.addProject("P"));
         model.selectScene(model.addScene("S"));
         Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
-        model.updateScreenStructure(screen, 3000, 1000, 3, 3, 3, 3, 0, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3000, 1000, 3, 3, 3, 3, 0, null, null, null, null, 0, null);
 
         // Убрали средний сегмент ПЕРЕДНЕГО ряда башни 1.
         model.toggleStructureFrameCell(screen, 1, 0, 1);
 
         // Те же границы сетки (3 башни x 3 сегмента) -- пересчёт НЕ должен вернуть убранное.
-        model.updateScreenStructure(screen, 3200, 1000, 3, 3, 3, 3, 0, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3200, 1000, 3, 3, 3, 3, 0, null, null, null, null, 0, null);
         assertEquals(17, visibleFrames(screen), "18 (3 башни x 2 ряда x 3 сегмента) - 1 убранный");
         assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(1, 0, 1) && c.isHidden()),
                 "убранный сегмент не должен молча вернуться видимым при пересчёте в тех же границах");
@@ -2482,7 +2482,7 @@ class AppModelTest {
         // Уменьшили сетку, но убранная ячейка (1,0,1) ВСЁ РАВНО внутри новых границ
         // (1<2 башня, 1<2 сегмент) -- остаётся скрытой как есть, а не воскресает только
         // потому что сетка сжалась.
-        model.updateScreenStructure(screen, 3200, 1000, 2, 2, 2, 2, 0, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3200, 1000, 2, 2, 2, 2, 0, null, null, null, null, 0, null);
         assertEquals(8, screen.getStructureFrameCells().size(),
                 "2 башни x 2 ряда x 2 сегмента, включая скрытую (1,0,1)");
         assertEquals(7, visibleFrames(screen));
@@ -2500,7 +2500,7 @@ class AppModelTest {
         model.selectProject(model.addProject("P"));
         model.selectScene(model.addScene("S"));
         Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
-        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 0, 0, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 0, 0, null, null, null, null, 0, null);
 
         // Позиция (5, 0, 0) вне номинальной сетки (только 2 башни, индексы 0/1) -- создаётся
         // новая запись с переопределением типа.
@@ -2530,7 +2530,7 @@ class AppModelTest {
         // Round 10: секции выноса начинаются с coreBaseSectionCount, не жёстко с 1 -- при
         // дефолтных габаритах coreBaseSectionCount = ceil(2*500/500) = 2, значит первая (и
         // единственная) секция выноса тут -- индекс 2, а не 1.
-        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 0, 1, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 0, 1, null, null, null, null, 0, null);
 
         assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(0, 2, 2) && !c.isHidden()),
                 "усилительная рама башни 0 в первой секции выноса сгенерирована и видима");
