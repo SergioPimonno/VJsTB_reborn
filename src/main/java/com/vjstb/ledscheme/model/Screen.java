@@ -87,14 +87,10 @@ public class Screen {
      *  .StructureCalc#peremychkaIntervalMm}), только предложенное количество. */
     private int structurePeremychkaLevels = 0;
     /** Число ДОПОЛНИТЕЛЬНЫХ секций выноса базовой рамы под балласт (сверх обязательной секции
-     *  0 — ядра под объёмом башни), каждая — ширина ОБЫЧНОЙ рамы (Round 16 — "короткая рама"
-     *  как отдельный тип упразднена, см. {@code service.StructureCalc} class-javadoc, {@code
-     *  ui.Structure3DPanel#computeGeometry}: перемычка/база/усилительные рамы делаются из того
-     *  же {@link #structureFrameTypeId}, что и вертикальные рамы башни; количество реальных
-     *  коротких рам, если инженер решит их использовать на месте, в модель не входит — только
-     *  per-cell override конкретной ячейки, см. {@code StructureFrameCell#getFrameTypeId()}). */
+     *  0 — ядра под объёмом башни), каждая — ширина короткой рамы (~0.5м). */
     private int structureExtendedBaseSections = 0;
     private String structureFrameTypeId;
+    private String structureShortFrameTypeId;
     private String structureCupTypeId;
     private String structureBallastTypeId;
     /** Высота нижнего края экрана над землёй, мм — 0 = экран на земле. Влияет только на
@@ -328,6 +324,14 @@ public class Screen {
         this.structureFrameTypeId = structureFrameTypeId;
     }
 
+    public String getStructureShortFrameTypeId() {
+        return structureShortFrameTypeId;
+    }
+
+    public void setStructureShortFrameTypeId(String structureShortFrameTypeId) {
+        this.structureShortFrameTypeId = structureShortFrameTypeId;
+    }
+
     public String getStructureCupTypeId() {
         return structureCupTypeId;
     }
@@ -465,6 +469,7 @@ public class Screen {
         s.structurePeremychkaLevels = structurePeremychkaLevels;
         s.structureExtendedBaseSections = structureExtendedBaseSections;
         s.structureFrameTypeId = structureFrameTypeId;
+        s.structureShortFrameTypeId = structureShortFrameTypeId;
         s.structureCupTypeId = structureCupTypeId;
         s.structureBallastTypeId = structureBallastTypeId;
         s.structureScreenElevationMm = structureScreenElevationMm;

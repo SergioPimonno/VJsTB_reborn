@@ -881,16 +881,13 @@ public class AppModel {
      *  #suggestBackRowSegments}). Round 10 — "ядро" базовой рамы больше не одна секция
      *  произвольного размера: здесь (единственное место с одновременным доступом и к {@code
      *  Workspace}, и к вызову {@code regenerateStructureCells}) считаем реальные габариты
-     *  выбранного {@code frameTypeId} и передаём {@code
+     *  выбранных {@code frameTypeId}/{@code shortFrameTypeId} и передаём {@code
      *  StructureCalc#coreBaseSectionCount(frameW, sectionDepthMm)} — см. её javadoc и
-     *  {@code ScreenLogic#regenerateStructureCells} про смысл параметра. Round 16 — отдельный
-     *  {@code shortFrameTypeId}-параметр убран целиком (баг-репорт: "уберём короткие рамы,
-     *  переделываем всё под обычные") — перемычка/база/усилительные рамы теперь берут габариты
-     *  из ЭТОГО ЖЕ {@code frameTypeId}, см. {@code ui.Structure3DPanel#computeGeometry}. */
+     *  {@code ScreenLogic#regenerateStructureCells} про смысл параметра. */
     public void updateScreenStructure(Screen screen, double towerHeightMm, double towerSpacingMm,
                                        int towerCount, int verticalFramesPerTower, int backRowSegments,
                                        int peremychkaLevels, int extendedBaseSections, String frameTypeId,
-                                       String cupTypeId, String ballastTypeId,
+                                       String shortFrameTypeId, String cupTypeId, String ballastTypeId,
                                        double screenElevationMm, String notes) {
         pushUndo();
         screen.setStructureTowerHeightMm(towerHeightMm);
@@ -901,19 +898,18 @@ public class AppModel {
         screen.setStructurePeremychkaLevels(peremychkaLevels);
         screen.setStructureExtendedBaseSections(extendedBaseSections);
         screen.setStructureFrameTypeId(frameTypeId);
+        screen.setStructureShortFrameTypeId(shortFrameTypeId);
         screen.setStructureCupTypeId(cupTypeId);
         screen.setStructureBallastTypeId(ballastTypeId);
         screen.setStructureScreenElevationMm(screenElevationMm);
         screen.setStructureNotes(notes);
         StructureFrameType frameType = getWorkspace().structureFrameTypeById(frameTypeId);
+        StructureFrameType shortType = getWorkspace().structureFrameTypeById(shortFrameTypeId);
         double frameW = frameType != null && frameType.getWidthMm() != null && frameType.getWidthMm() > 0
                 ? frameType.getWidthMm() : StructureCalc.DEFAULT_FRAME_WIDTH_MM;
-        // Round 16 -- "короткая рама" как отдельный тип упразднена (баг-репорт: "изменение
-        // типа рамы не влияет на перемычки... давай уберём короткие рамы, переделываем всё под
-        // обычные"). sectionDepthMm (глубина одной секции выноса базы) теперь тоже = ширина
-        // ОБЫЧНОЙ рамы, не отдельного "короткого" типа -- coreBaseSectionCount(frameW, frameW)
-        // всегда даёт РОВНО 2 модуля на ядро (по одному на передний/задний ряд).
-        int coreBaseSectionCount = StructureCalc.coreBaseSectionCount(frameW, frameW);
+        double sectionDepthMm = shortType != null && shortType.getWidthMm() != null && shortType.getWidthMm() > 0
+                ? shortType.getWidthMm() : StructureCalc.DEFAULT_SECTION_DEPTH_MM;
+        int coreBaseSectionCount = StructureCalc.coreBaseSectionCount(frameW, sectionDepthMm);
         ScreenLogic.regenerateStructureCells(screen, typeOf(screen), towerCount, verticalFramesPerTower,
                 backRowSegments, peremychkaLevels, extendedBaseSections, coreBaseSectionCount);
         changed();
@@ -2053,21 +2049,17 @@ public class AppModel {
         return false;
     }
 
-    /** Один вид библиотеки (STRUCTURE_FRAME) обслуживает ТРИ разных FK-поля Screen (рама/
-     *  стакан/балласт — все ссылаются на записи ОДНОЙ библиотеки, различаемые по {@code
-     *  StructureFrameType.kind}, см. class-javadoc модели) — поэтому проверка ссылок и перенос
-     *  при "продвижении" смотрят на все три сразу, а не на одно поле, как у HOIST/CABINET.
-     *  Round 16 — четвёртое поле, {@code structureShortFrameTypeId}, упразднено (см. {@link
-     *  #updateScreenStructure} javadoc); отдельные записи {@code Kind.SHORT_FRAME} в
-     *  библиотеке НИКУДА не делись, просто больше не привязаны к отдельному FK-полю экрана —
-     *  их по-прежнему можно выбрать per-cell (см. {@code StructureFrameCell#getFrameTypeId()}
-     *  и {@code ui.Structure3DDialog}), эта проверка на это не смотрит (per-cell override —
-     *  свободный текст, не отдельное защищённое FK-поле). */
+    /** Один вид библиотеки (STRUCTURE_FRAME) обслуживает ЧЕТЫРЕ разных FK-поля Screen
+     *  (рама/короткая рама/стакан/балласт — все ссылаются на записи ОДНОЙ библиотеки,
+     *  различаемые по {@code StructureFrameType.kind}, см. class-javadoc модели) —
+     *  поэтому проверка ссылок и перенос при "продвижении" смотрят на все четыре сразу,
+     *  а не на одно поле, как у HOIST/CABINET. */
     private boolean isStructureFrameTypeReferenced(String id) {
         for (Project project : workspace.getProjects()) {
             for (Scene scene : project.getScenes()) {
                 for (Screen screen : scene.getScreens()) {
                     if (id.equals(screen.getStructureFrameTypeId())
+                            || id.equals(screen.getStructureShortFrameTypeId())
                             || id.equals(screen.getStructureCupTypeId())
                             || id.equals(screen.getStructureBallastTypeId())) {
                         return true;
@@ -2205,14 +2197,17 @@ public class AppModel {
         }
     }
 
-    /** Переносит ЛЮБОЕ из трёх FK-полей Screen на элементы STRUCTURE_FRAME — см.
-     *  javadoc {@link #isStructureFrameTypeReferenced} про то же разделение на 3 поля. */
+    /** Переносит ЛЮБОЕ из четырёх FK-полей Screen на элементы STRUCTURE_FRAME — см.
+     *  javadoc {@link #isStructureFrameTypeReferenced} про то же разделение на 4 поля. */
     private void migrateStructureFrameTypeReferences(String oldId, String newId) {
         for (Project project : workspace.getProjects()) {
             for (Scene scene : project.getScenes()) {
                 for (Screen screen : scene.getScreens()) {
                     if (oldId.equals(screen.getStructureFrameTypeId())) {
                         screen.setStructureFrameTypeId(newId);
+                    }
+                    if (oldId.equals(screen.getStructureShortFrameTypeId())) {
+                        screen.setStructureShortFrameTypeId(newId);
                     }
                     if (oldId.equals(screen.getStructureCupTypeId())) {
                         screen.setStructureCupTypeId(newId);

@@ -92,6 +92,7 @@ public class Structure3DPanel extends JPanel {
     private static final double DEFAULT_FRAME_HEIGHT_MM = 950;
     private static final double DEFAULT_FRAME_WIDTH_MM = 500;
     private static final double DEFAULT_FRAME_DEPTH_MM = 51;
+    private static final double DEFAULT_SECTION_DEPTH_MM = 500;
     /** Гарантированный зазор (мм) между задней гранью экрана и передним рядом конструктива —
      *  см. javadoc {@code computeGeometry}. */
     private static final double SCREEN_CLEARANCE_MM = 400;
@@ -271,25 +272,23 @@ public class Structure3DPanel extends JPanel {
     private StructureGeometry computeGeometry(Screen screen) {
         Workspace ws = model.getWorkspace();
         StructureFrameType frameType = ws.structureFrameTypeById(screen.getStructureFrameTypeId());
+        StructureFrameType shortType = ws.structureFrameTypeById(screen.getStructureShortFrameTypeId());
         double frameH = dim(frameType != null ? frameType.getHeightMm() : null, DEFAULT_FRAME_HEIGHT_MM);
         double frameW = dim(frameType != null ? frameType.getWidthMm() : null, DEFAULT_FRAME_WIDTH_MM);
         double frameD = dim(frameType != null ? frameType.getDepthMm() : null, DEFAULT_FRAME_DEPTH_MM);
-        // Round 16 (баг-репорт: "чаще всего перемычка делается из обычной рамы... уберём
-        // короткие рамы, переделываем всё под обычные") -- отдельный "короткий" тип рамы
-        // (structureShortFrameTypeId) упразднён целиком. Перемычка/база/усилительные рамы
-        // выноса теперь берут габариты из ТОГО ЖЕ frameType, что и вертикальные рамы башни:
-        // sectionDepthMm/reinforcementHeightMm = широкая/высокая грань рамы (frameW/frameH,
-        // те же величины, что уже посчитаны выше), baseThickness/peremychkaThickness = узкая
-        // грань (frameD, толщина рельса) -- физически перемычка/база РЕАЛЬНО чаще всего
-        // делаются из обычной рамы, отдельного каталожного типа для них не требуется. Если
-        // инженеру на месте нужна именно короткая рама где-то конкретно -- это по-прежнему
-        // доступно per-cell через селектор "Рама для добавления" в Structure3DDialog (см.
-        // {@code StructureFrameCell#getFrameTypeId()}), просто больше не встроено в номинальный
-        // расчёт всей сетки.
-        double sectionDepthMm = frameW;
-        double baseThickness = frameD;
-        double peremychkaThickness = frameD;
-        double reinforcementHeightMm = frameH;
+        double sectionDepthMm = dim(shortType != null ? shortType.getWidthMm() : null, DEFAULT_SECTION_DEPTH_MM);
+        double baseThickness = dim(shortType != null ? shortType.getDepthMm() : null, DEFAULT_FRAME_DEPTH_MM);
+        double peremychkaThickness = dim(shortType != null ? shortType.getDepthMm() : null, DEFAULT_FRAME_DEPTH_MM);
+        // Round 9 (баг-репорт: "рамы 1х1м в основании, таких не существует в библиотеке") --
+        // раньше усилительная рама выноса (row == 2) без явного per-cell override ВСЕГДА
+        // падала на синтетическую константу StructureCalc.DEFAULT_REINFORCEMENT_FRAME_HEIGHT_MM
+        // (1000мм), не привязанную ни к одному реальному элементу библиотеки. Приведено к тому
+        // же паттерну, что уже используют sectionDepthMm/baseThickness/peremychkaThickness выше
+        // -- берём высоту КОРОТКОЙ рамы (shortType.heightMm, тот же тип, что и у перемычки/базы),
+        // константа остаётся только как крайний fallback, если тип короткой рамы вообще не
+        // выбран в библиотеке.
+        double reinforcementHeightMm = dim(shortType != null ? shortType.getHeightMm() : null,
+                StructureCalc.DEFAULT_REINFORCEMENT_FRAME_HEIGHT_MM);
         double spacing = screen.getStructureTowerSpacingMm();
         // Зазор до экрана -- камера по умолчанию стоит со стороны ПОЛОЖИТЕЛЬНОГО Z и смотрит
         // на центр сцены, то есть большее Z означает БЛИЖЕ к зрителю -- конструктив на

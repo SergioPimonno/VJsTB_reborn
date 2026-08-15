@@ -115,6 +115,7 @@ public class SetupStagePanel extends JPanel {
     private final JSpinner pStructureTowerHeight = new JSpinner(new SpinnerNumberModel(3000.0, 0.0, 50_000.0, 100.0));
     private final JSpinner pStructureTowerSpacing = new JSpinner(new SpinnerNumberModel(1000.0, 100.0, 50_000.0, 50.0));
     private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pStructureFrameType = new JComboBox<>();
+    private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pStructureShortFrameType = new JComboBox<>();
     private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pStructureCupType = new JComboBox<>();
     private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pStructureBallastType = new JComboBox<>();
     /** 0 = экран стоит на земле. */
@@ -503,9 +504,12 @@ public class SetupStagePanel extends JPanel {
         structureFieldsPanel.add(UiKit.vgap());
 
         setStructureFrameRenderer(pStructureFrameType);
+        setStructureFrameRenderer(pStructureShortFrameType);
         setStructureFrameRenderer(pStructureCupType);
         setStructureFrameRenderer(pStructureBallastType);
         structureFieldsPanel.add(UiKit.formRow("Тип рамы (библиотека)", pStructureFrameType));
+        structureFieldsPanel.add(UiKit.vgap());
+        structureFieldsPanel.add(UiKit.formRow("Тип короткой рамы (библиотека)", pStructureShortFrameType));
         structureFieldsPanel.add(UiKit.vgap());
         structureFieldsPanel.add(UiKit.formRow("Тип стакана (библиотека)", pStructureCupType));
         structureFieldsPanel.add(UiKit.vgap());
@@ -790,6 +794,7 @@ public class SetupStagePanel extends JPanel {
         double spacing = ((Number) pStructureTowerSpacing.getValue()).doubleValue();
         double screenElevation = parseScreenElevation();
         String frameTypeId = structureFrameTypeId(pStructureFrameType);
+        String shortFrameTypeId = structureFrameTypeId(pStructureShortFrameType);
         String cupTypeId = structureFrameTypeId(pStructureCupType);
         String ballastTypeId = structureFrameTypeId(pStructureBallastType);
         CabinetType screenType = model.typeOf(scr);
@@ -816,7 +821,7 @@ public class SetupStagePanel extends JPanel {
 
         model.updateScreenStructure(scr, towerHeight, spacing, towers, vertical,
                 backRowSegments, peremychkaLevels, extendedBaseSections, frameTypeId,
-                cupTypeId, ballastTypeId, screenElevation, pStructureNotes.getText());
+                shortFrameTypeId, cupTypeId, ballastTypeId, screenElevation, pStructureNotes.getText());
 
         com.vjstb.ledscheme.service.StructureCalc.Result result =
                 com.vjstb.ledscheme.service.StructureCalc.compute(scr, screenType, model.getWorkspace());
@@ -1085,6 +1090,8 @@ public class SetupStagePanel extends JPanel {
                 pStructureTowerSpacing.setValue(scr.getStructureTowerSpacingMm());
                 populateStructureFrameCombo(pStructureFrameType,
                         com.vjstb.ledscheme.model.StructureFrameType.Kind.FRAME, scr.getStructureFrameTypeId());
+                populateStructureFrameCombo(pStructureShortFrameType,
+                        com.vjstb.ledscheme.model.StructureFrameType.Kind.SHORT_FRAME, scr.getStructureShortFrameTypeId());
                 populateStructureFrameCombo(pStructureCupType,
                         com.vjstb.ledscheme.model.StructureFrameType.Kind.CUP, scr.getStructureCupTypeId());
                 populateStructureFrameCombo(pStructureBallastType,
