@@ -143,6 +143,12 @@ public class MainMenuBar extends JMenuBar {
         videoTiming.addActionListener(e -> new VideoTimingCalculatorDialog(owner).setVisible(true));
         menu.add(videoTiming);
 
+        JMenuItem vehicleCalc = new JMenuItem("Калькулятор транспорта…");
+        vehicleCalc.setToolTipText("Подбор минимально достаточной машины для перевозки кофров проекта"
+                + " (кабинетов, коммутации, прочего оборудования) с учётом штабелирования и габаритов кузова");
+        vehicleCalc.addActionListener(e -> new VehicleCalculatorDialog(owner, model, settings).setVisible(true));
+        menu.add(vehicleCalc);
+
         return menu;
     }
 

@@ -31,6 +31,11 @@ public class Scene {
      *  {@code AppModel#addProjector}/{@code OutputStagePanel#addProjectorSheet} —
      *  модель и её отображение в спецификации оставлены). */
     private List<ProjectorInstance> projectors = new ArrayList<>();
+    /** Раскладка загрузки машин(ы) кофрами для этой сцены (см.
+     *  {@code ui.VehicleLoadVisualizerDialog}) — {@code null}, пока визуализатор
+     *  ни разу не открывали для этой сцены. Персистится и синхронизируется с
+     *  облаком так же, как остальные данные сцены (см. VEHICLE_CALC_NOTES.md). */
+    private VehicleLoadPlan vehicleLoadPlan;
 
     public Scene() {
     }
@@ -117,5 +122,13 @@ public class Scene {
 
     public void setProjectors(List<ProjectorInstance> projectors) {
         this.projectors = projectors;
+    }
+
+    public VehicleLoadPlan getVehicleLoadPlan() {
+        return vehicleLoadPlan;
+    }
+
+    public void setVehicleLoadPlan(VehicleLoadPlan vehicleLoadPlan) {
+        this.vehicleLoadPlan = vehicleLoadPlan;
     }
 }
