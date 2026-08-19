@@ -27,7 +27,7 @@ public class MainMenuBar extends JMenuBar {
     public MainMenuBar(JFrame owner, AppModel model, SettingsManager settings, Runnable onShowShortcuts) {
         add(buildSettingsMenu(owner, model, settings));
         add(buildDatabaseMenu(owner, model, settings));
-        add(buildToolsMenu(owner, model));
+        add(buildToolsMenu(owner, model, settings));
         add(buildPersonalizationMenu(owner, settings));
         add(buildHelpMenu(onShowShortcuts));
     }
@@ -116,7 +116,7 @@ public class MainMenuBar extends JMenuBar {
         return menu;
     }
 
-    private JMenu buildToolsMenu(JFrame owner, AppModel model) {
+    private JMenu buildToolsMenu(JFrame owner, AppModel model, SettingsManager settings) {
         JMenu menu = new JMenu("Инструменты");
 
         // Импорт из NovaLCT (.scr) временно отключён из меню — формат разобран лишь
@@ -142,6 +142,12 @@ public class MainMenuBar extends JMenuBar {
                 + " и разъёма под нестандартное разрешение LED-стены");
         videoTiming.addActionListener(e -> new VideoTimingCalculatorDialog(owner).setVisible(true));
         menu.add(videoTiming);
+
+        JMenuItem vehicleCalc = new JMenuItem("Калькулятор транспорта…");
+        vehicleCalc.setToolTipText("Подбор минимально достаточной машины для перевозки кофров проекта"
+                + " (кабинетов, коммутации, прочего оборудования) с учётом штабелирования и габаритов кузова");
+        vehicleCalc.addActionListener(e -> new VehicleCalculatorDialog(owner, model, settings).setVisible(true));
+        menu.add(vehicleCalc);
 
         return menu;
     }

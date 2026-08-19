@@ -1,5 +1,6 @@
 package com.vjstb.ledscheme.ui.stage;
 
+import com.vjstb.ledscheme.model.CaseType;
 import com.vjstb.ledscheme.model.ContentCanvas;
 import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.Project;
@@ -8,6 +9,10 @@ import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SignalChain;
+import com.vjstb.ledscheme.model.VehicleLoadPlacement;
+import com.vjstb.ledscheme.model.VehicleLoadPlan;
+import com.vjstb.ledscheme.model.VehicleLoadSection;
+import com.vjstb.ledscheme.model.VehicleType;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.SceneStats;
 import com.vjstb.ledscheme.service.ScreenLogic;
@@ -19,6 +24,7 @@ import com.vjstb.ledscheme.ui.SceneCanvasPanel;
 import com.vjstb.ledscheme.ui.SchemaCanvasPanel;
 import com.vjstb.ledscheme.ui.SchemeRenderer;
 import com.vjstb.ledscheme.ui.UiKit;
+import com.vjstb.ledscheme.ui.VehicleLoadSchemaImageWriter;
 import java.awt.BorderLayout;
 import java.awt.Desktop;
 import java.awt.Dimension;
@@ -337,6 +343,45 @@ public class OutputStagePanel extends JPanel {
                             new File(masksFolder, "Канвас_" + OutputPaths.sanitize(c.getName()) + "_"
                                     + img.getWidth() + "x" + img.getHeight() + ".png"));
                     maskCount++;
+                }
+
+                // Схема загрузки машины(-) кофрами (см. ui.VehicleLoadVisualizerDialog,
+                // персистится в Scene.vehicleLoadPlan) — по прямому запросу пользователя:
+                // "рендер схемы размещения аналогично рендеру схем расключения", тот же
+                // dpiScale/docExportDpi, что и остальные JPEG-схемы этого экспорта. Только
+                // если визуализатор для этой сцены вообще открывали и там что-то размещено —
+                // не создаём папку/файлы для сцен без раскладки.
+                VehicleLoadPlan loadPlan = scene.getVehicleLoadPlan();
+                if (loadPlan != null && !loadPlan.getSections().isEmpty()) {
+                    File transportFolder = new File(sceneFolder, "Транспорт");
+                    int machineIndex = 0;
+                    for (VehicleLoadSection section : loadPlan.getSections()) {
+                        machineIndex++;
+                        VehicleType vt = model.getWorkspace().vehicleTypeById(section.getVehicleTypeId());
+                        if (vt == null || section.getPlacements().isEmpty()) {
+                            continue; // машина удалена из библиотеки или пуста — рисовать нечего
+                        }
+                        List<VehicleLoadSchemaImageWriter.PlacedCase> resolved = new java.util.ArrayList<>();
+                        for (VehicleLoadPlacement pl : section.getPlacements()) {
+                            CaseType ct = model.getWorkspace().caseTypeById(pl.getCaseTypeId());
+                            if (ct == null) {
+                                continue; // тип кофра удалён из библиотеки — пропускаем эту позицию
+                            }
+                            resolved.add(new VehicleLoadSchemaImageWriter.PlacedCase(ct, pl.getXMm(), pl.getYMm(),
+                                    pl.isRotated(), pl.getStackCount(), pl.getNote()));
+                        }
+                        if (resolved.isEmpty()) {
+                            continue;
+                        }
+                        transportFolder.mkdirs();
+                        BufferedImage transportImg = VehicleLoadSchemaImageWriter.render(vt, resolved,
+                                "Машина " + machineIndex, dpiScale);
+                        SchemeRenderer.writeJpeg(transportImg,
+                                new File(transportFolder, OutputPaths.sanitize(scene.getName() + " Машина "
+                                        + machineIndex) + ".jpg"),
+                                docExportDpi);
+                        jpegCount++;
+                    }
                 }
 
                 report.append('\n');
