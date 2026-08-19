@@ -267,8 +267,8 @@ public final class UpdateManager {
         }
     }
 
-    public static List<VersionManifest.Entry> fetchAvailableVersions() throws IOException, InterruptedException {
-        return VersionManifest.fetchAvailable();
+    public static List<VersionManifest.Entry> fetchAvailableVersions(String baseUrl) throws IOException, InterruptedException {
+        return VersionManifest.fetchAvailable(baseUrl);
     }
 
     public static String currentVersion() {

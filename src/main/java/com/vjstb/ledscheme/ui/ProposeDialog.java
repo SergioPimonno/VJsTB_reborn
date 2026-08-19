@@ -2,6 +2,7 @@ package com.vjstb.ledscheme.ui;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vjstb.ledscheme.settings.SettingsManager;
+import com.vjstb.ledscheme.sync.LibrarySyncClient;
 import com.vjstb.ledscheme.sync.ProposalClient;
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
@@ -95,7 +96,8 @@ public class ProposeDialog extends JDialog {
             @Override
             protected ProposalClient.ProposalDto doInBackground() throws Exception {
                 String draftJson = new ObjectMapper().writeValueAsString(item);
-                return new ProposalClient().submit(token, libraryItemKind, draftJson, justification);
+                return new ProposalClient(LibrarySyncClient.resolveBaseUrl(settings))
+                        .submit(token, libraryItemKind, draftJson, justification);
             }
 
             @Override

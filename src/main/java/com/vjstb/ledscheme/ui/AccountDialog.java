@@ -2,6 +2,7 @@ package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.settings.SettingsManager;
 import com.vjstb.ledscheme.sync.AuthClient;
+import com.vjstb.ledscheme.sync.LibrarySyncClient;
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
@@ -94,7 +95,8 @@ public class AccountDialog extends JDialog {
             String name = username.getText().trim();
             submit.setEnabled(false);
             status.setText("Вход…");
-            runAuth(status, submit, name, () -> new AuthClient().login(name, new String(password.getPassword())));
+            runAuth(status, submit, name, () -> new AuthClient(LibrarySyncClient.resolveBaseUrl(settings))
+                    .login(name, new String(password.getPassword())));
         });
         return form;
     }
@@ -116,7 +118,8 @@ public class AccountDialog extends JDialog {
             }
             submit.setEnabled(false);
             status.setText("Регистрация…");
-            runAuth(status, submit, name, () -> new AuthClient().register(name, pass));
+            runAuth(status, submit, name, () -> new AuthClient(LibrarySyncClient.resolveBaseUrl(settings))
+                    .register(name, pass));
         });
         return form;
     }

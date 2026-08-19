@@ -31,6 +31,16 @@ public class ProposalClient {
                                String status, String moderatorNote) {
     }
 
+    private final String baseUrl;
+
+    public ProposalClient() {
+        this(LibrarySyncClient.DEFAULT_BASE_URL);
+    }
+
+    public ProposalClient(String baseUrl) {
+        this.baseUrl = baseUrl;
+    }
+
     public ProposalDto submit(String token, String libraryItemKind, String draftJson, String justification)
             throws IOException, InterruptedException {
         Map<String, Object> body = new java.util.LinkedHashMap<>();
@@ -41,8 +51,8 @@ public class ProposalClient {
         body.put("justification", justification);
         String json = MAPPER.writeValueAsString(body);
 
-        HttpClient client = TrustedHttp.client();
-        HttpRequest request = HttpRequest.newBuilder(URI.create(LibrarySyncClient.DEFAULT_BASE_URL + "/api/proposals"))
+        HttpClient client = TrustedHttp.clientFor(baseUrl);
+        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/api/proposals"))
                 .timeout(Duration.ofSeconds(15))
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + token)
@@ -58,11 +68,9 @@ public class ProposalClient {
     /** Список предложений "на рассмотрении" — только MODERATOR/ADMIN (см.
      *  SecurityConfig на сервере), обычный USER получит 403. */
     public List<ProposalDto> pending(String token) throws IOException, InterruptedException {
-        HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(10))
-                .build();
+        HttpClient client = TrustedHttp.clientFor(baseUrl);
         HttpRequest request = HttpRequest.newBuilder(
-                        URI.create(LibrarySyncClient.DEFAULT_BASE_URL + "/api/proposals/pending"))
+                        URI.create(baseUrl + "/api/proposals/pending"))
                 .timeout(Duration.ofSeconds(15))
                 .header("Authorization", "Bearer " + token)
                 .GET()
@@ -90,11 +98,9 @@ public class ProposalClient {
     private ProposalDto decide(String token, String id, String action, String note)
             throws IOException, InterruptedException {
         String json = MAPPER.writeValueAsString(Map.of("note", note == null ? "" : note));
-        HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(10))
-                .build();
+        HttpClient client = TrustedHttp.clientFor(baseUrl);
         HttpRequest request = HttpRequest.newBuilder(
-                        URI.create(LibrarySyncClient.DEFAULT_BASE_URL + "/api/proposals/" + id + "/" + action))
+                        URI.create(baseUrl + "/api/proposals/" + id + "/" + action))
                 .timeout(Duration.ofSeconds(15))
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + token)
