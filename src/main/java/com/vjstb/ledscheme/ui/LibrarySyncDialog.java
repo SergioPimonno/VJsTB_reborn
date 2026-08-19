@@ -65,7 +65,7 @@ public class LibrarySyncDialog extends JDialog {
         new SwingWorker<LibrarySyncClient.ChangesResult, Void>() {
             @Override
             protected LibrarySyncClient.ChangesResult doInBackground() throws Exception {
-                return new LibrarySyncClient().fetchChanges(since);
+                return new LibrarySyncClient(LibrarySyncClient.resolveBaseUrl(settings)).fetchChanges(since);
             }
 
             @Override

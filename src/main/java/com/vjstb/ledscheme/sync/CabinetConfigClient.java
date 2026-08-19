@@ -29,6 +29,16 @@ public class CabinetConfigClient {
     public record DownloadedFile(String fileName, byte[] content) {
     }
 
+    private final String baseUrl;
+
+    public CabinetConfigClient() {
+        this(LibrarySyncClient.DEFAULT_BASE_URL);
+    }
+
+    public CabinetConfigClient(String baseUrl) {
+        this.baseUrl = baseUrl;
+    }
+
     public List<SummaryDto> list(String cabinetTypeName) throws IOException, InterruptedException {
         String query = "?cabinetTypeName=" + URLEncoder.encode(cabinetTypeName, StandardCharsets.UTF_8);
         HttpResponse<String> response = send("/api/cabinet-configs" + query);
@@ -46,8 +56,8 @@ public class CabinetConfigClient {
     }
 
     private HttpResponse<String> send(String path) throws IOException, InterruptedException {
-        HttpClient client = TrustedHttp.client();
-        HttpRequest request = HttpRequest.newBuilder(URI.create(LibrarySyncClient.DEFAULT_BASE_URL + path))
+        HttpClient client = TrustedHttp.clientFor(baseUrl);
+        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + path))
                 .timeout(Duration.ofSeconds(20))
                 .GET()
                 .build();

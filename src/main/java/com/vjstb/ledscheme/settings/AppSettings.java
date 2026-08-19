@@ -27,6 +27,14 @@ public class AppSettings {
      *  снова про ЭТУ ЖЕ версию при следующих запусках, но уведомим про более новую,
      *  если она появится. null — ничего ещё не закрывали. */
     private String dismissedUpdateVersion;
+    /** Ручной "мост синхронизации" (см. sync.LibrarySyncClient#resolveBaseUrl) -- если
+     *  задан (непустая строка), все sync-клиенты ходят СЮДА вместо
+     *  {@code LibrarySyncClient.DEFAULT_BASE_URL}. Нужен на сетях, где прямое
+     *  подключение к серверу по IP:8443 блокируется (см. раздел "Мост синхронизации"
+     *  на публичной веб-странице сервера) -- пользователь вписывает альтернативный
+     *  адрес вручную в Настройках. {@code null}/пусто -- использовать адрес по
+     *  умолчанию, как раньше. */
+    private String syncServerUrlOverride;
 
     public String getActiveProfileId() {
         return activeProfileId;
@@ -90,5 +98,13 @@ public class AppSettings {
 
     public void setDismissedUpdateVersion(String dismissedUpdateVersion) {
         this.dismissedUpdateVersion = dismissedUpdateVersion;
+    }
+
+    public String getSyncServerUrlOverride() {
+        return syncServerUrlOverride;
+    }
+
+    public void setSyncServerUrlOverride(String syncServerUrlOverride) {
+        this.syncServerUrlOverride = syncServerUrlOverride;
     }
 }

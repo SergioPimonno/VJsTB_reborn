@@ -52,11 +52,15 @@ public final class VersionManifest {
      *  или если синглтон ещё ни разу не сохранён с админ-консоли (см. серверный
      *  {@code LibraryController.singleton}, 404 в этом случае) — вызывающая сторона
      *  показывает это пользователю (см. UpdateDialog) либо тихо пропускает
-     *  автопроверку при запуске (см. App). */
-    public static List<Entry> fetch() throws IOException, InterruptedException {
-        HttpClient client = TrustedHttp.client();
+     *  автопроверку при запуске (см. App).
+     *
+     * <p>{@code baseUrl} — см. {@link LibrarySyncClient#resolveBaseUrl} (ручной
+     * "мост синхронизации"); {@link #fetch()} без параметра — всегда адрес по
+     * умолчанию, для мест, где {@code SettingsManager} недоступен. */
+    public static List<Entry> fetch(String baseUrl) throws IOException, InterruptedException {
+        HttpClient client = TrustedHttp.clientFor(baseUrl);
         HttpRequest request = HttpRequest.newBuilder(
-                        URI.create(LibrarySyncClient.DEFAULT_BASE_URL + "/api/library/singleton/VERSION_MANIFEST"))
+                        URI.create(baseUrl + "/api/library/singleton/VERSION_MANIFEST"))
                 .timeout(Duration.ofSeconds(15))
                 .GET()
                 .build();
@@ -69,9 +73,13 @@ public final class VersionManifest {
         return payload.versions() != null ? payload.versions() : List.of();
     }
 
+    public static List<Entry> fetch() throws IOException, InterruptedException {
+        return fetch(LibrarySyncClient.DEFAULT_BASE_URL);
+    }
+
     /** Только доступные (available=true) версии — то, что нужно показать в списке. */
-    public static List<Entry> fetchAvailable() throws IOException, InterruptedException {
-        List<Entry> all = fetch();
+    public static List<Entry> fetchAvailable(String baseUrl) throws IOException, InterruptedException {
+        List<Entry> all = fetch(baseUrl);
         List<Entry> result = new ArrayList<>();
         for (Entry e : all) {
             if (e.available()) {
@@ -79,6 +87,10 @@ public final class VersionManifest {
             }
         }
         return result;
+    }
+
+    public static List<Entry> fetchAvailable() throws IOException, InterruptedException {
+        return fetchAvailable(LibrarySyncClient.DEFAULT_BASE_URL);
     }
 
     /** Простое сравнение точечных версий вида "2.0"/"1.6.1" по числовым сегментам

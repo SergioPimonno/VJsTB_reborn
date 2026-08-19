@@ -37,6 +37,16 @@ public class ProjectArchiveClient {
     public record VersionDto(int revision, String projectJson, String savedByUsername, String savedAt) {
     }
 
+    private final String baseUrl;
+
+    public ProjectArchiveClient() {
+        this(LibrarySyncClient.DEFAULT_BASE_URL);
+    }
+
+    public ProjectArchiveClient(String baseUrl) {
+        this.baseUrl = baseUrl;
+    }
+
     /** Сервер отклонил сохранение — {@code baseRevision} клиента отстала от
      *  {@code currentRevision} на сервере (кто-то уже сохранил новее). */
     public static class ProjectConflictException extends IOException {
@@ -109,8 +119,8 @@ public class ProjectArchiveClient {
 
     private HttpResponse<String> send(String token, String method, String path, String body)
             throws IOException, InterruptedException {
-        HttpClient client = TrustedHttp.client();
-        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(LibrarySyncClient.DEFAULT_BASE_URL + path))
+        HttpClient client = TrustedHttp.clientFor(baseUrl);
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(baseUrl + path))
                 .timeout(Duration.ofSeconds(20))
                 .header("Authorization", "Bearer " + token);
         switch (method) {
