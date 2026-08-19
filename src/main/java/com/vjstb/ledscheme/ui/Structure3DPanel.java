@@ -81,11 +81,14 @@ import javax.swing.SwingUtilities;
  * перетаскивание — орбита (yaw/pitch); средняя кнопка + перетаскивание — панорамирование
  * цели орбиты; колесо — зум.
  *
- * <p><b>Picking</b>: клик по СУЩЕСТВУЮЩЕМУ элементу прячет его, клик по наведённому
- * "призрачному" месту добавляет — "призраки" показываются ПО НАВЕДЕНИЮ (только ближайший к
- * курсору). Ручной CPU-side raycast, математика — {@link StructurePickMath}. Тестируется не
- * один луч через курсор, а небольшой крест точек вокруг него ("толстый курсор" — тонкие
- * стойки в перспективе иначе почти невозможно зацепить мышью).
+ * <p><b>Picking</b>: клик по СУЩЕСТВУЮЩЕМУ элементу прячет его. Добавление — ТОЛЬКО с
+ * зажатым Ctrl (Round 17, баг-репорт: без разделения режимов клик по стойке нередко "пробивал"
+ * её и добавлял соседний призрак вместо удаления самой стойки, см. javadoc
+ * {@link #handleClick}) — без Ctrl призраки не рисуются и не участвуют в тесте луча вообще, с
+ * Ctrl показывается ближайший к курсору "призрак" и клик по нему добавляет элемент. Ручной
+ * CPU-side raycast, математика — {@link StructurePickMath}. Тестируется не один луч через
+ * курсор, а небольшой крест точек вокруг него ("толстый курсор" — тонкие стойки в перспективе
+ * иначе почти невозможно зацепить мышью).
  */
 public class Structure3DPanel extends JPanel {
 
@@ -195,7 +198,7 @@ public class Structure3DPanel extends JPanel {
 
             @Override
             public void mouseMoved(MouseEvent e) {
-                updateHover(e.getX(), e.getY());
+                updateHover(e.getX(), e.getY(), e.isControlDown());
             }
 
             @Override
@@ -205,7 +208,7 @@ public class Structure3DPanel extends JPanel {
                 }
                 int moved = Math.abs(e.getX() - pressX) + Math.abs(e.getY() - pressY);
                 if (moved <= CLICK_MOVE_THRESHOLD_PX) {
-                    handleClick(e.getX(), e.getY());
+                    handleClick(e.getX(), e.getY(), e.isControlDown());
                 }
             }
 
@@ -681,13 +684,24 @@ public class Structure3DPanel extends JPanel {
         return best;
     }
 
-    private void handleClick(int pixelX, int pixelY) {
+    /** Round 17 (баг-репорт: "рейтрейсинг от курсора — вместо удаления рам часто добавляются
+     *  новые") — раньше клик ({@code existsFilter=null}) искал ближайшего по лучу кандидата
+     *  СРЕДИ ОБОИХ множеств сразу: у "призрака" {@code pickBoxes} — это весь номинальный объём
+     *  ячейки (крупная коробка), у существующей стойки — узкие коробки самих стоек (см. javadoc
+     *  {@link Candidate}), поэтому объёмный призрак соседней пустой позиции нередко оказывался
+     *  БЛИЖЕ по лучу, чем тонкая стойка реальной рамы прямо под курсором, и клик добавлял новую
+     *  раму вместо удаления имеющейся. Теперь добавление — ТОЛЬКО с зажатым Ctrl (см.
+     *  {@code e.isControlDown()} у вызывающей стороны): без Ctrl в тест луча вообще не попадают
+     *  кандидаты-призраки ({@code existsFilter=true}, удаление), с Ctrl — только они
+     *  ({@code existsFilter=false}, добавление). Простой клик по существующей раме больше не
+     *  может "промахнуться" в невидимый призрак позади/вокруг нее. */
+    private void handleClick(int pixelX, int pixelY, boolean addMode) {
         Screen screen = model.getCurrentScreen();
         if (screen == null || screen.getMountType() != ScreenMountType.STRUCTURE) {
             return;
         }
         StructureGeometry g = computeGeometry(screen);
-        Candidate best = raycastAtCursor(pixelX, pixelY, screen, g, null);
+        Candidate best = raycastAtCursor(pixelX, pixelY, screen, g, !addMode);
         if (best != null) {
             best.toggle().run();
             hoveredGhostKey = null;
@@ -695,9 +709,12 @@ public class Structure3DPanel extends JPanel {
         }
     }
 
-    private void updateHover(int pixelX, int pixelY) {
+    /** Без зажатого Ctrl призраки не только не кликабельны (см. {@link #handleClick}), но и не
+     *  подсвечиваются при наведении — тест луча на них вообще не выполняется, поэтому в режиме
+     *  "только удаление" в сцене нет никаких контуров, обещающих добавление, которого не будет. */
+    private void updateHover(int pixelX, int pixelY, boolean addMode) {
         Screen screen = model.getCurrentScreen();
-        if (screen == null || screen.getMountType() != ScreenMountType.STRUCTURE) {
+        if (!addMode || screen == null || screen.getMountType() != ScreenMountType.STRUCTURE) {
             if (hoveredGhostKey != null) {
                 hoveredGhostKey = null;
                 gljPanel.repaint();
