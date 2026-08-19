@@ -36,6 +36,13 @@ public class Library {
      *  контейнеры балласта) — см. StructureFrameType, STRUCTURE_CALC_NOTES.md и
      *  {@code Screen#structureFrameTypeId} и соседние FK-поля. */
     private List<StructureFrameType> structureFrameTypes = new ArrayList<>();
+    /** Библиотека типов транспортировочных кофров (габариты/вес/лимит штабелирования) —
+     *  см. CaseType и VEHICLE_CALC_NOTES.md. В отличие от hoistTypes/structureFrameTypes
+     *  на эти id нет персистентных FK нигде в проектных данных. */
+    private List<CaseType> caseTypes = new ArrayList<>();
+    /** Библиотека типов машин (габариты кузова, грузоподъёмность) — см. VehicleType
+     *  и VEHICLE_CALC_NOTES.md. */
+    private List<VehicleType> vehicleTypes = new ArrayList<>();
     /** Подкатегории оборудования под "Прочее оборудование" — общая справочная
      *  данные (Task #135/v2.0), редактируется только через отдельную админ-консоль
      *  (ledscheme-admin), синхронизируется с сервера (вид EQUIPMENT_CUSTOM_CATEGORY,
@@ -80,6 +87,8 @@ public class Library {
     private List<CableLengthProfile> sharedCableLengthProfiles = new ArrayList<>();
     private List<HoistType> sharedHoistTypes = new ArrayList<>();
     private List<StructureFrameType> sharedStructureFrameTypes = new ArrayList<>();
+    private List<CaseType> sharedCaseTypes = new ArrayList<>();
+    private List<VehicleType> sharedVehicleTypes = new ArrayList<>();
 
     public List<CabinetType> getCabinetTypes() {
         return cabinetTypes;
@@ -143,6 +152,22 @@ public class Library {
 
     public void setStructureFrameTypes(List<StructureFrameType> structureFrameTypes) {
         this.structureFrameTypes = structureFrameTypes;
+    }
+
+    public List<CaseType> getCaseTypes() {
+        return caseTypes;
+    }
+
+    public void setCaseTypes(List<CaseType> caseTypes) {
+        this.caseTypes = caseTypes;
+    }
+
+    public List<VehicleType> getVehicleTypes() {
+        return vehicleTypes;
+    }
+
+    public void setVehicleTypes(List<VehicleType> vehicleTypes) {
+        this.vehicleTypes = vehicleTypes;
     }
 
     public Map<String, String> getServerCustomEquipmentCategoriesById() {
@@ -249,6 +274,22 @@ public class Library {
         this.sharedStructureFrameTypes = sharedStructureFrameTypes;
     }
 
+    public List<CaseType> getSharedCaseTypes() {
+        return sharedCaseTypes;
+    }
+
+    public void setSharedCaseTypes(List<CaseType> sharedCaseTypes) {
+        this.sharedCaseTypes = sharedCaseTypes;
+    }
+
+    public List<VehicleType> getSharedVehicleTypes() {
+        return sharedVehicleTypes;
+    }
+
+    public void setSharedVehicleTypes(List<VehicleType> sharedVehicleTypes) {
+        this.sharedVehicleTypes = sharedVehicleTypes;
+    }
+
     /** Общее, затем личное — см. class-javadoc про общую/личную библиотеку. */
     public CabinetType cabinetTypeById(String id) {
         if (id == null) {
@@ -315,6 +356,42 @@ public class Library {
         for (StructureFrameType t : structureFrameTypes) {
             if (t.getId().equals(id)) {
                 return t;
+            }
+        }
+        return null;
+    }
+
+    /** Общее, затем личное — см. class-javadoc про общую/личную библиотеку. */
+    public CaseType caseTypeById(String id) {
+        if (id == null) {
+            return null;
+        }
+        for (CaseType c : sharedCaseTypes) {
+            if (c.getId().equals(id)) {
+                return c;
+            }
+        }
+        for (CaseType c : caseTypes) {
+            if (c.getId().equals(id)) {
+                return c;
+            }
+        }
+        return null;
+    }
+
+    /** Общее, затем личное — см. class-javadoc про общую/личную библиотеку. */
+    public VehicleType vehicleTypeById(String id) {
+        if (id == null) {
+            return null;
+        }
+        for (VehicleType v : sharedVehicleTypes) {
+            if (v.getId().equals(id)) {
+                return v;
+            }
+        }
+        for (VehicleType v : vehicleTypes) {
+            if (v.getId().equals(id)) {
+                return v;
             }
         }
         return null;

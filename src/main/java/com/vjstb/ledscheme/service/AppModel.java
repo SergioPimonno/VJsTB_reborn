@@ -6,8 +6,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.CableLengthProfile;
+import com.vjstb.ledscheme.model.CaseType;
 import com.vjstb.ledscheme.model.HoistType;
 import com.vjstb.ledscheme.model.StructureFrameType;
+import com.vjstb.ledscheme.model.VehicleType;
 import com.vjstb.ledscheme.model.CableType;
 import com.vjstb.ledscheme.model.CanvasPlacement;
 import com.vjstb.ledscheme.model.CardPort;
@@ -26,6 +28,7 @@ import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.Project;
 import com.vjstb.ledscheme.model.ProjectorInstance;
 import com.vjstb.ledscheme.model.Scene;
+import com.vjstb.ledscheme.model.VehicleLoadPlan;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SchemaCard;
 import com.vjstb.ledscheme.model.SchemaEdge;
@@ -1864,6 +1867,88 @@ public class AppModel {
         changed();
     }
 
+    /** Общая библиотека ("GTO") ++ личная — см. javadoc {@link #getCabinetTypes()}
+     *  про то же разделение. */
+    public List<CaseType> getCaseTypes() {
+        List<CaseType> union = new ArrayList<>(workspace.getSharedCaseTypes());
+        union.addAll(workspace.getCaseTypes());
+        return union;
+    }
+
+    public boolean isSharedCaseType(String id) {
+        return id != null && workspace.getSharedCaseTypes().stream().anyMatch(c -> c.getId().equals(id));
+    }
+
+    private void requireUniqueCaseTypeName(String name, String ignoreId) {
+        for (CaseType c : getCaseTypes()) {
+            if (c.getName().equalsIgnoreCase(name) && !c.getId().equals(ignoreId)) {
+                throw new IllegalStateException("Кофр «" + name + "» уже есть в библиотеке");
+            }
+        }
+    }
+
+    public CaseType addCaseType(CaseType caseType) {
+        requireUniqueCaseTypeName(caseType.getName(), null);
+        workspace.getCaseTypes().add(caseType);
+        changed();
+        return caseType;
+    }
+
+    public void updateCaseType(CaseType edited) {
+        requireUniqueCaseTypeName(edited.getName(), edited.getId());
+        CaseType existing = getCaseTypes().stream()
+                .filter(c -> c.getId().equals(edited.getId())).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Кофр не найден в библиотеке"));
+        existing.applyEditedValues(edited);
+        changed();
+    }
+
+    public void deleteCaseType(String id) {
+        workspace.getCaseTypes().removeIf(c -> c.getId().equals(id));
+        changed();
+    }
+
+    /** Общая библиотека ("GTO") ++ личная — см. javadoc {@link #getCabinetTypes()}
+     *  про то же разделение. */
+    public List<VehicleType> getVehicleTypes() {
+        List<VehicleType> union = new ArrayList<>(workspace.getSharedVehicleTypes());
+        union.addAll(workspace.getVehicleTypes());
+        return union;
+    }
+
+    public boolean isSharedVehicleType(String id) {
+        return id != null && workspace.getSharedVehicleTypes().stream().anyMatch(v -> v.getId().equals(id));
+    }
+
+    private void requireUniqueVehicleTypeName(String name, String ignoreId) {
+        for (VehicleType v : getVehicleTypes()) {
+            if (v.getName().equalsIgnoreCase(name) && !v.getId().equals(ignoreId)) {
+                throw new IllegalStateException("Машина «" + name + "» уже есть в библиотеке");
+            }
+        }
+    }
+
+    public VehicleType addVehicleType(VehicleType vehicle) {
+        requireUniqueVehicleTypeName(vehicle.getName(), null);
+        workspace.getVehicleTypes().add(vehicle);
+        changed();
+        return vehicle;
+    }
+
+    public void updateVehicleType(VehicleType edited) {
+        requireUniqueVehicleTypeName(edited.getName(), edited.getId());
+        VehicleType existing = getVehicleTypes().stream()
+                .filter(v -> v.getId().equals(edited.getId())).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Машина не найдена в библиотеке"));
+        existing.applyEditedValues(edited);
+        changed();
+    }
+
+    public void deleteVehicleType(String id) {
+        workspace.getVehicleTypes().removeIf(v -> v.getId().equals(id));
+        changed();
+    }
+
     /** Тип библиотеки, которым файл экспорта себя маркирует (Task #5) — null, если
      *  файл в старом формате или маркер не распознан; тогда UI возвращается к
      *  ручному выбору типа в комбобоксе, как раньше. */
@@ -1936,6 +2021,12 @@ public class AppModel {
                             workspace.getStructureFrameTypes(), dto, StructureFrameType.class,
                             StructureFrameType::getId, StructureFrameType::setId, StructureFrameType::getName,
                             this::migrateStructureFrameTypeReferences);
+                    case "CASE" -> applyOne(workspace.getSharedCaseTypes(), workspace.getCaseTypes(), dto,
+                            CaseType.class, CaseType::getId, CaseType::setId, CaseType::getName,
+                            NO_REFERENCE_MIGRATION);
+                    case "VEHICLE" -> applyOne(workspace.getSharedVehicleTypes(), workspace.getVehicleTypes(), dto,
+                            VehicleType.class, VehicleType::getId, VehicleType::setId, VehicleType::getName,
+                            NO_REFERENCE_MIGRATION);
                     case "EQUIPMENT_CUSTOM_CATEGORY" -> applyCustomCategory(dto);
                     case "GUIDE_TEXT" -> applySingletonSections(dto, workspace.getLibrary()::setGuideSections);
                     case "ONBOARDING_TEXT" -> applySingletonSections(dto, workspace.getLibrary()::setOnboardingSections);
@@ -1987,6 +2078,8 @@ public class AppModel {
                     HoistType::getId, this::isHoistTypeReferenced);
             case "STRUCTURE_FRAME" -> removeSharedIfUnreferenced(workspace.getSharedStructureFrameTypes(), dto.id(),
                     StructureFrameType::getId, this::isStructureFrameTypeReferenced);
+            case "CASE" -> workspace.getSharedCaseTypes().removeIf(c -> c.getId().equals(dto.id()));
+            case "VEHICLE" -> workspace.getSharedVehicleTypes().removeIf(v -> v.getId().equals(dto.id()));
             default -> false; // остальные виды (тексты/сценарии/параметры) не поддерживают удаление синком
         };
     }
@@ -2610,6 +2703,24 @@ public class AppModel {
     public void removePlacement(ContentCanvas canvas, String placementId) {
         pushUndo("Удаление размещения из канваса «" + canvas.getName() + "»");
         canvas.getPlacements().removeIf(p -> p.getId().equals(placementId));
+        changed();
+    }
+
+    /** Сохраняет текущую раскладку визуализатора загрузки машины (см.
+     *  {@code ui.VehicleLoadVisualizerDialog}) в сцену — персистится/уходит в
+     *  облако вместе с остальным проектом (обычная генерическая Jackson-
+     *  сериализация Scene, см. VEHICLE_CALC_NOTES.md), без отдельного кода
+     *  синхронизации. Вызывается на каждое дискретное изменение раскладки
+     *  (отпускание перетаскивания, добавление/удаление кофра, поворот,
+     *  правка примечания) — НЕ на каждый кадр перетаскивания мышью (см.
+     *  вызывающий код, там это уже так). Сознательно БЕЗ pushUndo — раскладка
+     *  меняется слишком часто (каждый чих в визуализаторе) для содержательных
+     *  записей в отменяемой истории проекта; интеграция с undo не запрашивалась. */
+    public void saveVehicleLoadPlan(Scene scene, VehicleLoadPlan plan) {
+        if (scene == null) {
+            return;
+        }
+        scene.setVehicleLoadPlan(plan);
         changed();
     }
 

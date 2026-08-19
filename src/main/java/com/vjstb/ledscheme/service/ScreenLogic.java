@@ -566,6 +566,20 @@ public final class ScreenLogic {
         return new SceneStats(scene.getScreens().size(), cabinets, power, weight, byType);
     }
 
+    /** Сумма {@link #sceneStats}{@code .totalCabinetCount()} по набору сцен —
+     *  переиспользуется для ЛЮБОЙ области расчёта, которая не «одна сцена»
+     *  (весь проект — все сцены разом, либо выбранное вручную подмножество,
+     *  см. VehicleCalculatorDialog). Не record-обёртка вроде SceneStats —
+     *  здесь из "проектного" расчёта нужно только число кабинетов, без
+     *  веса/мощности/разбивки по типу. */
+    public static int cabinetCountAcross(List<Scene> scenes, Workspace workspace) {
+        int total = 0;
+        for (Scene s : scenes) {
+            total += sceneStats(s, workspace).totalCabinetCount();
+        }
+        return total;
+    }
+
     /** Авторасчёт КОЛИЧЕСТВА точек подвеса — минимум из референсных таблиц риг-тех
      *  расчёта заказчика: «Hanging bar» = ширина экрана в модулях / 2 (стандартный
      *  сегмент несущей балки перекрывает 2 модуля по ширине), не меньше 2 (подвес

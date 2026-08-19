@@ -24,9 +24,10 @@ import java.util.Map;
  * попадут в workspace.json прямо через геттеры, в обход поля.
  */
 @JsonIgnoreProperties({"cabinetTypes", "controllerTypes", "equipmentPresets", "cableTypes", "interfaceTypes",
-        "cableLengthProfiles", "hoistTypes", "structureFrameTypes",
+        "cableLengthProfiles", "hoistTypes", "structureFrameTypes", "caseTypes", "vehicleTypes",
         "sharedCabinetTypes", "sharedControllerTypes", "sharedEquipmentPresets", "sharedCableTypes",
         "sharedInterfaceTypes", "sharedCableLengthProfiles", "sharedHoistTypes", "sharedStructureFrameTypes",
+        "sharedCaseTypes", "sharedVehicleTypes",
         "customEquipmentCategories", "equipmentCategoryLabelOverrides"})
 public class Workspace {
 
@@ -106,6 +107,22 @@ public class Workspace {
         library.setStructureFrameTypes(structureFrameTypes);
     }
 
+    public List<CaseType> getCaseTypes() {
+        return library.getCaseTypes();
+    }
+
+    public void setCaseTypes(List<CaseType> caseTypes) {
+        library.setCaseTypes(caseTypes);
+    }
+
+    public List<VehicleType> getVehicleTypes() {
+        return library.getVehicleTypes();
+    }
+
+    public void setVehicleTypes(List<VehicleType> vehicleTypes) {
+        library.setVehicleTypes(vehicleTypes);
+    }
+
     public List<CabinetType> getSharedCabinetTypes() {
         return library.getSharedCabinetTypes();
     }
@@ -170,6 +187,22 @@ public class Workspace {
         library.setSharedStructureFrameTypes(sharedStructureFrameTypes);
     }
 
+    public List<CaseType> getSharedCaseTypes() {
+        return library.getSharedCaseTypes();
+    }
+
+    public void setSharedCaseTypes(List<CaseType> sharedCaseTypes) {
+        library.setSharedCaseTypes(sharedCaseTypes);
+    }
+
+    public List<VehicleType> getSharedVehicleTypes() {
+        return library.getSharedVehicleTypes();
+    }
+
+    public void setSharedVehicleTypes(List<VehicleType> sharedVehicleTypes) {
+        library.setSharedVehicleTypes(sharedVehicleTypes);
+    }
+
     public Map<String, String> getServerCustomEquipmentCategoriesById() {
         return library.getServerCustomEquipmentCategoriesById();
     }
@@ -208,5 +241,13 @@ public class Workspace {
 
     public StructureFrameType structureFrameTypeById(String id) {
         return library.structureFrameTypeById(id);
+    }
+
+    public CaseType caseTypeById(String id) {
+        return library.caseTypeById(id);
+    }
+
+    public VehicleType vehicleTypeById(String id) {
+        return library.vehicleTypeById(id);
     }
 }
