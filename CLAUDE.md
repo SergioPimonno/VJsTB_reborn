@@ -324,7 +324,7 @@ Onboarding) и т.д., в `ledscheme-admin/.../admin/ui/`. `AdminLibraryClient`
     релиз», это разрешение на весь процесс целиком (шаги 1–13), но НЕ
     разрешение на будущие релизы без нового явного запроса.
 
-- **Текущая версия** — константа `AppInfo.VERSION` (сейчас `"2.1"`). Бампать
+- **Текущая версия** — константа `AppInfo.VERSION` (сейчас `"2.2"`). Бампать
   перед каждым релизом.
 - **CI**: `.github/workflows/release-macos.yml` и `release-linux.yml` —
   триггерятся на `push: tags: v*` ИЛИ вручную (`workflow_dispatch`, поле
