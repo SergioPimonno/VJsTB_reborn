@@ -38,12 +38,12 @@ public final class AfterEffectsJsxWriter {
 
     public static String buildJsx(ContentCanvas canvas, Scene scene, AppModel model, String sceneNameSanitized) {
         StringBuilder sb = new StringBuilder();
-        sb.append("// LED Scheme Designer -- шаблон композиции для After Effects\n");
+        sb.append("// AVE_ToolBox -- шаблон композиции для After Effects\n");
         sb.append("// Сцена: ").append(jsComment(scene.getName())).append(", канвас: ")
                 .append(jsComment(canvas.getName())).append("\n");
         sb.append("// PNG-маски экранов ищутся РЯДОМ с этим .jsx-файлом.\n");
         sb.append("(function () {\n");
-        sb.append("    app.beginUndoGroup(\"Импорт LED Scheme Designer -- ").append(js(canvas.getName()))
+        sb.append("    app.beginUndoGroup(\"Импорт AVE_ToolBox -- ").append(js(canvas.getName()))
                 .append("\");\n");
         sb.append("    var scriptFolder = new File($.fileName).parent;\n");
         sb.append("    function importMask(filename) {\n");

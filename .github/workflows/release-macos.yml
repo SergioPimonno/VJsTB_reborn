@@ -69,12 +69,12 @@ jobs:
             --type dmg \
             --input dist-input \
             --dest dist \
-            --name "LED Scheme Designer" \
+            --name "AVE_ToolBox" \
             --main-jar led-scheme.jar \
             --main-class com.vjstb.ledscheme.App \
             --app-version "${{ steps.ver.outputs.version }}" \
-            --vendor "VJsTB" \
-            --mac-package-name "LED Scheme Designer" \
+            --vendor "AVE_ToolBox" \
+            --mac-package-name "AVE_ToolBox" \
             --icon packaging/icon-main.icns
 
       - name: Загрузить .dmg в релиз
@@ -82,8 +82,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           DMG=$(find dist -name '*.dmg' | head -n1)
-          mv "$DMG" "dist/LED-Scheme-Designer-${{ steps.ver.outputs.tag }}-mac.dmg"
+          mv "$DMG" "dist/AVE_ToolBox-${{ steps.ver.outputs.tag }}-mac.dmg"
           gh release upload "${{ steps.ver.outputs.tag }}" \
-            "dist/LED-Scheme-Designer-${{ steps.ver.outputs.tag }}-mac.dmg" \
+            "dist/AVE_ToolBox-${{ steps.ver.outputs.tag }}-mac.dmg" \
             --repo "${{ github.repository }}" \
             --clobber

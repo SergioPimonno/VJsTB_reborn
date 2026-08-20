@@ -49,7 +49,7 @@ public class MainFrame extends JFrame {
     private String currentStage = StageSwitcher.SETUP;
 
     public MainFrame(AppModel model, SettingsManager settings) {
-        super("LED Scheme Designer");
+        super("AVE_ToolBox");
         this.model = model;
         this.settings = settings;
 
