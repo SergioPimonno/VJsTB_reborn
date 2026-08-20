@@ -36,10 +36,12 @@ import javax.swing.JPanel;
  */
 public class Structure3DDialog extends JDialog {
 
+    private final Structure3DPanel panel;
+
     public Structure3DDialog(Window owner, AppModel model) {
         super(owner, "3D-превью конструктива", ModalityType.MODELESS);
 
-        Structure3DPanel panel = new Structure3DPanel(model);
+        panel = new Structure3DPanel(model);
 
         JPanel content = new JPanel(new BorderLayout(0, 8));
         content.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
@@ -106,6 +108,15 @@ public class Structure3DDialog extends JDialog {
         setContentPane(content);
         setSize(new Dimension(900, 720));
         setLocationRelativeTo(owner);
+    }
+
+    /** Обновляет 3D-вид (например, после пересчёта конструктива, пока диалог уже открыт) —
+     *  {@code AppModel} не поддерживает {@code removeListener}, а новая панель создаётся при
+     *  каждом открытии диалога, поэтому подписка на {@code addListener} здесь не заводится
+     *  (утекла бы) — вызывающий код (см. {@code SetupStagePanel#calculateStructure}) явно
+     *  дёргает этот метод, если диалог уже показан. */
+    public void refresh() {
+        panel.refresh();
     }
 
     private static JButton viewButton(Structure3DPanel panel, String label, double yawDeg, double pitchDeg) {

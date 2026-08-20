@@ -59,6 +59,10 @@ class StructureCalcTest {
         // Round 7: базовые секции тоже строятся между СОСЕДНИМИ башнями (тот же зазор, что и
         // перемычки), а не по одной на башню -- 2 зазора x 1 секция (ядро) = 2.
         assertEquals(2, result.baseFrameCount(), "2 зазора x 1 секция (ядро)");
+        // 2026-08-20, по прямому указанию пользователя: спецификация выдаёт ОДНО общее число
+        // рам (физически один и тот же каталожный тип, см. Result#totalFrameCount javadoc) --
+        // 18(вертикальных)+12(перемычек)+2(базы)=32.
+        assertEquals(32, result.totalFrameCount());
         // Стыков: ТОЛЬКО вертикальные (рама стоит физически сверху другой рамы того же типа)
         // -- (3-1)*2ряда*3башни=12 -> 12*2=24. Round 10: перемычка (Round 8) и база больше не
         // считаются -- ни одна не стоит "сверху" другой рамы (см. StructureCalc.compute javadoc).
@@ -100,7 +104,7 @@ class StructureCalcTest {
     }
 
     @Test
-    void requiredBallastApproximatelyEqualsScreenWeight(@TempDir Path dir) {
+    void requiredBallastApproximatelyEqualsScreenWeightAtRatioOne(@TempDir Path dir) {
         AppModel model = freshModel(dir);
         CabinetType t = model.addCabinetType(type(500, 500));
         t.setWeightKg(10);
@@ -109,11 +113,36 @@ class StructureCalcTest {
         model.selectScene(scene);
         // 2 строки x 4 колонки = 8 кабинетов * 10 кг = 80 кг суммарного веса экрана.
         Screen screen = model.addScreen("E", t.getId(), 2, 4, 0, 0);
+        // Явно 1:1 -- проверяем исходную "вес ≈ вес экрана" идею при коэффициенте 1.0
+        // (дефолт теперь 0.6, см. ballastRatioScalesRequiredWeight за проверкой ЭТОГО дефолта).
+        screen.setStructureBallastRatio(1.0);
 
         StructureCalc.Result result = StructureCalc.compute(screen, t, model.getWorkspace());
 
-        assertEquals(80.0, result.requiredBallastKg(), 0.01, "балласт ≈ вес экрана, без запаса");
+        assertEquals(80.0, result.requiredBallastKg(), 0.01, "балласт = вес экрана при коэффициенте 1.0");
         assertEquals(0, result.ballastContainerCount(), "без выбранного типа контейнера в библиотеке -- 0");
+    }
+
+    @Test
+    void ballastRatioScalesRequiredWeight(@TempDir Path dir) {
+        // Баг-репорт/уточнение пользователя: "сейчас он 1:1, в реальности хорошо если 6:10" --
+        // коэффициент теперь редактируемый (Screen.structureBallastRatio), дефолт 0.6, а не
+        // жёстко зашитая 1.0.
+        AppModel model = freshModel(dir);
+        CabinetType t = model.addCabinetType(type(500, 500));
+        t.setWeightKg(10);
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("E", t.getId(), 2, 4, 0, 0); // 80 кг веса экрана
+
+        assertEquals(0.6, screen.getStructureBallastRatio(), 0.001, "дефолт -- 0.6 (6:10), не 1.0");
+        StructureCalc.Result defaultResult = StructureCalc.compute(screen, t, model.getWorkspace());
+        assertEquals(48.0, defaultResult.requiredBallastKg(), 0.01, "80кг x 0.6 = 48кг балласта");
+
+        screen.setStructureBallastRatio(0.3);
+        StructureCalc.Result customResult = StructureCalc.compute(screen, t, model.getWorkspace());
+        assertEquals(24.0, customResult.requiredBallastKg(), 0.01, "80кг x 0.3 = 24кг -- коэффициент реально применяется");
     }
 
     @Test
@@ -124,7 +153,8 @@ class StructureCalcTest {
         model.selectProject(model.addProject("P"));
         Scene scene = model.addScene("S");
         model.selectScene(scene);
-        Screen screen = model.addScreen("E", t.getId(), 2, 4, 0, 0); // 80 кг
+        Screen screen = model.addScreen("E", t.getId(), 2, 4, 0, 0); // 80 кг веса экрана
+        screen.setStructureBallastRatio(1.0); // изолируем проверку деления от дефолтного коэффициента
 
         StructureFrameType ballast = new StructureFrameType();
         ballast.setName("Мешок с песком 25 кг");
@@ -156,7 +186,11 @@ class StructureCalcTest {
     }
 
     @Test
-    void exceedsScreenHeightWarningWhenTowerReachesOrPassesScreenTop(@TempDir Path dir) {
+    void exceedsScreenHeightWarningOnlyWhenTowerIsStrictlyTallerThanScreen(@TempDir Path dir) {
+        // 2026-08-19, по прямому указанию пользователя: высота башни автоматически
+        // приравнивается к высоте экрана -- РАВЕНСТВО теперь НОРМАЛЬНЫЙ случай (расчёт
+        // производится без предупреждения), предупреждение -- только если башня ВЫШЕ экрана
+        // (граница была {@code >=}, стала строго {@code >}).
         AppModel model = freshModel(dir);
         CabinetType t = model.addCabinetType(type(500, 500)); // 2 строки x 500мм = 1000мм высоты экрана
         model.selectProject(model.addProject("P"));
@@ -168,19 +202,41 @@ class StructureCalcTest {
         assertFalse(StructureCalc.compute(screen, t, model.getWorkspace()).exceedsScreenHeightWarning());
 
         screen.setStructureTowerHeightMm(1000);
+        assertFalse(StructureCalc.compute(screen, t, model.getWorkspace()).exceedsScreenHeightWarning(),
+                "равно высоте экрана -- это теперь НОРМАЛЬНЫЙ (авто-приравненный) случай, не нарушение");
+
+        screen.setStructureTowerHeightMm(1001);
         assertTrue(StructureCalc.compute(screen, t, model.getWorkspace()).exceedsScreenHeightWarning(),
-                "строго меньше -- 1000 (равно) уже нарушение");
+                "строго выше экрана -- предупреждение");
     }
 
     @Test
-    void suggestTowerCountUsesSpacingAsFenceposts(@TempDir Path dir) {
+    void suggestTowerHeightMmEqualsScreenPhysicalHeight() {
+        // 2026-08-19: высота башни автоматически приравнивается к собственной высоте экрана
+        // (строк x высота кабинета) -- по прямому указанию пользователя.
+        CabinetType t = type(500, 500);
+        Screen screen = new Screen();
+        screen.setRows(4);
+        assertEquals(2000.0, StructureCalc.suggestTowerHeightMm(screen, t), 0.001);
+        assertEquals(0.0, StructureCalc.suggestTowerHeightMm(screen, null), "без типа кабинета -- нечего предложить");
+    }
+
+    // suggestBaseExtensionMm/BASE_TO_HEIGHT_RATIO (auto-подсказка выноса по tg/ctg 60°) были
+    // добавлены и в тот же день откачены по прямому указанию пользователя ("забываем про
+    // котангенсы, раньше рассчитывалось лучше", 2026-08-20) -- см. class-javadoc StructureCalc
+    // за полной историей. Вынос снова полностью ручной ввод, без авто-формулы.
+
+    @Test
+    void suggestTowerCountUsesFixedDefaultSpacingAsFenceposts(@TempDir Path dir) {
+        // Шаг башен убран как редактируемое поле (2026-08-19, "ни на что не влияет") --
+        // suggestTowerCount теперь всегда использует внутреннюю константу
+        // StructureCalc.DEFAULT_TOWER_SPACING_MM (тот же прежний дефолт, 1000мм).
         AppModel model = freshModel(dir);
         CabinetType t = model.addCabinetType(type(500, 500)); // 500мм x 8 колонок = 4000мм ширины
         model.selectProject(model.addProject("P"));
         Scene scene = model.addScene("S");
         model.selectScene(scene);
         Screen screen = model.addScreen("E", t.getId(), 1, 8, 0, 0);
-        screen.setStructureTowerSpacingMm(1000);
 
         // ceil(4000/1000) + 1 = 5 башен ("заборными столбами" с шагом 1м).
         assertEquals(5, StructureCalc.suggestTowerCount(screen, t));
@@ -222,11 +278,25 @@ class StructureCalcTest {
     }
 
     @Test
-    void suggestExtendedBaseSectionsGrowsForTallOrWideScreens() {
-        assertEquals(1, StructureCalc.suggestExtendedBaseSections(2500, 4000), "невысокий узкий экран -- 1 секция");
-        assertEquals(2, StructureCalc.suggestExtendedBaseSections(3800, 4000), "выше 3.5м -- больше выноса");
-        assertEquals(3, StructureCalc.suggestExtendedBaseSections(4800, 4000), "выше 4.5м -- ещё больше");
-        assertEquals(2, StructureCalc.suggestExtendedBaseSections(2500, 9000), "очень широкий экран -- тоже больше");
+    void extendedBaseSectionsFromOverhangSubtractsMandatoryModuleFirst() {
+        // Round 19 (уточнение того же дня, баг-репорт на реальном проекте ДКФ): введённое
+        // значение выноса -- это ПОЛНАЯ глубина базы, ВКЛЮЧАЯ обязательный модуль
+        // (StructureCalc.CORE_BASE_SECTION_COUNT = 1), не сверх него -- формула сначала
+        // вычитает ровно 1 модуль, и только остаток переводит в целое число ДОПОЛНИТЕЛЬНЫХ
+        // каталожных секций.
+        assertEquals(0, StructureCalc.extendedBaseSectionsFromOverhang(0, 500), "меньше обязательной части -- 0");
+        assertEquals(0, StructureCalc.extendedBaseSectionsFromOverhang(500, 500),
+                "ровно 1 обязательный модуль, ничего сверх -- 0 доп. секций");
+        assertEquals(1, StructureCalc.extendedBaseSectionsFromOverhang(600, 500),
+                "600-500=100 сверх обязательного -> округление вверх до 1 доп. секции");
+        assertEquals(1, StructureCalc.extendedBaseSectionsFromOverhang(1000, 500),
+                "1000-500=500 сверх обязательного -> 500/500=1 ровно доп. секция");
+        // Реальный сценарий из баг-репорта (проект ДКФ): пользователь ввёл 1500мм, ожидая
+        // ИТОГО 1500мм базы (не 1500 сверх ядра) -- 1500-500=1000 сверх обязательного ->
+        // 1000/500=2 доп. секции -> 1(обязательная)+2(доп.)=3 секции x 500мм = 1500мм ровно.
+        assertEquals(2, StructureCalc.extendedBaseSectionsFromOverhang(1500, 500),
+                "баг-репорт ДКФ: 1500мм ИТОГО -> 2 доп. секции (1 обязательная уже включена в итог)");
+        assertEquals(0, StructureCalc.extendedBaseSectionsFromOverhang(500, 0), "sectionDepthMm<=0 -- защитный 0");
     }
 
     @Test
@@ -255,20 +325,6 @@ class StructureCalcTest {
     }
 
     @Test
-    void coreBaseSectionCountCoversFullFrameDepthInWholeCatalogModules() {
-        // Round 10 (баг-репорт: "эта пластина должна не рендериться как 2 рамы, а являться 2
-        // отдельными рамами. Башни могут быть глубиной 0.5, в таком случае текущее основание не
-        // будет подходить по габаритам") -- ядро покрывает 2*frameW (оба ряда, без зазора), НЕ
-        // одной плитой произвольного размера, а целым числом модулей sectionDepthMm.
-        assertEquals(2, StructureCalc.coreBaseSectionCount(500, 500), "2*500 / 500 = 2 ровно");
-        assertEquals(1, StructureCalc.coreBaseSectionCount(250, 500), "2*250 / 500 = 1 ровно");
-        // Не делится нацело -- округляем ВВЕРХ (модуль либо есть целиком, либо не считается):
-        // 2*400 / 500 = 1.6 -> нужно 2 модуля, чтобы полностью покрыть глубину.
-        assertEquals(2, StructureCalc.coreBaseSectionCount(400, 500), "2*400 / 500 = 1.6 -> округление вверх до 2");
-        assertEquals(1, StructureCalc.coreBaseSectionCount(500, 0), "sectionDepthMm<=0 -- защитный фолбэк, не 0");
-    }
-
-    @Test
     void coreBaseSectionsAreIndependentlyToggleableAndExtensionStartsAfterThem(@TempDir Path dir) {
         AppModel model = freshModel(dir);
         CabinetType t = model.addCabinetType(type(500, 500));
@@ -276,8 +332,11 @@ class StructureCalcTest {
         Scene scene = model.addScene("S");
         model.selectScene(scene);
         Screen screen = model.addScreen("E", t.getId(), 2, 6, 0, 0);
-        // 2 башни (1 зазор), ядро из 2 модулей (coreBaseSectionCount=2, как при дефолтных
-        // 500х500 габаритах), плюс 1 доп. секция выноса под балласт -- сеется автоматически.
+        // 2 башни (1 зазор), ядро из 2 модулей -- ScreenLogic.regenerateStructureCells
+        // принимает coreBaseSectionCount как обычный параметр (не привязана к тому, что
+        // в проде AppModel теперь всегда передаёт StructureCalc.CORE_BASE_SECTION_COUNT=1,
+        // см. Round 19) -- здесь намеренно 2, чтобы проверить поведение функции при ядре из
+        // НЕСКОЛЬКИХ модулей, плюс 1 доп. секция выноса под балласт -- сеется автоматически.
         ScreenLogic.regenerateStructureCells(screen, t, 2, 1, 1, 0, 1, 2);
 
         var baseCells = screen.getStructureBaseFrameCells();
@@ -311,7 +370,6 @@ class StructureCalcTest {
         Scene scene = model.addScene("S");
         model.selectScene(scene);
         Screen screen = model.addScreen("E", t.getId(), 1, 4, 0, 0); // 4 колонки x 500мм = 2000мм
-        screen.setStructureTowerSpacingMm(1000);
         // Прячем кабинеты в правой половине экрана (колонки 2,3, т.е. 1000..2000мм) -- имитирует
         // вырезанную форму экрана (Phase 2.2: "если в экране есть отсутствующие кабинеты, то
         // для них башни не строятся").
@@ -341,7 +399,6 @@ class StructureCalcTest {
         Scene scene = model.addScene("S");
         model.selectScene(scene);
         Screen screen = model.addScreen("E", t.getId(), 4, 4, 0, 0); // 4 ряда x 4 колонки, 2000x2000мм
-        screen.setStructureTowerSpacingMm(1000);
         // Башня 2 стоит на X=2000мм, её зона ответственности [1500..2500)мм -- это СТОЛБЕЦ 3
         // (X=[1500..2000)) при cellW=500мм, не столбец 2. Нижний ряд (rowIndex=3, "земля")
         // столбца 3 прячем, верхние 3 ряда остаются видимы -- проём-арка снизу.
@@ -368,7 +425,6 @@ class StructureCalcTest {
         Scene scene = model.addScene("S");
         model.selectScene(scene);
         Screen screen = model.addScreen("E", t.getId(), 4, 4, 0, 0);
-        screen.setStructureTowerSpacingMm(1000);
         // Башня 2 -> столбец 3 (см. предыдущий тест) -- верхние 3 ряда прячем, нижний (опорный)
         // оставляем видимым.
         for (var cab : screen.getCabinets()) {
@@ -431,7 +487,6 @@ class StructureCalcTest {
         Scene scene = model.addScene("S");
         model.selectScene(scene);
         Screen screen = model.addScreen("E", t.getId(), 1, 6, 0, 0); // 6 колонок x 500мм = 3000мм
-        screen.setStructureTowerSpacingMm(1000);
         // Прячем столбцы 3-5 (X=1500..3000мм) -- вся зона ответственности башни 2
         // (X=2000мм, ±500мм = [1500..2500)) остаётся без видимых кабинетов.
         for (var cab : screen.getCabinets()) {
@@ -464,7 +519,6 @@ class StructureCalcTest {
         Scene scene = model.addScene("S");
         model.selectScene(scene);
         Screen screen = model.addScreen("E", t.getId(), 1, 6, 0, 0);
-        screen.setStructureTowerSpacingMm(1000);
         for (var cab : screen.getCabinets()) {
             if (cab.getColIndex() >= 3) {
                 cab.setHidden(true);

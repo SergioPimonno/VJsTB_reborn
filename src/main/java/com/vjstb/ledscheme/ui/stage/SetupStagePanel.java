@@ -69,6 +69,7 @@ public class SetupStagePanel extends JPanel {
     private final com.vjstb.ledscheme.ui.SceneCanvasPanel prerigPreview;
     private final JButton calcRiggingBtn = new JButton("Рассчитать точки подвеса");
     private final JButton toggleShapeBtn = new JButton("Изменить форму экрана");
+    private final JButton alignCabinetsBtn = new JButton("Выровнять кабинеты по сетке");
     /** «Форма экрана» раньше показывалась ВСЕГДА, пока выбран экран — редактор нужен
      *  редко (только вырезание/переформовка ячеек), а место в правой колонке отнимал
      *  постоянно (баг-репорт: "мешается"). Теперь секция скрыта по умолчанию и
@@ -113,7 +114,14 @@ public class SetupStagePanel extends JPanel {
     private final JButton calcStructureBtn = new JButton("Предварительный расчёт конструктива");
     private final JButton buildStructureSpecBtn = new JButton("Собрать спецификацию");
     private final JSpinner pStructureTowerHeight = new JSpinner(new SpinnerNumberModel(3000.0, 0.0, 50_000.0, 100.0));
-    private final JSpinner pStructureTowerSpacing = new JSpinner(new SpinnerNumberModel(1000.0, 100.0, 50_000.0, 50.0));
+    /** «Вынос базы под балласт, мм» — заменил бывший «Шаг башен» (2026-08-19, тот ни на что не
+     *  влиял в итоговой ведомости материалов, см. StructureCalc.DEFAULT_TOWER_SPACING_MM):
+     *  насколько дополнительно база выступает под балласт, инженер вводит вручную — формула
+     *  оказалась ненадёжной ("аппаратно не получается его просчитывать эффективно"). */
+    private final JSpinner pStructureBaseExtension = new JSpinner(new SpinnerNumberModel(500.0, 0.0, 50_000.0, 50.0));
+    /** Коэффициент отношения требуемого веса балласта к весу экрана (2026-08-19) — раньше
+     *  жёстко 1:1, теперь редактируемый (дефолт 0.6 — "в реальности хорошо если 6:10"). */
+    private final JSpinner pStructureBallastRatio = new JSpinner(new SpinnerNumberModel(0.6, 0.05, 5.0, 0.05));
     private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pStructureFrameType = new JComboBox<>();
     private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pStructureCupType = new JComboBox<>();
     private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pStructureBallastType = new JComboBox<>();
@@ -419,13 +427,30 @@ public class SetupStagePanel extends JPanel {
         javax.swing.JCheckBox showCabinetsCheck = new javax.swing.JCheckBox(
                 "Кабинеты по отдельности (можно двигать каждый, Shift — прилипание к соседям,"
                         + " Ctrl+колесо — масштаб)");
-        showCabinetsCheck.addActionListener(e -> {
-            boolean detail = showCabinetsCheck.isSelected();
-            // fitToViewport=false в детальном режиме — иначе Ctrl+колесо (масштаб,
-            // см. mouseWheelMoved) не работает вовсе, а именно масштаб и нужен для
-            // точной расстановки отдельных кабинетов (баг-репорт: без масштаба
-            // порог привязки к соседям физически недостижим мышью при мелком виде).
-            prerigPreview.setDetailMode(detail, true, !detail);
+        showCabinetsCheck.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+
+        // Баг-репорт: сдвинутый вручную (в режиме выше) кабинет уводит NovaLCT-экспорт
+        // в Complex-раскладку (см. NovaLctScrWriter.isComplexExport), а руками попасть
+        // перетаскиванием ровно обратно в 0,0 неудобно/ненадёжно — кнопка одним кликом
+        // возвращает ВСЕ кабинеты текущего экрана на номинальную сетку (см.
+        // AppModel.alignScreenCabinetsToGrid), после чего экспорт сам определит экран
+        // снова как обычный (Standard), т.к. проверка (isUniformRectangularGrid) читает
+        // те же offsetXMm/offsetYMm заново при каждом экспорте, ничего не кэширует.
+        // Видна ТОЛЬКО при включённом чекбоксе выше (баг-репорт: кнопка вне режима
+        // отдельных кабинетов не имеет смысла — двигать нечего — и раньше ломала
+        // раскладку footer'а, см. ниже) — по умолчанию скрыта, т.к. чекбокс по
+        // умолчанию выключен.
+        alignCabinetsBtn.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        alignCabinetsBtn.setVisible(false);
+        alignCabinetsBtn.setToolTipText("Сбросить свободное смещение всех кабинетов текущего экрана обратно на"
+                + " номинальную сетку — в частности, возвращает экспорт в NovaLCT к обычной"
+                + " (Standard) раскладке, если он ушёл в Complex из-за случайно сдвинутого кабинета.");
+        alignCabinetsBtn.addActionListener(e -> {
+            Screen scr = model.getCurrentScreen();
+            if (scr == null) {
+                return;
+            }
+            model.alignScreenCabinetsToGrid(scr);
             prerigPreview.revalidate();
             prerigPreview.repaint();
         });
@@ -433,10 +458,47 @@ public class SetupStagePanel extends JPanel {
         JPanel canvasArea = new JPanel(new BorderLayout());
         canvasArea.add(stats, BorderLayout.NORTH);
         canvasArea.add(prerigScroll, BorderLayout.CENTER);
+        // BoxLayout (не FlowLayout) — каждый компонент на СВОЕЙ строке. FlowLayout
+        // раньше ставил чекбокс и кнопку в один ряд, но при недостаточной ширине
+        // панели переносил кнопку на вторую строку ТОЛЬКО визуально: FlowLayout#
+        // getPreferredSize() всегда считает высоту как для ОДНОЙ строки (не умеет
+        // предсказывать перенос заранее), поэтому BorderLayout.SOUTH выделял footer'у
+        // высоту только одной строки, а перенесённая кнопка молча обрезалась родителем
+        // — баг-репорт «кнопка не видна». BoxLayout вертикально суммирует preferred-
+        // высоты детей честно, обрезания при любой ширине панели не будет.
         JPanel canvasFooter = UiKit.vbox();
         canvasFooter.add(UiKit.vgap(6));
         canvasFooter.add(showCabinetsCheck);
+        canvasFooter.add(UiKit.vgap(4));
+        canvasFooter.add(alignCabinetsBtn);
         canvasArea.add(canvasFooter, BorderLayout.SOUTH);
+
+        showCabinetsCheck.addActionListener(e -> {
+            boolean detail = showCabinetsCheck.isSelected();
+            // fitToViewport=false в детальном режиме — иначе Ctrl+колесо (масштаб,
+            // см. mouseWheelMoved) не работает вовсе, а именно масштаб и нужен для
+            // точной расстановки отдельных кабинетов (баг-репорт: без масштаба
+            // порог привязки к соседям физически недостижим мышью при мелком виде).
+            prerigPreview.setDetailMode(detail, true, !detail);
+            // Кнопка появляется/исчезает вместе с режимом — footer меняет высоту,
+            // поэтому потолок ("Прериг сцены", см. javadoc dynamicSection в конце
+            // этого метода) нужно пересчитать явно, тем же приёмом, что и у
+            // applyMountTypeVisibility() ниже для riggingFieldsPanel/structureFieldsPanel
+            // — иначе выделенное разделителем место осталось бы прежним и кнопка
+            // всё равно не поместилась бы на экран.
+            alignCabinetsBtn.setVisible(detail);
+            canvasFooter.revalidate();
+            canvasFooter.repaint();
+            if (prerigSection != null) {
+                UiKit.recapHeight(prerigSection);
+            }
+            if (prerigSplit != null) {
+                prerigSplit.revalidate();
+                prerigSplit.repaint();
+            }
+            prerigPreview.revalidate();
+            prerigPreview.repaint();
+        });
 
         JPanel riggingArea = UiKit.vbox();
 
@@ -497,9 +559,15 @@ public class SetupStagePanel extends JPanel {
         riggingArea.add(UiKit.vgap(10));
 
         structureFieldsPanel = UiKit.vbox();
+        pStructureTowerHeight.setToolTipText("Автоматически подставляется равной собственной высоте экрана при"
+                + " выборе экрана — башня строится вплотную под весь экран. Можно переопределить вручную; если"
+                + " указанное значение выше высоты экрана, «Рассчитать конструктив» покажет предупреждение.");
         structureFieldsPanel.add(UiKit.formRow("Высота башни, мм", pStructureTowerHeight));
         structureFieldsPanel.add(UiKit.vgap());
-        structureFieldsPanel.add(UiKit.formRow("Шаг башен, мм", pStructureTowerSpacing));
+        pStructureBaseExtension.setToolTipText("Полная глубина базы под балласт (ВКЛЮЧАЯ обязательный модуль"
+                + " под самой башней, не сверх него) — площадь опоры/рычаг устойчивости. Формулой не считается"
+                + " («аппаратно не получается его просчитывать эффективно») — вводится вручную по месту.");
+        structureFieldsPanel.add(UiKit.formRow("Вынос базы под балласт, мм", pStructureBaseExtension));
         structureFieldsPanel.add(UiKit.vgap());
 
         setStructureFrameRenderer(pStructureFrameType);
@@ -511,9 +579,14 @@ public class SetupStagePanel extends JPanel {
         structureFieldsPanel.add(UiKit.vgap());
         structureFieldsPanel.add(UiKit.formRow("Тип контейнера балласта (библиотека)", pStructureBallastType));
         structureFieldsPanel.add(UiKit.vgap());
+        pStructureBallastRatio.setToolTipText("Требуемый вес балласта = вес отгружаемого экрана × этот"
+                + " коэффициент. Раньше было жёстко 1:1 (1.0) — теперь редактируемо, реалистичнее около 0.6"
+                + " (6:10).");
+        structureFieldsPanel.add(UiKit.formRow("Коэфф. отгруз/масса экрана", pStructureBallastRatio));
+        structureFieldsPanel.add(UiKit.vgap());
         pStructureScreenElevation.setToolTipText("Высота нижнего края экрана над землёй, мм — 0 = экран стоит на"
                 + " земле. Влияет только на отображение в 3D (виден зазор между истинной землёй и приподнятым"
-                + " экраном), НЕ на проверку «высота башни < высоты экрана».");
+                + " экраном), НЕ на проверку высоты башни относительно высоты экрана.");
         structureFieldsPanel.add(UiKit.formRow("Подъём экрана от земли, мм", pStructureScreenElevation));
         structureFieldsPanel.add(UiKit.vgap());
         structureFieldsPanel.add(UiKit.formRow("Заметки по конструктиву", pStructureNotes));
@@ -787,19 +860,19 @@ public class SetupStagePanel extends JPanel {
             return;
         }
         double towerHeight = ((Number) pStructureTowerHeight.getValue()).doubleValue();
-        double spacing = ((Number) pStructureTowerSpacing.getValue()).doubleValue();
+        double baseExtensionMm = ((Number) pStructureBaseExtension.getValue()).doubleValue();
+        double ballastRatio = ((Number) pStructureBallastRatio.getValue()).doubleValue();
         double screenElevation = parseScreenElevation();
         String frameTypeId = structureFrameTypeId(pStructureFrameType);
         String cupTypeId = structureFrameTypeId(pStructureCupType);
         String ballastTypeId = structureFrameTypeId(pStructureBallastType);
         CabinetType screenType = model.typeOf(scr);
 
-        Screen preview = scr.copy();
-        preview.setStructureTowerHeightMm(towerHeight);
-        preview.setStructureTowerSpacingMm(spacing);
-        int towers = com.vjstb.ledscheme.service.StructureCalc.suggestTowerCount(preview, screenType);
+        int towers = com.vjstb.ledscheme.service.StructureCalc.suggestTowerCount(scr, screenType);
         com.vjstb.ledscheme.model.StructureFrameType frameType =
                 (com.vjstb.ledscheme.model.StructureFrameType) pStructureFrameType.getSelectedItem();
+        Screen preview = scr.copy();
+        preview.setStructureTowerHeightMm(towerHeight);
         int vertical = com.vjstb.ledscheme.service.StructureCalc.suggestVerticalFramesPerTower(preview, frameType);
         double frameHeightMm = frameType != null && frameType.getHeightMm() != null && frameType.getHeightMm() > 0
                 ? frameType.getHeightMm() : 950.0;
@@ -810,13 +883,16 @@ public class SetupStagePanel extends JPanel {
         int peremychkaLevels =
                 com.vjstb.ledscheme.service.StructureCalc.suggestPeremychkaLevels(backRowHeightMm, frameHeightMm);
         double screenHeightMm = screenType != null ? scr.getRows() * screenType.getHeightMm() : 0;
-        double screenWidthMm = screenType != null ? scr.getCols() * screenType.getWidthMm() : 0;
-        int extendedBaseSections =
-                com.vjstb.ledscheme.service.StructureCalc.suggestExtendedBaseSections(screenHeightMm, screenWidthMm);
 
-        model.updateScreenStructure(scr, towerHeight, spacing, towers, vertical,
-                backRowSegments, peremychkaLevels, extendedBaseSections, frameTypeId,
+        model.updateScreenStructure(scr, towerHeight, towers, vertical,
+                backRowSegments, peremychkaLevels, baseExtensionMm, ballastRatio, frameTypeId,
                 cupTypeId, ballastTypeId, screenElevation, pStructureNotes.getText());
+        // 3D-окно не подписано на модель (см. Structure3DPanel#refresh() javadoc) -- если оно
+        // уже открыто, без этого явного вызова пересчёт не отразился бы в картинке, пока
+        // пользователь не закроет и не откроет окно заново (баг-репорт).
+        if (structure3DDialog != null && structure3DDialog.isShowing()) {
+            structure3DDialog.refresh();
+        }
 
         com.vjstb.ledscheme.service.StructureCalc.Result result =
                 com.vjstb.ledscheme.service.StructureCalc.compute(scr, screenType, model.getWorkspace());
@@ -825,8 +901,8 @@ public class SetupStagePanel extends JPanel {
 
         StringBuilder msg = new StringBuilder();
         msg.append(String.format("Стартовая сетка построена: %d башен, %d сегментов переднего ряда, %d заднего,"
-                + " %d уровней перемычек, %d доп. секций выноса.%n", towers, vertical, backRowSegments,
-                peremychkaLevels, extendedBaseSections));
+                + " %d уровней перемычек, вынос базы %.0f мм.%n", towers, vertical, backRowSegments,
+                peremychkaLevels, baseExtensionMm));
         msg.append("Дальнейшая точная расстановка (добавить/убрать раму, перемычку, секцию) — кликами в"
                 + " 3D-превью. Итоговую ведомость материалов смотрите через «" + buildStructureSpecBtn.getText()
                 + "» после того, как закончите правки.");
@@ -836,8 +912,8 @@ public class SetupStagePanel extends JPanel {
                     result.totalTowerHeightMm(), com.vjstb.ledscheme.service.StructureCalc.MAX_SAFE_TOWER_HEIGHT_MM));
         }
         if (warnScreen) {
-            msg.append(String.format("%n%nВНИМАНИЕ: высота башни %.0f мм должна быть строго меньше высоты экрана"
-                    + " %.0f мм!%n", result.totalTowerHeightMm(), screenHeightMm));
+            msg.append(String.format("%n%nВНИМАНИЕ: высота башни %.0f мм превышает высоту экрана %.0f мм —"
+                    + " башня должна быть не выше экрана!%n", result.totalTowerHeightMm(), screenHeightMm));
         }
         JOptionPane.showMessageDialog(this, msg.toString(), "Стартовая сетка построена",
                 (warnSafe || warnScreen) ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE);
@@ -857,16 +933,20 @@ public class SetupStagePanel extends JPanel {
         com.vjstb.ledscheme.service.StructureCalc.Result result =
                 com.vjstb.ledscheme.service.StructureCalc.compute(scr, screenType, model.getWorkspace());
 
+        // По прямому указанию пользователя (2026-08-20): спецификация выдаёт ОДНО общее число
+        // рам (вертикальные + перемычки + секции базы — физически один и тот же каталожный
+        // тип, см. StructureCalc.Result#totalFrameCount javadoc), не три отдельные строки,
+        // порядок — рамы/стаканы/болты/отгрузы.
         StringBuilder msg = new StringBuilder();
         msg.append("Спецификация конструктива — экран «").append(scr.getName()).append("»\n\n");
-        msg.append(String.format("Вертикальных рам: %d%n", result.verticalFrameCount()));
-        msg.append(String.format("Перемычек: %d%n", result.peremychkaCount()));
-        msg.append(String.format("Секций базовых рам: %d%n", result.baseFrameCount()));
+        msg.append(String.format("Рам: %d (из них вертикальных %d, перемычек %d, секций базы %d)%n",
+                result.totalFrameCount(), result.verticalFrameCount(), result.peremychkaCount(),
+                result.baseFrameCount()));
         msg.append(String.format("Стаканов: %d%n", result.cupCount()));
         msg.append(String.format("Болтов: %d%n", result.boltCount()));
         if (result.requiredBallastKg() > 0) {
-            msg.append(String.format("Требуемый балласт (≈ вес экрана): %.1f кг (%d контейнеров)%n",
-                    result.requiredBallastKg(), result.ballastContainerCount()));
+            msg.append(String.format("Отгрузов: %d (≈%.1f кг балласта)%n",
+                    result.ballastContainerCount(), result.requiredBallastKg()));
         }
         msg.append("\nЭтот же список войдёт в общую спецификацию проекта (лист «Конструктив») на этапе «Вывод».");
         msg.append("\nТребует независимой инженерной перепроверки перед монтажом — см. STRUCTURE_CALC_NOTES.md.");
@@ -1081,8 +1161,37 @@ public class SetupStagePanel extends JPanel {
                 pRefreshHz.setSelectedItem(scr.getRefreshRateHz());
                 pBitDepth.setSelectedItem(scr.getColorBitDepth());
 
-                pStructureTowerHeight.setValue(scr.getStructureTowerHeightMm());
-                pStructureTowerSpacing.setValue(scr.getStructureTowerSpacingMm());
+                // Высота башни автоматически приравнивается к собственной физической высоте
+                // экрана (2026-08-19, по прямому указанию пользователя) -- НО только для
+                // экрана, для которого конструктив ЕЩЁ НИ РАЗУ не рассчитывался (пустой
+                // structureFrameCells). Баг-репорт (тот же день, следующий заход): doRebuild()
+                // выполняется ПОСЛЕ КАЖДОГО изменения модели, включая само нажатие
+                // «Рассчитать конструктив» (AppModel.updateScreenStructure тоже вызывает
+                // changed()) -- если пересчитывать autoTowerHeight здесь БЕЗУСЛОВНО на каждый
+                // ребилд, поле молча откатывается к авто-значению сразу после того, как
+                // пользователь ввёл своё и нажал «Рассчитать», из-за чего его правка выглядела
+                // как "не сохранившаяся" (реально сохранялась, но тут же маскировалась). Для
+                // уже рассчитанного экрана показываем ПЕРСИСТИРОВАННОЕ значение, как и любое
+                // другое поле формы -- ровно то, что описал пользователь: "калькулятор должен
+                // держать в памяти свои стартовые значения" (авто-подсказка только один раз,
+                // до первого расчёта), а не подставлять их поверх уже введённых пользователем.
+                boolean structureNeverCalculated = scr.getStructureFrameCells().isEmpty();
+                if (structureNeverCalculated) {
+                    double autoTowerHeight = com.vjstb.ledscheme.service.StructureCalc.suggestTowerHeightMm(
+                            scr, model.typeOf(scr));
+                    pStructureTowerHeight.setValue(
+                            autoTowerHeight > 0 ? autoTowerHeight : scr.getStructureTowerHeightMm());
+                } else {
+                    pStructureTowerHeight.setValue(scr.getStructureTowerHeightMm());
+                }
+                // Вынос базы -- НЕ авто-подсказка (2026-08-20, откачено в тот же день, что
+                // добавлено: "забываем про котангенсы, раньше рассчитывалось лучше" -- см.
+                // StructureCalc class-javadoc за полной историей, не изобретай новую формулу
+                // для этого поля без прямого запроса) -- всегда персистированное значение, как
+                // и было после Round 19 (в отличие от высоты башни выше, для этого поля авто-
+                // подстановка для нового экрана больше не делается вовсе).
+                pStructureBaseExtension.setValue(scr.getStructureBaseExtensionMm());
+                pStructureBallastRatio.setValue(scr.getStructureBallastRatio());
                 populateStructureFrameCombo(pStructureFrameType,
                         com.vjstb.ledscheme.model.StructureFrameType.Kind.FRAME, scr.getStructureFrameTypeId());
                 populateStructureFrameCombo(pStructureCupType,
