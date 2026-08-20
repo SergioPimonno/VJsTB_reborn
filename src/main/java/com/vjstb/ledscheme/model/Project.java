@@ -1,7 +1,9 @@
 package com.vjstb.ledscheme.model;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 public class Project {
@@ -19,6 +21,25 @@ public class Project {
      *  новую ревизию — "принудительный" контроль версий, без тихой перезаписи). */
     private String cloudId;
     private Integer cloudRevision;
+    /** Строки калькулятора транспорта ({@code ui.VehicleCalculatorDialog}) для
+     *  области расчёта "Весь проект" — см. {@link Scene#getVehicleCaseCounts()}
+     *  за общую мотивацию (то же самое, но для другой области расчёта; у
+     *  каждой области своё хранилище — они считаются по разным наборам сцен
+     *  и не должны затирать значения друг друга). */
+    private Map<String, Integer> vehicleCaseCountsProject = new LinkedHashMap<>();
+    /** То же самое для области "Несколько сцен…" — вместе с {@link
+     *  #vehicleCaseCustomSceneIds} (какой именно набор сцен был выбран в
+     *  прошлый раз), иначе восстановленные количества было бы не с чем
+     *  сверить при повторном открытии. */
+    private Map<String, Integer> vehicleCaseCountsCustom = new LinkedHashMap<>();
+    private List<String> vehicleCaseCustomSceneIds = new ArrayList<>();
+    /** Какая область расчёта калькулятора транспорта использовалась последней
+     *  — имя константы {@code ui.VehicleCalculatorDialog.CalcScope}
+     *  ("SCENE"/"PROJECT"/"CUSTOM") — восстанавливает выбор в комбобоксе при
+     *  повторном открытии диалога вместо того, чтобы всегда сбрасывать его на
+     *  "Текущая сцена". {@code null} — калькулятор для этого проекта ещё ни
+     *  разу не открывали. */
+    private String vehicleCaseLastScope;
 
     public Project() {
     }
@@ -89,5 +110,37 @@ public class Project {
 
     public void setCloudRevision(Integer cloudRevision) {
         this.cloudRevision = cloudRevision;
+    }
+
+    public Map<String, Integer> getVehicleCaseCountsProject() {
+        return vehicleCaseCountsProject;
+    }
+
+    public void setVehicleCaseCountsProject(Map<String, Integer> vehicleCaseCountsProject) {
+        this.vehicleCaseCountsProject = vehicleCaseCountsProject;
+    }
+
+    public Map<String, Integer> getVehicleCaseCountsCustom() {
+        return vehicleCaseCountsCustom;
+    }
+
+    public void setVehicleCaseCountsCustom(Map<String, Integer> vehicleCaseCountsCustom) {
+        this.vehicleCaseCountsCustom = vehicleCaseCountsCustom;
+    }
+
+    public List<String> getVehicleCaseCustomSceneIds() {
+        return vehicleCaseCustomSceneIds;
+    }
+
+    public void setVehicleCaseCustomSceneIds(List<String> vehicleCaseCustomSceneIds) {
+        this.vehicleCaseCustomSceneIds = vehicleCaseCustomSceneIds;
+    }
+
+    public String getVehicleCaseLastScope() {
+        return vehicleCaseLastScope;
+    }
+
+    public void setVehicleCaseLastScope(String vehicleCaseLastScope) {
+        this.vehicleCaseLastScope = vehicleCaseLastScope;
     }
 }

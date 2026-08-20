@@ -1,7 +1,9 @@
 package com.vjstb.ledscheme.model;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 public class Scene {
@@ -36,6 +38,17 @@ public class Scene {
      *  ни разу не открывали для этой сцены. Персистится и синхронизируется с
      *  облаком так же, как остальные данные сцены (см. VEHICLE_CALC_NOTES.md). */
     private VehicleLoadPlan vehicleLoadPlan;
+    /** Строки калькулятора транспорта (тип кофра → количество) для этой сцены —
+     *  запрос пользователя: при повторном открытии {@code
+     *  ui.VehicleCalculatorDialog} количество кофров, введённое в прошлый раз,
+     *  должно подтягиваться, а не начинаться с пустой таблицы. Ключ — {@code
+     *  CaseType#getId()} (ссылка по id, как {@link VehicleLoadPlacement
+     *  #getCaseTypeId()}, не embed объекта). Отдельно от {@link
+     *  #vehicleLoadPlan} (тот хранит РАСКЛАДКУ в кузове, этот — исходные
+     *  количества, из которых раскладка считалась) — они могут разойтись,
+     *  если пользователь поменял строки в калькуляторе, но ещё не переоткрыл
+     *  визуализатор. */
+    private Map<String, Integer> vehicleCaseCounts = new LinkedHashMap<>();
 
     public Scene() {
     }
@@ -130,5 +143,13 @@ public class Scene {
 
     public void setVehicleLoadPlan(VehicleLoadPlan vehicleLoadPlan) {
         this.vehicleLoadPlan = vehicleLoadPlan;
+    }
+
+    public Map<String, Integer> getVehicleCaseCounts() {
+        return vehicleCaseCounts;
+    }
+
+    public void setVehicleCaseCounts(Map<String, Integer> vehicleCaseCounts) {
+        this.vehicleCaseCounts = vehicleCaseCounts;
     }
 }
