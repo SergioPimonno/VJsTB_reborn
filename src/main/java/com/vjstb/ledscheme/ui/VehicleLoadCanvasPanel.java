@@ -16,7 +16,9 @@ import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollBar;
@@ -407,6 +409,119 @@ public class VehicleLoadCanvasPanel extends JPanel {
         selected = p;
         onChanged.run();
         repaint();
+    }
+
+    /** Автоматическая раскладка "разместить всё" (запрос пользователя) — заменяет
+     *  ТЕКУЩИЕ размещения (вызывающий код должен спросить подтверждение заранее,
+     *  если они не пусты — см. {@code VehicleLoadVisualizerDialog}) простым
+     *  shelf-алгоритмом: ряды слева направо вдоль {@code cargoLengthMm}, следующий
+     *  ряд начинается на высоте самого высокого отпечатка текущего ряда. Кофры
+     *  сортируются по площади отпечатка по убыванию (first-fit-decreasing —
+     *  простая эвристика, уменьшает потери места по сравнению с порядком ввода) —
+     *  v1, без честной 2D bin-packing оптимизации, см. VEHICLE_CALC_NOTES.md.
+     *
+     * <p>Штабелирование учитывается ДО раскладки, не как отдельный проход: для
+     *  каждого типа считается {@code effectiveStack = min(maxStackCount,
+     *  floor(cargoHeightMm/heightMm))}, и {@code needed} штук этого типа заранее
+     *  режется на "стопки" — в одну клетку пола сразу встаёт целая стопка
+     *  ({@code stackCount = effectiveStack}, кроме последней неполной), а не по
+     *  одному кофру на клетку с последующим слиянием (в отличие от ручного
+     *  перетаскивания, см. {@link #resolveDrop}).
+     *
+     * <p>Запас по периметру каждого типа ({@code CaseType#getClearanceMm()})
+     *  добавляется К КАЖДОМУ отпечатку целиком (не поровну между соседями, как у
+     *  {@link #overlaps}/{@link #snap} при ручном перетаскивании) — упрощение,
+     *  оправданное тем, что это гарантирует НЕ МЕНЬШЕ уговорённого зазора между
+     *  соседями (первый элемент ряда/столбца прилегает к стенке кузова без
+     *  зазора, как и при ручной раскладке — зазор только между кофрами).
+     *
+     * <p>Ориентация — сначала пробует БЕЗ поворота; если отпечаток шире кузова по
+     *  длине, пробует развёрнутый на 90°; если не помещается ни в одной ориентации
+     *  или не хватило места по высоте/ширине кузова — тип уходит в {@code
+     *  leftover} (вызывающий код показывает пользователю, сколько и чего не
+     *  поместилось, обычно с предложением добавить ещё одну машину).
+     *
+     * @param needed тип кофра → сколько штук нужно всего (обычно {@code
+     *               remainingFor(t)} по всем секциям, кроме этой — см. диалог)
+     * @return типы/количества, которые НЕ поместились в эту машину (пусто, если
+     *         разместилось всё) */
+    public Map<CaseType, Integer> autoPlaceAll(Map<CaseType, Integer> needed) {
+        placements.clear();
+        selected = null;
+        Map<CaseType, Integer> leftover = new LinkedHashMap<>();
+        if (vehicle == null) {
+            leftover.putAll(needed);
+            return leftover;
+        }
+
+        record Slot(CaseType type, int units, double footprintWMm, double footprintHMm) {
+        }
+        List<Slot> slots = new ArrayList<>();
+        for (Map.Entry<CaseType, Integer> entry : needed.entrySet()) {
+            CaseType type = entry.getKey();
+            int count = entry.getValue();
+            if (count <= 0) {
+                continue;
+            }
+            int heightCap = (int) Math.floor(vehicle.getCargoHeightMm() / type.getHeightMm());
+            if (heightCap < 1) {
+                leftover.merge(type, count, Integer::sum);
+                continue;
+            }
+            int effectiveStack = Math.max(1, Math.min(type.getMaxStackCount(), heightCap));
+            int remaining = count;
+            while (remaining > 0) {
+                int units = Math.min(effectiveStack, remaining);
+                slots.add(new Slot(type, units, type.getLengthMm(), type.getWidthMm()));
+                remaining -= units;
+            }
+        }
+        slots.sort((a, b) -> Double.compare(b.footprintWMm() * b.footprintHMm(), a.footprintWMm() * a.footprintHMm()));
+
+        double cargoL = vehicle.getCargoLengthMm();
+        double cargoW = vehicle.getCargoWidthMm();
+        double curX = 0;
+        double curY = 0;
+        double rowH = 0;
+        for (Slot slot : slots) {
+            double clearance = slot.type().getClearanceMm();
+            double w = slot.footprintWMm() + clearance;
+            double h = slot.footprintHMm() + clearance;
+            boolean rotated = false;
+            if (w > cargoL) {
+                double rw = slot.footprintHMm() + clearance;
+                double rh = slot.footprintWMm() + clearance;
+                if (rw <= cargoL) {
+                    w = rw;
+                    h = rh;
+                    rotated = true;
+                }
+            }
+            if (w > cargoL) {
+                leftover.merge(slot.type(), slot.units(), Integer::sum);
+                continue;
+            }
+            if (curX + w > cargoL) {
+                curX = 0;
+                curY += rowH;
+                rowH = 0;
+            }
+            if (curY + h > cargoW) {
+                leftover.merge(slot.type(), slot.units(), Integer::sum);
+                continue;
+            }
+            Placement p = new Placement(slot.type());
+            p.rotated = rotated;
+            p.xMm = curX;
+            p.yMm = curY;
+            p.stackCount = slot.units();
+            placements.add(p);
+            curX += w;
+            rowH = Math.max(rowH, h);
+        }
+        revalidate();
+        repaint();
+        return leftover;
     }
 
     /** Экранные px (в координатах ЭТОЙ панели, включая {@link #PADDING}) →

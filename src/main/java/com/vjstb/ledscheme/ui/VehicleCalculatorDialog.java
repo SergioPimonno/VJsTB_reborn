@@ -14,9 +14,12 @@ import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Window;
+import java.awt.event.ActionListener;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
@@ -56,6 +59,27 @@ import javax.swing.table.DefaultTableCellRenderer;
  * пользователь не выберет тип заново в этой же строке. Для всех остальных
  * кофров — только ручной ввод (осознанное решение, см. заметки — без
  * привязки конкретных EQUIPMENT/CABLE записей к типам кофров).
+ *
+ * <p><b>Строки персистятся отдельно на КАЖДУЮ область расчёта</b> (запрос
+ * пользователя: при повторном открытии калькулятора ранее введённые кофры
+ * должны подтягиваться, а не начинать таблицу заново пустой — включая
+ * случай, когда таблица собиралась для "Весь проект"/"Несколько сцен…", не
+ * только для одной текущей сцены) — см. {@link #loadSavedRows()}/{@link
+ * #persistRows()}/{@link #savedCountsForCurrentScope()}:
+ * <ul>
+ * <li>SCENE → {@link Scene#getVehicleCaseCounts()} (та же гранулярность, что
+ *     у {@code Scene#getVehicleLoadPlan()});</li>
+ * <li>PROJECT → {@link Project#getVehicleCaseCountsProject()};</li>
+ * <li>CUSTOM → {@link Project#getVehicleCaseCountsCustom()}, вместе с самим
+ *     выбранным набором сцен ({@link Project#getVehicleCaseCustomSceneIds()}) —
+ *     без него восстановленные числа было бы не с чем сверить.</li>
+ * </ul>
+ * Сама область расчёта тоже запоминается ({@link Project#getVehicleCaseLastScope()},
+ * см. {@link #restoreLastScope()}/{@link #persistLastScope()}) — при повторном
+ * открытии {@link #scopeCombo} восстанавливает последний выбор, а не всегда
+ * сбрасывается на "Текущая сцена". Типы кофров, удалённые из библиотеки после
+ * сохранения, и сцены CUSTOM-набора, удалённые из проекта, при восстановлении
+ * молча пропускаются (id не резолвится).
  */
 public class VehicleCalculatorDialog extends JDialog {
 
@@ -80,6 +104,14 @@ public class VehicleCalculatorDialog extends JDialog {
     private CalcScope scope = CalcScope.SCENE;
     private List<Scene> customScenes = List.of();
     private int lastScopeIndex = 0;
+    /** Именованный листенер {@link #scopeCombo} (не инлайн-лямбда) — {@link
+     *  #restoreLastScope()} должен уметь временно снять его перед
+     *  программной сменой выбора, чтобы восстановление сохранённой области
+     *  расчёта не запускало {@link #applyScopeSelection()} (та ещё и открыла
+     *  бы диалог выбора сцен для CUSTOM, и — куда хуже — успела бы вызвать
+     *  {@link #recalculate()}/{@link #persistRows()} ДО того, как строки
+     *  восстановлены, затерев сохранённые количества пустой таблицей). */
+    private final ActionListener scopeListener = e -> applyScopeSelection();
 
     private List<VehicleCalc.CaseRow> lastCaseRows = List.of();
     private VehicleType lastRecommended;
@@ -101,8 +133,145 @@ public class VehicleCalculatorDialog extends JDialog {
         pack();
         setLocationRelativeTo(owner);
 
+        restoreLastScope();
+        loadSavedRows();
         refreshScopeInfo();
         recalculate();
+    }
+
+    /** Восстанавливает область расчёта, использованную последней для ТЕКУЩЕГО
+     *  проекта (см. class-javadoc, {@link Project#getVehicleCaseLastScope()}) —
+     *  вызывается ПЕРВЫМ в конструкторе, до {@link #loadSavedRows()} (та должна
+     *  уже знать правильную {@link #scope}, чтобы читать из верного хранилища).
+     *  Меняет выбор {@link #scopeCombo} НАПРЯМУЮ, временно сняв {@link
+     *  #scopeListener} — обычный путь через листенер запустил бы {@link
+     *  #applyScopeSelection()} (диалог выбора сцен для CUSTOM, преждевременный
+     *  {@link #recalculate()}/{@link #persistRows()} с ещё пустой таблицей).
+     *  Если сохранённого значения нет, оно "SCENE", либо (для CUSTOM) ни одна
+     *  сохранённая сцена не резолвится — область остаётся дефолтной ({@code
+     *  scope}, {@code scopeCombo} и так уже проинициализированы под SCENE). */
+    private void restoreLastScope() {
+        Project project = model.getCurrentProject();
+        if (project == null) {
+            return;
+        }
+        String saved = project.getVehicleCaseLastScope();
+        int idx;
+        if ("PROJECT".equals(saved)) {
+            scope = CalcScope.PROJECT;
+            idx = 1;
+        } else if ("CUSTOM".equals(saved)) {
+            List<Scene> resolved = new ArrayList<>();
+            for (String id : project.getVehicleCaseCustomSceneIds()) {
+                for (Scene s : project.getScenes()) {
+                    if (s.getId().equals(id)) {
+                        resolved.add(s);
+                        break;
+                    }
+                }
+            }
+            if (resolved.isEmpty()) {
+                return; // ни одна сохранённая сцена не сохранилась/не резолвится -> остаёмся на SCENE
+            }
+            customScenes = resolved;
+            scope = CalcScope.CUSTOM;
+            idx = 2;
+        } else {
+            return; // "SCENE", null или неизвестное значение -- уже дефолт
+        }
+        lastScopeIndex = idx;
+        scopeCombo.removeActionListener(scopeListener);
+        scopeCombo.setSelectedIndex(idx);
+        scopeCombo.addActionListener(scopeListener);
+    }
+
+    /** Восстанавливает строки, сохранённые в прошлый раз ДЛЯ ТЕКУЩЕЙ {@link
+     *  #scope} (см. class-javadoc) — вызывается один раз при открытии, ПОСЛЕ
+     *  {@link #restoreLastScope()} и до первого {@link #recalculate()}. Типы,
+     *  которых больше нет в библиотеке (id не резолвится), молча пропускаются —
+     *  тот же приём, что и у {@code VehicleLoadVisualizerDialog#loadOrInitSections}.
+     *  Использует {@link RowsTableModel#addRowRestored} (НЕ {@link
+     *  RowsTableModel#addRow}) — иначе авто-подстановка для строк "несёт
+     *  кабинеты" перезаписала бы восстановленное количество текущим значением
+     *  по области расчёта. */
+    private void loadSavedRows() {
+        Map<String, Integer> saved = savedCountsForCurrentScope();
+        if (saved == null || saved.isEmpty()) {
+            return;
+        }
+        for (Map.Entry<String, Integer> entry : saved.entrySet()) {
+            CaseType t = model.getWorkspace().caseTypeById(entry.getKey());
+            if (t == null || entry.getValue() == null || entry.getValue() <= 0) {
+                continue;
+            }
+            rowsTableModel.addRowRestored(t, entry.getValue());
+        }
+    }
+
+    private Map<String, Integer> savedCountsForCurrentScope() {
+        return switch (scope) {
+            case SCENE -> {
+                Scene scene = model.getCurrentScene();
+                yield scene != null ? scene.getVehicleCaseCounts() : null;
+            }
+            case PROJECT -> {
+                Project project = model.getCurrentProject();
+                yield project != null ? project.getVehicleCaseCountsProject() : null;
+            }
+            case CUSTOM -> {
+                Project project = model.getCurrentProject();
+                yield project != null ? project.getVehicleCaseCountsCustom() : null;
+            }
+        };
+    }
+
+    /** Сохраняет текущие строки таблицы под ТЕКУЩУЮ {@link #scope} (см.
+     *  class-javadoc) — вызывается из {@link #recalculate()}, то есть на каждое
+     *  дискретное изменение таблицы (тем же приёмом, что {@code
+     *  VehicleLoadVisualizerDialog#persistPlan}). Для CUSTOM сохраняет и сам
+     *  набор сцен ({@link #customScenes}) — без него восстановленные при
+     *  следующем открытии количества было бы не с чем сверить. No-op, если
+     *  для текущей области нет владельца (сцена/проект не выбраны). */
+    private void persistRows() {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (RowsTableModel.Row row : rowsTableModel.rows) {
+            if (row.type != null && row.count > 0) {
+                counts.put(row.type.getId(), row.count);
+            }
+        }
+        switch (scope) {
+            case SCENE -> {
+                Scene scene = model.getCurrentScene();
+                if (scene != null) {
+                    model.saveVehicleCaseCounts(scene, counts);
+                }
+            }
+            case PROJECT -> {
+                Project project = model.getCurrentProject();
+                if (project != null) {
+                    model.saveVehicleCaseCountsProject(project, counts);
+                }
+            }
+            case CUSTOM -> {
+                Project project = model.getCurrentProject();
+                if (project != null) {
+                    List<String> ids = customScenes.stream().map(Scene::getId).toList();
+                    model.saveVehicleCaseCountsCustom(project, ids, counts);
+                }
+            }
+        }
+    }
+
+    /** Запоминает {@link #scope} как "последнюю использованную область расчёта"
+     *  для текущего проекта (см. {@link Project#getVehicleCaseLastScope()}) —
+     *  вызывается из {@link #applyScopeSelection()} на КАЖДУЮ интерактивную
+     *  смену пользователем (не из {@link #restoreLastScope()} — там значение
+     *  только читается, повторно записывать то же самое незачем). */
+    private void persistLastScope() {
+        Project project = model.getCurrentProject();
+        if (project != null) {
+            model.saveVehicleCaseLastScope(project, scope.name());
+        }
     }
 
     private JPanel buildScopePanel() {
@@ -111,7 +280,7 @@ public class VehicleCalculatorDialog extends JDialog {
 
         JPanel scopeRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         scopeRow.add(new JLabel("Область расчёта:"));
-        scopeCombo.addActionListener(e -> applyScopeSelection());
+        scopeCombo.addActionListener(scopeListener);
         scopeRow.add(scopeCombo);
         panel.add(scopeRow);
         panel.add(sceneInfoLabel);
@@ -142,6 +311,7 @@ public class VehicleCalculatorDialog extends JDialog {
             scope = idx == 0 ? CalcScope.SCENE : CalcScope.PROJECT;
         }
         lastScopeIndex = scopeCombo.getSelectedIndex();
+        persistLastScope();
         recalculate();
     }
 
@@ -369,6 +539,7 @@ public class VehicleCalculatorDialog extends JDialog {
             }
         }
         lastCaseRows = caseRows;
+        persistRows();
         if (caseRows.isEmpty()) {
             resultLabel.setText("<html>Добавьте хотя бы один кофр с количеством больше нуля.</html>");
             lastRecommended = null;
@@ -424,6 +595,19 @@ public class VehicleCalculatorDialog extends JDialog {
             Row row = new Row();
             row.type = initialType;
             applyAutoCount(row);
+            rows.add(row);
+            fireTableRowsInserted(rows.size() - 1, rows.size() - 1);
+        }
+
+        /** Восстанавливает строку с ТОЧНЫМ сохранённым количеством — в отличие от
+         *  {@link #addRow}, НЕ применяет {@link #applyAutoCount} (см. {@link
+         *  #loadSavedRows}: восстановленное значение — это уже финальное число,
+         *  каким его оставил пользователь в прошлый раз, авто-подстановка тут не
+         *  нужна и перезаписала бы его). */
+        void addRowRestored(CaseType type, int count) {
+            Row row = new Row();
+            row.type = type;
+            row.count = count;
             rows.add(row);
             fireTableRowsInserted(rows.size() - 1, rows.size() - 1);
         }

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.CaseType;
+import com.vjstb.ledscheme.model.Project;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.VehicleType;
@@ -13,6 +14,7 @@ import com.vjstb.ledscheme.store.WorkspaceStore;
 import java.io.File;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -200,5 +202,97 @@ class VehicleCalcTest {
         assertEquals(1, stats.screenCount());
         assertEquals(3, stats.totalCabinetCount()); // 4 - 1 скрытый, без учёта сцены S2
         assertEquals(30.0, stats.totalWeightKg(), 1e-6);
+    }
+
+    @Test
+    void vehicleCaseCounts_persistAndReloadWithScene(@TempDir Path dir) {
+        // Запрос пользователя: строки калькулятора транспорта должны подтягиваться при
+        // повторном открытии, а не начинать таблицу заново пустой — см.
+        // Scene#getVehicleCaseCounts/AppModel#saveVehicleCaseCounts. Округляет полный
+        // цикл: сохранить -> перезагрузить С НУЛЯ ЧЕРЕЗ ФАЙЛ (не тот же AppModel в памяти) ->
+        // убедиться, что генерическая Jackson-сериализация Map<String,Integer> не потеряла
+        // данные (тот же приём, что legacyPerPlacementMaskColorIsSeededOntoScreenOnLoad в
+        // AppModelTest).
+        File workspaceFile = new File(dir.toFile(), "workspace.json");
+        AppModel model1 = new AppModel(new WorkspaceStore(workspaceFile));
+        CaseType type = model1.addCaseType(caseType(1000, 1000, 1000, 20, 1));
+        model1.selectProject(model1.addProject("P"));
+        Scene scene = model1.addScene("S1");
+        model1.selectScene(scene);
+
+        model1.saveVehicleCaseCounts(scene, Map.of(type.getId(), 7));
+
+        AppModel model2 = new AppModel(new WorkspaceStore(workspaceFile));
+        Scene reloadedScene = model2.getWorkspace().getProjects().get(0).getScenes().get(0);
+
+        assertEquals(Map.of(type.getId(), 7), reloadedScene.getVehicleCaseCounts());
+    }
+
+    @Test
+    void vehicleCaseCounts_defaultsToEmptyForNewScene(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S1");
+
+        assertTrue(scene.getVehicleCaseCounts().isEmpty());
+    }
+
+    @Test
+    void vehicleCaseCountsProject_persistAndReloadWithProject(@TempDir Path dir) {
+        // Область расчёта "Весь проект" — строки должны подтягиваться так же, как для
+        // одной сцены (баг-репорт: "как будет работать сценарий, если табличка собиралась
+        // для нескольких сцен сразу" — до этой правки PROJECT/CUSTOM вообще не сохранялись
+        // отдельно от текущей сцены).
+        File workspaceFile = new File(dir.toFile(), "workspace.json");
+        AppModel model1 = new AppModel(new WorkspaceStore(workspaceFile));
+        CaseType type = model1.addCaseType(caseType(1000, 1000, 1000, 20, 1));
+        Project project = model1.addProject("P");
+        model1.selectProject(project);
+        model1.addScene("S1");
+
+        model1.saveVehicleCaseCountsProject(project, Map.of(type.getId(), 12));
+
+        AppModel model2 = new AppModel(new WorkspaceStore(workspaceFile));
+        Project reloaded = model2.getWorkspace().getProjects().get(0);
+
+        assertEquals(Map.of(type.getId(), 12), reloaded.getVehicleCaseCountsProject());
+    }
+
+    @Test
+    void vehicleCaseCountsCustom_persistsSceneIdsAndCountsTogether(@TempDir Path dir) {
+        File workspaceFile = new File(dir.toFile(), "workspace.json");
+        AppModel model1 = new AppModel(new WorkspaceStore(workspaceFile));
+        CaseType type = model1.addCaseType(caseType(1000, 1000, 1000, 20, 1));
+        Project project = model1.addProject("P");
+        model1.selectProject(project);
+        Scene s1 = model1.addScene("S1");
+        Scene s2 = model1.addScene("S2");
+        model1.addScene("S3"); // намеренно НЕ входит в выбранный набор
+
+        model1.saveVehicleCaseCountsCustom(project, List.of(s1.getId(), s2.getId()), Map.of(type.getId(), 6));
+
+        AppModel model2 = new AppModel(new WorkspaceStore(workspaceFile));
+        Project reloaded = model2.getWorkspace().getProjects().get(0);
+
+        assertEquals(List.of(s1.getId(), s2.getId()), reloaded.getVehicleCaseCustomSceneIds());
+        assertEquals(Map.of(type.getId(), 6), reloaded.getVehicleCaseCountsCustom());
+    }
+
+    @Test
+    void vehicleCaseLastScope_persistsAcrossReload(@TempDir Path dir) {
+        // Сам выбор области расчёта тоже должен подтягиваться — иначе комбобокс всегда
+        // сбрасывается на "Текущая сцена", даже если в прошлый раз использовался
+        // "Весь проект"/"Несколько сцен…" (та же жалоба из баг-репорта).
+        File workspaceFile = new File(dir.toFile(), "workspace.json");
+        AppModel model1 = new AppModel(new WorkspaceStore(workspaceFile));
+        Project project = model1.addProject("P");
+        model1.selectProject(project);
+
+        model1.saveVehicleCaseLastScope(project, "PROJECT");
+
+        AppModel model2 = new AppModel(new WorkspaceStore(workspaceFile));
+        Project reloaded = model2.getWorkspace().getProjects().get(0);
+
+        assertEquals("PROJECT", reloaded.getVehicleCaseLastScope());
     }
 }

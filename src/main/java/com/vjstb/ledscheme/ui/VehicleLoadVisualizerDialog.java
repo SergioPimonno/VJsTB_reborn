@@ -78,6 +78,19 @@ import javax.swing.TransferHandler;
  * ContentCanvas}/{@code SchemaNode}. Загружается при открытии диалога (см.
  * {@link #loadOrInitSections}), сохраняется на каждое дискретное изменение
  * (см. {@link #persistPlan}, вызывается из {@link #refreshAll}).
+ *
+ * <p><b>«Разместить всё»</b> (запрос пользователя) — кнопка в карточке каждой
+ * машины, автоматическая раскладка ВСЕХ ещё не размещённых типов кофров сразу
+ * (не одного выбранного в меню, как «Добавить сюда») простым shelf-алгоритмом
+ * с учётом штабелирования — см. {@link VehicleLoadCanvasPanel#autoPlaceAll}.
+ * Заменяет текущую раскладку именно этой машины целиком (после подтверждения,
+ * если она не пуста), бюджет считается за вычетом уже размещённого в ДРУГИХ
+ * машинах (см. {@link #autoPlaceAllInSection}/{@link #placedInOtherSections})
+ * — то есть при нескольких машинах в диалоге повторный клик «Разместить всё»
+ * на следующей карточке распределяет именно остаток, не дублирует уже
+ * пристроенное. Кофры, для которых не хватило места именно в этой машине, не
+ * теряются молча — остаются в бюджете (см. {@link #remainingFor}) и
+ * показываются статусом с подсказкой добавить ещё один кузов.
  */
 public class VehicleLoadVisualizerDialog extends JDialog {
 
@@ -266,6 +279,7 @@ public class VehicleLoadVisualizerDialog extends JDialog {
         final JComboBox<VehicleType> vehicleCombo = new JComboBox<>();
         final VehicleLoadCanvasPanel canvas = new VehicleLoadCanvasPanel();
         final JButton addHereBtn = new JButton("Добавить сюда");
+        final JButton placeAllBtn = new JButton("Разместить всё");
         final JPanel wrapper = new JPanel(new BorderLayout(4, 4));
 
         VehicleSection(VehicleType initial) {
@@ -300,6 +314,11 @@ public class VehicleLoadVisualizerDialog extends JDialog {
                 }
                 canvas.addPlacement(sel); // triggers onChanged -> refreshAll()
             });
+
+            placeAllBtn.setToolTipText("Автоматически расставить в эту машину максимум ещё не размещённых"
+                    + " кофров (по всем типам разом, с учётом штабелирования) — простая раскладка рядами,"
+                    + " без ручной подгонки. Заменяет текущую раскладку именно этой машины.");
+            placeAllBtn.addActionListener(e -> autoPlaceAllInSection(this));
 
             // Приём drag-n-drop из палитры слева — кофр падает туда, куда его бросили
             // (с центрированием под курсором), а не всегда в угол, как кнопка
@@ -346,16 +365,30 @@ public class VehicleLoadVisualizerDialog extends JDialog {
             zoomIn.setToolTipText("Приблизить (Ctrl+колесо мыши тоже работает)");
             zoomIn.addActionListener(e -> canvas.zoomBy(1.25));
 
+            // Две строки, не одна (баг-репорт со скриншотом: с "Разместить всё" одна
+            // FlowLayout-строка стала шире, чем канвас/окно, и хвост (зум, "Убрать
+            // машину") обрезался краем окна — тут нет горизонтальной прокрутки для
+            // самого хедера, только для канваса ниже, см. javadoc canvasScroll) — каждая
+            // строка примерно вдвое уже суммарной ширины всех кнопок, комфортно
+            // помещается даже в узком окне.
             JPanel headerLeft = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
             headerLeft.add(new JLabel("Машина:"));
             headerLeft.add(vehicleCombo);
             headerLeft.add(addHereBtn);
-            headerLeft.add(zoomOut);
-            headerLeft.add(zoomReset);
-            headerLeft.add(zoomIn);
-            JPanel header = new JPanel(new BorderLayout(6, 0));
-            header.add(headerLeft, BorderLayout.WEST);
-            header.add(removeBtn, BorderLayout.EAST);
+            headerLeft.add(placeAllBtn);
+            JPanel headerTop = new JPanel(new BorderLayout(6, 0));
+            headerTop.add(headerLeft, BorderLayout.WEST);
+            headerTop.add(removeBtn, BorderLayout.EAST);
+
+            JPanel zoomRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+            zoomRow.add(zoomOut);
+            zoomRow.add(zoomReset);
+            zoomRow.add(zoomIn);
+
+            JPanel header = new JPanel();
+            header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
+            header.add(headerTop);
+            header.add(zoomRow);
 
             // Канвас обёрнут в свой JScrollPane — при приближении (см. VehicleLoadCanvasPanel
             // #getPreferredSize) он растёт, и когда перестаёт помещаться в исходный размер
@@ -383,6 +416,70 @@ public class VehicleLoadVisualizerDialog extends JDialog {
                 .mapToInt(p -> p.stackCount)
                 .sum();
         return needed - placed;
+    }
+
+    /** Сколько штук типа {@code t} уже размещено в СЕКЦИЯХ, ОТЛИЧНЫХ от {@code
+     *  exclude} — используется {@link #autoPlaceAllInSection}, чтобы посчитать
+     *  бюджет "разместить всё" ИМЕННО для этой машины (текущая раскладка самой
+     *  {@code exclude} будет заменена целиком, поэтому не учитывается). */
+    private int placedInOtherSections(CaseType t, VehicleSection exclude) {
+        return sections.stream()
+                .filter(s -> s != exclude)
+                .flatMap(s -> s.canvas.getPlacements().stream())
+                .filter(p -> p.type == t)
+                .mapToInt(p -> p.stackCount)
+                .sum();
+    }
+
+    /** Кнопка «Разместить всё» одной карточки-машины (запрос пользователя: "кофры
+     *  все должны максимально добавиться в машину с учётом этажирования и
+     *  распределяться по машине") — считает бюджет (нужно всего минус уже
+     *  размещено в ДРУГИХ машинах, см. {@link #placedInOtherSections}) по каждому
+     *  типу из {@link #neededCounts} и запускает {@link
+     *  VehicleLoadCanvasPanel#autoPlaceAll} именно на канвасе {@code section}.
+     *  Если в этой машине уже что-то размещено вручную — спрашивает подтверждение
+     *  (алгоритм заменяет раскладку целиком, не дополняет её). Остаток, который не
+     *  поместился (кузов кончился раньше кофров), — не теряется молча: остаётся в
+     *  {@code neededCounts}/{@code remainingFor} как и раньше, показывается статусом
+     *  и подсказкой добавить ещё одну машину — тем же путём, что и обычная ручная
+     *  раскладка. */
+    private void autoPlaceAllInSection(VehicleSection section) {
+        if (section.canvas.getVehicle() == null) {
+            statusLabel.setText(" Сначала выберите машину для этой карточки.");
+            return;
+        }
+        if (neededCounts.isEmpty()) {
+            statusLabel.setText(" Нет данных из расчёта — сначала укажите кофры в калькуляторе.");
+            return;
+        }
+        if (!section.canvas.getPlacements().isEmpty()) {
+            int result = JOptionPane.showConfirmDialog(this,
+                    "Автоматическая раскладка заменит текущее размещение кофров в этой машине. Продолжить?",
+                    "Разместить всё", JOptionPane.YES_NO_OPTION);
+            if (result != JOptionPane.YES_OPTION) {
+                return;
+            }
+        }
+        Map<CaseType, Integer> budget = new LinkedHashMap<>();
+        for (Map.Entry<CaseType, Integer> entry : neededCounts.entrySet()) {
+            int remaining = entry.getValue() - placedInOtherSections(entry.getKey(), section);
+            if (remaining > 0) {
+                budget.put(entry.getKey(), remaining);
+            }
+        }
+        Map<CaseType, Integer> leftover = section.canvas.autoPlaceAll(budget);
+        // refreshAll() перезаписывает statusLabel общей сводкой ("Размещено кофров
+        // всего: N") — поэтому свой, более конкретный статус про остаток ставим
+        // ПОСЛЕ него, а не до (иначе refreshAll молча стирает эту подсказку).
+        refreshAll();
+        int leftoverTotal = leftover.values().stream().mapToInt(Integer::intValue).sum();
+        if (leftoverTotal > 0) {
+            String details = leftover.entrySet().stream()
+                    .map(e -> e.getKey().getName() + " × " + e.getValue())
+                    .collect(Collectors.joining(", "));
+            statusLabel.setText(" Не поместилось в эту машину: " + leftoverTotal + " шт. (" + details
+                    + ") — добавьте ещё одну машину и повторите «Разместить всё».");
+        }
     }
 
     private JPanel buildPalettePanel() {
