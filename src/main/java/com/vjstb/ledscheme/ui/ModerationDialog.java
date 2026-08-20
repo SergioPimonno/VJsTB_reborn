@@ -3,6 +3,7 @@ package com.vjstb.ledscheme.ui;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vjstb.ledscheme.settings.SettingsManager;
+import com.vjstb.ledscheme.sync.LibrarySyncClient;
 import com.vjstb.ledscheme.sync.ProposalClient;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
@@ -127,7 +128,7 @@ public class ModerationDialog extends JDialog {
         new SwingWorker<List<ProposalClient.ProposalDto>, Void>() {
             @Override
             protected List<ProposalClient.ProposalDto> doInBackground() throws Exception {
-                return new ProposalClient().pending(token);
+                return new ProposalClient(LibrarySyncClient.resolveBaseUrl(settings)).pending(token);
             }
 
             @Override
@@ -157,8 +158,9 @@ public class ModerationDialog extends JDialog {
         new SwingWorker<ProposalClient.ProposalDto, Void>() {
             @Override
             protected ProposalClient.ProposalDto doInBackground() throws Exception {
-                return approved ? new ProposalClient().approve(token, selected.id(), noteText)
-                        : new ProposalClient().reject(token, selected.id(), noteText);
+                String base = LibrarySyncClient.resolveBaseUrl(settings);
+                return approved ? new ProposalClient(base).approve(token, selected.id(), noteText)
+                        : new ProposalClient(base).reject(token, selected.id(), noteText);
             }
 
             @Override
