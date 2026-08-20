@@ -126,7 +126,16 @@ public final class NovaLctCombineHelper {
      * ячейки при таком объединении, это НЕ догадка. Остальные поля синтетической
      * записи (port/seq) роли не играют (в образце port=1,seq=1, здесь используются
      * нейтральные 0/0 — оба варианта дают одинаковый визуальный/функциональный
-     * результат в NovaLCT, т.к. у записи нет реальной платы). */
+     * результат в NovaLCT, т.к. у записи нет реальной платы).
+     *
+     * <p><b>Скрытые ("вырезанные") ячейки ВНУТРИ footprint своего экрана — тоже
+     * blank (2026-08-19)</b> — отдельным циклом ПОСЛЕ этого (см. код), т.к.
+     * {@code covered[][]} выше отмечает footprint геометрически (по rows/cols
+     * экрана), не заглядывая в {@code CabinetInstance.isHidden()} — экран с
+     * реальными вырезами (арки и т.п.) иначе оставлял бы такие ячейки вовсе БЕЗ
+     * записи (тот же баг, что чинили в одноэкранном {@link
+     * NovaLctScrWriter#writeStandard}, см. его javadoc за реальным баг-репортом
+     * ДКФ). */
     public static CombineResult combine(List<ScreenSlot> slots, int overallCols, int overallRows,
                                          List<NovaLctControllerResolver.CabinetRec> recs, AppModel model) {
         int cabW = 128;
@@ -180,6 +189,31 @@ public final class NovaLctCombineHelper {
             }
         }
 
+        // Скрытые ("вырезанные") ячейки ВНУТРИ footprint своего экрана — та же
+        // blank-семантика, что и у ячеек, вообще не покрытых ни одним экраном (цикл
+        // выше), но `covered[][]` их не ловит (отмечает footprint геометрически, по
+        // rows/cols экрана, не заглядывая в isHidden). До этой правки такая ячейка не
+        // попадала ни в резолвнутые записи (resolver пропускает скрытые кабинеты),
+        // ни в этот "дырочный" цикл — оставалась вовсе БЕЗ записи, тем же багом, что
+        // и в одноэкранном {@link NovaLctScrWriter#writeStandard} (см. его javadoc,
+        // 2026-08-19: "Failed to load screen information file!" на экране с арками).
+        // putIfAbsent — реальная запись (если кабинет всё же вдруг расключён,
+        // хотя видимый и скрытый кабинет одновременно не должен быть в recs) не
+        // перезатирается.
+        for (ScreenSlot slot : slots) {
+            for (com.vjstb.ledscheme.model.CabinetInstance cab : slot.screen().getCabinets()) {
+                if (!cab.isHidden()) {
+                    continue;
+                }
+                int c = slot.colOffset() + cab.getColIndex();
+                int r = slot.rowOffset() + cab.getRowIndex();
+                if (c < 0 || c >= overallCols || r < 0 || r >= overallRows) {
+                    continue;
+                }
+                combined.putIfAbsent(new NovaLctScrWriter.CellKey(c, r), new NovaLctScrWriter.Rec(r, c, 255, 0, 0));
+            }
+        }
+
         return new CombineResult(overallCols, overallRows, cabW, cabH, combined);
     }
 
@@ -211,6 +245,18 @@ public final class NovaLctCombineHelper {
             for (NovaLctControllerResolver.CabinetRec r : byScreen.get(s)) {
                 cells.put(new NovaLctScrWriter.CellKey(r.col(), r.row()),
                         new NovaLctScrWriter.Rec(r.row(), r.col(), r.cardIndex(), r.portInPool(), r.seq()));
+            }
+            // Скрытые ("вырезанные") ячейки -- та же blank-семантика (card=0xFF), что и
+            // в одноэкранном NovaLctScrWriter.writeStandard (см. её javadoc за полным
+            // разбором), не просто пропуск записи -- иначе тот же баг всплыл бы и здесь
+            // (экран с вырезом, экспортированный через "Раздельные экраны" в
+            // LctPresetMasterDialog, а не через одноэкранный путь).
+            for (com.vjstb.ledscheme.model.CabinetInstance cab : s.getCabinets()) {
+                if (!cab.isHidden()) {
+                    continue;
+                }
+                cells.putIfAbsent(new NovaLctScrWriter.CellKey(cab.getColIndex(), cab.getRowIndex()),
+                        new NovaLctScrWriter.Rec(cab.getRowIndex(), cab.getColIndex(), 255, 0, 0));
             }
             blocks.add(new NovaLctScrWriter.ScreenBlock(s.getCols(), s.getRows(), cabW, cabH, screenXPx, cells));
         }
@@ -336,6 +382,28 @@ public final class NovaLctCombineHelper {
                     // неё нет).
                     cells.put(new NovaLctScrWriter.CellKey(c, r), new NovaLctScrWriter.Rec(r, c, 255, 1, 1));
                 }
+            }
+        }
+
+        // Скрытые ("вырезанные") ячейки ВНУТРИ footprint своего экрана — та же
+        // blank-семантика, что и у ячеек вне footprint любого экрана группы (цикл
+        // выше), но `covered[][]` их не ловит геометрически (см. её же javadoc в
+        // combine() за полным разбором этого же бага, 2026-08-19). port=1/seq=1 —
+        // тот же подтверждённый для ЭТОЙ функции сентинел, что и у остальных
+        // blank-записей выше, см. комментарий над предыдущим циклом.
+        for (ScreenSlot slot : groupSlots) {
+            int localColOffset = slot.colOffset() - minCol;
+            int localRowOffset = slot.rowOffset() - minRow;
+            for (com.vjstb.ledscheme.model.CabinetInstance cab : slot.screen().getCabinets()) {
+                if (!cab.isHidden()) {
+                    continue;
+                }
+                int c = localColOffset + cab.getColIndex();
+                int r = localRowOffset + cab.getRowIndex();
+                if (c < 0 || c >= groupCols || r < 0 || r >= groupRows) {
+                    continue;
+                }
+                cells.putIfAbsent(new NovaLctScrWriter.CellKey(c, r), new NovaLctScrWriter.Rec(r, c, 255, 1, 1));
             }
         }
 
