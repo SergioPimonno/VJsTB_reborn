@@ -230,7 +230,7 @@ public class MainMenuBar extends JMenuBar {
         shortcuts.addActionListener(e -> onShowShortcuts.run());
         JMenuItem about = new JMenuItem("О программе");
         about.addActionListener(e -> JOptionPane.showMessageDialog(null,
-                "LED Scheme Designer\nв" + AppInfo.VERSION + "\nАвтор: " + AppInfo.AUTHOR
+                "AVE_ToolBox\nv" + AppInfo.VERSION + "\nАвтор: " + AppInfo.AUTHOR
                         + "\n\nПроектирование схем коммутации LED-экранов и видеосопровождения.",
                 "О программе", JOptionPane.INFORMATION_MESSAGE));
         menu.add(shortcuts);

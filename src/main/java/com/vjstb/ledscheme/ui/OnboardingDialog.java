@@ -41,7 +41,7 @@ public class OnboardingDialog extends JDialog {
      *  админ-консоль (ledscheme-admin), см. GuideDialog. Шаг «theme» с переключателями
      *  темы оформления остаётся функциональным/не редактируемым как текст. */
     private static final List<ContentSection> DEFAULT_SECTIONS = List.of(
-            new ContentSection("LED Scheme Designer v" + AppInfo.VERSION,
+            new ContentSection("AVE_ToolBox v" + AppInfo.VERSION,
                     "Приложение для проектирования схем коммутации LED-экранов и видеосопровождения — от "
                     + "структуры сцены до итогового пакета документации."
                     + "<br><br>Этот тур в несколько шагов покажет общий порядок работы и где что искать — его "
