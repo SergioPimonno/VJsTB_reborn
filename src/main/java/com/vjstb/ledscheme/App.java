@@ -6,6 +6,7 @@ import com.vjstb.ledscheme.settings.SettingsManager;
 import com.vjstb.ledscheme.settings.SettingsStore;
 import com.vjstb.ledscheme.settings.UserProfile;
 import com.vjstb.ledscheme.store.WorkspaceStore;
+import com.vjstb.ledscheme.sync.LibrarySyncClient;
 import com.vjstb.ledscheme.ui.LafStyle;
 import com.vjstb.ledscheme.ui.MainFrame;
 import com.vjstb.ledscheme.ui.OnboardingDialog;
@@ -69,7 +70,7 @@ public class App {
         new SwingWorker<List<VersionManifest.Entry>, Void>() {
             @Override
             protected List<VersionManifest.Entry> doInBackground() throws Exception {
-                return VersionManifest.fetchAvailable();
+                return VersionManifest.fetchAvailable(LibrarySyncClient.resolveBaseUrl(settings));
             }
 
             @Override

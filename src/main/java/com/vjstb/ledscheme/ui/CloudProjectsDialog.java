@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vjstb.ledscheme.model.Project;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.settings.SettingsManager;
+import com.vjstb.ledscheme.sync.LibrarySyncClient;
 import com.vjstb.ledscheme.sync.ProjectArchiveClient;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
@@ -49,7 +50,7 @@ public class CloudProjectsDialog extends JDialog {
 
     private final AppModel model;
     private final SettingsManager settings;
-    private final ProjectArchiveClient client = new ProjectArchiveClient();
+    private final ProjectArchiveClient client;
 
     private final DefaultListModel<Project> localModel = new DefaultListModel<>();
     private final JList<Project> localList = new JList<>(localModel);
@@ -76,6 +77,7 @@ public class CloudProjectsDialog extends JDialog {
         super(owner, "Облачные проекты", ModalityType.APPLICATION_MODAL);
         this.model = model;
         this.settings = settings;
+        this.client = new ProjectArchiveClient(LibrarySyncClient.resolveBaseUrl(settings));
 
         JPanel content = new JPanel(new BorderLayout(8, 8));
         content.setBorder(BorderFactory.createEmptyBorder(14, 14, 14, 14));

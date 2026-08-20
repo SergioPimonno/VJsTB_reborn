@@ -16,6 +16,7 @@ import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JSpinner;
+import javax.swing.JTextField;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.filechooser.FileNameExtensionFilter;
 
@@ -49,6 +50,7 @@ public class PreferencesDialog extends JDialog {
     private JCheckBox loadTrackingCheck;
     private JCheckBox powerUnitKwCheck;
     private JLabel maskLogoPathLabel;
+    private JTextField syncServerUrlField;
 
     public PreferencesDialog(Window owner, SettingsManager settings) {
         super(owner, "Персонализация — предпочтения", ModalityType.MODELESS);
@@ -71,6 +73,8 @@ public class PreferencesDialog extends JDialog {
         content.add(buildLoadGroup());
         content.add(Box.createVerticalStrut(8));
         content.add(buildMaskGroup());
+        content.add(Box.createVerticalStrut(8));
+        content.add(buildSyncGroup());
         content.add(Box.createVerticalStrut(10));
 
         JPanel closeRow = new JPanel(new FlowLayout(FlowLayout.RIGHT));
@@ -345,6 +349,40 @@ public class PreferencesDialog extends JDialog {
         return (JPanel) UiKit.section("Генерация масок", body);
     }
 
+    /** "Мост синхронизации" — на сетях, где прямое подключение к серверу по
+     *  {@code IP:8443} блокируется (см. раздел "Мост синхронизации" на публичной
+     *  веб-странице сервера), пользователь вписывает сюда альтернативный адрес
+     *  вручную; пусто -- используется адрес по умолчанию, как раньше. Коммитится
+     *  по потере фокуса/Enter, не по каждому нажатию клавиши -- это URL, не текст
+     *  для реактивного предпросмотра. */
+    private JPanel buildSyncGroup() {
+        JPanel body = UiKit.vbox();
+        body.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setToolTipText("Альтернативный адрес сервера — используйте, если обычное подключение к"
+                + " https://138.16.177.176:8443 не проходит (сеть блокирует нестандартный порт, см."
+                + " раздел «Мост синхронизации» на сайте сервера). Пусто — адрес по умолчанию.");
+        row.add(new JLabel("Адрес сервера (переопределение):"));
+        syncServerUrlField = new JTextField(24);
+        Runnable commit = () -> {
+            String text = syncServerUrlField.getText().trim();
+            settings.setSyncServerUrlOverride(text.isEmpty() ? null : text);
+        };
+        syncServerUrlField.addActionListener(e -> commit.run());
+        syncServerUrlField.addFocusListener(new java.awt.event.FocusAdapter() {
+            @Override
+            public void focusLost(java.awt.event.FocusEvent e) {
+                commit.run();
+            }
+        });
+        row.add(syncServerUrlField);
+        body.add(row);
+
+        return (JPanel) UiKit.section("Синхронизация", body);
+    }
+
     /** signalChainEndpointSocketsCheck/signalSchemaAutoPopulateCheck работают только
      *  вместе со СВОИМ signalSocketWiringCheck (без него общая схема сигнала не
      *  различает конкретные гнёзда/порты вообще) — и точно так же power-варианты со
@@ -385,5 +423,9 @@ public class PreferencesDialog extends JDialog {
         powerUnitKwCheck.setSelected(settings.activeProfile().isPowerUnitKw());
         String logoPath = settings.activeProfile().getMaskLogoImagePath();
         maskLogoPathLabel.setText(logoPath != null ? new File(logoPath).getName() : "не задан");
+        String urlOverride = settings.getSyncServerUrlOverride();
+        if (!syncServerUrlField.getText().equals(urlOverride != null ? urlOverride : "")) {
+            syncServerUrlField.setText(urlOverride != null ? urlOverride : "");
+        }
     }
 }

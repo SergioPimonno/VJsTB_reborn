@@ -611,10 +611,10 @@ public class SetupStagePanel extends JPanel {
         structureFieldsPanel.add(UiKit.vgap());
 
         toggle3DBtn.setToolTipText("Открыть/закрыть отдельное окно с 3D-превью конструктива — клик по"
-                + " существующей детали убирает её, по подсвеченному \"призраку\" -- добавляет (это и есть"
-                + " основной способ детальной правки, см. подсказку у «" + calcStructureBtn.getText() + "»)."
-                + " Требует OpenGL, на некоторых системах может быть недоступно -- тогда вместо картинки"
-                + " покажется сообщение.");
+                + " существующей детали убирает её; добавление — ТОЛЬКО с зажатым Ctrl (без Ctrl \"призраки\""
+                + " не показываются и не кликаются, это и есть основной способ детальной правки, см. подсказку"
+                + " у «" + calcStructureBtn.getText() + "»). Требует OpenGL, на некоторых системах может быть"
+                + " недоступно -- тогда вместо картинки покажется сообщение.");
         toggle3DBtn.addActionListener(e -> {
             if (structure3DDialog != null && structure3DDialog.isShowing()) {
                 structure3DDialog.dispose();

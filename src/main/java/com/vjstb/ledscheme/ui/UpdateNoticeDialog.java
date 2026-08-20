@@ -57,7 +57,7 @@ public class UpdateNoticeDialog extends JDialog {
         JButton updateNow = new JButton("Обновить сейчас…");
         updateNow.addActionListener(e -> {
             dispose();
-            UpdateDialog.show(owner);
+            UpdateDialog.show(owner, settings);
         });
         buttons.add(later);
         buttons.add(updateNow);

@@ -1,5 +1,7 @@
 package com.vjstb.ledscheme.ui;
 
+import com.vjstb.ledscheme.settings.SettingsManager;
+import com.vjstb.ledscheme.sync.LibrarySyncClient;
 import com.vjstb.ledscheme.update.UpdateManager;
 import com.vjstb.ledscheme.update.VersionManifest;
 import java.awt.BorderLayout;
@@ -33,11 +35,11 @@ public class UpdateDialog extends JDialog {
     private final JLabel status = new JLabel(" ");
     private final JButton updateBtn = new JButton("Обновить");
 
-    public static void show(Window owner) {
-        new UpdateDialog(owner).setVisible(true);
+    public static void show(Window owner, SettingsManager settings) {
+        new UpdateDialog(owner, settings).setVisible(true);
     }
 
-    private UpdateDialog(Window owner) {
+    private UpdateDialog(Window owner, SettingsManager settings) {
         super(owner, "Обновление версии", ModalityType.APPLICATION_MODAL);
 
         JPanel content = new JPanel();
@@ -80,14 +82,14 @@ public class UpdateDialog extends JDialog {
         setSize(420, 220);
         setLocationRelativeTo(owner);
 
-        loadVersions();
+        loadVersions(settings);
     }
 
-    private void loadVersions() {
+    private void loadVersions(SettingsManager settings) {
         new SwingWorker<List<VersionManifest.Entry>, Void>() {
             @Override
             protected List<VersionManifest.Entry> doInBackground() throws Exception {
-                return UpdateManager.fetchAvailableVersions();
+                return UpdateManager.fetchAvailableVersions(LibrarySyncClient.resolveBaseUrl(settings));
             }
 
             @Override

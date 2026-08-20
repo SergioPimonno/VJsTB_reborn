@@ -40,6 +40,16 @@ public class AuthClient {
         }
     }
 
+    private final String baseUrl;
+
+    public AuthClient() {
+        this(LibrarySyncClient.DEFAULT_BASE_URL);
+    }
+
+    public AuthClient(String baseUrl) {
+        this.baseUrl = baseUrl;
+    }
+
     public AuthResult login(String username, String password) throws IOException, InterruptedException {
         return call("/api/auth/login", username, password);
     }
@@ -50,8 +60,8 @@ public class AuthClient {
 
     private AuthResult call(String path, String username, String password) throws IOException, InterruptedException {
         String body = MAPPER.writeValueAsString(Map.of("username", username, "password", password));
-        HttpClient client = TrustedHttp.client();
-        HttpRequest request = HttpRequest.newBuilder(URI.create(LibrarySyncClient.DEFAULT_BASE_URL + path))
+        HttpClient client = TrustedHttp.clientFor(baseUrl);
+        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + path))
                 .timeout(Duration.ofSeconds(15))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body))

@@ -9,6 +9,7 @@ import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.NovaLctCombineHelper;
 import com.vjstb.ledscheme.service.NovaLctControllerResolver;
 import com.vjstb.ledscheme.service.NovaLctScrWriter;
+import com.vjstb.ledscheme.settings.SettingsManager;
 
 import java.awt.BorderLayout;
 import java.awt.Component;
@@ -64,7 +65,7 @@ public final class NovaLctControllerExportDialog {
     private NovaLctControllerExportDialog() {
     }
 
-    public static void showExportFlow(Frame owner, AppModel model) {
+    public static void showExportFlow(Frame owner, AppModel model, SettingsManager settings) {
         Scene scene = model.getCurrentScene();
         List<ControllerInstance> controllers = scene != null ? model.controllersInScene(scene) : List.of();
         if (controllers.isEmpty()) {
@@ -214,7 +215,7 @@ public final class NovaLctControllerExportDialog {
                             + "»?",
                     "Экспорт NovaLCT для контроллера", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
             if (rc == JOptionPane.YES_OPTION) {
-                CabinetConfigPickerDialog.showForType(owner, model, exportedCabinetType);
+                CabinetConfigPickerDialog.showForType(owner, model, settings, exportedCabinetType);
             }
         }
     }

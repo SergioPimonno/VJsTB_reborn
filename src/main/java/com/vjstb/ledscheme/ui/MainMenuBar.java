@@ -49,7 +49,7 @@ public class MainMenuBar extends JMenuBar {
         menu.add(scenarios);
 
         JMenuItem update = new JMenuItem("Обновить версию…");
-        update.addActionListener(e -> com.vjstb.ledscheme.ui.UpdateDialog.show(owner));
+        update.addActionListener(e -> com.vjstb.ledscheme.ui.UpdateDialog.show(owner, settings));
         menu.add(update);
 
         menu.addSeparator();
@@ -103,7 +103,7 @@ public class MainMenuBar extends JMenuBar {
         JMenuItem cabinetConfig = new JMenuItem("Скачать конфиг приёмной карты…");
         cabinetConfig.setToolTipText("Файл настроек приёмной карты NovaLCT (.rcfgx) для типа кабинета —"
                 + " по герцовке и требуемой яркости, из общей библиотеки на сервере");
-        cabinetConfig.addActionListener(e -> CabinetConfigPickerDialog.show(owner, model));
+        cabinetConfig.addActionListener(e -> CabinetConfigPickerDialog.show(owner, model, settings));
         menu.add(cabinetConfig);
 
         menu.addSeparator();
@@ -133,7 +133,7 @@ public class MainMenuBar extends JMenuBar {
         // реальными файлами NovaLCT).
         JMenuItem novaLctControllerExport = new JMenuItem("Экспорт NovaLCT для контроллера…");
         novaLctControllerExport.addActionListener(e ->
-                com.vjstb.ledscheme.ui.NovaLctControllerExportDialog.showExportFlow(owner, model));
+                com.vjstb.ledscheme.ui.NovaLctControllerExportDialog.showExportFlow(owner, model, settings));
         menu.add(novaLctControllerExport);
 
         JMenuItem videoTiming = new JMenuItem("Калькулятор видеотайминга…");

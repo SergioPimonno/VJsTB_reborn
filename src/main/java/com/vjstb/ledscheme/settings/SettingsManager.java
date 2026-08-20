@@ -252,6 +252,15 @@ public class SettingsManager {
         persist();
     }
 
+    public String getSyncServerUrlOverride() {
+        return settings.getSyncServerUrlOverride();
+    }
+
+    public void setSyncServerUrlOverride(String url) {
+        settings.setSyncServerUrlOverride(url);
+        persist();
+    }
+
     public double getLayoutProportion(String key, double defaultValue) {
         Double v = activeProfile().getLayout().get(key);
         return v != null ? v : defaultValue;

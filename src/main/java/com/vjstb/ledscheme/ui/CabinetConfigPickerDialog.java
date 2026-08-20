@@ -2,7 +2,9 @@ package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.settings.SettingsManager;
 import com.vjstb.ledscheme.sync.CabinetConfigClient;
+import com.vjstb.ledscheme.sync.LibrarySyncClient;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
@@ -38,7 +40,7 @@ import javax.swing.filechooser.FileNameExtensionFilter;
  */
 public class CabinetConfigPickerDialog extends JDialog {
 
-    private final CabinetConfigClient client = new CabinetConfigClient();
+    private final CabinetConfigClient client;
     /** null, если тип кабинета зафиксирован извне (см. {@link #showForType}) —
      *  тогда комбобокса выбора нет вовсе, {@link #presetName} несёт имя напрямую. */
     private final JComboBox<String> typeCombo;
@@ -47,16 +49,17 @@ public class CabinetConfigPickerDialog extends JDialog {
     private final JList<CabinetConfigClient.SummaryDto> list = new JList<>(listModel);
     private final JLabel status = new JLabel(" ");
 
-    public static void show(Window owner, AppModel model) {
-        new CabinetConfigPickerDialog(owner, model, null).setVisible(true);
+    public static void show(Window owner, AppModel model, SettingsManager settings) {
+        new CabinetConfigPickerDialog(owner, model, settings, null).setVisible(true);
     }
 
-    public static void showForType(Window owner, AppModel model, CabinetType preset) {
-        new CabinetConfigPickerDialog(owner, model, preset).setVisible(true);
+    public static void showForType(Window owner, AppModel model, SettingsManager settings, CabinetType preset) {
+        new CabinetConfigPickerDialog(owner, model, settings, preset).setVisible(true);
     }
 
-    private CabinetConfigPickerDialog(Window owner, AppModel model, CabinetType preset) {
+    private CabinetConfigPickerDialog(Window owner, AppModel model, SettingsManager settings, CabinetType preset) {
         super(owner, "Скачать конфиг приёмной карты", ModalityType.APPLICATION_MODAL);
+        this.client = new CabinetConfigClient(LibrarySyncClient.resolveBaseUrl(settings));
         this.presetName = preset != null ? preset.getName() : null;
 
         JPanel content = new JPanel(new BorderLayout(8, 8));

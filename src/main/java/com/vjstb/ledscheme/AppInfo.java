@@ -9,7 +9,7 @@ package com.vjstb.ledscheme;
  */
 public final class AppInfo {
 
-    public static final String VERSION = "2.1";
+    public static final String VERSION = "2.2";
     public static final String AUTHOR = "SergioPimonno";
     public static final String REPOSITORY_URL = "https://github.com/SergioPimonno/VJsTB_reborn";
     public static final String NEW_ISSUE_URL = REPOSITORY_URL + "/issues/new";
