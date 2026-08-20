@@ -55,7 +55,30 @@ import java.util.TreeMap;
  * которое (2026-08-11, баг-репорт «при перерасчёте количество лебёдок не
  * меняется») {@link #suggestPointCount} тоже пересчитывает заново при каждом
  * вызове «Рассчитать точки подвеса», а не только при изменении
- * {@link Screen#getCols()} — см. javadoc {@link #suggestPointCount}.
+ * {@link Screen#getCols()} — см. javadoc {@link #suggestPointCount}. Это же
+ * свойство (пересчёт стартует с нуля, ничего от предыдущего результата не
+ * наследует) означает, что повторный расчёт всегда ищет ЗАНОВО минимально
+ * достаточное число точек под текущий вес/лебёдку — если пользователь
+ * заменил тяжёлые кабинеты на лёгкие или выбрал более мощную лебёдку, число
+ * точек при повторном нажатии «Рассчитать» может и УМЕНЬШИТЬСЯ, не только
+ * вырасти (см. также {@link #baseColumnPointCount} ниже, 2026-08-19 —
+ * геометрический минимум больше не завышает предложение искусственно).
+ *
+ * <p><b>Геометрический минимум — по физической ширине, не по числу модулей
+ * (2026-08-19, баг-репорт)</b>: до этой правки {@link #baseColumnPointCount}
+ * считал {@code ceil(cols/2)} — минимум точек РОС вместе с числом занятых
+ * колонок сетки, независимо от их физического размера. Для мелкомодульных
+ * экранов (пример из баг-репорта — 17×15 кабинетов Dicolor 500×500мм, физическая
+ * ширина 8.5м) это давало абсурдно завышенный результат: 9 точек подвеса, хотя
+ * реальная нагрузка (255 кабинетов × 7.2кг × 1.2 наценки ≈ 2.2т) укладывается
+ * всего в 4 лебёдки по 1т с большим запасом. Формула была не более чем эвристикой
+ * "точка на каждые 2 модуля", случайно приемлемой для крупномодульных уличных
+ * экранов (где 2 модуля — уже несколько метров), но абсурдной для мелкого шага.
+ * Заменена на {@link #MAX_SPAN_MM} — минимум точек теперь считается от РЕАЛЬНОЙ
+ * ширины экрана в мм, не от числа модулей, и итоговое число точек — это max
+ * (геометрический минимум по пролёту, минимум по грузоподъёмности) — то есть
+ * калькулятор теперь активно СТАРАЕТСЯ МИНИМИЗИРОВАТЬ число лебёдок, беря ровно
+ * столько, сколько требуют оба ограничения, а не число модулей в сетке.
  */
 public final class RiggingCalc {
 
@@ -65,6 +88,82 @@ public final class RiggingCalc {
     /** Наценка на крепёж/кабели/сами лебёдки сверх чистого веса кабинетов —
      *  типовая отраслевая практика 15–25%, берём среднее. */
     public static final double HARDWARE_ALLOWANCE = 0.20;
+
+    /** Максимальный пролёт (мм) между соседними точками подвеса, взятый как
+     *  геометрический ориентир для контроля прогиба стандартной прутковой
+     *  фермы (типовая практика источников — единицы метров, не привязана к
+     *  размеру/числу модулей экрана) — см. class-javadoc, секция про
+     *  баг-репорт 2026-08-19. Как и {@link #HARDWARE_ALLOWANCE}, это
+     *  недокументированная нормативно оценка для v1, не экспонируется в UI. */
+    public static final double MAX_SPAN_MM = 3000.0;
+
+    /** Стандартный отступ (мм) от самого края фермы, где точки подвеса не
+     *  ставят (типовая практика — на самом краю фермы нет запаса на
+     *  монтажную оснастку/угол стропа, да и сама фёрма обычно короче номинала
+     *  экрана за счёт технологического свеса) — 2026-08-19, баг-репорт
+     *  «расчёт отступа лебёдок в экспортируемой таблице всегда начинается с
+     *  нуля, а это не так». Применяется СИММЕТРИЧНО с обеих сторон, только
+     *  если после отступа остаётся хоть какая-то полезная ширина ({@link
+     *  #usableWidthMm}) — иначе (экран у́же 2×отступа) отступ игнорируется
+     *  целиком, а не наполовину, чтобы не сталкивать точки друг с другом или
+     *  за пределы экрана. */
+    public static final double EDGE_MARGIN_MM = 500.0;
+
+    /** Допуск (мм) для распознавания ТОЧНОЙ ничьей между двумя точками при поиске
+     *  ближайшей к колонке (см. {@link #nearestPointIndex}) — на несколько порядков
+     *  меньше любой реальной разницы позиций (сами координаты — единицы-тысячи мм),
+     *  нужен только чтобы не потерять законную ничью из-за шума double-арифметики
+     *  деления. */
+    private static final double TIE_EPSILON_MM = 1e-6;
+
+    /** Ширина экрана за вычетом {@link #EDGE_MARGIN_MM} с каждой стороны —
+     *  общий знаменатель для {@link #baseColumnPointCount} (геометрический
+     *  минимум точек считается от НЕЁ, не от полной ширины — иначе отступ
+     *  учитывался бы в расстановке точек, но не в решении, сколько их нужно)
+     *  и {@link #compute} (сама расстановка). Откат на полную ширину для
+     *  узких экранов — см. class-javadoc {@link #EDGE_MARGIN_MM}. */
+    private static double usableWidthMm(double widthMm) {
+        return widthMm > 2 * EDGE_MARGIN_MM ? widthMm - 2 * EDGE_MARGIN_MM : widthMm;
+    }
+
+    /** Фактический отступ, применяемый к КАЖДОЙ стороне — {@link #EDGE_MARGIN_MM}
+     *  либо 0 для узких экранов (см. {@link #usableWidthMm}), никогда не «половина
+     *  отступа» — сохраняет геометрический минимум ({@link #baseColumnPointCount})
+     *  и реальную расстановку ({@link #compute}) согласованными между собой. */
+    private static double edgeMarginMm(double widthMm) {
+        return widthMm > 2 * EDGE_MARGIN_MM ? EDGE_MARGIN_MM : 0;
+    }
+
+    /** Индекс ближайшей к колонке точки подвеса — при ТОЧНОЙ ничьей (колонка ровно
+     *  на середине между двумя соседними точками) выбирает ту, что БЛИЖЕ К ЦЕНТРУ
+     *  фермы, а не "первую встреченную по возрастанию индекса" (2026-08-19,
+     *  баг-репорт: «нагрузка на крайние точки неравномерна, похоже на то, что
+     *  расчёт идёт слева направо» — так и есть: старый код при {@code d < best}
+     *  оставлял для ничьей уже установленный МЕНЬШИЙ индекс, то есть точку левее,
+     *  систематически утяжеляя левый край и облегчая правый). Это правило
+     *  СИММЕТРИЧНО относительно зеркального отражения экрана (точка i ↔ точка
+     *  n-1-i, x ↔ widthMm-x) — доказательство и разбор конкретного примера
+     *  (17×15 Dicolor, 4 точки) см. RIGGING_CALC_NOTES.md: правило "первый слева"
+     *  симметрии не сохраняет ни для одного варианта fixed-tie-break (ни "всегда
+     *  меньший индекс", ни "всегда больший"), а "ближе к центру" сохраняет.
+     *  Неизбежная (при остатке колонок, не делящемся ровно) асимметрия сдвигается
+     *  К ЦЕНТРУ фермы, где она не так критична, как на краях. */
+    private static int nearestPointIndex(double columnX, double[] pointX, double centerMm) {
+        int nearest = 0;
+        double best = Double.MAX_VALUE;
+        for (int i = 0; i < pointX.length; i++) {
+            double d = Math.abs(columnX - pointX[i]);
+            if (d < best - TIE_EPSILON_MM) {
+                best = d;
+                nearest = i;
+            } else if (Math.abs(d - best) <= TIE_EPSILON_MM
+                    && Math.abs(pointX[i] - centerMm) < Math.abs(pointX[nearest] - centerMm)) {
+                best = d;
+                nearest = i;
+            }
+        }
+        return nearest;
+    }
 
     /** Вес одной занятой колонки сетки экрана (суммарно по всем строкам) и её
      *  X-координата центра (мм от левого края номинальной сетки экрана). */
@@ -83,12 +182,21 @@ public final class RiggingCalc {
                           double requiredWllPerPointKg, List<PointLoad> points) {
     }
 
-    /** Минимум точек подвеса по ширине экрана (модули/2, историческая формула,
-     *  см. {@link #suggestPointCount}) — независимо от веса/грузоподъёмности,
-     *  это ГЕОМЕТРИЧЕСКИЙ минимум (равномерность провеса фермы), а не то, что
-     *  вообще ограничивает нагрузку на точку. */
-    private static int baseColumnPointCount(Screen screen) {
-        return Math.max(2, (int) Math.ceil(screen.getCols() / 2.0));
+    /** Минимум точек подвеса по РЕАЛЬНОЙ ширине экрана в мм (не по числу
+     *  модулей — см. class-javadoc, баг-репорт 2026-08-19), исходя из
+     *  {@link #MAX_SPAN_MM} — независимо от веса/грузоподъёмности, это
+     *  ГЕОМЕТРИЧЕСКИЙ минимум (равномерность провеса фермы), а не то, что
+     *  вообще ограничивает нагрузку на точку. {@code defaultType == null}
+     *  (ширина модуля неизвестна) откатывается на абсолютный минимум 2 —
+     *  без размера модуля посчитать физическую ширину нечем. */
+    private static int baseColumnPointCount(Screen screen, CabinetType defaultType) {
+        double cellW = defaultType != null ? defaultType.getWidthMm() : 0;
+        double widthMm = screen.getCols() * cellW;
+        if (widthMm <= 0) {
+            return 2;
+        }
+        int spans = (int) Math.ceil(usableWidthMm(widthMm) / MAX_SPAN_MM);
+        return Math.max(2, spans + 1);
     }
 
     /** Число точек подвеса — минимум по ширине экрана ({@link #baseColumnPointCount}),
@@ -110,7 +218,7 @@ public final class RiggingCalc {
      *  бессмысленно (возвращается предел, а превышение по-прежнему видно в {@link
      *  PointLoad#overCapacity} для каждой точки на экране прерига). */
     public static int suggestPointCount(Screen screen, CabinetType defaultType, Workspace workspace) {
-        int base = baseColumnPointCount(screen);
+        int base = baseColumnPointCount(screen, defaultType);
         Double capacity = effectiveHoistCapacityKg(screen, workspace);
         if (capacity == null || capacity <= 0) {
             return base;
@@ -166,8 +274,13 @@ public final class RiggingCalc {
 
     /** Распределяет суммарный вес занятых колонок (+ наценка на крепёж, см.
      *  {@link #HARDWARE_ALLOWANCE}) по {@code pointCount} точкам, расставленным
-     *  равномерно вдоль номинальной ширины экрана — методом грузовых площадей
-     *  (каждая колонка отдаёт вес ближайшей по X точке). */
+     *  равномерно вдоль ширины экрана — методом грузовых площадей (каждая
+     *  колонка отдаёт вес ближайшей по X точке, см. {@link #nearestPointIndex}
+     *  за симметричным правилом на случай точной ничьей). Крайние точки
+     *  отступают от краёв экрана на {@link #EDGE_MARGIN_MM} (не 0 — см. её
+     *  javadoc), между крайними точками остальные распределены равномерно;
+     *  при {@code n == 1} единственная точка по-прежнему ставится строго в
+     *  центр (отступ для одной точки не имеет смысла). */
     public static Result compute(Screen screen, CabinetType defaultType, Workspace workspace, int pointCount) {
         List<ColumnWeight> columns = columnWeights(screen, defaultType, workspace);
         double totalCabinetWeight = 0;
@@ -180,21 +293,16 @@ public final class RiggingCalc {
         double cellW = defaultType != null ? defaultType.getWidthMm() : 0;
         double widthMm = screen.getCols() * cellW;
         int n = Math.max(1, pointCount);
+        double margin = edgeMarginMm(widthMm);
+        double usable = usableWidthMm(widthMm);
         double[] pointX = new double[n];
         for (int i = 0; i < n; i++) {
-            pointX[i] = n == 1 ? widthMm / 2.0 : widthMm * i / (n - 1.0);
+            pointX[i] = n == 1 ? widthMm / 2.0 : margin + usable * i / (n - 1.0);
         }
+        double centerMm = widthMm / 2.0;
         double[] pointWeight = new double[n];
         for (ColumnWeight c : columns) {
-            int nearest = 0;
-            double best = Double.MAX_VALUE;
-            for (int i = 0; i < n; i++) {
-                double d = Math.abs(c.xMm() - pointX[i]);
-                if (d < best) {
-                    best = d;
-                    nearest = i;
-                }
-            }
+            int nearest = nearestPointIndex(c.xMm(), pointX, centerMm);
             pointWeight[nearest] += c.weightKg() * hardwareFactor;
         }
 
