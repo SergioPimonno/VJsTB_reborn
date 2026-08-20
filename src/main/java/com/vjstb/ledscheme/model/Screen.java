@@ -72,7 +72,6 @@ public class Screen {
      *  пользователь может напрямую переопределить (по явному требованию: сложные раскладки
      *  инженер чертит в Vectorworks и считает сам, калькулятор — только отправная точка). */
     private double structureTowerHeightMm = 3000;
-    private double structureTowerSpacingMm = 1000;
     private int structureTowerCount = 0;
     private int structureVerticalFramesPerTower = 0;
     /** Число сегментов ЗАДНЕГО ряда (row=1) — Round 5, баг-репорт с фото реальной башни: с
@@ -94,6 +93,22 @@ public class Screen {
      *  коротких рам, если инженер решит их использовать на месте, в модель не входит — только
      *  per-cell override конкретной ячейки, см. {@code StructureFrameCell#getFrameTypeId()}). */
     private int structureExtendedBaseSections = 0;
+    /** «Вынос базы под балласт», мм — насколько дополнительно (сверх обязательного ядра под
+     *  объёмом самой башни) базовая рама выступает вперёд-назад, чтобы под ней уместился
+     *  нужный балласт (площадь опоры = рычаг устойчивости). Раньше здесь была НОМИНАЛЬНАЯ
+     *  эвристика по высоте/ширине экрана ({@code StructureCalc#suggestExtendedBaseSections},
+     *  удалена 2026-08-19) — по прямому указанию пользователя: "аппаратно не получается его
+     *  просчитывать эффективно, будем указывать руками", заменяет прежний параметр «Шаг
+     *  башен» в той же секции формы (тот, как выяснилось, реально ни на что не влиял — см.
+     *  STRUCTURE_CALC_NOTES.md). {@link #structureExtendedBaseSections} (число реальных
+     *  секций) теперь ВЫВОДИТСЯ из этого мм-значения делением на глубину модуля рамы, см.
+     *  {@code AppModel#updateScreenStructure}. */
+    private double structureBaseExtensionMm = 500;
+    /** Коэффициент отношения требуемого веса балласта к суммарному весу отгружаемого экрана
+     *  (см. {@code StructureCalc#compute}) — по прямому указанию пользователя: раньше было
+     *  жёстко зашито 1:1 (коэффициент 1.0), но "в реальности хорошо если 6:10" — теперь
+     *  редактируемый коэффициент вместо константы, дефолт 0.6 (6:10). */
+    private double structureBallastRatio = 0.6;
     private String structureFrameTypeId;
     private String structureCupTypeId;
     private String structureBallastTypeId;
@@ -272,14 +287,6 @@ public class Screen {
         this.structureTowerHeightMm = structureTowerHeightMm;
     }
 
-    public double getStructureTowerSpacingMm() {
-        return structureTowerSpacingMm > 0 ? structureTowerSpacingMm : 1000;
-    }
-
-    public void setStructureTowerSpacingMm(double structureTowerSpacingMm) {
-        this.structureTowerSpacingMm = structureTowerSpacingMm > 0 ? structureTowerSpacingMm : 1000;
-    }
-
     public int getStructureTowerCount() {
         return structureTowerCount;
     }
@@ -318,6 +325,22 @@ public class Screen {
 
     public void setStructureExtendedBaseSections(int structureExtendedBaseSections) {
         this.structureExtendedBaseSections = Math.max(0, structureExtendedBaseSections);
+    }
+
+    public double getStructureBaseExtensionMm() {
+        return structureBaseExtensionMm;
+    }
+
+    public void setStructureBaseExtensionMm(double structureBaseExtensionMm) {
+        this.structureBaseExtensionMm = Math.max(0, structureBaseExtensionMm);
+    }
+
+    public double getStructureBallastRatio() {
+        return structureBallastRatio > 0 ? structureBallastRatio : 0.6;
+    }
+
+    public void setStructureBallastRatio(double structureBallastRatio) {
+        this.structureBallastRatio = structureBallastRatio > 0 ? structureBallastRatio : 0.6;
     }
 
     public String getStructureFrameTypeId() {
@@ -458,12 +481,13 @@ public class Screen {
         s.riggingHoistCapacityKg = riggingHoistCapacityKg;
         s.riggingHoistTypeId = riggingHoistTypeId;
         s.structureTowerHeightMm = structureTowerHeightMm;
-        s.structureTowerSpacingMm = structureTowerSpacingMm;
         s.structureTowerCount = structureTowerCount;
         s.structureVerticalFramesPerTower = structureVerticalFramesPerTower;
         s.structureBackRowSegments = structureBackRowSegments;
         s.structurePeremychkaLevels = structurePeremychkaLevels;
         s.structureExtendedBaseSections = structureExtendedBaseSections;
+        s.structureBaseExtensionMm = structureBaseExtensionMm;
+        s.structureBallastRatio = structureBallastRatio;
         s.structureFrameTypeId = structureFrameTypeId;
         s.structureCupTypeId = structureCupTypeId;
         s.structureBallastTypeId = structureBallastTypeId;

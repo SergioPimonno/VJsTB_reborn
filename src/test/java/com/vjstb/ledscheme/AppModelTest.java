@@ -1350,17 +1350,112 @@ class AppModelTest {
         model.selectProject(model.addProject("P"));
         model.selectScene(model.addScene("S"));
 
-        // Формула из риг-тех таблиц заказчика: "Hanging bar" = ширина в модулях / 2,
-        // округление вверх, минимум 2 точки.
+        // Геометрический минимум считается от РЕАЛЬНОЙ ПОЛЕЗНОЙ ширины экрана в мм
+        // (модуль 500мм здесь, за вычетом RiggingCalc.EDGE_MARGIN_MM=500мм с каждого
+        // края — лебёдки не вешают у самого края фермы), не от числа модулей — см.
+        // RiggingCalc.MAX_SPAN_MM (3000мм) и class-javadoc RiggingCalc, баг-репорты
+        // 2026-08-19 ("модули/2" завышало число лебёдок для мелкомодульных экранов;
+        // отступ от края экспортировался как 0, а не как реальный отступ).
         Screen narrow = model.addScreen("Узкий", type.getId(), 5, 3, 0, 0);
         assertEquals(com.vjstb.ledscheme.model.ScreenMountType.RIGGED, narrow.getMountType());
-        assertEquals(2, narrow.getRiggingPointsCount()); // ceil(3/2)=2, floor 2
+        assertEquals(2, narrow.getRiggingPointsCount()); // 3*500=1500мм, полезная 500мм -> минимум 2
 
         Screen wide = model.addScreen("Широкий", type.getId(), 5, 12, 0, 0);
-        assertEquals(6, wide.getRiggingPointsCount()); // 12/2=6
+        assertEquals(3, wide.getRiggingPointsCount()); // 12*500=6000мм, полезная 5000мм -> ceil(5000/3000)=2 -> 3 точки
 
         Screen odd = model.addScreen("Нечётный", type.getId(), 5, 7, 0, 0);
-        assertEquals(4, odd.getRiggingPointsCount()); // ceil(7/2)=4
+        assertEquals(2, odd.getRiggingPointsCount()); // 7*500=3500мм, полезная 2500мм -> ceil(2500/3000)=1 -> 2 точки
+    }
+
+    @Test
+    void alignScreenCabinetsToGrid_resetsOffsetsAndRestoresStandardNovaLctExport(@TempDir Path dir) {
+        // Баг-репорт: сдвинутый вручную (в режиме "Кабинеты по отдельности" на вкладке
+        // "Сетап") кабинет уводит NovaLCT-экспорт в Complex-раскладку (см.
+        // ScreenLogic.isUniformRectangularGrid -- считает экран "неровным" при ЛЮБОМ
+        // ненулевом offsetXMm/offsetYMm) и не давал простого способа вернуться назад.
+        // Кнопка "Выровнять кабинеты по сетке" (AppModel.alignScreenCabinetsToGrid)
+        // обязана и сбросить смещения, и (как следствие, без отдельного механизма --
+        // isComplexExport читает offsetXMm/offsetYMm заново при каждом вызове, ничего
+        // не кэширует) вернуть экспорт к Standard.
+        AppModel model = freshModel(dir);
+        CabinetType type = sampleType();
+        model.addCabinetType(type);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+
+        assertFalse(com.vjstb.ledscheme.service.NovaLctScrWriter.isComplexExport(screen, model.getWorkspace()),
+                "ровная сетка без смещений обязана экспортироваться как Standard");
+
+        // Сдвигаем угловой кабинет (0,0) в направлении ОТ сетки (вверх-влево), а не К
+        // соседям -- иначе сработал бы ДРУГОЙ, не связанный с этим тестом механизм
+        // (AppModel.autoDisableOverlapping прячет соседа при наложении прямоугольников,
+        // см. его javadoc), и тест проверял бы не то, что задумано.
+        CabinetInstance moved = screen.getCabinets().get(0);
+        model.updateCabinetOffset(moved, -50.0, -50.0);
+        assertTrue(com.vjstb.ledscheme.service.NovaLctScrWriter.isComplexExport(screen, model.getWorkspace()),
+                "сдвинутый кабинет обязан переключить экспорт на Complex (воспроизводит баг-репорт)");
+        for (CabinetInstance cab : screen.getCabinets()) {
+            assertFalse(cab.isHidden(), "смещение без наложения не должно скрывать соседей (иначе тест не изолирован)");
+        }
+
+        model.alignScreenCabinetsToGrid(screen);
+        for (CabinetInstance cab : screen.getCabinets()) {
+            assertEquals(0.0, cab.getOffsetXMm(), 1e-9);
+            assertEquals(0.0, cab.getOffsetYMm(), 1e-9);
+        }
+        assertFalse(com.vjstb.ledscheme.service.NovaLctScrWriter.isComplexExport(screen, model.getWorkspace()),
+                "после выравнивания экспорт обязан снова определиться как Standard");
+    }
+
+    @Test
+    void alignScreenCabinetsToGrid_isNoOpWhenNothingIsOffset(@TempDir Path dir) {
+        // Не должно писать пустую запись в undo, если у экрана и так все кабинеты на
+        // сетке -- иначе кнопка "съедала" бы один шаг Ctrl+Z без видимого эффекта.
+        AppModel model = freshModel(dir);
+        CabinetType type = sampleType();
+        model.addCabinetType(type);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+
+        int depthBefore = model.undoDepth();
+        model.alignScreenCabinetsToGrid(screen);
+        assertEquals(depthBefore, model.undoDepth());
+    }
+
+    @Test
+    void hiddenCabinetsAreBlanksNotComplex_onlyOffsetOrTypeOverrideForcesComplexExport(@TempDir Path dir) {
+        // Третий (и финальный) заход 2026-08-19 -- см. ScreenLogic.isUniformRectangularGrid
+        // javadoc за полной историей всех трёх попыток. Скрытая ("вырезанная") ячейка сама
+        // по себе НЕ форсирует Complex -- она пишется в Standard-файл ЯВНОЙ blank-записью
+        // (card=0xFF), см. байтовый round-trip тест
+        // NovaLctScrWriterTest.hiddenCabinetWritesExplicitBlankRecord_notOmittedEntirely за
+        // подтверждением, что сама запись реально попадает в файл, а не просто пропускается
+        // (пропуск сломал реальную загрузку в NovaLCT на проекте ДКФ -- см. javadoc).
+        AppModel model = freshModel(dir);
+        CabinetType type = sampleType();
+        model.addCabinetType(type);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+        model.selectScreen(screen); // toggleCabinetHidden резолвит кабинет через currentScreen
+
+        assertFalse(com.vjstb.ledscheme.service.NovaLctScrWriter.isComplexExport(screen, model.getWorkspace()),
+                "ровная сетка без скрытых ячеек/смещений обязана экспортироваться как Standard");
+
+        CabinetInstance hidden = screen.getCabinets().get(0);
+        model.toggleCabinetHidden(hidden.getId());
+        assertTrue(hidden.isHidden());
+        assertFalse(com.vjstb.ledscheme.service.NovaLctScrWriter.isComplexExport(screen, model.getWorkspace()),
+                "скрытая ячейка сама по себе -- бланк, не повод уходить в Complex");
+
+        // Смещение у ДРУГОГО (видимого) кабинета -- по-прежнему обязано форсировать
+        // Complex, единственная причина, оставшаяся в силе.
+        CabinetInstance moved = screen.getCabinets().get(3);
+        model.updateCabinetOffset(moved, 50.0, 50.0);
+        assertTrue(com.vjstb.ledscheme.service.NovaLctScrWriter.isComplexExport(screen, model.getWorkspace()),
+                "смещение видимого кабинета обязано по-прежнему форсировать Complex");
     }
 
     @Test
@@ -2401,18 +2496,54 @@ class AppModelTest {
         Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
 
         // towerCount=2, verticalFramesPerTower=3 (в КАЖДОМ из 2 рядов), peremychkaLevels=2,
-        // extendedBaseSections=0 (только ядро).
-        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 2, 0, null, null, null, 0, null);
+        // baseExtensionMm=0 (только ядро -- extendedBaseSectionsFromOverhang(0, ...)=0).
+        model.updateScreenStructure(screen, 3000, 2, 3, 3, 2, 0, 0.6, null, null, null, 0, null);
 
         assertEquals(12, screen.getStructureFrameCells().size(), "2 башни x 2 ряда x 3 сегмента");
         assertTrue(screen.getStructureFrameCells().stream().noneMatch(com.vjstb.ledscheme.model.StructureFrameCell::isHidden),
                 "свежесгенерированная сетка целиком видима");
         assertEquals(4, screen.getStructurePeremychkaCells().size(), "1 зазор x 2 ряда x 2 уровня перемычек");
-        // Round 10: ядро больше не 1 фиксированная секция -- coreBaseSectionCount при
-        // дефолтных габаритах (нет выбранного типа рамы/короткой рамы) = ceil(2*500/500) = 2.
-        assertEquals(2, screen.getStructureBaseFrameCells().size(), "1 зазор x 2 секции (ядро)");
+        // Round 19: ядро -- фиксированная StructureCalc.CORE_BASE_SECTION_COUNT = 1 модуль,
+        // не зависит от габаритов рамы; baseExtensionMm=0 не добавляет секций сверх неё.
+        assertEquals(1, screen.getStructureBaseFrameCells().size(), "1 зазор x 1 секция (ядро)");
         assertTrue(screen.getStructureBaseFrameCells().stream()
                 .noneMatch(com.vjstb.ledscheme.model.StructureBaseFrameCell::isHidden));
+    }
+
+    @Test
+    void updateScreenStructureWithLargeManualOverhangStillGeneratesBaseFrames(@TempDir Path dir) {
+        // Баг-репорт (2026-08-20, во время недолгого эксперимента с авто-подсказкой выноса по
+        // tg/ctg 60° -- впоследствии откачена целиком по указанию пользователя, см. class-javadoc
+        // StructureCalc): "ранее был баг когда автоматически рассчитывался вынос, не рисовались
+        // рамы основания. проверь." Разбор показал, что отдельного бага в конвейере
+        // (regenerateStructureCells/AppModel.updateScreenStructure) НЕТ -- "не рисовалось" было
+        // следствием того, что тестовая формула (ошибочно tan вместо ctg 60°) давала АБСУРДНО
+        // большой вынос (~10.4м при башне 6м), из-за чего база уезжала далеко за пределы того,
+        // что 3D-камера показывает по умолчанию, а не отсутствием данных. Тест остаётся и после
+        // отката авто-формулы -- фиксирует именно это: конвейер обязан корректно генерировать
+        // базу для БОЛЬШОГО выноса, кто бы его ни ввёл, вручную или (в будущем) снова автоматически.
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType()); // 500мм кабинет
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 12, 6, 0, 0); // 12 строк x 500мм = 6000мм высоты
+
+        double towerHeight = com.vjstb.ledscheme.service.StructureCalc.suggestTowerHeightMm(screen, type);
+        assertEquals(6000.0, towerHeight, 0.001);
+        double largeOverhangMm = 10392.3; // тот самый "абсурдно большой" вынос из баг-репорта
+
+        model.updateScreenStructure(screen, towerHeight, 2, 3, 3, 2, largeOverhangMm, 0.6,
+                null, null, null, 0, null);
+
+        assertFalse(screen.getStructureBaseFrameCells().isEmpty(),
+                "база обязана сгенерироваться даже при очень большом выносе");
+        // 1 зазор (2 башни) x (1 обязательная + N доп. секций) -- N выводится из largeOverhangMm.
+        int expectedExtended = com.vjstb.ledscheme.service.StructureCalc.extendedBaseSectionsFromOverhang(
+                largeOverhangMm, 500.0);
+        assertEquals(1 + expectedExtended, screen.getStructureBaseFrameCells().size());
+        assertTrue(screen.getStructureBaseFrameCells().stream()
+                        .noneMatch(com.vjstb.ledscheme.model.StructureBaseFrameCell::isHidden),
+                "свежесгенерированные секции базы целиком видимы");
     }
 
     @Test
@@ -2426,7 +2557,7 @@ class AppModelTest {
         model.selectProject(model.addProject("P"));
         model.selectScene(model.addScene("S"));
         Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
-        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 2, 0, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3000, 2, 3, 3, 2, 0, 0.6, null, null, null, 0, null);
 
         model.toggleStructureFrameCell(screen, 0, 0, 1);
         assertEquals(12, screen.getStructureFrameCells().size(), "запись остаётся, просто прячется");
@@ -2446,7 +2577,7 @@ class AppModelTest {
         // 3 башни -> 2 зазора (0-1 и 1-2), нужно хотя бы 2 для проверки "соседний зазор не
         // пострадал" (Round 7: и перемычки, и опора теперь по зазорам, не по башням).
         Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
-        model.updateScreenStructure(screen, 3000, 1000, 3, 3, 3, 2, 0, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3000, 3, 3, 3, 2, 0, 0.6, null, null, null, 0, null);
 
         model.toggleStructurePeremychkaCell(screen, 0, 0, 1);
         assertEquals(7, screen.getStructurePeremychkaCells().stream().filter(c -> !c.isHidden()).count(),
@@ -2468,13 +2599,13 @@ class AppModelTest {
         model.selectProject(model.addProject("P"));
         model.selectScene(model.addScene("S"));
         Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
-        model.updateScreenStructure(screen, 3000, 1000, 3, 3, 3, 3, 0, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3000, 3, 3, 3, 3, 0, 0.6, null, null, null, 0, null);
 
         // Убрали средний сегмент ПЕРЕДНЕГО ряда башни 1.
         model.toggleStructureFrameCell(screen, 1, 0, 1);
 
         // Те же границы сетки (3 башни x 3 сегмента) -- пересчёт НЕ должен вернуть убранное.
-        model.updateScreenStructure(screen, 3200, 1000, 3, 3, 3, 3, 0, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3200, 3, 3, 3, 3, 0, 0.6, null, null, null, 0, null);
         assertEquals(17, visibleFrames(screen), "18 (3 башни x 2 ряда x 3 сегмента) - 1 убранный");
         assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(1, 0, 1) && c.isHidden()),
                 "убранный сегмент не должен молча вернуться видимым при пересчёте в тех же границах");
@@ -2482,7 +2613,7 @@ class AppModelTest {
         // Уменьшили сетку, но убранная ячейка (1,0,1) ВСЁ РАВНО внутри новых границ
         // (1<2 башня, 1<2 сегмент) -- остаётся скрытой как есть, а не воскресает только
         // потому что сетка сжалась.
-        model.updateScreenStructure(screen, 3200, 1000, 2, 2, 2, 2, 0, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3200, 2, 2, 2, 2, 0, 0.6, null, null, null, 0, null);
         assertEquals(8, screen.getStructureFrameCells().size(),
                 "2 башни x 2 ряда x 2 сегмента, включая скрытую (1,0,1)");
         assertEquals(7, visibleFrames(screen));
@@ -2500,7 +2631,7 @@ class AppModelTest {
         model.selectProject(model.addProject("P"));
         model.selectScene(model.addScene("S"));
         Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
-        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 0, 0, null, null, null, 0, null);
+        model.updateScreenStructure(screen, 3000, 2, 3, 3, 0, 0, 0.6, null, null, null, 0, null);
 
         // Позиция (5, 0, 0) вне номинальной сетки (только 2 башни, индексы 0/1) -- создаётся
         // новая запись с переопределением типа.
@@ -2525,18 +2656,21 @@ class AppModelTest {
         model.selectProject(model.addProject("P"));
         model.selectScene(model.addScene("S"));
         Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
-        // 1 доп. секция выноса -> regenerateStructureCells уже посеял 1 усилительную раму на
-        // башню в СЕКЦИИ ВЫНОСА (см. StructureCalcTest.reinforcementFramesInExtensionSectionsCounts...).
-        // Round 10: секции выноса начинаются с coreBaseSectionCount, не жёстко с 1 -- при
-        // дефолтных габаритах coreBaseSectionCount = ceil(2*500/500) = 2, значит первая (и
-        // единственная) секция выноса тут -- индекс 2, а не 1.
-        model.updateScreenStructure(screen, 3000, 1000, 2, 3, 3, 0, 1, null, null, null, 0, null);
+        // baseExtensionMm=1000 -- Round 19: значение включает в себя обязательный модуль
+        // (StructureCalc.CORE_BASE_SECTION_COUNT=1, 500мм при фолбэке DEFAULT_FRAME_WIDTH_MM),
+        // extendedBaseSectionsFromOverhang вычитает его первым: 1000-500=500 сверх обязательного
+        // -> ceil(500/500)=1 доп. секция выноса -> regenerateStructureCells уже посеял 1
+        // усилительную раму на башню в СЕКЦИИ ВЫНОСА (см.
+        // StructureCalcTest.reinforcementFramesInExtensionSectionsCounts...). Секции выноса
+        // начинаются СРАЗУ ПОСЛЕ ядра -- ядро теперь фиксированно 1 модуль (не 2, как до Round
+        // 19), значит первая (и единственная) секция выноса тут -- индекс 1, а не 2.
+        model.updateScreenStructure(screen, 3000, 2, 3, 3, 0, 1000, 0.6, null, null, null, 0, null);
 
-        assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(0, 2, 2) && !c.isHidden()),
+        assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(0, 2, 1) && !c.isHidden()),
                 "усилительная рама башни 0 в первой секции выноса сгенерирована и видима");
 
-        model.toggleStructureFrameCell(screen, 0, 2, 2);
-        assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(0, 2, 2) && c.isHidden()),
+        model.toggleStructureFrameCell(screen, 0, 2, 1);
+        assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(0, 2, 1) && c.isHidden()),
                 "клик по существующей усилительной раме прячет её");
     }
 }

@@ -160,6 +160,18 @@ public class Structure3DPanel extends JPanel {
         }
     }
 
+    /** Внешний хук перерисовки (см. {@code Structure3DDialog#refresh}) — эта панель НЕ
+     *  подписывается на {@code AppModel.addListener} сама (у {@code AppModel} нет
+     *  {@code removeListener}, а новая панель создаётся при каждом открытии диалога, так что
+     *  подписка бы утекала) — вызывающий код (см. {@code SetupStagePanel#calculateStructure})
+     *  явно дёргает этот метод после пересчёта конструктива, если диалог уже открыт, чтобы
+     *  показанная модель не расходилась с только что сохранёнными значениями. */
+    public void refresh() {
+        if (gljPanel != null) {
+            gljPanel.repaint();
+        }
+    }
+
     private static JLabel unavailableLabel(Throwable t) {
         JLabel msg = new JLabel("<html><center>3D недоступно на этой системе<br>("
                 + t.getClass().getSimpleName() + ")</center></html>", SwingConstants.CENTER);
@@ -290,7 +302,10 @@ public class Structure3DPanel extends JPanel {
         double baseThickness = frameD;
         double peremychkaThickness = frameD;
         double reinforcementHeightMm = frameH;
-        double spacing = screen.getStructureTowerSpacingMm();
+        // Round 17 -- "Шаг башен" упразднён как отдельный редактируемый параметр экрана (не
+        // влиял ни на что реальное), заменён фиксированной константой StructureCalc
+        // #DEFAULT_TOWER_SPACING_MM.
+        double spacing = StructureCalc.DEFAULT_TOWER_SPACING_MM;
         // Зазор до экрана -- камера по умолчанию стоит со стороны ПОЛОЖИТЕЛЬНОГО Z и смотрит
         // на центр сцены, то есть большее Z означает БЛИЖЕ к зрителю -- конструктив на
         // ОТРИЦАТЕЛЬНОМ Z, дальше от зрителя, чем лицевая грань экрана (z от -15 до +15).
@@ -330,9 +345,9 @@ public class Structure3DPanel extends JPanel {
         int verticalPerTower = Math.max(0, screen.getStructureVerticalFramesPerTower());
         int backRowSegments = Math.max(0, screen.getStructureBackRowSegments());
         int peremychkaLevels = Math.max(0, screen.getStructurePeremychkaLevels());
-        // Round 10 -- "ядро" базовой рамы больше не 1 фиксированная секция, а
-        // StructureCalc#coreBaseSectionCount реальных модулей (см. её javadoc).
-        int coreSections = StructureCalc.coreBaseSectionCount(g.frameW(), g.sectionDepthMm());
+        // Round 19 -- "ядро" базовой рамы -- фиксированная константа StructureCalc
+        // #CORE_BASE_SECTION_COUNT (1 модуль), больше не зависит от габаритов рамы.
+        int coreSections = StructureCalc.CORE_BASE_SECTION_COUNT;
         int baseSections = coreSections + Math.max(0, screen.getStructureExtendedBaseSections());
         int minTower = 0;
         int maxTower = towerCount - 1;
@@ -465,14 +480,14 @@ public class Structure3DPanel extends JPanel {
 
     /** Усилительные рамы выноса (row == 2 в {@link Screen#getStructureFrameCells()}, Phase 2.2
      *  — "1 метровая рама на секцию, вкл/выкл как всё остальное") — по одной на КАЖДУЮ секцию
-     *  выноса (ядро, {@code [0, coreBaseSectionCount)}, там не нужна — уже есть полноразмерный
-     *  ряд 0/1, см. Round 10 в {@code StructureCalc#coreBaseSectionCount}), центрирована по
-     *  глубине секции. */
+     *  выноса (ядро, {@code [0, CORE_BASE_SECTION_COUNT)}, там не нужна — уже есть
+     *  полноразмерный ряд 0/1, см. {@code StructureCalc#CORE_BASE_SECTION_COUNT}), центрирована
+     *  по глубине секции. */
     private List<Candidate> reinforcementCandidates(Screen screen, StructureGeometry g) {
         FrameEnvelope env = frameEnvelope(screen, g);
         List<StructureFrameCell> cells = screen.getStructureFrameCells();
         List<Candidate> result = new ArrayList<>();
-        int coreSections = StructureCalc.coreBaseSectionCount(g.frameW(), g.sectionDepthMm());
+        int coreSections = StructureCalc.CORE_BASE_SECTION_COUNT;
         for (int t = env.minTower(); t <= env.maxTower(); t++) {
             for (int section = coreSections; section <= env.maxSection(); section++) {
                 final int ft = t;
@@ -575,11 +590,12 @@ public class Structure3DPanel extends JPanel {
      *  размер), считая от ближней грани переднего ряда назад — раньше секция 0 была ОДНОЙ
      *  сплошной плитой на всю глубину {@code 2*frameW} под обоими рядами сразу (произвольный
      *  размер, см. историю Round 4/7 в STRUCTURE_CALC_NOTES.md); сколько таких секций реально
-     *  покрывает "ядро" до начала выноса под балласт — считает {@code StructureCalc
-     *  #coreBaseSectionCount}, вызывающая сторона ({@code ScreenLogic
-     *  #regenerateStructureCells} на стороне данных, {@code reinforcementCandidates}/{@code
-     *  frameEnvelope} на стороне рендера) знает эту границу отдельно — сама функция теперь
-     *  не различает "ядро"/"вынос", это чисто равномерный шаг. */
+     *  покрывает "ядро" до начала выноса под балласт — фиксированная константа {@code
+     *  StructureCalc#CORE_BASE_SECTION_COUNT} (Round 19, было раньше вычисляемым числом секций
+     *  через удалённый метод {@code coreBaseSectionCount}), вызывающая сторона ({@code
+     *  ScreenLogic#regenerateStructureCells} на стороне данных, {@code
+     *  reinforcementCandidates}/{@code frameEnvelope} на стороне рендера) знает эту границу
+     *  отдельно — сама функция теперь не различает "ядро"/"вынос", это чисто равномерный шаг. */
     private static double[] baseSectionZRange(StructureGeometry g, int section) {
         double coreNearZ = g.frontZ() + g.frameW() / 2.0;
         double frontZ = coreNearZ - section * g.sectionDepthMm();

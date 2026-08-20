@@ -27,6 +27,12 @@ dependency-reduced-pom.xml
 dist-input/
 dist/
 
+# Единый адрес живого тестового билда для computer-use/агентов (см. CLAUDE.md,
+# секция "Единый адрес тестового билда") — НЕ релизный jpackage-вывод (тот — dist/
+# выше), просто shaded jar для быстрой ручной проверки, живёт в главном чекауте вне
+# зависимости от того, какой worktree его собрал.
+testbuild/
+
 # Data / local runtime
 *.log
 data/

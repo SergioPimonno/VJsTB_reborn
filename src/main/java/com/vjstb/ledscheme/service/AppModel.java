@@ -882,27 +882,38 @@ public class AppModel {
      *  Round 5 — добавлен {@code backRowSegments}: задний ряд (row=1) теперь короткий (~1-2м),
      *  независимый от {@code verticalFramesPerTower} переднего ряда (см. {@code StructureCalc
      *  #suggestBackRowSegments}). Round 10 — "ядро" базовой рамы больше не одна секция
-     *  произвольного размера: здесь (единственное место с одновременным доступом и к {@code
-     *  Workspace}, и к вызову {@code regenerateStructureCells}) считаем реальные габариты
-     *  выбранного {@code frameTypeId} и передаём {@code
-     *  StructureCalc#coreBaseSectionCount(frameW, sectionDepthMm)} — см. её javadoc и
-     *  {@code ScreenLogic#regenerateStructureCells} про смысл параметра. Round 16 — отдельный
-     *  {@code shortFrameTypeId}-параметр убран целиком (баг-репорт: "уберём короткие рамы,
-     *  переделываем всё под обычные") — перемычка/база/усилительные рамы теперь берут габариты
-     *  из ЭТОГО ЖЕ {@code frameTypeId}, см. {@code ui.Structure3DPanel#computeGeometry}. */
-    public void updateScreenStructure(Screen screen, double towerHeightMm, double towerSpacingMm,
+     *  произвольного размера, а целое число каталожных модулей (Round 19 зафиксировала это
+     *  число константой {@code StructureCalc#CORE_BASE_SECTION_COUNT}, не зависящей от габаритов
+     *  рамы — см. её javadoc). Round 16 — отдельный {@code shortFrameTypeId}-параметр убран
+     *  целиком (баг-репорт: "уберём короткие рамы, переделываем всё под обычные") — перемычка/
+     *  база/усилительные рамы теперь берут габариты из ЭТОГО ЖЕ {@code frameTypeId}, см.
+     *  {@code ui.Structure3DPanel#computeGeometry}.
+     *
+     * <p><b>2026-08-19 — {@code towerSpacingMm} убран, {@code extendedBaseSections(int)}
+     *  заменён на {@code baseExtensionMm(double)}, добавлен {@code ballastRatio}</b>: шаг башен
+     *  оказался параметром, ни на что не влияющим в итоговой ведомости материалов (см. {@code
+     *  StructureCalc#DEFAULT_TOWER_SPACING_MM} за полным обоснованием) — убран целиком, больше
+     *  не персистится. Число секций выноса базы теперь ВЫВОДИТСЯ здесь из ручного «выноса» в
+     *  мм ({@link StructureCalc#extendedBaseSectionsFromOverhang}, которая сама вычитает
+     *  обязательный модуль {@code StructureCalc#CORE_BASE_SECTION_COUNT} — введённое значение
+     *  включает в себя обязательную часть, не идёт сверх неё, см. её javadoc) через {@code
+     *  frameW}, переиспользуемый ниже без повторного вычисления. Коэффициент балласта
+     *  персистится напрямую на
+     *  {@link Screen#setStructureBallastRatio}, в генерацию ячеек не участвует (используется
+     *  только в {@code StructureCalc#compute}). */
+    public void updateScreenStructure(Screen screen, double towerHeightMm,
                                        int towerCount, int verticalFramesPerTower, int backRowSegments,
-                                       int peremychkaLevels, int extendedBaseSections, String frameTypeId,
-                                       String cupTypeId, String ballastTypeId,
+                                       int peremychkaLevels, double baseExtensionMm, double ballastRatio,
+                                       String frameTypeId, String cupTypeId, String ballastTypeId,
                                        double screenElevationMm, String notes) {
         pushUndo();
         screen.setStructureTowerHeightMm(towerHeightMm);
-        screen.setStructureTowerSpacingMm(towerSpacingMm);
         screen.setStructureTowerCount(towerCount);
         screen.setStructureVerticalFramesPerTower(verticalFramesPerTower);
         screen.setStructureBackRowSegments(backRowSegments);
         screen.setStructurePeremychkaLevels(peremychkaLevels);
-        screen.setStructureExtendedBaseSections(extendedBaseSections);
+        screen.setStructureBaseExtensionMm(baseExtensionMm);
+        screen.setStructureBallastRatio(ballastRatio);
         screen.setStructureFrameTypeId(frameTypeId);
         screen.setStructureCupTypeId(cupTypeId);
         screen.setStructureBallastTypeId(ballastTypeId);
@@ -914,11 +925,14 @@ public class AppModel {
         // Round 16 -- "короткая рама" как отдельный тип упразднена (баг-репорт: "изменение
         // типа рамы не влияет на перемычки... давай уберём короткие рамы, переделываем всё под
         // обычные"). sectionDepthMm (глубина одной секции выноса базы) теперь тоже = ширина
-        // ОБЫЧНОЙ рамы, не отдельного "короткого" типа -- coreBaseSectionCount(frameW, frameW)
-        // всегда даёт РОВНО 2 модуля на ядро (по одному на передний/задний ряд).
-        int coreBaseSectionCount = StructureCalc.coreBaseSectionCount(frameW, frameW);
+        // ОБЫЧНОЙ рамы, не отдельного "короткого" типа. Round 19 -- обязательная часть базы
+        // больше не зависит от frameW (StructureCalc.CORE_BASE_SECTION_COUNT -- всегда 1
+        // модуль, см. её javadoc), extendedBaseSectionsFromOverhang сама вычитает этот модуль
+        // из baseExtensionMm (значение включает в себя обязательную часть, не идёт сверх неё).
+        int extendedBaseSections = StructureCalc.extendedBaseSectionsFromOverhang(baseExtensionMm, frameW);
+        screen.setStructureExtendedBaseSections(extendedBaseSections);
         ScreenLogic.regenerateStructureCells(screen, typeOf(screen), towerCount, verticalFramesPerTower,
-                backRowSegments, peremychkaLevels, extendedBaseSections, coreBaseSectionCount);
+                backRowSegments, peremychkaLevels, extendedBaseSections, StructureCalc.CORE_BASE_SECTION_COUNT);
         changed();
     }
 
@@ -2724,6 +2738,51 @@ public class AppModel {
         changed();
     }
 
+    /** Персистит строки калькулятора транспорта (тип кофра → количество) для
+     *  {@code scene} — см. {@link Scene#getVehicleCaseCounts()} за мотивацией.
+     *  Вызывается из {@code ui.VehicleCalculatorDialog} на каждое дискретное
+     *  изменение таблицы строк, тем же приёмом, что {@link #saveVehicleLoadPlan}. */
+    public void saveVehicleCaseCounts(Scene scene, Map<String, Integer> counts) {
+        if (scene == null) {
+            return;
+        }
+        scene.setVehicleCaseCounts(counts);
+        changed();
+    }
+
+    /** То же самое, для области расчёта "Весь проект" — см. {@link
+     *  Project#getVehicleCaseCountsProject()}. */
+    public void saveVehicleCaseCountsProject(Project project, Map<String, Integer> counts) {
+        if (project == null) {
+            return;
+        }
+        project.setVehicleCaseCountsProject(counts);
+        changed();
+    }
+
+    /** То же самое, для области расчёта "Несколько сцен…" — вместе с {@code
+     *  sceneIds} (какой именно набор сцен был выбран), см. {@link
+     *  Project#getVehicleCaseCountsCustom()}/{@link Project#getVehicleCaseCustomSceneIds()}. */
+    public void saveVehicleCaseCountsCustom(Project project, List<String> sceneIds, Map<String, Integer> counts) {
+        if (project == null) {
+            return;
+        }
+        project.setVehicleCaseCustomSceneIds(sceneIds);
+        project.setVehicleCaseCountsCustom(counts);
+        changed();
+    }
+
+    /** Запоминает, какая область расчёта калькулятора транспорта использовалась
+     *  последней для {@code project} — см. {@link Project#getVehicleCaseLastScope()}
+     *  за мотивацию (восстановление выбора в комбобоксе при переоткрытии). */
+    public void saveVehicleCaseLastScope(Project project, String scopeName) {
+        if (project == null) {
+            return;
+        }
+        project.setVehicleCaseLastScope(scopeName);
+        changed();
+    }
+
     /** Настройка маски одного грида (размещённого на канвасе экрана) — имя-override,
      *  набор включённых элементов (см. class-javadoc CanvasPlacement/
      *  PixelGridRenderer.GridRenderOptions). Цвет чек-борда сюда больше НЕ входит
@@ -2934,6 +2993,39 @@ public class AppModel {
         cab.setOffsetXMm(offsetXMm);
         cab.setOffsetYMm(offsetYMm);
         autoDisableOverlapping(currentScene != null ? screenOfCabinet(currentScene, cab.getId()) : null, cab);
+        changed();
+    }
+
+    /** Возвращает ВСЕ кабинеты экрана на номинальную сеточную позицию (сбрасывает
+     *  {@code offsetXMm}/{@code offsetYMm} каждого в 0, см. {@link #updateCabinetOffset})
+     *  ОДНИМ действием — кнопка «Выровнять кабинеты по сетке» рядом с чекбоксом
+     *  «Кабинеты по отдельности» в {@code SetupStagePanel} (баг-репорт: случайно
+     *  сдвинутый мышью кабинет уводит {@code NovaLctScrWriter.write} в Complex-раскладку
+     *  — см. {@link ScreenLogic#isUniformRectangularGrid}, которая считает экран
+     *  "неровным" при ЛЮБОМ ненулевом смещении — а вручную попасть перетаскиванием
+     *  обратно ровно в 0,0 у каждого кабинета неудобно/ненадёжно). Трогает ТОЛЬКО
+     *  позицию — {@code isHidden}/{@code rotationOverride}/переопределение типа
+     *  кабинета не сбрасываются (это осознанные пользовательские решения, не
+     *  случайность драга, и сами по себе не форсируют Complex — {@code isHidden}
+     *  пишется явной blank-записью прямо в Standard, см. {@code
+     *  NovaLctScrWriter.writeStandard}/{@code isUniformRectangularGrid} за полной
+     *  историей трёх попыток этого же дня). Один {@link #pushUndo()} на всю
+     *  операцию, не по кабинету; ничего не делает (и не пишет пустую запись в
+     *  undo), если ни у одного кабинета экрана смещения и так не было. */
+    public void alignScreenCabinetsToGrid(Screen screen) {
+        if (screen == null) {
+            return;
+        }
+        boolean anyOffset = screen.getCabinets().stream()
+                .anyMatch(c -> c.getOffsetXMm() != 0 || c.getOffsetYMm() != 0);
+        if (!anyOffset) {
+            return;
+        }
+        pushUndo();
+        for (CabinetInstance cab : screen.getCabinets()) {
+            cab.setOffsetXMm(0);
+            cab.setOffsetYMm(0);
+        }
         changed();
     }
 

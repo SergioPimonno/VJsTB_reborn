@@ -11,6 +11,20 @@
 конвенцию, описанную здесь, — обнови и этот файл. Другие агенты будут ему
 доверять буквально, устаревшая строчка тут хуже, чем её отсутствие.
 
+**Ребрендинг (2026-08-20)**: отображаемое пользователю имя приложения —
+**"AVE_ToolBox"** (короткий id-вариант — "ave_tb") — заголовок окна, About,
+инсталлятор, экспортируемые файлы (After Effects .jsx), README. Имена
+репозитория/пакета/Maven-координат (`VJsTB_reborn`, `com.vjstb.ledscheme`,
+`led-scheme`, `ledscheme-model`/`-admin`/`-server`), GitHub-URL в
+`AppInfo.REPOSITORY_URL`/`update.UpdateManager`, домен
+`ledschemedesigner.ru`, VPS-инфраструктура (systemd/Docker) и каталог
+данных пользователя `~/.led-scheme/` **сознательно НЕ переименованы** —
+пользователь явно отказался от полного ребрендинга, т.к. он сломал бы
+автообновление и подключение к серверу для уже установленных копий
+приложения. Не "исправляй" это несоответствие самостоятельно в будущей
+сессии без нового явного запроса — расхождение между видимым именем и
+техническими идентификаторами тут намеренное.
+
 ## 1. Четыре репозитория, как они связаны
 
 | Репозиторий | Что это | Расположение | Git |
@@ -305,9 +319,9 @@ Onboarding) и т.д., в `ledscheme-admin/.../admin/ui/`. `AdminLibraryClient`
   ```
   mvn -DskipTests package
   jpackage --type app-image --input dist-input --dest dist \
-    --name "LED Scheme Designer" --main-jar led-scheme.jar \
+    --name "AVE_ToolBox" --main-jar led-scheme.jar \
     --main-class com.vjstb.ledscheme.App --app-version "X.Y" \
-    --vendor "VJsTB" --icon packaging/icon-main.ico
+    --vendor "AVE_ToolBox" --icon packaging/icon-main.ico
   # затем упаковать в zip и gh release upload
   ```
 - **Иконка приложения**: `packaging/icon-main.{ico,icns,png}` — закоммичены в
@@ -437,12 +451,32 @@ Onboarding) и т.д., в `ledscheme-admin/.../admin/ui/`. `AdminLibraryClient`
   ```
   (номер версии IDEA может со временем измениться — проверить `ls "/c/Program
   Files/JetBrains/"`, если путь не находится).
-- **Живая проверка через computer-use**: пересобранный jar не подхватывается
-  автоматически, если рядом лежит ярлык/Start Menu запись на
-  `target/xxx-latest.jar` — после каждой пересборки `cp target/xxx.jar
-  target/xxx-latest.jar`, и всегда убивать все `javaw.exe`/запускать ровно
-  один свежий процесс через `nohup ... &; disown`, а не `open_application`
-  (та может поднять старый ярлык вместо свежего билда).
+- **Единый адрес тестового билда (2026-08-20)** — `C:\Development\VJsTB_reborn\testbuild\
+  led-scheme-test.jar`. Один и тот же путь для ВСЕХ сессий/агентов независимо от того,
+  в каком worktree шла работа (`.claude/worktrees/<имя>`) — сам путь лежит в ГЛАВНОМ
+  чекауте, вне git (`testbuild/` в `.gitignore`), не внутри конкретного worktree и не
+  внутри `target/` (тот стирается `mvn clean`). Это НЕ `dist/` — та зарезервирована под
+  релизный `jpackage`-вывод (см. ниже), `testbuild/` — просто shaded jar для быстрой
+  ручной/computer-use проверки текущей разработки.
+  - **После КАЖДОЙ пересборки, для живой проверки, из любого worktree**:
+    ```
+    cp target/led-scheme.jar "C:\Development\VJsTB_reborn\testbuild\led-scheme-test.jar"
+    ```
+  - **Ярлык на рабочем столе** (`led-scheme.jar — ярлык.lnk`) указывает СЮДА —
+    `TargetPath` = `javaw.exe`, `Arguments` = `-jar "...\testbuild\led-scheme-test.jar"`
+    (не голый путь к .jar — тот полагался на файловую ассоциацию Windows, ярлык через
+    `javaw.exe -jar` работает всегда, независимо от неё). Если когда-нибудь понадобится
+    восстановить/пересоздать ярлык (например, пользователь его случайно удалил) — тем
+    же способом, PowerShell `New-Object -ComObject WScript.Shell`,
+    `CreateShortcut(...)`, задать `TargetPath`/`Arguments`/`WorkingDirectory`/`Save()`.
+  - **Живая проверка через computer-use**: даже с единым путём пересобранный jar не
+    подхватывается автоматически, пока не перезапущен процесс — всегда убивать все
+    относящиеся к ЭТОМУ приложению `javaw.exe` (искать по командной строке, содержащей
+    `led-scheme-test.jar`, НЕ блочным `taskkill` по имени процесса — на машине
+    пользователя есть посторонние `javaw.exe`, например Minecraft, их трогать нельзя) и
+    запускать ровно один свежий процесс через `nohup "javaw.exe" -jar
+    "...\testbuild\led-scheme-test.jar" &; disown`, а не `open_application` (та может
+    поднять старый ярлык вместо свежего билда).
 - Никогда не трогать "dxvfi" (Node/PM2/nginx) на VPS dxv — см. секцию 2.
 - Не коммитить/не пушить без явного указания пользователя (это правило
   действует всегда, независимо от того, что написано в этом файле).

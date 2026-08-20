@@ -513,11 +513,16 @@ public class OutputStagePanel extends JPanel {
      *  #buildStructureSpec} — единственный источник правды, не отдельно
      *  накапливаемый список). Экранов без этого способа монтажа просто нет в списке —
      *  лист может остаться пустым (только заголовок), это нормально для проекта без
-     *  ни одного конструктива. */
+     *  ни одного конструктива.
+     *
+     * <p>Столбец «Рам, шт» — ОБЩЕЕ число (вертикальные + перемычки + секции базы, см.
+     * {@code StructureCalc.Result#totalFrameCount} javadoc), не три отдельных столбца, как
+     * раньше — по прямому указанию пользователя (2026-08-20): это физически один и тот же
+     * каталожный тип рамы, заказывается одним числом. */
     private void addStructureSheet(Workbook wb, Project project) {
         Sheet sheet = com.vjstb.ledscheme.service.SpecXlsxWriter.addSheet(wb, "Конструктив",
-                "Сцена", "Экран", "Вертикальных рам, шт", "Перемычек, шт", "Секций базовых рам, шт",
-                "Стаканов, шт", "Болтов, шт", "Требуемый балласт, кг", "Контейнеров балласта, шт");
+                "Сцена", "Экран", "Рам, шт", "Стаканов, шт", "Болтов, шт", "Требуемый балласт, кг",
+                "Отгрузов, шт");
         for (Scene scene : project.getScenes()) {
             for (Screen scr : scene.getScreens()) {
                 if (scr.getMountType() != com.vjstb.ledscheme.model.ScreenMountType.STRUCTURE) {
@@ -527,11 +532,11 @@ public class OutputStagePanel extends JPanel {
                 com.vjstb.ledscheme.service.StructureCalc.Result r =
                         com.vjstb.ledscheme.service.StructureCalc.compute(scr, type, model.getWorkspace());
                 com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, scene.getName(), scr.getName(),
-                        r.verticalFrameCount(), r.peremychkaCount(), r.baseFrameCount(), r.cupCount(),
-                        r.boltCount(), r.requiredBallastKg(), r.ballastContainerCount());
+                        r.totalFrameCount(), r.cupCount(), r.boltCount(), r.requiredBallastKg(),
+                        r.ballastContainerCount());
             }
         }
-        com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(sheet, 9);
+        com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(sheet, 7);
     }
 
     /** Лист «Общий список» — по прямому запросу пользователя, ОДНА сводная таблица
@@ -588,9 +593,10 @@ public class OutputStagePanel extends JPanel {
                     "шт");
         }
 
-        int structureVertical = 0;
-        int structurePeremychka = 0;
-        int structureBase = 0;
+        // Рамы -- ОДНО общее число (вертикальные + перемычки + секции базы), не три строки, по
+        // прямому указанию пользователя (2026-08-20, см. StructureCalc.Result#totalFrameCount
+        // javadoc) -- физически один и тот же каталожный тип рамы.
+        int structureFrames = 0;
         int structureCups = 0;
         int structureBolts = 0;
         int structureBallastContainers = 0;
@@ -602,26 +608,18 @@ public class OutputStagePanel extends JPanel {
                 }
                 com.vjstb.ledscheme.service.StructureCalc.Result r = com.vjstb.ledscheme.service.StructureCalc
                         .compute(scr, model.typeOf(scr), model.getWorkspace());
-                structureVertical += r.verticalFrameCount();
-                structurePeremychka += r.peremychkaCount();
-                structureBase += r.baseFrameCount();
+                structureFrames += r.totalFrameCount();
                 structureCups += r.cupCount();
                 structureBolts += r.boltCount();
                 structureBallastContainers += r.ballastContainerCount();
                 structureBallastKg += r.requiredBallastKg();
             }
         }
-        if (structureVertical + structurePeremychka + structureBase + structureCups + structureBolts
-                + structureBallastContainers > 0) {
-            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Конструктив", "Вертикальные рамы",
-                    structureVertical, "шт");
-            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Конструктив", "Перемычки", structurePeremychka,
-                    "шт");
-            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Конструктив", "Секции базовых рам",
-                    structureBase, "шт");
+        if (structureFrames + structureCups + structureBolts + structureBallastContainers > 0) {
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Конструктив", "Рамы", structureFrames, "шт");
             com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Конструктив", "Стаканы", structureCups, "шт");
             com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Конструктив", "Болты", structureBolts, "шт");
-            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Конструктив", "Контейнеры балласта",
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Конструктив", "Отгрузы",
                     structureBallastContainers, "шт (" + UiKit.fmt(structureBallastKg) + " кг балласта)");
         }
 
