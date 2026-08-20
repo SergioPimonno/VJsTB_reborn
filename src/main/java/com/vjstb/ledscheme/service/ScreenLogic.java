@@ -83,20 +83,39 @@ public final class ScreenLogic {
     }
 
     /** Экран физически представляет собой РОВНУЮ прямоугольную сетку одинаковых
-     *  кабинетов — false, если есть скрытые ("вырезанные") ячейки, свободное мм-
-     *  смещение (Task #7/v1.6) или переопределение типа хотя бы у одной ячейки
-     *  (разный физический размер, Issue B/v1.6). Нужно экспорту в NovaLCT (см.
-     *  NovaLctScrWriter) — формат "Standard Screen" (простая прямоугольная сетка,
-     *  row/col-индекс на кабинет) и "Complex Screen" (произвольные прямоугольники,
-     *  явные пиксельные X/Y/Width/Height на кабинет) в самом NovaLCT — РАЗНЫЕ
-     *  бинарные структуры (подтверждено побайтовым разбором реального образца
-     *  Complex Screen — там нет ни привычного 6-байтового якоря, ни JSON-маркера
-     *  простого формата вовсе), выбор писать которую нужно делать ДО генерации
-     *  байтов, а не пытаться впихнуть неровную форму в простой формат. */
+     *  кабинетов — false, если у ЛЮБОЙ ВИДИМОЙ ячейки есть свободное мм-смещение
+     *  (Task #7/v1.6) или переопределение типа (разный физический размер, Issue
+     *  B/v1.6). Нужно экспорту в NovaLCT (см. NovaLctScrWriter) — формат "Standard
+     *  Screen" (простая прямоугольная сетка, row/col-индекс на кабинет) и "Complex
+     *  Screen" (произвольные прямоугольники, явные пиксельные X/Y/Width/Height на
+     *  кабинет) в самом NovaLCT — РАЗНЫЕ бинарные структуры (подтверждено
+     *  побайтовым разбором реального образца Complex Screen — там нет ни
+     *  привычного 6-байтового якоря, ни JSON-маркера простого формата вовсе),
+     *  выбор писать которую нужно делать ДО генерации байтов, а не пытаться
+     *  впихнуть неровную форму в простой формат.
+     *
+     *  <p><b>Скрытые ("вырезанные") ячейки НЕ форсируют Complex (2026-08-19,
+     *  третий заход — см. ПОЛНУЮ историю в {@code NOVALCT_EXPORT.md})</b>. Коротко:
+     *  первая попытка (тот же день) сделала ровно это же изменение БЕЗ изменения
+     *  самой записи — реальный экспорт ДКФ (уличная сцена с арками) сломался у
+     *  пользователя ("Failed to load screen information file!"), правку откатили.
+     *  Вторая попытка (тоже тот же день) вернула прежнее поведение (скрытая ячейка
+     *  форсирует Complex) — но пользователь объяснил, ЗАЧЕМ ему нужен именно
+     *  Standard для таких экранов: Complex-конфигурация в самой NovaLCT кратно
+     *  дольше и сложнее в настройке техником на площадке, чем Standard с
+     *  blank-ячейками — то же самое, что реальные операторы NovaLCT делают сами
+     *  (см. {@code NovaLctCombineHelper#combine}, реальный образец {@code 111.scr}).
+     *  Третья попытка (эта) делает ОБЕ половины сразу: снимает Complex-гейт ЗДЕСЬ
+     *  И реализует явную blank-запись ({@code card=0xFF}, ПОДТВЕРЖДЁННЫЙ сентинел
+     *  из {@code 111.scr}) для скрытых ячеек в {@link NovaLctScrWriter#writeStandard}
+     *  — то, чего не хватало в первой попытке (там ячейка просто НЕ писалась
+     *  вовсе, а не помечалась blank-ом, отсюда и падение загрузки). НЕ повторяй
+     *  первую попытку (просто снять гейт здесь) без проверки, что blank-запись
+     *  в {@code NovaLctScrWriter} тоже на месте — они правятся ТОЛЬКО ВМЕСТЕ. */
     public static boolean isUniformRectangularGrid(Screen s, CabinetType defaultType, Workspace workspace) {
         for (CabinetInstance cab : s.getCabinets()) {
             if (cab.isHidden()) {
-                return false;
+                continue;
             }
             if (cab.getOffsetXMm() != 0 || cab.getOffsetYMm() != 0) {
                 return false;
@@ -269,7 +288,7 @@ public final class ScreenLogic {
     public static void regenerateStructureCells(Screen screen, CabinetType type, int towerCount,
             int verticalFramesPerTower, int backRowSegments, int peremychkaLevels, int extendedBaseSections,
             int coreBaseSectionCount) {
-        double spacing = screen.getStructureTowerSpacingMm();
+        double spacing = StructureCalc.DEFAULT_TOWER_SPACING_MM;
         Set<Integer> validTowers = new HashSet<>();
         for (int t = 0; t < towerCount; t++) {
             if (towerHasCabinetContent(screen, type, t * spacing, spacing)) {

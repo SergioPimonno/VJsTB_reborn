@@ -2,6 +2,7 @@ package com.vjstb.ledscheme.service;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
@@ -121,6 +122,56 @@ class NovaLctScrWriterTest {
         byte[] data = NovaLctScrWriter.writeStandardCore(2, 2, 128, 128, 0, cells);
         assertEquals(3, data[0x149] & 0xff, "Заголовочный Sending Card не должен взять blank-сентинел 0xFF");
         assertEquals(7, data[0x14a] & 0xff, "Заголовочный Ethernet Port не должен взять blank-сентинел");
+    }
+
+    @Test
+    void hiddenCabinetWritesExplicitBlankRecord_notOmittedEntirely(@TempDir Path dir) {
+        // Прямой тест на баг-репорт ДКФ (уличная сцена с арками): скрытая ("вырезанная")
+        // ячейка обязана попасть в файл ЯВНОЙ blank-записью (card=255), а не быть просто
+        // не написанной вовсе -- см. javadoc NovaLctScrWriter.writeStandard и
+        // ScreenLogic.isUniformRectangularGrid за полной историей (первая попытка чинить
+        // это ("просто снять гейт Complex") сломала реальную загрузку в NovaLCT именно
+        // потому, что не писала blank-запись, эта запись здесь и проверяется). Круговой
+        // тест через NovaLctScrParser -- надёжнее, чем разбор смещений вручную: если
+        // блока-записи нет вовсе, парсер либо рассинхронизируется на границе следующей
+        // записи, либо не наберёт полный набор ячеек, и тест это ловит через
+        // fillMissingOrigin() (та восстанавливает РОВНО ОДНУ недостающую ячейку -- origin
+        // -- и провалилась бы, если бы недостающих ячеек было ДВЕ, как до этого фикса).
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(type128());
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+        model.selectScreen(screen);
+
+        ControllerType controllerType = model.addControllerType(singleCardController());
+        model.addControllerToScreen(screen, controllerType.getId());
+
+        CabinetInstance origin = screen.cabinetAt(0, 0);
+        CabinetInstance c01 = screen.cabinetAt(0, 1);
+        CabinetInstance c11 = screen.cabinetAt(1, 1);
+        CabinetInstance hidden = screen.cabinetAt(1, 0);
+        model.addSignalChain(1, false, List.of(origin.getId(), c01.getId(), c11.getId()));
+        model.toggleCabinetHidden(hidden.getId());
+
+        assertFalse(NovaLctScrWriter.isComplexExport(screen, model.getWorkspace()),
+                "скрытая ячейка сама по себе не форсирует Complex -- пишем Standard с blank-ом");
+
+        byte[] bytes = NovaLctScrWriter.write(screen, scene, model.getWorkspace());
+        NovaLctScrParser.ImportResult parsed = NovaLctScrParser.parse(bytes);
+        assertEquals(1, parsed.screens().size());
+        NovaLctScrParser.ImportedScreen imported = parsed.screens().get(0);
+        assertEquals(2, imported.width);
+        assertEquals(2, imported.height);
+        assertEquals(4, imported.cabinets.size(),
+                "все 4 ячейки сетки обязаны присутствовать в файле -- скрытая как явный "
+                        + "blank (card=255), origin (0,0) восстанавливается парсером из заголовка");
+
+        NovaLctScrParser.CabinetEntry hiddenEntry = imported.cabinets.stream()
+                .filter(e -> e.row() == 1 && e.col() == 0)
+                .findFirst().orElseThrow();
+        assertEquals(255, hiddenEntry.card(), "скрытая ячейка обязана попасть в файл как явный blank-сентинел");
     }
 
     private static byte[] decode(String base64) {

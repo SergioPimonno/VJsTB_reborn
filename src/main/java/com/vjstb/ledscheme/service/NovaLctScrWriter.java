@@ -269,12 +269,37 @@ public final class NovaLctScrWriter {
      *  class-javadoc). Тонкая обёртка над {@link #writeStandardCore}: резолвит
      *  цепочки ОДНОГО экрана в {@code Map<CellKey,Rec>} и вызывает общее ядро —
      *  сохранена ради обратной совместимости существующего вызывающего кода
-     *  ({@link #write}), само ядро экрана не знает. */
+     *  ({@link #write}), само ядро экрана не знает.
+     *
+     * <p><b>Скрытые ("вырезанные") ячейки → явный blank-сентинел, НЕ пропуск
+     * записи (2026-08-19, третий заход)</b>: первая попытка (пропустить проверку
+     * {@code isUniformRectangularGrid} для скрытых ячеек, ничего не меняя в самой
+     * записи) была ОТКАЧЕНА в тот же день — оставлять скрытую ячейку вовсе БЕЗ
+     * записи (как для просто нерасключённого, но ВИДИМОГО кабинета) дало файл,
+     * который реальная NovaLCT отказалась грузить ("Failed to load screen
+     * information file!", баг-репорт на реальном проекте ДКФ — уличная сцена с
+     * арками). Правильное решение подсказал пользователь: экран с "дырами"
+     * (форма подразумевает отсутствие кабинетов) должен по-прежнему писаться как
+     * Standard (прямоугольник по наибольшим размерам), а недостающие кабинеты —
+     * помечаться ТЕМ ЖЕ blank-сентинелом ({@code card=0xFF/255}), что уже
+     * ПОДТВЕРЖДЁН побайтовым разбором реального {@code 111.scr} для ДРУГОГО
+     * (мультиэкранного) сценария — {@link NovaLctCombineHelper#combine}. Отличие
+     * от простого "не расключено" (та ячейка по-прежнему не пишется вовсе, см.
+     * {@link #resolve}) принципиальное: скрытая ячейка означает "кабинета тут
+     * физически НЕТ" (сама форма экрана), а не "кабинет есть, но пока не
+     * подключен проводом" — только первое соответствует семантике blank-дыры,
+     * которую понимает реальная NovaLCT. */
     private static byte[] writeStandard(Screen screen, Scene scene, Workspace workspace) {
         Map<String, Rec> byCabinetId = resolve(screen, scene, workspace);
         Map<CellKey, Rec> byCell = new HashMap<>();
         for (Rec r : byCabinetId.values()) {
             byCell.put(new CellKey(r.col(), r.row()), r);
+        }
+        for (CabinetInstance cab : screen.getCabinets()) {
+            if (cab.isHidden()) {
+                byCell.putIfAbsent(new CellKey(cab.getColIndex(), cab.getRowIndex()),
+                        new Rec(cab.getRowIndex(), cab.getColIndex(), 255, 0, 0));
+            }
         }
         CabinetType defaultType = workspace != null ? workspace.cabinetTypeById(screen.getCabinetTypeId()) : null;
         int cabW = defaultType != null ? defaultType.getResolutionWidth() : 128;
