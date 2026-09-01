@@ -16,7 +16,10 @@ public enum HotkeyAction {
     MOVE_LEFT("moveLeft", "Курсор строящейся цепочки: влево", KeyCombo.ofKey(KeyEvent.VK_LEFT, false, false, false)),
     MOVE_RIGHT("moveRight", "Курсор строящейся цепочки: вправо", KeyCombo.ofKey(KeyEvent.VK_RIGHT, false, false, false)),
     TOGGLE_HIDDEN("toggleHidden", "Скрыть/показать кабинет под курсором",
-            KeyCombo.ofKey(KeyEvent.VK_DELETE, false, false, false));
+            KeyCombo.ofKey(KeyEvent.VK_DELETE, false, false, false)),
+    TOGGLE_SCHEMA_INTERACTION("toggleSchemaInteraction",
+            "Общая схема: переключить инструмент «Перемещение»/«Соединение»",
+            KeyCombo.ofKey(KeyEvent.VK_SPACE, false, false, false));
 
     private final String id;
     private final String label;

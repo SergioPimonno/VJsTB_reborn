@@ -1705,7 +1705,7 @@ public class SchemaCanvasPanel extends JPanel {
 
         Font titleFont = getFont().deriveFont(Font.BOLD, 12f);
         Font metaFont = getFont().deriveFont(10f);
-        boolean verticalConnectors = settings.activeProfile().isConnectorsVertical();
+        boolean verticalConnectors = settings.activeProfile().isConnectorsVertical(mode);
         overloadIconRects.clear();
         for (SchemaNode n : ns) {
             boolean selected = n == selectedNode;
@@ -2145,7 +2145,7 @@ public class SchemaCanvasPanel extends JPanel {
         // CardPort.getId(), занятость конкретного гнезда определяется на лету по
         // порядку уже существующих SchemaEdge с этим portId (см. socketPosition).
         boolean individual = settings.activeProfile().getConnectorDisplayMode(mode) == ConnectorDisplayMode.INDIVIDUAL;
-        boolean vertical = settings.activeProfile().isConnectorsVertical();
+        boolean vertical = settings.activeProfile().isConnectorsVertical(mode);
         List<SocketRect> rects = new ArrayList<>();
         String prevCardId = null;
         boolean started = false;
@@ -2236,7 +2236,7 @@ public class SchemaCanvasPanel extends JPanel {
      *  (не-null) cardId — один блок; у разъёмов питания cardId всегда null — для
      *  них блок не рисуется. */
     private void drawCardBlockBorders(Graphics2D g2, List<SocketRect> rects, int x, int y, int w, int h) {
-        boolean vertical = settings.activeProfile().isConnectorsVertical();
+        boolean vertical = settings.activeProfile().isConnectorsVertical(mode);
         // "across" — поперечная зона блока: полная ширина узла в горизонтальном
         // режиме, полная высота зоны разъёмов (под заголовком узла) в вертикальном —
         // одна и та же зона для ВСЕХ блоков карт узла, вдоль неё блок просто рисуется
@@ -2376,7 +2376,7 @@ public class SchemaCanvasPanel extends JPanel {
      *  как и раньше. Если включена «коммутация через гнёзда» — гнёзда ещё и
      *  кликабельны (см. {@link #socketAt}), наведённое подсвечивается белым кольцом. */
     private void drawConnectorRows(Graphics2D g2, SchemaNode node, List<PortEntry> ports, int x, int y, int w, int h) {
-        boolean vertical = settings.activeProfile().isConnectorsVertical();
+        boolean vertical = settings.activeProfile().isConnectorsVertical(mode);
         List<SocketRect> rects = computeSocketRects(ports, x, y, w, h);
         drawCardBlockBorders(g2, rects, x, y, w, h);
         int acrossNear = vertical ? y + PORT_ROWS_TOP_OFFSET : x;
@@ -2537,7 +2537,7 @@ public class SchemaCanvasPanel extends JPanel {
      *  вся строка (по X — вся ширина узла, по Y — строка ± запас), не только сама
      *  точка-разъём. */
     private SocketHit socketAt(Point p) {
-        boolean vertical = settings.activeProfile().isConnectorsVertical();
+        boolean vertical = settings.activeProfile().isConnectorsVertical(mode);
         for (SchemaNode n : nodes()) {
             List<PortEntry> ports = portsOf(n);
             if (ports.isEmpty()) {

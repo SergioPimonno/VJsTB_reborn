@@ -346,6 +346,13 @@ public class SignalStagePanel extends JPanel {
         return canvas;
     }
 
+    /** Общая схема сигнала, если она сейчас показана (переключатель «Общая схема
+     *  сигнала» выбран), иначе null — см. PowerStagePanel.schemaPanelIfActive
+     *  (симметричный метод) за подробностями назначения. */
+    public SchemaPanel schemaPanelIfActive() {
+        return schemaViewBtn.isSelected() ? schemaPanel : null;
+    }
+
     /** Человекочитаемая подпись ГЛОБАЛЬНОГО номера порта — локальный номер в пределах
      *  его собственного контроллера (плюс "C{n}·" перед ним, если контроллеров в
      *  сцене несколько — иначе к какому контроллеру относится порт неоднозначно),

@@ -78,6 +78,19 @@ public class SchemaPanel extends JPanel {
         canvas.setOnScreenActivated(listener);
     }
 
+    /** Переключает инструмент холста Перемещение↔Соединение по горячей клавише
+     *  (см. HotkeyAction.TOGGLE_SCHEMA_INTERACTION, диспетчер — MainFrame) — в
+     *  отличие от прямого canvas.setInteraction(...), синхронизирует ещё и вид
+     *  переключателей moveBtn/connectBtn ниже, которые иначе остались бы показывать
+     *  старый инструмент. */
+    public void toggleInteraction() {
+        SchemaCanvasPanel.Interaction next = canvas.getInteraction() == SchemaCanvasPanel.Interaction.MOVE
+                ? SchemaCanvasPanel.Interaction.CONNECT : SchemaCanvasPanel.Interaction.MOVE;
+        canvas.setInteraction(next);
+        moveBtn.setSelected(next == SchemaCanvasPanel.Interaction.MOVE);
+        connectBtn.setSelected(next == SchemaCanvasPanel.Interaction.CONNECT);
+    }
+
     private JPanel buildSide() {
         JPanel body = UiKit.vboxFixedWidth(SIDE_WIDTH);
         body.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
