@@ -455,8 +455,8 @@ public class VehicleCalculatorDialog extends JDialog {
                         + " использует именно эти строки.");
                 return;
             }
-            VehicleLoadVisualizerDialog dlg = new VehicleLoadVisualizerDialog(getOwner(), model, model.getCurrentScene(),
-                    lastRecommended, lastCaseRows);
+            VehicleLoadVisualizerDialog dlg = new VehicleLoadVisualizerDialog(getOwner(), model, settings,
+                    model.getCurrentScene(), lastRecommended, lastCaseRows);
             dlg.setSnapEnabled(snapCheck.isSelected());
             dlg.setVisible(true);
         });

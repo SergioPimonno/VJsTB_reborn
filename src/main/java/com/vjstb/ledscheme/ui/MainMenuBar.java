@@ -1,12 +1,8 @@
 package com.vjstb.ledscheme.ui;
 
-import com.formdev.flatlaf.FlatDarkLaf;
-import com.formdev.flatlaf.FlatLightLaf;
 import com.vjstb.ledscheme.AppInfo;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.settings.SettingsManager;
-import java.awt.Desktop;
-import java.net.URI;
 import javax.swing.ButtonGroup;
 import javax.swing.JFrame;
 import javax.swing.JMenu;
@@ -14,8 +10,6 @@ import javax.swing.JMenuBar;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JRadioButtonMenuItem;
-import javax.swing.SwingUtilities;
-import javax.swing.UIManager;
 
 /** Верхнее меню: настройки, база данных, инструменты, персонализация, справка. */
 public class MainMenuBar extends JMenuBar {
@@ -36,7 +30,7 @@ public class MainMenuBar extends JMenuBar {
         JMenu menu = new JMenu("Настройки");
 
         JMenuItem reportBug = new JMenuItem("Сообщить о баге…");
-        reportBug.addActionListener(e -> openUrl(owner, AppInfo.NEW_ISSUE_URL));
+        reportBug.addActionListener(e -> UiKit.openUrl(owner, AppInfo.NEW_ISSUE_URL));
         menu.add(reportBug);
 
         JMenuItem onboarding = new JMenuItem("Показать приветствие снова…");
@@ -61,17 +55,6 @@ public class MainMenuBar extends JMenuBar {
         menu.add(author);
 
         return menu;
-    }
-
-    private void openUrl(JFrame owner, String url) {
-        try {
-            if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
-                Desktop.getDesktop().browse(new URI(url));
-            }
-        } catch (Exception ex) {
-            JOptionPane.showMessageDialog(owner, "Не удалось открыть ссылку:\n" + url, "Ошибка",
-                    JOptionPane.ERROR_MESSAGE);
-        }
     }
 
     /** Всё, что говорит с сервером/общей библиотекой (Postgres на dxv) — синк,
@@ -160,11 +143,20 @@ public class MainMenuBar extends JMenuBar {
         JMenu menu = new JMenu("Персонализация");
         ButtonGroup group = new ButtonGroup();
 
-        boolean currentlyDark = settings.activeProfile().isDarkTheme();
+        // Отражает LafStyle (см. PersonalizationDialog#buildStylePanel — 4-вариантный
+        // выбор стиля), а НЕ отдельный UserProfile#isDarkTheme — тот нигде не
+        // читается при старте (App.main смотрит только на getLafStyle()), поэтому
+        // раньше живое переключение здесь визуально работало В ЭТОЙ сессии, но
+        // откатывалось при следующем запуске приложения (баг, обнаруженный при
+        // фиксе "залипающих задников" — до этого никем не замечен, т.к. простое
+        // переключение обычно совпадало с уже активным lafStyle). Простое
+        // "Тёмная"/"Светлая" здесь — ярлык на FLAT_DARK/FLAT_LIGHT, за Darcula/
+        // IntelliJ — в «Персонализация → Цвета и профили…».
+        boolean currentlyDark = LafStyle.byId(settings.activeProfile().getLafStyle()).isDark();
         JRadioButtonMenuItem dark = new JRadioButtonMenuItem("Тёмная тема", currentlyDark);
         JRadioButtonMenuItem light = new JRadioButtonMenuItem("Светлая тема", !currentlyDark);
-        dark.addActionListener(e -> applyTheme(true, settings));
-        light.addActionListener(e -> applyTheme(false, settings));
+        dark.addActionListener(e -> applyTheme(true, settings, owner));
+        light.addActionListener(e -> applyTheme(false, settings, owner));
         group.add(dark);
         group.add(light);
         menu.add(dark);
@@ -204,24 +196,38 @@ public class MainMenuBar extends JMenuBar {
         return menu;
     }
 
-    /** Живое переключение темы: L&F-скин + палитра (BG/PANEL/BORDER/TEXT/MUTED, см.
-     *  {@link Palette#applyTheme}) применяются сразу на ВСЕХ открытых окнах (не только
-     *  владельце меню) — иначе уже открытые диалоги/панели с кастомной отрисовкой
-     *  (читающей Palette-константы напрямую в paintComponent) не подхватили бы новые
-     *  цвета до перезапуска. Выбор персистентен (см. UserProfile#isDarkTheme) — при
-     *  следующем запуске App применит его же, а не всегда FlatDarkLaf. */
-    private void applyTheme(boolean dark, SettingsManager settings) {
-        try {
-            UIManager.setLookAndFeel(dark ? new FlatDarkLaf() : new FlatLightLaf());
-        } catch (Exception ignored) {
+    /** Смена темы — ТОЛЬКО сохраняет выбор ({@link LafStyle}, App применит его при
+     *  следующем запуске) и предупреждает о необходимости перезапуска (см.
+     *  {@link UiKit#promptRestartRequired}), с кнопкой сделать это сразу.
+     *
+     * <p>Баг-репорт: "при переключении темы некоторые задники (в расключениях, в
+     * масках) залипают" — раньше тема переключалась ЖИВЬЁМ: L&F-скин + {@link
+     * Palette#applyTheme} + {@code updateComponentTreeUI} на все открытые окна.
+     * Это работало для обычных Swing-компонентов (кнопки/меню/подписи), но НЕ для
+     * холстов с собственной отрисовкой (CanvasPanel — расключение,
+     * CanvasEditorPanel — генерация масок, SchemaCanvasPanel, SceneCanvasPanel,
+     * VehicleLoadCanvasPanel, NetworkCanvasPanel, ShapeEditorPanel,
+     * LctPresetMasterDialog) — все они делают {@code setBackground(Palette.BG)}
+     * ОДИН РАЗ в конструкторе, захватывая ТЕКУЩИЙ на тот момент объект {@code
+     * Color}; {@code Palette.applyTheme} затем присваивает {@code Palette.BG}
+     * НОВЫЙ объект, но уже установленный {@code background} компонента на это
+     * никак не реагирует (и {@code updateComponentTreeUI} его не трогает — не
+     * трогает то, что приложение само явно задало через setBackground) — фон
+     * остаётся цветом СТАРОЙ темы навсегда, до следующего создания панели. Чинить
+     * КАЖДУЮ такую панель отдельно (перечитывать Palette на каждой перерисовке)
+     * избыточно рискованно ради живого переключения — вместо этого тема просто
+     * применяется целиком при СЛЕДУЮЩЕМ запуске (App.main вызывает
+     * Palette.applyTheme ДО создания хоть одной панели — конструкторы сразу
+     * захватывают правильный цвет, инвариант "залипания" в принципе невозможен). */
+    private void applyTheme(boolean dark, SettingsManager settings, JFrame owner) {
+        LafStyle target = dark ? LafStyle.FLAT_DARK : LafStyle.FLAT_LIGHT;
+        if (target.getId().equals(settings.activeProfile().getLafStyle())) {
             return;
         }
-        Palette.applyTheme(dark);
-        for (java.awt.Window w : java.awt.Window.getWindows()) {
-            SwingUtilities.updateComponentTreeUI(w);
-            w.repaint();
-        }
-        settings.setDarkTheme(dark);
+        settings.setLafStyle(target.getId());
+        UiKit.promptRestartRequired(owner, "Тема будет применена при следующем запуске — при живом"
+                + " переключении некоторые элементы с собственной отрисовкой (расключение, общая схема,"
+                + " генерация масок) остаются цветов старой темы.");
     }
 
     private JMenu buildHelpMenu(Runnable onShowShortcuts) {

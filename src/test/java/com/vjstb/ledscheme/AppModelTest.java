@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.vjstb.ledscheme.model.CabinetInstance;
@@ -16,6 +17,13 @@ import com.vjstb.ledscheme.model.ContentCanvas;
 import com.vjstb.ledscheme.model.ControllerInstance;
 import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.InterfaceType;
+import com.vjstb.ledscheme.model.Network;
+import com.vjstb.ledscheme.model.NetworkDeviceCategory;
+import com.vjstb.ledscheme.model.NetworkDevicePlacement;
+import com.vjstb.ledscheme.model.NetworkDeviceType;
+import com.vjstb.ledscheme.model.NetworkLink;
+import com.vjstb.ledscheme.model.NetworkLinkWaypoint;
+import com.vjstb.ledscheme.model.NetworkManagerPlan;
 import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.Project;
@@ -447,6 +455,123 @@ class AppModelTest {
         assertEquals(4, screen.getCabinets().size());
         assertEquals(100.0, screen.getPosXMm());
         assertEquals(200.0, screen.getPosYMm());
+    }
+
+    @Test
+    void networkDeviceTypeCrud_duplicateNameRejectedUpdateAndDeleteWork(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        NetworkDeviceType type = new NetworkDeviceType();
+        type.setName("Свитч 24 порта");
+        type.setCategory(NetworkDeviceCategory.SWITCH);
+        NetworkDeviceType saved = model.addNetworkDeviceType(type);
+
+        NetworkDeviceType duplicate = new NetworkDeviceType();
+        duplicate.setName("свитч 24 порта"); // регистр не важен
+        assertThrows(IllegalStateException.class, () -> model.addNetworkDeviceType(duplicate));
+
+        NetworkDeviceType edited = new NetworkDeviceType();
+        edited.setId(saved.getId());
+        edited.setName("Свитч 48 портов");
+        edited.setCategory(NetworkDeviceCategory.SWITCH);
+        model.updateNetworkDeviceType(edited);
+        assertEquals("Свитч 48 портов", model.getNetworkDeviceTypes().get(0).getName());
+
+        model.deleteNetworkDeviceType(saved.getId());
+        assertTrue(model.getNetworkDeviceTypes().isEmpty());
+    }
+
+    @Test
+    void savesAndReloadsNetworkManagerPlan(@TempDir Path dir) {
+        // Полный цикл через РЕАЛЬНЫЙ файл (пересоздание AppModel на диске, не тот же
+        // объект в памяти) — подтверждает, что генерическая Jackson-сериализация
+        // NetworkManagerPlan/Network/NetworkDevicePlacement не теряет данные, тем же
+        // приёмом, что savesAndReloadsWorkspace выше.
+        File file = new File(dir.toFile(), "workspace.json");
+        AppModel model1 = new AppModel(new WorkspaceStore(file));
+        NetworkDeviceType typeSeed = new NetworkDeviceType();
+        typeSeed.setPortCount(24);
+        NetworkDeviceType deviceType = model1.addNetworkDeviceType(typeSeed);
+        model1.selectProject(model1.addProject("P"));
+        Scene scene = model1.addScene("S1");
+        model1.selectScene(scene);
+        SchemaNode node = model1.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SERVER, "Медиасервер", 0, 0, null);
+
+        NetworkManagerPlan plan = new NetworkManagerPlan();
+        Network network = new Network();
+        network.setName("Сеть управления");
+        network.setColor(0xff8800);
+
+        NetworkDevicePlacement linked = new NetworkDevicePlacement();
+        linked.setLinkedSchemaNodeId(node.getId());
+        linked.setIpAddress("192.168.1.10");
+        linked.setSubnetMask("255.255.255.0");
+        linked.setGateway("192.168.1.1");
+        linked.setWebInterfaceUrl("http://192.168.1.10");
+        linked.setHasWebInterface(true);
+        linked.setXMm(10);
+        linked.setYMm(20);
+        linked.setPortCount(8);
+        network.getDevices().add(linked);
+
+        NetworkDevicePlacement catalog = new NetworkDevicePlacement();
+        catalog.setDeviceTypeId(deviceType.getId());
+        catalog.setIpAddress("192.168.1.20");
+        network.getDevices().add(catalog);
+
+        NetworkLink link = new NetworkLink();
+        link.setFromDeviceId(linked.getId());
+        link.setFromPort(1);
+        link.setToDeviceId(catalog.getId());
+        link.setToPort(3);
+        link.setLabel("Uplink");
+        link.getWaypoints().add(new NetworkLinkWaypoint(55, 65));
+        network.getLinks().add(link);
+
+        plan.getNetworks().add(network);
+        model1.saveNetworkManagerPlan(scene, plan);
+
+        AppModel model2 = new AppModel(new WorkspaceStore(file));
+        Scene reloadedScene = model2.getWorkspace().getProjects().get(0).getScenes().get(0);
+        NetworkManagerPlan reloadedPlan = reloadedScene.getNetworkManagerPlan();
+
+        assertNotNull(reloadedPlan);
+        assertEquals(1, reloadedPlan.getNetworks().size());
+        Network reloadedNetwork = reloadedPlan.getNetworks().get(0);
+        assertEquals("Сеть управления", reloadedNetwork.getName());
+        assertEquals(Integer.valueOf(0xff8800), reloadedNetwork.getColor());
+        assertEquals(2, reloadedNetwork.getDevices().size());
+
+        NetworkDevicePlacement reloadedLinked = reloadedNetwork.getDevices().get(0);
+        assertEquals(node.getId(), reloadedLinked.getLinkedSchemaNodeId());
+        assertEquals("192.168.1.10", reloadedLinked.getIpAddress());
+        assertEquals("255.255.255.0", reloadedLinked.getSubnetMask());
+        assertEquals("192.168.1.1", reloadedLinked.getGateway());
+        assertEquals("http://192.168.1.10", reloadedLinked.getWebInterfaceUrl());
+        assertTrue(reloadedLinked.isHasWebInterface());
+        assertEquals(10.0, reloadedLinked.getXMm());
+        assertEquals(20.0, reloadedLinked.getYMm());
+        assertEquals(8, reloadedLinked.getPortCount());
+        assertNotNull(reloadedLinked.getId());
+
+        NetworkDevicePlacement reloadedCatalog = reloadedNetwork.getDevices().get(1);
+        assertEquals(deviceType.getId(), reloadedCatalog.getDeviceTypeId());
+        assertEquals("192.168.1.20", reloadedCatalog.getIpAddress());
+        assertFalse(reloadedCatalog.isHasWebInterface(), "по умолчанию флаг веб-интерфейса снят");
+
+        NetworkDeviceType reloadedType = model2.getWorkspace().networkDeviceTypeById(deviceType.getId());
+        assertNotNull(reloadedType);
+        assertEquals(24, reloadedType.getPortCount());
+
+        assertEquals(1, reloadedNetwork.getLinks().size());
+        NetworkLink reloadedLink = reloadedNetwork.getLinks().get(0);
+        assertEquals(reloadedLinked.getId(), reloadedLink.getFromDeviceId());
+        assertEquals(1, reloadedLink.getFromPort());
+        assertEquals(reloadedCatalog.getId(), reloadedLink.getToDeviceId());
+        assertEquals(3, reloadedLink.getToPort());
+        assertEquals("Uplink", reloadedLink.getLabel());
+        assertEquals(1, reloadedLink.getWaypoints().size());
+        assertEquals(55.0, reloadedLink.getWaypoints().get(0).getX());
+        assertEquals(65.0, reloadedLink.getWaypoints().get(0).getY());
     }
 
     @Test
@@ -1090,6 +1215,98 @@ class AppModelTest {
     }
 
     @Test
+    void undoRestoresDeletedSchemaNodeAndItsEdges(@TempDir Path dir) {
+        // Баг-репорт: "удаление блока не отменяется через ctrl+Z" — общая схема
+        // (узлы/связи) раньше вообще не попадала в снимок AppModel#pushUndo/undo
+        // (см. старый комментарий у schemaNodesForCurrentScene), поэтому ЛЮБАЯ
+        // правка схемы, включая удаление узла, была неотменяемой.
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+
+        SchemaNode source = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SOURCE, "Щит А1", 0, 0, null);
+        SchemaNode screenNode = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SCREEN, screen.getName(),
+                200, 0, screen.getId());
+        model.addSchemaEdge(SchemaMode.POWER, source.getId(), screenNode.getId(), "3x2.5");
+        assertEquals(2, model.schemaNodesForCurrentScene(SchemaMode.POWER).size());
+        assertEquals(1, model.schemaEdgesForCurrentScene(SchemaMode.POWER).size());
+
+        model.deleteSchemaNode(screenNode);
+        assertEquals(1, model.schemaNodesForCurrentScene(SchemaMode.POWER).size());
+        assertTrue(model.schemaEdgesForCurrentScene(SchemaMode.POWER).isEmpty());
+
+        model.undo();
+        assertEquals(2, model.schemaNodesForCurrentScene(SchemaMode.POWER).size(),
+                "Ctrl+Z должен вернуть удалённый узел");
+        assertEquals(1, model.schemaEdgesForCurrentScene(SchemaMode.POWER).size(),
+                "Ctrl+Z должен вернуть и связь, удалённую вместе с узлом");
+    }
+
+    @Test
+    void moveSchemaNodesMovesAllAndUndoesAsOneStep(@TempDir Path dir) {
+        // Баг-репорт: "возможность выделять несколько блоков... для перетаскивания
+        // и удаления" — групповое перетаскивание должно двигать ВСЕ выбранные узлы
+        // и отменяться ОДНИМ Ctrl+Z, а не по одному узлу за раз.
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        SchemaNode a = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SOURCE, "A", 0, 0, null);
+        SchemaNode b = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SOURCE, "B", 200, 0, null);
+
+        java.util.Map<SchemaNode, double[]> positions = new java.util.LinkedHashMap<>();
+        positions.put(a, new double[]{50, 60});
+        positions.put(b, new double[]{250, 60});
+        model.moveSchemaNodes(positions);
+
+        assertEquals(50, a.getX());
+        assertEquals(60, a.getY());
+        assertEquals(250, b.getX());
+        assertEquals(60, b.getY());
+
+        // undo() заменяет список узлов сцены снимком-копией (см. AppModel.undo) —
+        // после отмены проверяем СВЕЖИЕ объекты из модели, не старые ссылки a/b
+        // (те продолжают указывать на мутированные до отмены инстансы).
+        model.undo();
+        SchemaNode aAfter = model.schemaNodesForCurrentScene(SchemaMode.POWER).stream()
+                .filter(n -> "A".equals(n.getLabel())).findFirst().orElseThrow();
+        SchemaNode bAfter = model.schemaNodesForCurrentScene(SchemaMode.POWER).stream()
+                .filter(n -> "B".equals(n.getLabel())).findFirst().orElseThrow();
+        assertEquals(0, aAfter.getX(), "Ctrl+Z должен вернуть ОБА узла одним шагом");
+        assertEquals(0, aAfter.getY());
+        assertEquals(200, bAfter.getX());
+        assertEquals(0, bAfter.getY());
+    }
+
+    @Test
+    void deleteSchemaNodesRemovesAllAndUndoesAsOneStep(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        SchemaNode a = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SOURCE, "A", 0, 0, null);
+        SchemaNode b = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SOURCE, "B", 200, 0, null);
+        SchemaNode c = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SOURCE, "C", 400, 0, null);
+        model.addSchemaEdge(SchemaMode.POWER, a.getId(), b.getId(), "к B");
+        model.addSchemaEdge(SchemaMode.POWER, b.getId(), c.getId(), "к C");
+        assertEquals(3, model.schemaNodesForCurrentScene(SchemaMode.POWER).size());
+        assertEquals(2, model.schemaEdgesForCurrentScene(SchemaMode.POWER).size());
+
+        model.deleteSchemaNodes(List.of(a, b));
+
+        assertEquals(1, model.schemaNodesForCurrentScene(SchemaMode.POWER).size(),
+                "должны остаться только C");
+        assertTrue(model.schemaEdgesForCurrentScene(SchemaMode.POWER).isEmpty(),
+                "обе связи касались удалённых узлов -- должны исчезнуть тоже");
+
+        model.undo();
+        assertEquals(3, model.schemaNodesForCurrentScene(SchemaMode.POWER).size(),
+                "Ctrl+Z должен вернуть ОБА узла и обе связи одним шагом");
+        assertEquals(2, model.schemaEdgesForCurrentScene(SchemaMode.POWER).size());
+    }
+
+    @Test
     void deletingScreenRemovesItsSchemaNodeReferences(@TempDir Path dir) {
         AppModel model = freshModel(dir);
         CabinetType type = model.addCabinetType(sampleType());
@@ -1365,6 +1582,27 @@ class AppModelTest {
 
         Screen odd = model.addScreen("Нечётный", type.getId(), 5, 7, 0, 0);
         assertEquals(2, odd.getRiggingPointsCount()); // 7*500=3500мм, полезная 2500мм -> ceil(2500/3000)=1 -> 2 точки
+    }
+
+    @Test
+    void addScreen_acceptsExplicitMountTypeAtCreation(@TempDir Path dir) {
+        // Запрос пользователя: "при создании экрана тип монтажа выбирать сразу,
+        // а не только при корректировке параметров экрана" -- см.
+        // ui.NewScreenDialog#mountTypeField. 6-аргументный overload (использован
+        // выше и во всех остальных тестах) остаётся с прежним дефолтом RIGGED --
+        // не должен ломаться для многочисленных существующих вызывающих мест.
+        AppModel model = freshModel(dir);
+        CabinetType type = sampleType();
+        model.addCabinetType(type);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+
+        Screen floor = model.addScreen("Напольный", type.getId(), 5, 3, 0, 0,
+                com.vjstb.ledscheme.model.ScreenMountType.FLOOR);
+        assertEquals(com.vjstb.ledscheme.model.ScreenMountType.FLOOR, floor.getMountType());
+
+        Screen defaulted = model.addScreen("Без явного монтажа", type.getId(), 5, 3, 0, 0, null);
+        assertEquals(com.vjstb.ledscheme.model.ScreenMountType.RIGGED, defaulted.getMountType());
     }
 
     @Test
@@ -2160,6 +2398,27 @@ class AppModelTest {
     }
 
     @Test
+    void librarySyncAppliesAndRemovesCustomEquipmentCategoryIgnoringModeField(@TempDir Path dir) {
+        // Баг-репорт: "добавление категории в админке сейчас не делает ничего" --
+        // причина была в том, что новый payload (с 2026-08-21) несёт "mode", а
+        // клиент читает только "name" (см. CustomCategoryPayload) -- убеждаемся,
+        // что лишнее поле не ломает синк (SYNC_MAPPER игнорирует неизвестные поля)
+        // и что удаление на сервере (deleted=true) теперь тоже применяется --
+        // раньше EQUIPMENT_CUSTOM_CATEGORY отсутствовал в applyDeletion.
+        AppModel model = freshModel(dir);
+        model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-cat-1", "EQUIPMENT_CUSTOM_CATEGORY", "Усилители",
+                "{\"name\":\"Усилители\",\"mode\":\"POWER\"}", 5, false)));
+        assertEquals(List.of("Усилители"), model.getCustomEquipmentCategories());
+
+        AppModel.LibrarySyncSummary summary = model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-cat-1", "EQUIPMENT_CUSTOM_CATEGORY", "Усилители", "{}", 6, true)));
+
+        assertEquals(1, summary.deleted());
+        assertTrue(model.getCustomEquipmentCategories().isEmpty());
+    }
+
+    @Test
     void chainEndpointSocketCabinetIdsCoversPowerEntryAndSignalMainPlusBackupEntries(@TempDir Path dir) {
         AppModel model = freshModel(dir);
         CabinetType type = model.addCabinetType(sampleType());
@@ -2481,6 +2740,172 @@ class AppModelTest {
         model.autoPopulateSchema(SchemaMode.SIGNAL, true);
         assertTrue(model.schemaEdgesForCurrentScene(SchemaMode.SIGNAL).isEmpty(),
                 "Узел экрана уже существовал до этого вызова — разорванная связь не должна восстановиться");
+    }
+
+    @Test
+    void autoFitScreenNodeMatchesContentAspectForWideAndTallScreensAlike(@TempDir Path dir) {
+        // Баг-репорт: "размер блока должен стремиться быть чуть больше чем размеры
+        // схемы расключения, для вертикальных схем это работает нормально, а для
+        // горизонтальных кривовато" — раньше высота узла считалась как
+        // rows*cellH + 46 (фиксированная добавка), а ширина — cols*cellW + 8: для
+        // НИЗКОГО ШИРОКОГО экрана (мало строк, много столбцов) фиксированная
+        // добавка 46 заметно искажала пропорции блока относительно реального охвата
+        // кабинетов (миниатюра вписывается в блок РАВНОМЕРНЫМ масштабом по обеим
+        // осям — SchemaCanvasPanel.wiringThumbGeometry), оставляя пустое поле сбоку
+        // при отрисовке; для высокого узкого экрана та же абсолютная
+        // рассинхронизация тонула в большом числе строк и была незаметна. Теперь
+        // обе добавки (SCREEN_THUMB_SIDE_PAD/SCREEN_THUMB_HEADER_PAD) — ровно те же
+        // константы, что и в wiringThumbGeometry, поэтому вычисленный здесь
+        // "рендер-масштаб" (та же формула, что использует миниатюра при отрисовке)
+        // должен совпадать по ШИРИНЕ и ВЫСОТЕ независимо от формы экрана.
+        AppModel model = freshModel(dir);
+        CabinetType tall = new CabinetType(); // не квадратный кабинет -- 500x1000мм
+        tall.setName("Test 500x1000");
+        tall.setWidthMm(500);
+        tall.setHeightMm(1000);
+        tall.setResolutionWidth(128);
+        tall.setResolutionHeight(256);
+        tall.setPowerConsumptionW(150);
+        tall.setWeightKg(12);
+        CabinetType type = model.addCabinetType(tall);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+
+        Screen wide = model.addScreen("Wide", type.getId(), 2, 16, 0, 0); // низкий и широкий
+        model.selectScreen(wide);
+        model.addPowerChain(1, List.of(wide.getCabinets().get(0).getId()));
+
+        // cols=8 (не 2) -- иначе минимальная ширина блока (SCREEN_THUMB_MIN_WIDTH,
+        // читаемость для очень узких экранов) перекрыла бы содержательную ширину и
+        // тест сравнивал бы масштаб не с тем, что реально нарисует миниатюра.
+        Screen tallScreen = model.addScreen("Tall", type.getId(), 16, 8, 3000, 0); // высокий и узкий
+        model.selectScreen(tallScreen);
+        model.addPowerChain(1, List.of(tallScreen.getCabinets().get(0).getId()));
+
+        model.autoPopulateSchema(SchemaMode.POWER, false);
+        List<SchemaNode> nodes = model.schemaNodesForCurrentScene(SchemaMode.POWER);
+        SchemaNode wideNode = nodes.stream().filter(n -> wide.getId().equals(n.getScreenRefId())).findFirst()
+                .orElseThrow();
+        SchemaNode tallNode = nodes.stream().filter(n -> tallScreen.getId().equals(n.getScreenRefId())).findFirst()
+                .orElseThrow();
+
+        // Та же формула, что SchemaCanvasPanel.wiringThumbGeometry использует при
+        // отрисовке (top=34+pad=4=38 сверху/снизу, pad*2=8 слева/справа) -- если
+        // соотношение блока подобрано верно, масштаб по ширине и по высоте должен
+        // совпасть (контент заполняет блок в ОБЕИХ осях, без перекоса).
+        double wideScaleW = (wideNode.getWidth() - 8) / (16 * 500.0);
+        double wideScaleH = (wideNode.getHeight() - 38) / (2 * 1000.0);
+        assertEquals(wideScaleW, wideScaleH, wideScaleW * 0.05,
+                "широкий низкий экран: масштаб по ширине и высоте должен почти совпадать");
+
+        double tallScaleW = (tallNode.getWidth() - 8) / (8 * 500.0);
+        double tallScaleH = (tallNode.getHeight() - 38) / (16 * 1000.0);
+        assertEquals(tallScaleW, tallScaleH, tallScaleW * 0.05,
+                "высокий узкий экран: масштаб по ширине и высоте должен почти совпадать");
+    }
+
+    @Test
+    void screenNodeFitSizeIsIndependentOfStoredNodeDimensions(@TempDir Path dir) {
+        // screenNodeFitSize — стартовый размер СВЕЖЕДОБАВЛЕННОГО узла-экрана (см.
+        // AppModel.autoFitScreenNode/autoPopulateSchema), считает "натуральный"
+        // размер миниатюры ИСКЛЮЧИТЕЛЬНО по факту сетки/типа кабинета экрана — не
+        // принимает SchemaNode вовсе, поэтому не может зависеть от того, каким
+        // сохранён node.getWidth()/getHeight() (дальнейший ручной resize блока —
+        // см. AppModel.screenWiringHeightForWidth/screenWiringWidthForHeight — уже
+        // самостоятельная история, не переигрывает этот стартовый расчёт).
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen scr = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+
+        double[] sizeA = model.screenNodeFitSize(scr);
+        assertNotNull(sizeA);
+
+        // Раздутый ("устаревший"/руками растянутый) сохранённый размер узла никак
+        // не должен влиять на результат — метод не принимает SchemaNode вовсе.
+        double[] sizeB = model.screenNodeFitSize(scr);
+        assertEquals(sizeA[0], sizeB[0]);
+        assertEquals(sizeA[1], sizeB[1]);
+
+        // А вот РЕАЛЬНОЕ изменение сетки экрана результат МЕНЯЕТ — "динамически".
+        model.updateScreenGrid(scr, scr.getName(), type.getId(), 2, 8);
+        double[] sizeAfterResize = model.screenNodeFitSize(scr);
+        assertNotNull(sizeAfterResize);
+        assertTrue(sizeAfterResize[0] > sizeA[0], "более широкая сетка -- более широкий натуральный размер");
+    }
+
+    @Test
+    void screenNodeFitSizeReturnsNullWithoutCabinetTypeData(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen scr = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+        // Тип кабинета экрана стал невалиден (например, удалён из библиотеки после
+        // создания экрана) -- typeOf(scr) вернёт null, дальше считать нечем.
+        scr.setCabinetTypeId("no-such-type-id");
+
+        assertNull(model.screenNodeFitSize(scr));
+    }
+
+    @Test
+    void screenWiringHeightForWidthAndBackIsReciprocal(@TempDir Path dir) {
+        // Запрос: "я хочу чтобы я мог изменять размер блока экрана с включённой
+        // схемой расключения... общий размер блока должен выравниваться в
+        // зависимости от текущего размера схемы расключения с учётом шапки" —
+        // тянуть можно за любую ось (ширина->высота или высота->ширина), оба
+        // направления должны быть согласованы (round-trip).
+        AppModel model = freshModel(dir);
+        CabinetType tall = new CabinetType(); // не квадратный кабинет -- 500x1000мм
+        tall.setName("Test 500x1000");
+        tall.setWidthMm(500);
+        tall.setHeightMm(1000);
+        tall.setResolutionWidth(128);
+        tall.setResolutionHeight(256);
+        tall.setPowerConsumptionW(150);
+        tall.setWeightKg(12);
+        CabinetType type = model.addCabinetType(tall);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen scr = model.addScreen("E", type.getId(), 2, 8, 0, 0); // 4000x2000мм охват
+
+        double chosenWidth = 500;
+        Double h = model.screenWiringHeightForWidth(scr, chosenWidth);
+        assertNotNull(h);
+        Double widthBack = model.screenWiringWidthForHeight(scr, h);
+        assertNotNull(widthBack);
+        assertEquals(chosenWidth, widthBack, 0.01, "ширина->высота->ширина должно вернуть исходное значение");
+    }
+
+    @Test
+    void screenWiringHeightForWidthGrowsWithChosenWidth(@TempDir Path dir) {
+        // Запрос: "иногда, когда схема большая, схема расключения нужна чисто
+        // символическая, а если схема не слишком большая -- подробная" -- перетяжка
+        // блока шире должна давать КРУПНЕЕ (детальнее), а не тот же масштаб с
+        // добавленным пустым полем.
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen scr = model.addScreen("E", type.getId(), 4, 4, 0, 0);
+
+        Double hSmall = model.screenWiringHeightForWidth(scr, 200);
+        Double hBig = model.screenWiringHeightForWidth(scr, 800);
+        assertNotNull(hSmall);
+        assertNotNull(hBig);
+        assertTrue(hBig > hSmall, "более широкий выбранный блок должен давать более крупную миниатюру");
+    }
+
+    @Test
+    void screenWiringHeightForWidthReturnsNullWhenWidthLeavesNoRoomForGrid(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen scr = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+
+        assertNull(model.screenWiringHeightForWidth(scr, 4), "ширина меньше бокового отступа -- места под сетку нет вовсе");
     }
 
     private static long visibleFrames(Screen s) {

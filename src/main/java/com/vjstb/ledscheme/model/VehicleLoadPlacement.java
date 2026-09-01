@@ -12,6 +12,15 @@ public class VehicleLoadPlacement {
     private double xMm;
     private double yMm;
     private boolean rotated;
+    /** Кофр стоит "на попа" (footprint пола = ширина×высота, длина торчит вверх,
+     *  см. {@code ui.VehicleLoadCanvasPanel.Placement#footprintWMm/HMm}) — вместо
+     *  обычного лежачего положения (footprint = длина×ширина, стек по высоте, см.
+     *  {@link #stackCount}). Запрос пользователя: "опция для автозаполнения...
+     *  для заполнения машины кофрами в вертикальной ориентации" — экономит
+     *  площадь пола ценой высоты кузова, штабелирование в этом положении не
+     *  предусмотрено (stackCount игнорируется, если vertical — физически стоящие
+     *  на попа кофры друг на друга здесь не ставятся). */
+    private boolean vertical;
     private int stackCount = 1;
     private String note = "";
 
@@ -48,6 +57,14 @@ public class VehicleLoadPlacement {
 
     public void setRotated(boolean rotated) {
         this.rotated = rotated;
+    }
+
+    public boolean isVertical() {
+        return vertical;
+    }
+
+    public void setVertical(boolean vertical) {
+        this.vertical = vertical;
     }
 
     public int getStackCount() {

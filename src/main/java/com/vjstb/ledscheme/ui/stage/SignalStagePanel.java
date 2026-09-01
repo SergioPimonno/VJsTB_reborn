@@ -13,6 +13,7 @@ import com.vjstb.ledscheme.ui.CanvasPanel;
 import com.vjstb.ledscheme.ui.ChainInteractionController;
 import com.vjstb.ledscheme.ui.ChainPatterns;
 import com.vjstb.ledscheme.ui.ContextBar;
+import com.vjstb.ledscheme.ui.NetworkManagerPanel;
 import com.vjstb.ledscheme.ui.Palette;
 import com.vjstb.ledscheme.ui.PortPickerPanel;
 import com.vjstb.ledscheme.ui.RadialMenu;
@@ -52,6 +53,7 @@ public class SignalStagePanel extends JPanel {
 
     private static final String VIEW_CHAIN = "chain";
     private static final String VIEW_SCHEMA = "schema";
+    private static final String VIEW_NETWORK = "network";
 
     private final AppModel model;
     private final CanvasPanel canvas;
@@ -60,8 +62,10 @@ public class SignalStagePanel extends JPanel {
     private final CardLayout viewCards = new CardLayout();
     private final JPanel viewContainer = new JPanel(viewCards);
     private final SchemaPanel schemaPanel;
+    private final NetworkManagerPanel networkManagerPanel;
     private final JToggleButton chainViewBtn = new JToggleButton("Расключение экрана", true);
     private final JToggleButton schemaViewBtn = new JToggleButton("Общая схема сигнала");
+    private final JToggleButton networkViewBtn = new JToggleButton("Сетевой менеджер");
     private final JCheckBox showAllScreens = new JCheckBox("Показать все экраны сцены");
     private final JToggleButton quickConnectBtn = new JToggleButton("⚡ Быстрое подключение");
     private final SceneCanvasPanel sceneOverview;
@@ -110,6 +114,11 @@ public class SignalStagePanel extends JPanel {
     private final JLabel statCount = new JLabel("—");
     private final JLabel statPower = new JLabel("—");
     private final JLabel statWeight = new JLabel("—");
+    private javax.swing.JComponent sceneStatsSection;
+    private final JLabel sceneStatScreens = new JLabel("—");
+    private final JLabel sceneStatCount = new JLabel("—");
+    private final JLabel sceneStatPower = new JLabel("—");
+    private final JLabel sceneStatWeight = new JLabel("—");
 
     public SignalStagePanel(AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings) {
         this.model = model;
@@ -143,6 +152,11 @@ public class SignalStagePanel extends JPanel {
                 advanceActivePortAfterCommit(port);
             };
         });
+        // Баг-репорт: "выделение не только залезло на ячейки из другой цепочки, но
+        // и включило их в текущую" — та же проверка занятости, что и при СТАРТЕ
+        // цепочки выше, теперь применяется и к каждому кабинету, добавляемому по
+        // ходу построения (клик/протяжка/стрелки) — см. javadoc setOccupancyCheck.
+        this.chainCtrl.setOccupancyCheck(model::isCabinetWiredForSignal);
         this.chainCtrl.setOnCommitError(msg ->
                 JOptionPane.showMessageDialog(this, msg, "Не удалось завершить цепочку",
                         JOptionPane.ERROR_MESSAGE));
@@ -277,15 +291,23 @@ public class SignalStagePanel extends JPanel {
             model.selectScreen(scr);
             chainViewBtn.setSelected(true);
             viewCards.show(viewContainer, VIEW_CHAIN);
+            updateChainOnlyControlsVisibility();
         });
+
+        networkManagerPanel = new NetworkManagerPanel(model, settings);
 
         viewContainer.add(perScreen, VIEW_CHAIN);
         viewContainer.add(schemaPanel, VIEW_SCHEMA);
+        viewContainer.add(networkManagerPanel, VIEW_NETWORK);
 
         ButtonGroup viewGroup = new ButtonGroup();
         viewGroup.add(chainViewBtn);
         viewGroup.add(schemaViewBtn);
-        chainViewBtn.addActionListener(e -> viewCards.show(viewContainer, VIEW_CHAIN));
+        viewGroup.add(networkViewBtn);
+        chainViewBtn.addActionListener(e -> {
+            viewCards.show(viewContainer, VIEW_CHAIN);
+            updateChainOnlyControlsVisibility();
+        });
         schemaViewBtn.addActionListener(e -> {
             if (settings.activeProfile().isSignalSchemaAutoPopulateEnabled()) {
                 boolean autoConnect = settings.activeProfile().isSignalSocketWiringEnabled()
@@ -293,6 +315,11 @@ public class SignalStagePanel extends JPanel {
                 model.autoPopulateSchema(SchemaMode.SIGNAL, autoConnect);
             }
             viewCards.show(viewContainer, VIEW_SCHEMA);
+            updateChainOnlyControlsVisibility();
+        });
+        networkViewBtn.addActionListener(e -> {
+            viewCards.show(viewContainer, VIEW_NETWORK);
+            updateChainOnlyControlsVisibility();
         });
         quickConnectBtn.setToolTipText("Протяжка ЛКМ по холсту выделяет область — радиальное меню предложит"
                 + " шаблон серпантина для быстрой прописки (как в NovaLCT)");
@@ -300,6 +327,7 @@ public class SignalStagePanel extends JPanel {
         JPanel toggleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
         toggleRow.add(chainViewBtn);
         toggleRow.add(schemaViewBtn);
+        toggleRow.add(networkViewBtn);
         toggleRow.add(showAllScreens);
         toggleRow.add(quickConnectBtn);
 
@@ -314,6 +342,20 @@ public class SignalStagePanel extends JPanel {
         model.addListener(this::refresh);
         refresh();
         updateCornerPreviewVisibility();
+        updateChainOnlyControlsVisibility();
+    }
+
+    /** «Показать все экраны сцены» и «Быстрое подключение» осмысленны только в
+     *  режиме «Расключение экрана» (радиальное меню серпантина/отображение соседних
+     *  экранов относятся к канвасу ОДНОГО экрана) — в «Общей схеме сигнала» и
+     *  «Сетевом менеджере» это чужеродные, ничего не делающие элементы управления,
+     *  поэтому скрываются там целиком, а не просто становятся неактивными
+     *  (баг-репорт: были видны во всех трёх режимах вкладки «Сигнал»). Вызывается
+     *  из каждого переключателя вида и один раз при инициализации. */
+    private void updateChainOnlyControlsVisibility() {
+        boolean chainView = chainViewBtn.isSelected();
+        showAllScreens.setVisible(chainView);
+        quickConnectBtn.setVisible(chainView);
     }
 
     /** Радиальное меню из 8 шаблонов серпантина (NovaLCT-style «Быстрая прописка») —
@@ -625,8 +667,12 @@ public class SignalStagePanel extends JPanel {
                     ControllerInstance sel = scr != null ? selectedController(scr) : null;
                     ControllerType t = sel != null
                             ? model.getWorkspace().controllerTypeById(sel.getControllerTypeId()) : null;
-                    String cardName = t != null && !t.getCards().isEmpty() && poolIdx < t.getCards().size()
-                            ? t.getCards().get(poolIdx).getName() : "";
+                    // Тот же баг-репорт/фикс, что в PortPickerPanel.rebuild -- t.getCards()
+                    // .get(poolIdx) считает СЫРОЙ индекс (все карты подряд, включая чисто
+                    // входные), sendingCardAt(poolIdx) резолвит ТЕМ ЖЕ способом, что и сама
+                    // нумерация Ethernet-пулов (см. её javadoc в ControllerType).
+                    com.vjstb.ledscheme.model.SchemaCard sendingCard = t != null ? t.sendingCardAt(poolIdx) : null;
+                    String cardName = sendingCard != null ? sendingCard.getName() : "";
                     setText("Карта " + (poolIdx + 1) + (cardName.isEmpty() ? "" : " — " + cardName));
                 }
                 return this;
@@ -676,6 +722,18 @@ public class SignalStagePanel extends JPanel {
         statsBody.add(statRow("Вес", statWeight));
         body.add(UiKit.vgap());
         body.add(UiKit.section("Статистика экрана", statsBody));
+
+        // Статистика ПО ВСЕЙ СЦЕНЕ, отдельно от статистики активного экрана — см.
+        // тот же блок и его javadoc в PowerStagePanel (запрос: «под статистикой
+        // экрана показывать ещё статистику по сцене», распространён и на Сигнал).
+        JPanel sceneStatsBody = UiKit.vbox();
+        sceneStatsBody.add(statRow("Экранов", sceneStatScreens));
+        sceneStatsBody.add(statRow("Кабинетов", sceneStatCount));
+        sceneStatsBody.add(statRow("Мощность", sceneStatPower));
+        sceneStatsBody.add(statRow("Вес", sceneStatWeight));
+        body.add(UiKit.vgap());
+        sceneStatsSection = UiKit.dynamicSection("Статистика сцены", sceneStatsBody);
+        body.add(sceneStatsSection);
         body.add(javax.swing.Box.createVerticalGlue());
 
         return body;
@@ -823,6 +881,26 @@ public class SignalStagePanel extends JPanel {
             statWeight.setText("—");
         }
 
+        boolean sceneStatsEnabled = settings.activeProfile().isSignalSceneStatsEnabled();
+        sceneStatsSection.setVisible(sceneStatsEnabled);
+        if (sceneStatsEnabled) {
+            Scene sceneForStats = model.getCurrentScene();
+            java.util.List<Screen> sceneScreens = sceneForStats != null ? sceneForStats.getScreens() : List.of();
+            if (!sceneScreens.isEmpty()) {
+                ScreenStats ss = ScreenLogic.aggregateStats(sceneScreens, model::typeOf, model.getWorkspace());
+                sceneStatScreens.setText(String.valueOf(sceneScreens.size()));
+                sceneStatCount.setText(String.valueOf(ss.activeCabinetCount()));
+                sceneStatPower.setText(UiKit.fmtPower(ss.totalPowerW(), settings.activeProfile().isPowerUnitKw()));
+                sceneStatWeight.setText(UiKit.fmt(ss.totalWeightKg()) + " кг");
+            } else {
+                sceneStatScreens.setText("—");
+                sceneStatCount.setText("—");
+                sceneStatPower.setText("—");
+                sceneStatWeight.setText("—");
+            }
+            UiKit.recapHeight(sceneStatsSection);
+        }
+
         canvas.revalidate();
         canvas.repaint();
         sceneOverview.revalidate();
@@ -962,7 +1040,7 @@ public class SignalStagePanel extends JPanel {
                 javax.swing.JMenuItem colorItem = new javax.swing.JMenuItem("Цвет цепочки…");
                 colorItem.addActionListener(ev -> {
                     java.awt.Color initial = chain.getColor() != null ? new java.awt.Color(chain.getColor()) : dot;
-                    java.awt.Color chosen = javax.swing.JColorChooser.showDialog(SignalStagePanel.this,
+                    java.awt.Color chosen = UiKit.showColorChooser(SignalStagePanel.this,
                             "Цвет цепочки сигнала", initial);
                     if (chosen != null) {
                         model.setSignalChainColor(chain, chosen.getRGB());

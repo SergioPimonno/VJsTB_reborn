@@ -6,6 +6,7 @@ import com.vjstb.ledscheme.service.AppModel;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 /**
  * Логика построения цепочки на холсте, общая для питания и сигнала: клик по
@@ -30,6 +31,7 @@ public class ChainInteractionController implements CanvasPanel.Controller {
     private final Runnable onChange;
 
     private ChainStarter starter;
+    private Predicate<String> occupancyCheck = cabId -> false;
     private Consumer<List<String>> commitHandler;
     private Consumer<String> onCommitError = msg -> { };
     private boolean building;
@@ -49,6 +51,22 @@ public class ChainInteractionController implements CanvasPanel.Controller {
      *  момент клика, а не той, что была на момент регистрации обработчика. */
     public void setStarter(ChainStarter starter) {
         this.starter = starter;
+    }
+
+    /** Регистрирует проверку «этот кабинет уже занят ДРУГОЙ (не строящейся сейчас)
+     *  цепочкой» — {@code model::isCabinetWiredForPower}/{@code isCabinetWiredForSignal}
+     *  у вызывающей панели. Баг-репорт: "рисовал стрелками, выделение не только
+     *  залезло на ячейки из другой цепочки, но и включило их в текущую" — при
+     *  СТАРТЕ новой цепочки занятость первого кабинета уже проверялась через
+     *  {@link ChainStarter#startChainFor}, но при ПРОДОЛЖЕНИИ (клик/протяжка/стрелки
+     *  по уже строящейся цепочке, см. {@link #cabinetClicked}/{@link #moveCursor})
+     *  такой проверки не было вовсе — любой кабинет, через который проходил курсор,
+     *  включался в текущую цепочку, даже если физически принадлежал ДРУГОЙ, уже
+     *  сохранённой. Кабинеты, уже входящие в {@code activeIds} (свою же строящуюся
+     *  цепочку, в т.ч. при {@link #resumeEditing}), исключением не считаются —
+     *  проверка применяется только к НОВЫМ для activeIds кабинетам. */
+    public void setOccupancyCheck(Predicate<String> occupancyCheck) {
+        this.occupancyCheck = occupancyCheck != null ? occupancyCheck : cabId -> false;
     }
 
     /** Колбэк на случай, если сохранение цепочки при завершении бросит исключение
@@ -188,7 +206,8 @@ public class ChainInteractionController implements CanvasPanel.Controller {
             cursorCol = clamp(cursorCol + dCol, 0, scr.getCols() - 1);
         }
         CabinetInstance cab = scr.cabinetAt(cursorRow, cursorCol);
-        if (cab != null && !cab.isHidden() && !activeIds.contains(cab.getId())) {
+        if (cab != null && !cab.isHidden() && !activeIds.contains(cab.getId())
+                && !occupancyCheck.test(cab.getId())) {
             activeIds.add(cab.getId());
         }
         onChange.run();
@@ -258,7 +277,7 @@ public class ChainInteractionController implements CanvasPanel.Controller {
             activeIds.clear();
             building = true;
         }
-        if (!activeIds.contains(cabId)) {
+        if (!activeIds.contains(cabId) && !occupancyCheck.test(cabId)) {
             activeIds.add(cabId);
         }
         cursorRow = cab.getRowIndex();

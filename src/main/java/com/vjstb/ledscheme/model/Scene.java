@@ -49,6 +49,14 @@ public class Scene {
      *  если пользователь поменял строки в калькуляторе, но ещё не переоткрыл
      *  визуализатор. */
     private Map<String, Integer> vehicleCaseCounts = new LinkedHashMap<>();
+    /** Сетевой менеджер этой сцены (см. {@code ui.NetworkManagerPanel}, вкладка
+     *  раздела «Сигнал») — {@code null}, пока менеджер ни разу не открывали для
+     *  этой сцены. Хранит НЕСКОЛЬКО именованных сетей ({@link
+     *  NetworkManagerPlan#getNetworks()}), каждая со своей раскладкой устройств —
+     *  позиции {@code xMm}/{@code yMm} внутри устройства СВОИ, не копия координат
+     *  связанного {@code SchemaNode} на общей схеме (топология сети и физическая
+     *  схема раскладываются независимо). */
+    private NetworkManagerPlan networkManagerPlan;
 
     public Scene() {
     }
@@ -151,5 +159,13 @@ public class Scene {
 
     public void setVehicleCaseCounts(Map<String, Integer> vehicleCaseCounts) {
         this.vehicleCaseCounts = vehicleCaseCounts;
+    }
+
+    public NetworkManagerPlan getNetworkManagerPlan() {
+        return networkManagerPlan;
+    }
+
+    public void setNetworkManagerPlan(NetworkManagerPlan networkManagerPlan) {
+        this.networkManagerPlan = networkManagerPlan;
     }
 }

@@ -36,26 +36,35 @@ import javax.swing.filechooser.FileNameExtensionFilter;
  * этап, поэтому подписи самих чекбоксов больше НЕ повторяют «Сигнал:»/
  * «Питание:» в начале (было избыточно при плоском списке/группировке по теме,
  * стало откровенно лишним при группировке по этапу).</p>
+ *
+ * <p>Настройки, которые не относятся ни к сигналу, ни к питанию, но и не тянут
+ * на отдельную группу (форма экрана как отдельное окно, папка экспорта по
+ * умолчанию), сложены в «Общие» — по тому же принципу «не привязано к
+ * конкретному этапу общей схемы».</p>
  */
 public class PreferencesDialog extends JDialog {
 
     private final SettingsManager settings;
     private JCheckBox previewWidgetCheck;
     private JCheckBox canvasSnapToCenterCheck;
+    private JCheckBox shapeEditorFloatingCheck;
     private JSpinner snapThresholdSpinner;
     private JSpinner snapStrengthSpinner;
     private JCheckBox foolProofWiringCheck;
     private JCheckBox schemaScreensAsWiringCheck;
+    private JLabel exportRootFolderLabel;
     private JCheckBox signalSocketWiringCheck;
     private JCheckBox signalConnectorDisplayModeCheck;
     private JCheckBox signalConnectorsVerticalCheck;
     private JCheckBox signalChainEndpointSocketsCheck;
     private JCheckBox signalSchemaAutoPopulateCheck;
+    private JCheckBox signalSceneStatsCheck;
     private JCheckBox powerSocketWiringCheck;
     private JCheckBox powerConnectorDisplayModeCheck;
     private JCheckBox powerConnectorsVerticalCheck;
     private JCheckBox powerChainEndpointSocketsCheck;
     private JCheckBox powerSchemaAutoPopulateCheck;
+    private JCheckBox powerSceneStatsCheck;
     private JCheckBox loadTrackingCheck;
     private JCheckBox powerUnitKwCheck;
     private JLabel maskLogoPathLabel;
@@ -96,7 +105,9 @@ public class PreferencesDialog extends JDialog {
     }
 
     /** Настройки, не привязанные к конкретному этапу (сигнал/питание) — действуют
-     *  одинаково в обоих режимах общей схемы либо касаются холста/сцены вообще. */
+     *  одинаково в обоих режимах общей схемы либо касаются холста/сцены вообще
+     *  (плюс «пристроенные» сюда одиночки — форма экрана отдельным окном, папка
+     *  экспорта по умолчанию, — которым отдельная группа не нужна). */
     private JPanel buildGeneralGroup() {
         JPanel body = UiKit.vbox();
         body.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -161,11 +172,48 @@ public class PreferencesDialog extends JDialog {
                 settings.setSchemaScreensAsWiringDiagram(schemaScreensAsWiringCheck.isSelected()));
         body.add(schemaScreensAsWiringCheck);
 
+        shapeEditorFloatingCheck = new JCheckBox("«Форма экрана»: открывать отдельным всплывающим окном,"
+                + " а не областью в «Сетапе»",
+                settings.activeProfile().isShapeEditorFloating());
+        shapeEditorFloatingCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        shapeEditorFloatingCheck.setToolTipText("Окно живое — показывает ТЕКУЩИЙ выбранный экран и обновляется"
+                + " при смене выбора, не фиксированный снимок на момент открытия. Кнопка «Изменить форму экрана»"
+                + " в «Сетапе» тогда открывает/поднимает это окно вместо показа встроенной секции на месте.");
+        shapeEditorFloatingCheck.addActionListener(e ->
+                settings.setShapeEditorFloating(shapeEditorFloatingCheck.isSelected()));
+        body.add(shapeEditorFloatingCheck);
+
+        JPanel exportRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        exportRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        exportRow.setToolTipText("Папка, в которую по умолчанию сохраняются экспортированные схемы/маски/пресеты"
+                + " (пока не выбрана папка явно на конкретном этапе) — по умолчанию ~/Documents/Video. Явный выбор"
+                + " папки кнопкой «Папка…» на этапе Вывод/Генерация масок по-прежнему приоритетнее.");
+        JButton exportChooseBtn = new JButton("Папка экспорта…");
+        exportChooseBtn.addActionListener(e -> {
+            JFileChooser fc = new JFileChooser();
+            fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+            fc.setDialogTitle("Выберите папку по умолчанию для экспорта");
+            String current = settings.activeProfile().getExportRootFolder();
+            if (current != null && !current.isBlank()) {
+                fc.setCurrentDirectory(new File(current));
+            }
+            if (fc.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+                settings.setExportRootFolder(fc.getSelectedFile().getAbsolutePath());
+            }
+        });
+        JButton exportClearBtn = new JButton("Сбросить");
+        exportClearBtn.addActionListener(e -> settings.setExportRootFolder(null));
+        exportRootFolderLabel = new JLabel();
+        exportRow.add(exportChooseBtn);
+        exportRow.add(exportClearBtn);
+        exportRow.add(exportRootFolderLabel);
+        body.add(exportRow);
+
         return (JPanel) UiKit.section("Общие", body);
     }
 
-    /** Общая схема СИГНАЛА — зеркальная пара группы «Питание» ниже, те же пять
-     *  переключателей в том же порядке (плюс не имеющие пары «Контроль нагрузки»/
+    /** Общая схема СИГНАЛА — зеркальная пара группы «Питание» ниже, те же
+     *  переключатели в том же порядке (плюс не имеющие пары «Контроль нагрузки»/
      *  «кВт», это чисто силовые понятия). */
     private JPanel buildSignalGroup() {
         JPanel body = UiKit.vbox();
@@ -243,11 +291,21 @@ public class PreferencesDialog extends JDialog {
                 settings.setSignalSchemaAutoPopulateEnabled(signalSchemaAutoPopulateCheck.isSelected()));
         body.add(signalSchemaAutoPopulateCheck);
 
+        signalSceneStatsCheck = new JCheckBox("Показывать блок «Статистика сцены» под статистикой экрана",
+                settings.activeProfile().isSignalSceneStatsEnabled());
+        signalSceneStatsCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        signalSceneStatsCheck.setToolTipText("Суммарные показатели ПО ВСЕЙ сцене — отдельно от статистики активного"
+                + " экрана, видна независимо от «Показать все экраны сцены». Своя отдельная копия для питания —"
+                + " в группе «Питание».");
+        signalSceneStatsCheck.addActionListener(e ->
+                settings.setSignalSceneStatsEnabled(signalSceneStatsCheck.isSelected()));
+        body.add(signalSceneStatsCheck);
+
         return (JPanel) UiKit.section("Сигнал", body);
     }
 
-    /** Общая схема ПИТАНИЯ — зеркальная пара группы «Сигнал» выше (те же пять
-     *  переключателей в том же порядке) плюс два чисто силовых понятия, которым
+    /** Общая схема ПИТАНИЯ — зеркальная пара группы «Сигнал» выше (те же
+     *  переключатели в том же порядке) плюс два чисто силовых понятия, которым
      *  нет аналога у сигнала: контроль нагрузки и единицы измерения мощности. */
     private JPanel buildPowerGroup() {
         JPanel body = UiKit.vbox();
@@ -317,6 +375,16 @@ public class PreferencesDialog extends JDialog {
         powerSchemaAutoPopulateCheck.addActionListener(e ->
                 settings.setPowerSchemaAutoPopulateEnabled(powerSchemaAutoPopulateCheck.isSelected()));
         body.add(powerSchemaAutoPopulateCheck);
+
+        powerSceneStatsCheck = new JCheckBox("Показывать блок «Статистика сцены» под статистикой экрана",
+                settings.activeProfile().isPowerSceneStatsEnabled());
+        powerSceneStatsCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        powerSceneStatsCheck.setToolTipText("Суммарные кабинеты/мощность/вес и разбивка по фазам ПО ВСЕЙ сцене —"
+                + " отдельно от статистики активного экрана, видна независимо от «Показать все экраны сцены»."
+                + " Своя отдельная копия для сигнала — в группе «Сигнал».");
+        powerSceneStatsCheck.addActionListener(e ->
+                settings.setPowerSceneStatsEnabled(powerSceneStatsCheck.isSelected()));
+        body.add(powerSceneStatsCheck);
 
         loadTrackingCheck = new JCheckBox("Контроль электрической нагрузки"
                 + " (предупреждения о перегрузке цепочек/щитов)",
@@ -428,6 +496,7 @@ public class PreferencesDialog extends JDialog {
     private void refresh() {
         previewWidgetCheck.setSelected(settings.activeProfile().isPreviewWidgetEnabled());
         canvasSnapToCenterCheck.setSelected(settings.activeProfile().isCanvasSnapToCenter());
+        shapeEditorFloatingCheck.setSelected(settings.activeProfile().isShapeEditorFloating());
         snapThresholdSpinner.setValue(settings.activeProfile().getSnapThresholdPx());
         snapStrengthSpinner.setValue(settings.activeProfile().getSnapStrengthPercent());
         foolProofWiringCheck.setSelected(settings.activeProfile().isFoolProofWiringEnabled());
@@ -445,10 +514,15 @@ public class PreferencesDialog extends JDialog {
                 settings.activeProfile().getPowerConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL);
         signalConnectorsVerticalCheck.setSelected(settings.activeProfile().isSignalConnectorsVertical());
         powerConnectorsVerticalCheck.setSelected(settings.activeProfile().isPowerConnectorsVertical());
+        signalSceneStatsCheck.setSelected(settings.activeProfile().isSignalSceneStatsEnabled());
+        powerSceneStatsCheck.setSelected(settings.activeProfile().isPowerSceneStatsEnabled());
         loadTrackingCheck.setSelected(settings.activeProfile().isLoadTrackingEnabled());
         powerUnitKwCheck.setSelected(settings.activeProfile().isPowerUnitKw());
         String logoPath = settings.activeProfile().getMaskLogoImagePath();
         maskLogoPathLabel.setText(logoPath != null ? new File(logoPath).getName() : "не задан");
+        String exportRoot = settings.activeProfile().getExportRootFolder();
+        exportRootFolderLabel.setText(exportRoot != null && !exportRoot.isBlank()
+                ? exportRoot : "не задана (по умолчанию ~/Documents/Video)");
         String urlOverride = settings.getSyncServerUrlOverride();
         if (!syncServerUrlField.getText().equals(urlOverride != null ? urlOverride : "")) {
             syncServerUrlField.setText(urlOverride != null ? urlOverride : "");

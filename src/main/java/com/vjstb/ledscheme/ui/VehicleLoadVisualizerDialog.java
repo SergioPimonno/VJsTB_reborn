@@ -8,6 +8,7 @@ import com.vjstb.ledscheme.model.VehicleLoadSection;
 import com.vjstb.ledscheme.model.VehicleType;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.VehicleCalc;
+import com.vjstb.ledscheme.settings.SettingsManager;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
@@ -16,6 +17,7 @@ import java.awt.FlowLayout;
 import java.awt.Point;
 import java.awt.Window;
 import java.awt.datatransfer.Transferable;
+import java.awt.event.ActionListener;
 import java.awt.datatransfer.UnsupportedFlavorException;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -28,6 +30,7 @@ import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.DefaultListCellRenderer;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JDialog;
@@ -91,6 +94,18 @@ import javax.swing.TransferHandler;
  * пристроенное. Кофры, для которых не хватило места именно в этой машине, не
  * теряются молча — остаются в бюджете (см. {@link #remainingFor}) и
  * показываются статусом с подсказкой добавить ещё один кузов.
+ *
+ * <p><b>«Убрать все»</b> (запрос пользователя) — кнопка в карточке каждой
+ * машины, симметричная «Разместить всё»: полностью очищает раскладку ИМЕННО
+ * этой машины (см. {@link #clearAllInSection}/{@code
+ * VehicleLoadCanvasPanel#clearAll}), спросив подтверждение, если там уже
+ * что-то размещено. Освобождённые штуки сразу возвращаются в общий бюджет
+ * (см. {@link #remainingFor}).
+ *
+ * <p><b>Баг-репорт, исправлен 2026-08-21</b>: «Добавить сюда» при выделенном
+ * на канвасе стеке того же типа теперь добавляет кофр К НЕМУ, а не к первому
+ * попавшемуся под фиксированной точкой (0,0) — см. {@code
+ * VehicleLoadCanvasPanel#addPlacement} javadoc за подробностями.
  */
 public class VehicleLoadVisualizerDialog extends JDialog {
 
@@ -98,6 +113,7 @@ public class VehicleLoadVisualizerDialog extends JDialog {
     private static final int SECTION_HEIGHT = 260;
 
     private final AppModel model;
+    private final SettingsManager settings;
     private final Scene scene;
     private final List<VehicleSection> sections = new ArrayList<>();
     private final JPanel sectionsContainer = new JPanel();
@@ -108,10 +124,11 @@ public class VehicleLoadVisualizerDialog extends JDialog {
     private final Map<CaseType, Integer> neededCounts;
     private boolean snapEnabled = true;
 
-    public VehicleLoadVisualizerDialog(Window owner, AppModel model, Scene scene, VehicleType initialVehicle,
-                                        List<VehicleCalc.CaseRow> initialRows) {
+    public VehicleLoadVisualizerDialog(Window owner, AppModel model, SettingsManager settings, Scene scene,
+                                        VehicleType initialVehicle, List<VehicleCalc.CaseRow> initialRows) {
         super(owner, "Визуализация загрузки машины", ModalityType.MODELESS);
         this.model = model;
+        this.settings = settings;
         this.scene = scene;
         this.neededCounts = initialRows == null ? Map.of()
                 : initialRows.stream().collect(Collectors.toMap(
@@ -166,7 +183,8 @@ public class VehicleLoadVisualizerDialog extends JDialog {
                     continue;
                 }
                 section.canvas.restorePlacement(ct, savedPlacement.getXMm(), savedPlacement.getYMm(),
-                        savedPlacement.isRotated(), savedPlacement.getStackCount(), savedPlacement.getNote());
+                        savedPlacement.isRotated(), savedPlacement.isVertical(), savedPlacement.getStackCount(),
+                        savedPlacement.getNote());
             }
             section.canvas.repaint();
         }
@@ -192,6 +210,7 @@ public class VehicleLoadVisualizerDialog extends JDialog {
                 vp.setXMm(p.xMm);
                 vp.setYMm(p.yMm);
                 vp.setRotated(p.rotated);
+                vp.setVertical(p.vertical);
                 vp.setStackCount(p.stackCount);
                 vp.setNote(p.note);
                 savedPlacements.add(vp);
@@ -280,7 +299,27 @@ public class VehicleLoadVisualizerDialog extends JDialog {
         final VehicleLoadCanvasPanel canvas = new VehicleLoadCanvasPanel();
         final JButton addHereBtn = new JButton("Добавить сюда");
         final JButton placeAllBtn = new JButton("Разместить всё");
+        /** Запрос пользователя: "опция для автозаполнения... для заполнения машины
+         *  кофрами в вертикальной ориентации" — см. {@link
+         *  VehicleLoadCanvasPanel#autoPlaceAll(Map, boolean)}. */
+        final JCheckBox verticalCheck = new JCheckBox("Вертикально");
+        final JButton clearAllBtn = new JButton("Убрать все");
+        final JButton newVehicleTypeBtn = new JButton("+ Новый тип машины…");
         final JPanel wrapper = new JPanel(new BorderLayout(4, 4));
+        /** Именованный листенер (не инлайн-лямбда) — {@link #refreshVehicleCombos}
+         *  должен уметь временно снять его перед программной перестройкой пунктов
+         *  комбобокса (после добавления нового типа машины через {@link
+         *  #newVehicleTypeBtn}), иначе {@code removeAllItems()}/{@code addItem()}
+         *  по одному пункту транзитно триггерили бы {@code canvas.setVehicle(...)}
+         *  на КАЖДОМ промежуточном состоянии — а та БЕЗУСЛОВНО стирает {@code
+         *  placements} при каждом вызове (см. её javadoc), потому что обычно смена
+         *  машины пользователем ДОЛЖНА сбрасывать раскладку. Тот же приём, что
+         *  {@code VehicleCalculatorDialog#restoreLastScope} использует для своего
+         *  {@code scopeListener}. */
+        private final ActionListener vehicleComboListener = e -> {
+            canvas.setVehicle((VehicleType) vehicleCombo.getSelectedItem());
+            refreshAll();
+        };
 
         VehicleSection(VehicleType initial) {
             canvas.setSnapEnabled(snapEnabled);
@@ -296,16 +335,18 @@ public class VehicleLoadVisualizerDialog extends JDialog {
                 label.setForeground(isSelected ? list.getSelectionForeground() : list.getForeground());
                 return label;
             });
-            vehicleCombo.addActionListener(e -> {
-                canvas.setVehicle((VehicleType) vehicleCombo.getSelectedItem());
-                refreshAll();
-            });
+            vehicleCombo.addActionListener(vehicleComboListener);
             if (initial != null) {
                 vehicleCombo.setSelectedItem(initial);
             } else if (vehicleCombo.getItemCount() > 0) {
                 vehicleCombo.setSelectedIndex(0);
             }
             canvas.setVehicle((VehicleType) vehicleCombo.getSelectedItem());
+
+            newVehicleTypeBtn.setToolTipText("Библиотека не предусмотрела нужную машину? Задайте свою прямо здесь —"
+                    + " сохранится в личную библиотеку и сразу станет доступна во всех карточках, можно"
+                    + " предложить в общую на модерацию.");
+            newVehicleTypeBtn.addActionListener(e -> createCustomVehicleType(this));
 
             addHereBtn.addActionListener(e -> {
                 CaseType sel = paletteList.getSelectedValue();
@@ -319,6 +360,18 @@ public class VehicleLoadVisualizerDialog extends JDialog {
                     + " кофров (по всем типам разом, с учётом штабелирования) — простая раскладка рядами,"
                     + " без ручной подгонки. Заменяет текущую раскладку именно этой машины.");
             placeAllBtn.addActionListener(e -> autoPlaceAllInSection(this));
+
+            // Состояние читается прямо в autoPlaceAllInSection по клику "Разместить
+            // всё" — отдельный слушатель не нужен, галочка ничего не пересчитывает
+            // сама по себе.
+            verticalCheck.setToolTipText("Ставить кофры «на попа» (длина торчит вверх, площадь пола — ширина×высота)"
+                    + " вместо обычного лежачего положения — экономит площадь пола ценой высоты кузова."
+                    + " Штабелирование в этом положении не применяется. Тип, который стоя не помещается под"
+                    + " потолок кузова, всё равно ляжет как обычно (со штабелированием).");
+
+            clearAllBtn.setToolTipText("Убрать все размещённые кофры из этой машины"
+                    + " (спросит подтверждение, если что-то уже размещено).");
+            clearAllBtn.addActionListener(e -> clearAllInSection(this));
 
             // Приём drag-n-drop из палитры слева — кофр падает туда, куда его бросили
             // (с центрированием под курсором), а не всегда в угол, как кнопка
@@ -365,29 +418,47 @@ public class VehicleLoadVisualizerDialog extends JDialog {
             zoomIn.setToolTipText("Приблизить (Ctrl+колесо мыши тоже работает)");
             zoomIn.addActionListener(e -> canvas.zoomBy(1.25));
 
-            // Две строки, не одна (баг-репорт со скриншотом: с "Разместить всё" одна
-            // FlowLayout-строка стала шире, чем канвас/окно, и хвост (зум, "Убрать
-            // машину") обрезался краем окна — тут нет горизонтальной прокрутки для
-            // самого хедера, только для канваса ниже, см. javadoc canvasScroll) — каждая
-            // строка примерно вдвое уже суммарной ширины всех кнопок, комфортно
-            // помещается даже в узком окне.
-            JPanel headerLeft = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-            headerLeft.add(new JLabel("Машина:"));
-            headerLeft.add(vehicleCombo);
-            headerLeft.add(addHereBtn);
-            headerLeft.add(placeAllBtn);
-            JPanel headerTop = new JPanel(new BorderLayout(6, 0));
-            headerTop.add(headerLeft, BorderLayout.WEST);
-            headerTop.add(removeBtn, BorderLayout.EAST);
+            // ТРИ строки, не одна и не две (баг-репорт со скриншотом: "+ Новый тип
+            // машины…"/"Убрать все" добавились в ту же строку, что и остальное, и
+            // хвост кнопок стал вылезать за край окна — тут нет горизонтальной
+            // прокрутки для самого хедера, только для канваса ниже, см. javadoc
+            // canvasScroll) — каждая строка сгруппирована по смыслу (выбор
+            // машины / действия с раскладкой / зум) и заметно уже суммарной ширины
+            // всех кнопок разом, комфортно помещается даже в узком окне. Раньше
+            // хватало двух строк — с ростом числа кнопок по прямым запросам
+            // пользователя (Round N) две тоже перестали помещаться, отсюда три.
+            // "Убрать машину" раньше стояло особняком через BorderLayout.EAST —
+            // при трёх более коротких строках это оставляло уродливый пустой
+            // разрыв во всю ширину карточки (баг-репорт со скриншотом); теперь
+            // сидит последней кнопкой в строке действий, обычным FlowLayout-
+            // отступом от остальных, без искусственного разрыва.
+            JPanel vehicleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+            vehicleRow.add(new JLabel("Машина:"));
+            vehicleRow.add(vehicleCombo);
+            vehicleRow.add(newVehicleTypeBtn);
+
+            JPanel actionsRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+            actionsRow.add(addHereBtn);
+            actionsRow.add(placeAllBtn);
+            actionsRow.add(verticalCheck);
+            actionsRow.add(clearAllBtn);
+            actionsRow.add(removeBtn);
 
             JPanel zoomRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
             zoomRow.add(zoomOut);
             zoomRow.add(zoomReset);
             zoomRow.add(zoomIn);
 
+            // Небольшой вертикальный зазор между строками (баг-репорт со скриншотом:
+            // три строки кнопок липли вплотную друг к другу без него) — тот же приём,
+            // что Box.createVerticalStrut уже используется в rebuildSectionsContainer
+            // между карточками-машинами.
             JPanel header = new JPanel();
             header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
-            header.add(headerTop);
+            header.add(vehicleRow);
+            header.add(Box.createVerticalStrut(4));
+            header.add(actionsRow);
+            header.add(Box.createVerticalStrut(4));
             header.add(zoomRow);
 
             // Канвас обёрнут в свой JScrollPane — при приближении (см. VehicleLoadCanvasPanel
@@ -467,7 +538,7 @@ public class VehicleLoadVisualizerDialog extends JDialog {
                 budget.put(entry.getKey(), remaining);
             }
         }
-        Map<CaseType, Integer> leftover = section.canvas.autoPlaceAll(budget);
+        Map<CaseType, Integer> leftover = section.canvas.autoPlaceAll(budget, section.verticalCheck.isSelected());
         // refreshAll() перезаписывает statusLabel общей сводкой ("Размещено кофров
         // всего: N") — поэтому свой, более конкретный статус про остаток ставим
         // ПОСЛЕ него, а не до (иначе refreshAll молча стирает эту подсказку).
@@ -479,6 +550,83 @@ public class VehicleLoadVisualizerDialog extends JDialog {
                     .collect(Collectors.joining(", "));
             statusLabel.setText(" Не поместилось в эту машину: " + leftoverTotal + " шт. (" + details
                     + ") — добавьте ещё одну машину и повторите «Разместить всё».");
+        }
+    }
+
+    /** Кнопка «Убрать все» одной карточки-машины (запрос пользователя) — полностью
+     *  очищает раскладку ИМЕННО этой машины (см. {@link
+     *  VehicleLoadCanvasPanel#clearAll}), спросив подтверждение, если там уже
+     *  что-то размещено — та же осторожность, что и у {@link #autoPlaceAllInSection}
+     *  (заменяет/стирает раскладку целиком) и {@link #removeSection}. Освобождённые
+     *  штуки сразу возвращаются в общий бюджет (см. {@link #remainingFor}) — через
+     *  {@link #refreshAll}, отдельно ничего пересчитывать не нужно. */
+    private void clearAllInSection(VehicleSection section) {
+        if (section.canvas.getPlacements().isEmpty()) {
+            return;
+        }
+        int result = JOptionPane.showConfirmDialog(this,
+                "Убрать все размещённые кофры из этой машины?",
+                "Убрать все", JOptionPane.YES_NO_OPTION);
+        if (result != JOptionPane.YES_OPTION) {
+            return;
+        }
+        section.canvas.clearAll();
+        refreshAll();
+    }
+
+    /** Своя запись машины, которую библиотека не предусмотрела (запрос
+     *  пользователя: "в менюшке выбора количества кофров нет кнопки добавить
+     *  тип машины ... для ситуации, когда нужного варианта в библиотеке
+     *  нету") — точная копия приёма {@link VehicleCalculatorDialog
+     *  #createCustomCaseType} для типов кофров: сохраняется в ЛИЧНУЮ библиотеку
+     *  ({@code model.addVehicleType}), сразу становится доступна во ВСЕХ
+     *  карточках-машинах этого диалога (см. {@link #refreshVehicleCombos} —
+     *  комбобоксы не живут синхронно с библиотекой сами по себе), сразу
+     *  выбирается в комбобоксе КОНКРЕТНОЙ карточки, из которой нажали кнопку
+     *  (меняет машину именно там, как обычный выбор из списка — раскладка
+     *  этой карточки сбрасывается, тот же эффект, что и у смены на любую
+     *  другую существующую машину), и предлагается на модерацию в общую
+     *  библиотеку (см. {@link ProposeDialog}). */
+    private void createCustomVehicleType(VehicleSection section) {
+        VehicleType created = new VehicleTypeDialog(this, null).showDialog();
+        if (created == null) {
+            return;
+        }
+        VehicleType saved;
+        try {
+            saved = model.addVehicleType(created);
+        } catch (IllegalStateException ex) {
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "Проверка данных", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        refreshVehicleCombos();
+        section.vehicleCombo.setSelectedItem(saved);
+        if (settings != null) {
+            ProposeDialog.show(this, settings, "VEHICLE", saved.getName(), saved);
+        }
+    }
+
+    /** Пересобирает пункты {@code vehicleCombo} ВО ВСЕХ секциях из {@code
+     *  model.getVehicleTypes()} — новый тип машины (см. {@link
+     *  #createCustomVehicleType}) должен сразу стать выбираемым в КАЖДОЙ
+     *  карточке, не только в той, где его создали. Временно снимает
+     *  {@code vehicleComboListener} на время перестройки (см. её javadoc в
+     *  {@link VehicleSection}) — иначе {@code removeAllItems()}/{@code
+     *  addItem()} транзитно триггерили бы {@code canvas.setVehicle(...)} на
+     *  промежуточных состояниях и стёрли бы уже размещённые кофры каждой
+     *  секции целиком. */
+    private void refreshVehicleCombos() {
+        for (VehicleSection s : sections) {
+            Object selected = s.vehicleCombo.getSelectedItem();
+            s.vehicleCombo.removeActionListener(s.vehicleComboListener);
+            s.vehicleCombo.removeAllItems();
+            for (VehicleType v : model.getVehicleTypes()) {
+                s.vehicleCombo.addItem(v);
+            }
+            if (selected != null) {
+                s.vehicleCombo.setSelectedItem(selected);
+            }
+            s.vehicleCombo.addActionListener(s.vehicleComboListener);
         }
     }
 

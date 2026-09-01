@@ -259,6 +259,27 @@ public final class UpdateManager {
         pb.start();
     }
 
+    /** Перезапускает ТЕКУЩИЙ jar как есть, без подмены файла (см. {@link
+     *  #applyAndRestartWindows} — та ждёт завершения процесса и копирует НОВЫЙ jar
+     *  поверх старого; здесь файл не меняется, поэтому ждать/копировать нечего —
+     *  можно просто запустить второй процесс и сразу выйти). Нужна, например, для
+     *  настроек, которые требуют перезапуска приложения целиком, а не подгружаемых
+     *  «на лету» (см. MainMenuBar — смена темы: живое переключение оставляло
+     *  «залипшие» на старых цветах кастомно отрисованные холсты — расключение,
+     *  общая схема, генерация масок — т.к. те не перечитывают Palette при каждой
+     *  перерисовке). Вызывать ПОСЛЕДНИМ действием перед System.exit(0) — как и
+     *  applyAndRestartWindows. */
+    public static void restartCurrentJar() throws IOException {
+        Path currentJar = currentJarPath();
+        if (currentJar == null) {
+            throw new IllegalStateException("Автоперезапуск недоступен — приложение запущено не из jar-файла");
+        }
+        ProcessBuilder pb = new ProcessBuilder("javaw", "-jar", currentJar.toAbsolutePath().toString());
+        pb.redirectOutput(ProcessBuilder.Redirect.to(new java.io.File("NUL")));
+        pb.redirectError(ProcessBuilder.Redirect.to(new java.io.File("NUL")));
+        pb.start();
+    }
+
     /** Для случаев без автоподмены (macOS, запуск не из jar-а) — просто открывает
      *  скачанный файл системным приложением (для .dmg это монтирует образ в Finder). */
     public static void openDownloaded(Path file) throws IOException {

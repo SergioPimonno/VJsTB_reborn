@@ -205,6 +205,26 @@ public class SettingsManager {
         persist();
     }
 
+    public void setExportRootFolder(String path) {
+        activeProfile().setExportRootFolder(path);
+        persist();
+    }
+
+    public void setShapeEditorFloating(boolean floating) {
+        activeProfile().setShapeEditorFloating(floating);
+        persist();
+    }
+
+    public void setPowerSceneStatsEnabled(boolean enabled) {
+        activeProfile().setPowerSceneStatsEnabled(enabled);
+        persist();
+    }
+
+    public void setSignalSceneStatsEnabled(boolean enabled) {
+        activeProfile().setSignalSceneStatsEnabled(enabled);
+        persist();
+    }
+
     public void setDarkTheme(boolean dark) {
         activeProfile().setDarkTheme(dark);
         persist();
