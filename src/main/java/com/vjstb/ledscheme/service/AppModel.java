@@ -23,6 +23,8 @@ import com.vjstb.ledscheme.model.Scenario;
 import com.vjstb.ledscheme.model.Library;
 import com.vjstb.ledscheme.model.LibraryBundle;
 import com.vjstb.ledscheme.model.MaskColorPreset;
+import com.vjstb.ledscheme.model.NetworkDeviceType;
+import com.vjstb.ledscheme.model.NetworkManagerPlan;
 import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.Project;
@@ -81,14 +83,24 @@ public class AppModel {
 
     /** Снимок для «отменить»: состояние текущего экрана (null, если на момент записи
      *  экран не был выбран — например, правка велась на этапе «Генерация масок», где
-     *  выбор экрана не требуется) + цепочки и канвасы сцены на тот момент. Цепочки и
-     *  канвасы хранятся на уровне сцены, а не экрана (см. Task #78), поэтому снимок
-     *  ОДНОГО экрана (как было раньше) не покрывает их отмену — нужен отдельный
-     *  снимок списков сцены. {@code actionLabel} — человекочитаемое описание для
+     *  выбор экрана не требуется) + цепочки, канвасы И общая схема площадки (узлы +
+     *  связи) сцены на тот момент. Всё это хранится на уровне сцены, а не экрана (см.
+     *  Task #78 про цепочки/канвасы), поэтому снимок ОДНОГО экрана (как было раньше)
+     *  не покрывает их отмену — нужен отдельный снимок списков сцены.
+     *
+     * <p>Баг-репорт: "удаление блока не отменяется через ctrl+Z" — узлы/связи общей
+     * схемы ({@code schemaNodesSnapshot}/{@code schemaEdgesSnapshot}) добавлены
+     * позже цепочек/канвасов и раньше сюда не попадали вовсе (см. старый комментарий
+     * у {@code schemaNodesForCurrentScene}: "схема... не проходит через pushUndo()" —
+     * рассуждение было верным на момент, когда сам {@code pushUndo} снимал только
+     * ОДИН экран, но устарело, как только он расширился до снимка ВСЕЙ сцены ради
+     * цепочек/канвасов — с тех пор ничто технически не мешало добавить сюда и схему,
+     * просто не сделали). {@code actionLabel} — человекочитаемое описание для
      *  будущего UI истории действий (по образцу лога команд grandMA) — пока не
      *  проставляется на всех местах вызова, только там, где уже осмысленно (маски). */
     private record UndoEntry(Screen screenSnapshot, List<PowerChain> powerChainsSnapshot,
                               List<SignalChain> signalChainsSnapshot, List<ContentCanvas> canvasesSnapshot,
+                              List<SchemaNode> schemaNodesSnapshot, List<SchemaEdge> schemaEdgesSnapshot,
                               String actionLabel) {
     }
 
@@ -496,6 +508,21 @@ public class AppModel {
         return all;
     }
 
+    /** Публичная версия {@link #controllersInScene(Scene)} для UI, когда под рукой
+     *  только {@link Screen} — нужна {@code SchemeRenderer}, чтобы резолвить метки
+     *  портов ("К{карта}·{порт}") ТОЙ ЖЕ сценовой нумерацией, что и сайдбар
+     *  {@code SignalStagePanel.portDisplayLabel} (см. {@link #controllerForPort},
+     *  {@link #portOffsetOf(Screen, ControllerInstance)}). Баг-репорт: "почему на
+     *  расключении нумерация порта не совпадает с выбранным портом в контроллере"
+     *  — {@code SchemeRenderer} искал владельца порта только среди {@code
+     *  scr.getControllers()} (контроллеров, физически хранящихся именно под ЭТИМ
+     *  экраном), а не по всей сцене — если контроллер был добавлен, пока был выбран
+     *  ДРУГОЙ экран сцены, канвас вообще не находил его (владелец порта — null) и
+     *  тихо показывал СЫРОЙ номер порта без какого-либо резолва пула/карты. */
+    public List<ControllerInstance> controllersInScene(Screen screen) {
+        return controllersInScene(sceneContaining(screen));
+    }
+
     /** Добавляет сцене (физически — переданному экрану, см. {@link #controllersInScene})
      *  контроллер выбранного типа. */
     public ControllerInstance addControllerToScreen(Screen screen, String controllerTypeId) {
@@ -813,6 +840,19 @@ public class AppModel {
     }
 
     public Screen addScreen(String name, String cabinetTypeId, int rows, int cols, double posX, double posY) {
+        return addScreen(name, cabinetTypeId, rows, cols, posX, posY, ScreenMountType.RIGGED);
+    }
+
+    /** Способ монтажа задаётся СРАЗУ при создании (запрос пользователя: "при
+     *  создании экрана тип монтажа выбирать сразу, а не только при
+     *  корректировке параметров экрана" — см. {@code
+     *  ui.NewScreenDialog#mountTypeField}), не только позже через {@link
+     *  #updateScreenMount}. {@code null} — тот же дефолт {@link
+     *  ScreenMountType#RIGGED}, что и раньше у 6-аргументного overload'а (тот
+     *  делегирует сюда, оставлен ради существующих вызывающих мест —
+     *  многочисленные тесты, которым способ монтажа не важен). */
+    public Screen addScreen(String name, String cabinetTypeId, int rows, int cols, double posX, double posY,
+                             ScreenMountType mountType) {
         if (currentScene == null) {
             throw new IllegalStateException("Не выбрана сцена");
         }
@@ -826,6 +866,7 @@ public class AppModel {
         scr.setCols(cols);
         scr.setPosXMm(posX);
         scr.setPosYMm(posY);
+        scr.setMountType(mountType != null ? mountType : ScreenMountType.RIGGED);
         ScreenLogic.buildGrid(scr);
         scr.setRiggingPointsCount(ScreenLogic.suggestRiggingPoints(scr, typeOf(scr), workspace));
         currentScene.getScreens().add(scr);
@@ -1115,6 +1156,7 @@ public class AppModel {
         if (currentScene == null) {
             throw new IllegalStateException("Не выбрана сцена");
         }
+        pushUndo();
         SchemaNode n = new SchemaNode(mode, type, label, x, y, screenRefId);
         currentScene.getSchemaNodes().add(n);
         if (type == SchemaNodeType.SCREEN && screenRefId != null) {
@@ -1148,8 +1190,28 @@ public class AppModel {
 
     /** Перемещение узла (драг мышью) — вызывать один раз по отпусканию кнопки, не на каждый кадр. */
     public void moveSchemaNode(SchemaNode node, double x, double y) {
+        pushUndo();
         node.setX(x);
         node.setY(y);
+        changed();
+    }
+
+    /** Перемещение НЕСКОЛЬКИХ узлов ОДНИМ действием отмены — групповое
+     *  перетаскивание многовыделения на общей схеме (баг-репорт: "возможность
+     *  выделять несколько блоков... для перетаскивания и удаления"): без этого
+     *  метода {@link #moveSchemaNode}, вызванный по кругу для каждого узла, дал
+     *  бы ОТДЕЛЬНУЮ запись в истории на каждый узел — Ctrl+Z вернул бы только
+     *  последний из них, а не всю группу разом. Вызывать один раз по отпусканию
+     *  кнопки, как и {@link #moveSchemaNode}. */
+    public void moveSchemaNodes(java.util.Map<SchemaNode, double[]> positions) {
+        if (positions.isEmpty()) {
+            return;
+        }
+        pushUndo();
+        for (java.util.Map.Entry<SchemaNode, double[]> e : positions.entrySet()) {
+            e.getKey().setX(e.getValue()[0]);
+            e.getKey().setY(e.getValue()[1]);
+        }
         changed();
     }
 
@@ -1158,6 +1220,7 @@ public class AppModel {
 
     /** Изменение размера узла (драг за угол) — вызывать один раз по отпусканию кнопки. */
     public void resizeSchemaNode(SchemaNode node, double width, double height) {
+        pushUndo();
         node.setWidth(Math.max(SCHEMA_NODE_MIN_WIDTH, width));
         node.setHeight(Math.max(SCHEMA_NODE_MIN_HEIGHT, height));
         changed();
@@ -1208,57 +1271,171 @@ public class AppModel {
     }
 
     /** Целевой размер одной ячейки-кабинета (px) на миниатюре расключения узла
-     *  общей схемы — ориентир для {@link #autoFitScreenNode}, не связан с реальными
-     *  константами отрисовки в SchemaCanvasPanel (та сама вписывает миниатюру в
-     *  ЛЮБОЙ заданный размер узла) — здесь достаточно приблизительного, но читаемого
-     *  стартового размера, который пользователь при желании подправит перетаскиванием. */
+     *  общей схемы — ориентир для {@link #autoFitScreenNode}. Сама миниатюра
+     *  (SchemaCanvasPanel.wiringThumbGeometry) вписывает содержимое в ЛЮБОЙ заданный
+     *  размер узла равномерным масштабом по ОБОИМ измерениям сразу — поэтому, чтобы
+     *  узел получился "чуть больше" содержимого СИММЕТРИЧНО (не только по одной оси),
+     *  здесь используются РОВНО ТЕ ЖЕ константы отступов (top/pad), что и в
+     *  wiringThumbGeometry, а не независимо подобранные — раньше (баг-репорт: "для
+     *  вертикальных схем это работает нормально, а для горизонтальных кривовато")
+     *  ширина считалась от {@code cols*cellW} (просто число колонок), а высота — от
+     *  {@code rows*cellH + 46} (просто число строк), с РАЗНЫМИ фиксированными
+     *  добавками (8px справа, 46px снизу) независимо от формы охвата кабинетов —
+     *  для НИЗКОЙ широкой сетки (мало строк, много столбцов) фиксированная высотная
+     *  добавка 46 составляла ЗАМЕТНУЮ долю итоговой высоты блока, тогда как узкая
+     *  добавка 8 у ширины — нет, из-за чего пропорции блока расходились с реальными
+     *  пропорциями содержимого (охват в мм через {@link ScreenLogic#cabinetExtentMm})
+     *  именно на широких экранах — для высоких узких экранов та же абсолютная
+     *  рассинхронизация тонула в большом числе строк и была незаметна. */
     private static final double SCREEN_THUMB_TARGET_CELL_PX = 22;
-    /** Запас под заголовок узла/строку-подпись снизу миниатюры (см.
-     *  SchemaCanvasPanel.PORT_ROWS_TOP_OFFSET и .drawControllerSummaryBar) — не
-     *  обязан совпадать пиксель-в-пиксель, только чтобы сетка не обрезалась. */
-    private static final double SCREEN_THUMB_HEADER_PAD = 46;
+    /** Ровно {@code top(34) + pad(4)} из {@code SchemaCanvasPanel.wiringThumbGeometry}
+     *  (полоса контроллеров сигнала/{@code barH} сюда сознательно не включена — та
+     *  же приблизительность, что была и раньше, только РАСТЯГИВАЕТ высоту, не
+     *  обрезает). */
+    private static final double SCREEN_THUMB_HEADER_PAD = 38;
+    /** Ровно {@code pad*2(=4*2)} из wiringThumbGeometry (запас слева/справа). */
+    private static final double SCREEN_THUMB_SIDE_PAD = 8;
     private static final double SCREEN_THUMB_MIN_WIDTH = 140;
+
+    /** Целевые ширина/высота блока под миниатюру расключения этого экрана — "чуть
+     *  больше" реального охвата кабинетов (мм) при фиксированном целевом масштабе
+     *  ячейки (не подогнанные ПОД произвольный аспект). Используется только как
+     *  СТАРТОВЫЙ размер нового узла (см. {@link #autoFitScreenNode}) — сам блок
+     *  пользователь потом свободно тянет за уголок (см. {@link
+     *  #screenWiringHeightForWidth}/{@link #screenWiringWidthForHeight} — ими
+     *  ограничен именно ЭТОТ drag, чтобы миниатюра при перетаскивании всегда
+     *  заполняла блок без пустот, а не оставалась зафиксированной на этом
+     *  стартовом масштабе). {@code null} — нет данных о типе кабинета/сетке
+     *  экрана. */
+    public double[] screenNodeFitSize(Screen scr) {
+        CabinetType t = typeOf(scr);
+        if (t == null || t.getWidthMm() <= 0 || t.getHeightMm() <= 0 || scr.getCols() <= 0 || scr.getRows() <= 0) {
+            return null;
+        }
+        // Тот же охват (мм), что вычисляет сама миниатюра при отрисовке (учитывает
+        // кабинеты, вытащенные свободным смещением за номинальную сетку) — целевой
+        // масштаб фиксирует ШИРИНУ ячейки в SCREEN_THUMB_TARGET_CELL_PX, высота
+        // ячейки следует из реального соотношения сторон типа кабинета САМА, без
+        // отдельного пересчёта — ровно так же, как cellW/cellH в wiringThumbGeometry.
+        double scale = SCREEN_THUMB_TARGET_CELL_PX / t.getWidthMm();
+        double[] ext = ScreenLogic.cabinetExtentMm(scr, t, workspace);
+        double contentW = (ext[2] - ext[0]) * scale;
+        double contentH = (ext[3] - ext[1]) * scale;
+        double neededW = Math.max(SCREEN_THUMB_MIN_WIDTH, contentW + SCREEN_THUMB_SIDE_PAD);
+        double neededH = contentH + SCREEN_THUMB_HEADER_PAD;
+        return new double[]{neededW, neededH};
+    }
+
+    /** Высота блока, В ТОЧНОСТИ вмещающая миниатюру расключения БЕЗ пустого поля,
+     *  если ширина блока равна {@code desiredWidth} — та же формула, что {@link
+     *  #screenNodeFitSize}, но масштаб миниатюры выводится ИЗ заданной ширины
+     *  (то, что реально тянет пользователь мышью), а не из фиксированного целевого
+     *  размера ячейки. Так перетаскивание уголка узла-экрана в режиме «схема
+     *  расключения» (см. {@code SchemaCanvasPanel}, mouseDragged) одновременно и
+     *  меняет масштаб миниатюры (крупнее/детальнее ИЛИ мельче/символичнее — запрос
+     *  пользователя: "если схема большая, схема расключения нужна чисто
+     *  символическая, а если не слишком большая — подробная"), и держит обводку
+     *  блока БЕЗ пустот на любом выбранном размере (запрос: "общий размер блока
+     *  должен выравниваться в зависимости от текущего размера схемы расключения с
+     *  учётом шапки с названием экрана вверху блока" — шапка/боковой отступ здесь
+     *  учтены как фиксированные {@link #SCREEN_THUMB_HEADER_PAD}/{@link
+     *  #SCREEN_THUMB_SIDE_PAD}, НЕ масштабируются вместе с сеткой кабинетов, как и
+     *  в реальной отрисовке {@code SchemaCanvasPanel.wiringThumbGeometry}).
+     *  {@code null} — нет данных (тип кабинета/сетка) или {@code desiredWidth}
+     *  не оставляет места под сетку за вычетом бокового отступа. */
+    public Double screenWiringHeightForWidth(Screen scr, double desiredWidth) {
+        CabinetType t = typeOf(scr);
+        if (t == null || t.getWidthMm() <= 0 || t.getHeightMm() <= 0 || scr.getCols() <= 0 || scr.getRows() <= 0) {
+            return null;
+        }
+        double[] ext = ScreenLogic.cabinetExtentMm(scr, t, workspace);
+        double extW = ext[2] - ext[0], extH = ext[3] - ext[1];
+        double availW = desiredWidth - SCREEN_THUMB_SIDE_PAD;
+        if (extW <= 0 || availW <= 0) {
+            return null;
+        }
+        double scale = availW / extW;
+        return extH * scale + SCREEN_THUMB_HEADER_PAD;
+    }
+
+    /** Обратное к {@link #screenWiringHeightForWidth} — ширина блока, В ТОЧНОСТИ
+     *  вмещающая миниатюру без пустого поля при заданной высоте (для drag'а,
+     *  начатого преимущественно по вертикали). */
+    public Double screenWiringWidthForHeight(Screen scr, double desiredHeight) {
+        CabinetType t = typeOf(scr);
+        if (t == null || t.getWidthMm() <= 0 || t.getHeightMm() <= 0 || scr.getCols() <= 0 || scr.getRows() <= 0) {
+            return null;
+        }
+        double[] ext = ScreenLogic.cabinetExtentMm(scr, t, workspace);
+        double extW = ext[2] - ext[0], extH = ext[3] - ext[1];
+        double availH = desiredHeight - SCREEN_THUMB_HEADER_PAD;
+        if (extH <= 0 || availH <= 0) {
+            return null;
+        }
+        double scale = availH / extH;
+        return extW * scale + SCREEN_THUMB_SIDE_PAD;
+    }
 
     /** Растягивает свежедобавленный узел-ссылку на экран (см. {@link #autoPopulateSchema})
      *  до размера, в котором миниатюра его расключения (см.
      *  {@link com.vjstb.ledscheme.settings.UserProfile#isSchemaScreensAsWiringDiagram()})
      *  реально читаема — дефолтный размер нового узла (175×56, см. конструктор
-     *  {@link SchemaNode}) рассчитан на компактный блок оборудования без деталей,
-     *  для сетки кабинетов этого мало (сжимается до нечитаемой полоски). Как и
-     *  {@link #autoFitNodeToPorts} — только РАСТЯГИВАЕТ, не уменьшает то, что
-     *  пользователь уже подстроил вручную крупнее. Без данных о типе кабинета/сетке
-     *  экрана — no-op (не должно происходить для настоящего экрана сцены). */
+     *  {@link SchemaNode}) рассчитан на компактный блок оборудования без деталей.
+     *  ТОЛЬКО стартовый ("сохранённый") размер узла — реальная отрисовка блока в
+     *  режиме "схема расключения" на этот сохранённый размер уже не смотрит вовсе
+     *  (см. {@link #screenNodeFitSize}, вызывается СВЕЖО на каждый кадр из
+     *  {@code SchemaCanvasPanel}); здесь как и раньше — только РАСТЯГИВАЕТ, не
+     *  уменьшает, полезно ГЛАВНЫМ ОБРАЗОМ как разумный default для обычного (не
+     *  wiring-diagram) отображения узла и как размер, из которого стартует resize
+     *  мышью, если пользователь позже выключит "схему расключения" для этого узла. */
     private void autoFitScreenNode(SchemaNode node, Screen scr) {
-        CabinetType t = typeOf(scr);
-        if (t == null || t.getWidthMm() <= 0 || t.getHeightMm() <= 0 || scr.getCols() <= 0 || scr.getRows() <= 0) {
+        double[] size = screenNodeFitSize(scr);
+        if (size == null) {
             return;
         }
-        double cellW = SCREEN_THUMB_TARGET_CELL_PX;
-        double cellH = cellW * (t.getHeightMm() / t.getWidthMm());
-        double neededW = Math.max(SCREEN_THUMB_MIN_WIDTH, scr.getCols() * cellW + 8);
-        double neededH = scr.getRows() * cellH + SCREEN_THUMB_HEADER_PAD;
-        if (node.getWidth() < neededW) {
-            node.setWidth(neededW);
+        if (node.getWidth() < size[0]) {
+            node.setWidth(size[0]);
         }
-        if (node.getHeight() < neededH) {
-            node.setHeight(neededH);
+        if (node.getHeight() < size[1]) {
+            node.setHeight(size[1]);
         }
     }
 
     public void updateSchemaNode(SchemaNode node, String label, SchemaNodeType type, String screenRefId) {
+        pushUndo();
         node.setLabel(label);
         node.setType(type);
         node.setScreenRefId(screenRefId);
         changed();
     }
 
+    /** Баг-репорт: "удаление блока не отменяется через ctrl+Z" — см. {@link #pushUndo()}. */
     public void deleteSchemaNode(SchemaNode node) {
         if (currentScene == null) {
             return;
         }
+        pushUndo();
         currentScene.getSchemaNodes().remove(node);
         currentScene.getSchemaEdges().removeIf(e ->
                 node.getId().equals(e.getFromNodeId()) || node.getId().equals(e.getToNodeId()));
+        changed();
+    }
+
+    /** Удаление НЕСКОЛЬКИХ узлов ОДНИМ действием отмены — многовыделение на общей
+     *  схеме (см. {@link #moveSchemaNodes} — тот же мотив: по одному через {@link
+     *  #deleteSchemaNode} дал бы отдельную запись истории на каждый узел). */
+    public void deleteSchemaNodes(java.util.Collection<SchemaNode> nodesToDelete) {
+        if (currentScene == null || nodesToDelete.isEmpty()) {
+            return;
+        }
+        pushUndo();
+        Set<String> ids = new java.util.HashSet<>();
+        for (SchemaNode n : nodesToDelete) {
+            ids.add(n.getId());
+        }
+        currentScene.getSchemaNodes().removeIf(n -> ids.contains(n.getId()));
+        currentScene.getSchemaEdges().removeIf(e ->
+                ids.contains(e.getFromNodeId()) || ids.contains(e.getToNodeId()));
         changed();
     }
 
@@ -1293,6 +1470,7 @@ public class AppModel {
         if (fromNodeId.equals(toNodeId)) {
             throw new IllegalArgumentException("Нельзя соединить узел сам с собой");
         }
+        pushUndo();
         SchemaEdge edge = new SchemaEdge(mode, fromNodeId, toNodeId, label);
         edge.setFromPortId(fromPortId);
         edge.setToPortId(toPortId);
@@ -1304,6 +1482,7 @@ public class AppModel {
     }
 
     public void updateSchemaEdgeLabel(SchemaEdge edge, String label) {
+        pushUndo();
         edge.setLabel(label);
         edge.setWireCount(null);
         edge.setWireType(null);
@@ -1320,6 +1499,7 @@ public class AppModel {
         if (wireType == null || wireType.isBlank()) {
             throw new IllegalArgumentException("Укажите тип линии");
         }
+        pushUndo();
         edge.setWireCount(count);
         edge.setWireType(wireType.trim());
         edge.setLengthM(lengthM != null && lengthM > 0 ? lengthM : null);
@@ -1331,17 +1511,20 @@ public class AppModel {
      *  пустой список сбрасывает её к прямой линии узел-узел (см. пункт «Выпрямить»
      *  в контекстном меню связи схемы). */
     public void setSchemaEdgeWaypoints(SchemaEdge edge, List<com.vjstb.ledscheme.model.EdgeWaypoint> waypoints) {
+        pushUndo();
         edge.setWaypoints(waypoints);
         changed();
     }
 
     public void setSchemaEdgeDashed(SchemaEdge edge, boolean dashed) {
+        pushUndo();
         edge.setDashed(dashed);
         changed();
     }
 
     /** null — сбросить на стандартный цвет режима схемы (см. SchemaCanvasPanel.edgeColor). */
     public void setSchemaEdgeColor(SchemaEdge edge, Integer rgb) {
+        pushUndo();
         edge.setColor(rgb);
         changed();
     }
@@ -1349,6 +1532,7 @@ public class AppModel {
     /** Смещение чипа подписи связи от расчётной точки, экранные пиксели схемы
      *  (Task #3) — задаётся перетаскиванием в SchemaCanvasPanel. */
     public void setSchemaEdgeLabelOffset(SchemaEdge edge, double dx, double dy) {
+        pushUndo();
         edge.setLabelDx(dx);
         edge.setLabelDy(dy);
         changed();
@@ -1358,6 +1542,7 @@ public class AppModel {
         if (currentScene == null) {
             return;
         }
+        pushUndo();
         currentScene.getSchemaEdges().remove(edge);
         changed();
     }
@@ -1366,6 +1551,7 @@ public class AppModel {
         if (currentScene == null) {
             return;
         }
+        pushUndo();
         currentScene.getSchemaNodes().removeIf(n -> n.getMode() == mode);
         currentScene.getSchemaEdges().removeIf(e -> e.getMode() == mode);
         changed();
@@ -1374,6 +1560,7 @@ public class AppModel {
     // ---- карты ввода/вывода узла (медиасерверы/видеопроцессоры) ----
 
     public SchemaCard addCardToNode(SchemaNode node, String name, List<CardPort> ports) {
+        pushUndo();
         SchemaCard card = new SchemaCard(name, ports);
         node.getCards().add(card);
         autoFitNodeToPorts(node);
@@ -1382,6 +1569,7 @@ public class AppModel {
     }
 
     public void removeCardFromNode(SchemaNode node, String cardId) {
+        pushUndo();
         node.getCards().removeIf(c -> c.getId().equals(cardId));
         changed();
     }
@@ -1393,6 +1581,7 @@ public class AppModel {
         if (card == null) {
             throw new IllegalArgumentException("Карта не найдена");
         }
+        pushUndo();
         card.setName(name);
         card.setPorts(ports);
         autoFitNodeToPorts(node);
@@ -1410,6 +1599,7 @@ public class AppModel {
      *  а не потерялись бы при мутации уже возвращённого объекта постфактум. */
     public CardPort addPowerConnectorToNode(SchemaNode node, String connectorType, PortDirection direction,
                                              int count, int phaseCount, Double breakerAmps) {
+        pushUndo();
         CardPort port = new CardPort(connectorType, direction, count);
         port.setPhaseCount(phaseCount);
         port.setBreakerAmps(breakerAmps);
@@ -1420,6 +1610,7 @@ public class AppModel {
     }
 
     public void removePowerConnectorFromNode(SchemaNode node, String portId) {
+        pushUndo();
         node.getPowerConnectors().removeIf(p -> p.getId().equals(portId));
         changed();
     }
@@ -1435,6 +1626,7 @@ public class AppModel {
         if (port == null) {
             throw new IllegalArgumentException("Разъём не найден");
         }
+        pushUndo();
         port.setConnectorType(connectorType);
         port.setDirection(direction);
         port.setCount(count);
@@ -1447,6 +1639,7 @@ public class AppModel {
     /** Запас (%) для проверки суммарной нагрузки этого силового узла (Task #86/#87) —
      *  null сбрасывает на значение по умолчанию (см. PowerCalc.defaultDeratingPercentFor). */
     public void setSchemaNodeLoadDeratingPercent(SchemaNode node, Double percent) {
+        pushUndo();
         node.setLoadDeratingPercent(percent);
         changed();
     }
@@ -1963,6 +2156,47 @@ public class AppModel {
         changed();
     }
 
+    /** Общая библиотека ("GTO") ++ личная — см. javadoc {@link #getCabinetTypes()}
+     *  про то же разделение. */
+    public List<NetworkDeviceType> getNetworkDeviceTypes() {
+        List<NetworkDeviceType> union = new ArrayList<>(workspace.getSharedNetworkDeviceTypes());
+        union.addAll(workspace.getNetworkDeviceTypes());
+        return union;
+    }
+
+    public boolean isSharedNetworkDeviceType(String id) {
+        return id != null && workspace.getSharedNetworkDeviceTypes().stream().anyMatch(t -> t.getId().equals(id));
+    }
+
+    private void requireUniqueNetworkDeviceTypeName(String name, String ignoreId) {
+        for (NetworkDeviceType t : getNetworkDeviceTypes()) {
+            if (t.getName().equalsIgnoreCase(name) && !t.getId().equals(ignoreId)) {
+                throw new IllegalStateException("Тип оборудования «" + name + "» уже есть в библиотеке");
+            }
+        }
+    }
+
+    public NetworkDeviceType addNetworkDeviceType(NetworkDeviceType deviceType) {
+        requireUniqueNetworkDeviceTypeName(deviceType.getName(), null);
+        workspace.getNetworkDeviceTypes().add(deviceType);
+        changed();
+        return deviceType;
+    }
+
+    public void updateNetworkDeviceType(NetworkDeviceType edited) {
+        requireUniqueNetworkDeviceTypeName(edited.getName(), edited.getId());
+        NetworkDeviceType existing = getNetworkDeviceTypes().stream()
+                .filter(t -> t.getId().equals(edited.getId())).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Тип оборудования не найден в библиотеке"));
+        existing.applyEditedValues(edited);
+        changed();
+    }
+
+    public void deleteNetworkDeviceType(String id) {
+        workspace.getNetworkDeviceTypes().removeIf(t -> t.getId().equals(id));
+        changed();
+    }
+
     /** Тип библиотеки, которым файл экспорта себя маркирует (Task #5) — null, если
      *  файл в старом формате или маркер не распознан; тогда UI возвращается к
      *  ручному выбору типа в комбобоксе, как раньше. */
@@ -2041,6 +2275,10 @@ public class AppModel {
                     case "VEHICLE" -> applyOne(workspace.getSharedVehicleTypes(), workspace.getVehicleTypes(), dto,
                             VehicleType.class, VehicleType::getId, VehicleType::setId, VehicleType::getName,
                             NO_REFERENCE_MIGRATION);
+                    case "NETWORK_DEVICE" -> applyOne(workspace.getSharedNetworkDeviceTypes(),
+                            workspace.getNetworkDeviceTypes(), dto, NetworkDeviceType.class,
+                            NetworkDeviceType::getId, NetworkDeviceType::setId, NetworkDeviceType::getName,
+                            NO_REFERENCE_MIGRATION);
                     case "EQUIPMENT_CUSTOM_CATEGORY" -> applyCustomCategory(dto);
                     case "GUIDE_TEXT" -> applySingletonSections(dto, workspace.getLibrary()::setGuideSections);
                     case "ONBOARDING_TEXT" -> applySingletonSections(dto, workspace.getLibrary()::setOnboardingSections);
@@ -2094,6 +2332,9 @@ public class AppModel {
                     StructureFrameType::getId, this::isStructureFrameTypeReferenced);
             case "CASE" -> workspace.getSharedCaseTypes().removeIf(c -> c.getId().equals(dto.id()));
             case "VEHICLE" -> workspace.getSharedVehicleTypes().removeIf(v -> v.getId().equals(dto.id()));
+            case "NETWORK_DEVICE" -> workspace.getSharedNetworkDeviceTypes().removeIf(t -> t.getId().equals(dto.id()));
+            case "EQUIPMENT_CUSTOM_CATEGORY" ->
+                    workspace.getServerCustomEquipmentCategoriesById().remove(dto.id()) != null;
             default -> false; // остальные виды (тексты/сценарии/параметры) не поддерживают удаление синком
         };
     }
@@ -2332,6 +2573,14 @@ public class AppModel {
         }
     }
 
+    /** Payload {@code EQUIPMENT_CUSTOM_CATEGORY} — с 2026-08-21 также несёт
+     *  {@code "mode":"SIGNAL"|"POWER"|null} (см. javadoc {@code
+     *  LibraryItemKind} на сервере и {@code EquipmentCustomCategoryFormPanel}
+     *  в ledscheme-admin), но здесь намеренно НЕ читается — эта пометка сейчас
+     *  используется только для отображения заметки в списке админки, клиент её
+     *  никак не применяет. {@code SYNC_MAPPER} не падает на лишнем поле
+     *  ({@code FAIL_ON_UNKNOWN_PROPERTIES} отключен) — это не забытая доработка,
+     *  а сознательно нечитаемое поле. */
     private record CustomCategoryPayload(String name) {
     }
 
@@ -2735,6 +2984,18 @@ public class AppModel {
             return;
         }
         scene.setVehicleLoadPlan(plan);
+        changed();
+    }
+
+    /** Персистит Сетевой менеджер сцены (см. {@link Scene#getNetworkManagerPlan()}) —
+     *  тот же приём, что {@link #saveVehicleLoadPlan}: раскладка мутирует слишком
+     *  часто (каждое перетаскивание блока) для содержательных записей в отменяемой
+     *  истории, поэтому без интеграции с undo-стеком. */
+    public void saveNetworkManagerPlan(Scene scene, NetworkManagerPlan plan) {
+        if (scene == null) {
+            return;
+        }
+        scene.setNetworkManagerPlan(plan);
         changed();
     }
 
@@ -4323,7 +4584,15 @@ public class AppModel {
         for (ContentCanvas c : currentScene.getCanvases()) {
             cv.add(c.copy());
         }
-        undoStack.push(new UndoEntry(screenSnap, pc, sc, cv, actionLabel));
+        List<SchemaNode> sn = new ArrayList<>();
+        for (SchemaNode n : currentScene.getSchemaNodes()) {
+            sn.add(n.copy());
+        }
+        List<SchemaEdge> se = new ArrayList<>();
+        for (SchemaEdge e : currentScene.getSchemaEdges()) {
+            se.add(e.copy());
+        }
+        undoStack.push(new UndoEntry(screenSnap, pc, sc, cv, sn, se, actionLabel));
         while (undoStack.size() > UNDO_LIMIT) {
             undoStack.removeLast();
         }
@@ -4340,6 +4609,8 @@ public class AppModel {
         currentScene.setPowerChains(snap.powerChainsSnapshot());
         currentScene.setSignalChains(snap.signalChainsSnapshot());
         currentScene.setCanvases(snap.canvasesSnapshot());
+        currentScene.setSchemaNodes(snap.schemaNodesSnapshot());
+        currentScene.setSchemaEdges(snap.schemaEdgesSnapshot());
         changed();
     }
 }

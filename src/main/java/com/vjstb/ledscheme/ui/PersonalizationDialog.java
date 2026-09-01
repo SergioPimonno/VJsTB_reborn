@@ -149,7 +149,14 @@ public class PersonalizationDialog extends javax.swing.JDialog {
     /** Стиль отрисовки (см. {@link LafStyle} — 4 варианта, все из уже подключённого
      *  {@code flatlaf}) + шрифт приложения ({@code FlatLaf.setPreferredFontFamily},
      *  живо обновляется через {@code FlatLaf.updateUI()} без перезапуска). Независимая
-     *  от акцентных цветов ось персонализации — см. class-javadoc Palette. */
+     *  от акцентных цветов ось персонализации — см. class-javadoc Palette.
+     *
+     * <p>Стиль (в отличие от шрифта чуть ниже) ТОЛЬКО сохраняется и предупреждает
+     *  о необходимости перезапуска (см. {@link UiKit#promptRestartRequired}) — раньше
+     *  применялся живьём (L&F + Palette.applyTheme + updateComponentTreeUI на все
+     *  окна), но холсты с собственной отрисовкой (расключение, схема, генерация
+     *  масок и т.д. — см. те же javadoc у {@code MainMenuBar#applyTheme}) при этом
+     *  "залипали" на цветах старой темы — баг-репорт. */
     private JPanel buildStylePanel() {
         JPanel body = new JPanel();
         body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
@@ -159,20 +166,13 @@ public class PersonalizationDialog extends javax.swing.JDialog {
         styleCombo.setSelectedItem(LafStyle.byId(settings.activeProfile().getLafStyle()));
         styleCombo.addActionListener(e -> {
             LafStyle style = (LafStyle) styleCombo.getSelectedItem();
-            if (style == null) {
+            if (style == null || style.getId().equals(settings.activeProfile().getLafStyle())) {
                 return;
-            }
-            try {
-                javax.swing.UIManager.setLookAndFeel(style.createLaf());
-            } catch (Exception ignored) {
-                return;
-            }
-            Palette.applyTheme(style.isDark());
-            for (Window w : Window.getWindows()) {
-                javax.swing.SwingUtilities.updateComponentTreeUI(w);
-                w.repaint();
             }
             settings.setLafStyle(style.getId());
+            UiKit.promptRestartRequired(this, "Стиль оформления «" + style + "» будет применён при следующем"
+                    + " запуске — при живом переключении некоторые элементы с собственной отрисовкой"
+                    + " (расключение, общая схема, генерация масок) остаются цветов старого стиля.");
         });
         JPanel styleRow = new JPanel(new java.awt.BorderLayout(8, 0));
         styleRow.setAlignmentX(Component.LEFT_ALIGNMENT);

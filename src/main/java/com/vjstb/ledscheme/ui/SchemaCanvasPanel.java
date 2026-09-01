@@ -67,6 +67,12 @@ public class SchemaCanvasPanel extends JPanel {
     private Interaction interaction = Interaction.MOVE;
     private SchemaNode dragNode;
     private double dragOffX, dragOffY;
+    /** Стартовые (x,y) КАЖДОГО выделенного узла на момент начала перетаскивания
+     *  {@link #dragNode} — позволяет тащить ВСЕ выделенные узлы разом, сохраняя
+     *  их взаимное расположение (см. mouseDragged): дельта считается по anchor'у
+     *  ({@link #dragNode}), затем применяется ко всем остальным от их собственных
+     *  стартовых координат. Очищается по отпусканию кнопки. */
+    private final java.util.Map<SchemaNode, double[]> dragStartPositions = new java.util.LinkedHashMap<>();
     private SchemaNode resizeNode;
     /** Точка излома связи, которую сейчас тащат мышью (см. Task #85/v1.4) — null,
      *  если ничего не тащат. */
@@ -108,8 +114,19 @@ public class SchemaCanvasPanel extends JPanel {
     private Point panStartScreen;
     private Point panStartViewPosition;
 
-    private SchemaNode selectedNode;
+    /** Множественное выделение узлов (баг-репорт: "возможность выделять несколько
+     *  блоков... для перетаскивания и удаления") — клик по узлу с зажатым Shift
+     *  или Ctrl добавляет/убирает его из выделения без начала перетаскивания;
+     *  протяжка мышью по ПУСТОМУ месту холста рисует прямоугольник-«резинку»
+     *  (см. {@link #rubberBandStart}) и выделяет все узлы, пересекшиеся с ним.
+     *  Порядок вставки (LinkedHashSet) не используется для логики, просто
+     *  предсказуем при отладке. */
+    private final Set<SchemaNode> selectedNodes = new LinkedHashSet<>();
     private SchemaEdge selectedEdge;
+    /** Начало/текущая точка прямоугольника-«резинки» выделения (модельные
+     *  координаты) — null, если сейчас не тянется. См. {@link #selectedNodes}. */
+    private Point rubberBandStart;
+    private Point rubberBandCurrent;
 
     /** Прямоугольник значка "⚠" (в экранных координатах) для каждого перегруженного
      *  узла на ПОСЛЕДНЕЙ отрисовке — используется только для наведения мыши
@@ -193,7 +210,7 @@ public class SchemaCanvasPanel extends JPanel {
                     // применявшейся только в ветке MOVE — см. Task #95/v1.5).
                     SchemaEdge chipHitConnect = edgeLabelChipAt(mp);
                     if (chipHitConnect != null) {
-                        selectedNode = null;
+                        selectedNodes.clear();
                         selectedEdge = chipHitConnect;
                         repaint();
                         editEdgeLabel(chipHitConnect);
@@ -294,7 +311,11 @@ public class SchemaCanvasPanel extends JPanel {
                 }
                 SchemaNode resizeHit = resizeHandleAt(mp);
                 if (resizeHit != null) {
-                    selectedNode = resizeHit;
+                    // Хват за уголок ВСЕГДА сужает выделение до одного узла — resize
+                    // осмыслен только для одного блока за раз (см. isAutoSizedScreenWiringNode
+                    // и сам resize-drag ниже, которые оперируют ровно одним resizeNode).
+                    selectedNodes.clear();
+                    selectedNodes.add(resizeHit);
                     selectedEdge = null;
                     resizeNode = resizeHit;
                     repaint();
@@ -303,24 +324,46 @@ public class SchemaCanvasPanel extends JPanel {
                 WaypointHit wpHit = waypointAt(mp);
                 if (wpHit != null) {
                     selectedEdge = wpHit.edge();
-                    selectedNode = null;
+                    selectedNodes.clear();
                     draggingWaypointEdge = wpHit.edge();
                     draggingWaypointIndex = wpHit.index();
                     repaint();
                     return;
                 }
                 if (hit != null) {
-                    selectedNode = hit;
+                    // Shift/Ctrl+клик по узлу — добавить/убрать его из выделения БЕЗ
+                    // начала перетаскивания (баг-репорт: "возможность выделять несколько
+                    // блоков... для перетаскивания и удаления") — как и в большинстве
+                    // редакторов схем, такой клик не двигает блок сам по себе.
+                    if (e.isShiftDown() || e.isControlDown()) {
+                        if (!selectedNodes.remove(hit)) {
+                            selectedNodes.add(hit);
+                        }
+                        selectedEdge = null;
+                        repaint();
+                        return;
+                    }
+                    // Обычный клик по узлу, УЖЕ входящему в многовыделение — не сбрасывает
+                    // его (тащить нужно ВСЮ группу), иначе (клик вне текущего выделения,
+                    // либо выделения не было) — сужает выделение до этого одного узла.
+                    if (!selectedNodes.contains(hit)) {
+                        selectedNodes.clear();
+                        selectedNodes.add(hit);
+                    }
                     selectedEdge = null;
                     dragNode = hit;
                     dragOffX = mp.x - hit.getX();
                     dragOffY = mp.y - hit.getY();
+                    dragStartPositions.clear();
+                    for (SchemaNode n : selectedNodes) {
+                        dragStartPositions.put(n, new double[]{n.getX(), n.getY()});
+                    }
                     repaint();
                     return;
                 }
                 SchemaEdge chipHit = edgeLabelChipAt(mp);
                 if (chipHit != null) {
-                    selectedNode = null;
+                    selectedNodes.clear();
                     selectedEdge = chipHit;
                     // Не открываем редактор подписи сразу по нажатию — короткий клик
                     // без сдвига мыши откроет его в mouseReleased (см. draggingLabelMoved),
@@ -333,8 +376,19 @@ public class SchemaCanvasPanel extends JPanel {
                     repaint();
                     return;
                 }
-                selectedNode = null;
+                // Пусто (не узел, не гнездо, не чип подписи) — Shift/Ctrl добавляет к
+                // текущему выделению по завершении протяжки (см. mouseReleased), иначе
+                // выделение сбрасывается сразу (клик без движения = просто снять
+                // выделение, протяжка ниже — прямоугольник-«резинка», баг-репорт про
+                // выделение нескольких блоков).
+                if (!(e.isShiftDown() || e.isControlDown())) {
+                    selectedNodes.clear();
+                }
                 selectedEdge = edgeAt(mp);
+                if (selectedEdge == null) {
+                    rubberBandStart = mp;
+                    rubberBandCurrent = mp;
+                }
                 repaint();
             }
 
@@ -360,18 +414,27 @@ public class SchemaCanvasPanel extends JPanel {
                 if (resizeNode != null) {
                     double newW = Math.max(MIN_NODE_W, mp.x - resizeNode.getX());
                     double newH = Math.max(MIN_NODE_H, mp.y - resizeNode.getY());
-                    Double aspect = screenWiringAspect(resizeNode);
-                    if (aspect != null) {
-                        // Тянуть можно за любую ось — берём вариант, что просит БОЛЬШУЮ
-                        // площадь (обычно тот, куда пользователь реально потянул), вторую
-                        // сторону пересчитываем по отношению, чтобы не "проскакивать"
-                        // мимо курсора. Финальный пересчёт width от height — на случай,
-                        // если MIN_NODE_H подрезал высоту снизу.
-                        double byWidth = newW;
-                        double byHeight = newH * aspect;
-                        newW = Math.max(MIN_NODE_W, Math.max(byWidth, byHeight));
-                        newH = Math.max(MIN_NODE_H, newW / aspect);
-                        newW = newH * aspect;
+                    // Узел-экран в режиме "схема расключения" — тянуть можно за любую
+                    // ось, но обводка блока всегда пересчитывается так, чтобы миниатюра
+                    // заполняла её БЕЗ пустого поля (см. AppModel.screenWiringHeightForWidth/
+                    // screenWiringWidthForHeight, запрос: "размер блока должен
+                    // выравниваться в зависимости от текущего размера схемы расключения
+                    // с учётом шапки") — берём вариант, что просит БОЛЬШУЮ площадь
+                    // (обычно тот, куда пользователь реально потянул).
+                    if (resizeNode.getType() == SchemaNodeType.SCREEN
+                            && settings.activeProfile().isSchemaScreensAsWiringDiagram()) {
+                        Screen scr = screenById(resizeNode.getScreenRefId());
+                        if (scr != null) {
+                            Double hForW = model.screenWiringHeightForWidth(scr, newW);
+                            Double wForH = model.screenWiringWidthForHeight(scr, newH);
+                            if (hForW != null && wForH != null) {
+                                if (newW * hForW >= wForH * newH) {
+                                    newH = Math.max(MIN_NODE_H, hForW);
+                                } else {
+                                    newW = Math.max(MIN_NODE_W, wForH);
+                                }
+                            }
+                        }
                     }
                     resizeNode.setWidth(newW);
                     resizeNode.setHeight(newH);
@@ -413,7 +476,9 @@ public class SchemaCanvasPanel extends JPanel {
                     double candidateY = mp.y - dragOffY;
                     // Shift во время перетаскивания — привязка к краям/центрам других
                     // узлов (как в yEd): без Shift положение свободное, как раньше.
-                    if (e.isShiftDown()) {
+                    // Только для ОДИНОЧНОГО узла — при групповом перетаскивании привязка
+                    // якоря исказила бы взаимное расположение остальных выделенных.
+                    if (e.isShiftDown() && selectedNodes.size() <= 1) {
                         double[] snapped = snapPosition(dragNode, candidateX, candidateY);
                         candidateX = snapped[0];
                         candidateY = snapped[1];
@@ -421,9 +486,24 @@ public class SchemaCanvasPanel extends JPanel {
                         snapGuideX = null;
                         snapGuideY = null;
                     }
-                    dragNode.setX(Math.max(0, candidateX));
-                    dragNode.setY(Math.max(0, candidateY));
+                    // Двигаем ВСЕ выделенные узлы разом, от дельты anchor'а (dragNode) —
+                    // сохраняет их взаимное расположение (баг-репорт про множественное
+                    // выделение/перетаскивание).
+                    double[] anchorStart = dragStartPositions.get(dragNode);
+                    double dx = anchorStart != null ? candidateX - anchorStart[0] : 0;
+                    double dy = anchorStart != null ? candidateY - anchorStart[1] : 0;
+                    for (SchemaNode n : selectedNodes) {
+                        double[] start = dragStartPositions.get(n);
+                        if (start == null) {
+                            continue;
+                        }
+                        n.setX(Math.max(0, start[0] + dx));
+                        n.setY(Math.max(0, start[1] + dy));
+                    }
                     revalidate();
+                    repaint();
+                } else if (rubberBandStart != null) {
+                    rubberBandCurrent = mp;
                     repaint();
                 } else if (interaction == Interaction.CONNECT && connectPendingId != null) {
                     lastMouse = mp;
@@ -490,9 +570,23 @@ public class SchemaCanvasPanel extends JPanel {
                     draggingLabelPressMp = null;
                     draggingLabelMoved = false;
                 } else if (dragNode != null) {
-                    model.moveSchemaNode(dragNode, dragNode.getX(), dragNode.getY());
+                    if (selectedNodes.size() > 1) {
+                        java.util.Map<SchemaNode, double[]> positions = new java.util.LinkedHashMap<>();
+                        for (SchemaNode n : selectedNodes) {
+                            positions.put(n, new double[]{n.getX(), n.getY()});
+                        }
+                        model.moveSchemaNodes(positions);
+                    } else {
+                        model.moveSchemaNode(dragNode, dragNode.getX(), dragNode.getY());
+                    }
                     dragNode = null;
+                    dragStartPositions.clear();
                     onChanged.run();
+                } else if (rubberBandStart != null) {
+                    finishRubberBandSelection();
+                    rubberBandStart = null;
+                    rubberBandCurrent = null;
+                    repaint();
                 }
                 snapGuideX = null;
                 snapGuideY = null;
@@ -576,18 +670,35 @@ public class SchemaCanvasPanel extends JPanel {
         repaint();
     }
 
+    /** "Главный" выделенный узел — только когда выделен РОВНО один (иначе, при
+     *  множественном выделении, null: нет однозначного "того самого" узла, см.
+     *  {@link #getSelectedNodes()} для полного набора). */
     public SchemaNode getSelectedNode() {
-        return selectedNode;
+        return selectedNodes.size() == 1 ? selectedNodes.iterator().next() : null;
+    }
+
+    /** Полный набор выделенных узлов (см. {@link #selectedNodes}) — неизменяемый
+     *  снимок, пустой, если ничего не выделено. */
+    public Set<SchemaNode> getSelectedNodes() {
+        return java.util.Collections.unmodifiableSet(new LinkedHashSet<>(selectedNodes));
     }
 
     public SchemaEdge getSelectedEdge() {
         return selectedEdge;
     }
 
+    /** Удаляет ВСЁ текущее выделение (узлы и/или связь) — при нескольких
+     *  выделенных узлах ОДНИМ действием отмены (см. {@code AppModel
+     *  .deleteSchemaNodes}), не по одному, иначе Ctrl+Z вернул бы только
+     *  последний удалённый узел. */
     public void deleteSelected() {
-        if (selectedNode != null) {
-            model.deleteSchemaNode(selectedNode);
-            selectedNode = null;
+        if (selectedNodes.size() > 1) {
+            model.deleteSchemaNodes(new ArrayList<>(selectedNodes));
+            selectedNodes.clear();
+            onChanged.run();
+        } else if (!selectedNodes.isEmpty()) {
+            model.deleteSchemaNode(selectedNodes.iterator().next());
+            selectedNodes.clear();
             onChanged.run();
         } else if (selectedEdge != null) {
             model.deleteSchemaEdge(selectedEdge);
@@ -616,6 +727,29 @@ public class SchemaCanvasPanel extends JPanel {
 
     private List<SchemaEdge> edges() {
         return model.schemaEdgesForCurrentScene(mode);
+    }
+
+    /** Завершает протяжку прямоугольника-«резинки» (см. {@link #rubberBandStart}) —
+     *  добавляет к {@link #selectedNodes} все узлы, чей прямоугольник ПЕРЕСЕКАЕТСЯ
+     *  с областью протяжки (не обязательно ЦЕЛИКОМ внутри — как в большинстве
+     *  редакторов схем). Протяжка короче нескольких пикселей игнорируется — это
+     *  был просто клик по пустому месту без реального намерения выделить область
+     *  (выделение уже сброшено в mousePressed, если не был зажат Shift/Ctrl). */
+    private void finishRubberBandSelection() {
+        double x1 = Math.min(rubberBandStart.x, rubberBandCurrent.x);
+        double y1 = Math.min(rubberBandStart.y, rubberBandCurrent.y);
+        double x2 = Math.max(rubberBandStart.x, rubberBandCurrent.x);
+        double y2 = Math.max(rubberBandStart.y, rubberBandCurrent.y);
+        if (x2 - x1 < 3 && y2 - y1 < 3) {
+            return;
+        }
+        for (SchemaNode n : nodes()) {
+            double nx1 = n.getX(), ny1 = n.getY();
+            double nx2 = nx1 + n.getWidth(), ny2 = ny1 + n.getHeight();
+            if (nx1 < x2 && nx2 > x1 && ny1 < y2 && ny2 > y1) {
+                selectedNodes.add(n);
+            }
+        }
     }
 
     /** Экранная точка мыши → координата в модельном (немасштабированном)
@@ -986,7 +1120,7 @@ public class SchemaCanvasPanel extends JPanel {
         newWps.add(insertAt, new com.vjstb.ledscheme.model.EdgeWaypoint(p.x, p.y));
         model.setSchemaEdgeWaypoints(edge, newWps);
         selectedEdge = edge;
-        selectedNode = null;
+        selectedNodes.clear();
         onChanged.run();
         repaint();
     }
@@ -1308,10 +1442,20 @@ public class SchemaCanvasPanel extends JPanel {
         Point mp = toModel(e.getPoint());
         SchemaNode hitNode = nodeAt(mp);
         if (hitNode != null) {
-            selectedNode = hitNode;
+            // ПКМ по узлу, УЖЕ входящему в многовыделение — сохраняет его целиком
+            // (меню предложит удалить ВСЕ выбранные узлы), иначе сужает выделение
+            // до этого одного узла и показывает обычное подробное меню.
+            if (!selectedNodes.contains(hitNode)) {
+                selectedNodes.clear();
+                selectedNodes.add(hitNode);
+            }
             selectedEdge = null;
             repaint();
-            showNodeMenu(hitNode, e.getX(), e.getY());
+            if (selectedNodes.size() > 1) {
+                showMultiNodeMenu(e.getX(), e.getY());
+            } else {
+                showNodeMenu(hitNode, e.getX(), e.getY());
+            }
             return;
         }
         // Точки излома видны/хватаются только у уже ВЫДЕЛЕННОЙ связи (см. waypointAt),
@@ -1326,10 +1470,22 @@ public class SchemaCanvasPanel extends JPanel {
         SchemaEdge hitEdge = edgeAt(mp);
         if (hitEdge != null) {
             selectedEdge = hitEdge;
-            selectedNode = null;
+            selectedNodes.clear();
             repaint();
             showEdgeMenu(hitEdge, e.getX(), e.getY());
         }
+    }
+
+    /** Контекстное меню для КЛИКА ПРАВОЙ по узлу, входящему в многовыделение (см.
+     *  {@link #handleRightClick}) — только общие для группы действия (удаление),
+     *  подробное меню одного узла ({@link #showNodeMenu}) для группы неприменимо
+     *  (переименование/тип/карты — свойства ОДНОГО конкретного узла). */
+    private void showMultiNodeMenu(int x, int y) {
+        JPopupMenu menu = new JPopupMenu();
+        javax.swing.JMenuItem del = new javax.swing.JMenuItem("Удалить выбранные (" + selectedNodes.size() + ")");
+        del.addActionListener(ev -> deleteSelected());
+        menu.add(del);
+        menu.show(this, x, y);
     }
 
     private void showNodeMenu(SchemaNode node, int x, int y) {
@@ -1396,7 +1552,7 @@ public class SchemaCanvasPanel extends JPanel {
         javax.swing.JMenuItem del = new javax.swing.JMenuItem("Удалить узел");
         del.addActionListener(ev -> {
             model.deleteSchemaNode(node);
-            selectedNode = null;
+            selectedNodes.remove(node);
             onChanged.run();
             repaint();
         });
@@ -1434,7 +1590,7 @@ public class SchemaCanvasPanel extends JPanel {
         javax.swing.JMenuItem colorItem = new javax.swing.JMenuItem("Цвет линии…");
         colorItem.addActionListener(ev -> {
             Color initial = edge.getColor() != null ? new Color(edge.getColor()) : Palette.MUTED;
-            Color chosen = javax.swing.JColorChooser.showDialog(this, "Цвет линии связи", initial);
+            Color chosen = UiKit.showColorChooser(this, "Цвет линии связи", initial);
             if (chosen != null) {
                 model.setSchemaEdgeColor(edge, chosen.getRGB());
                 onChanged.run();
@@ -1551,7 +1707,26 @@ public class SchemaCanvasPanel extends JPanel {
         int logicalH = (int) Math.ceil(getHeight() / scale);
         paint(g2, logicalW, logicalH, settings.activeProfile().isSchemaScreensAsWiringDiagram());
         drawSnapGuides(g2, logicalW, logicalH);
+        drawRubberBand(g2);
         g2.dispose();
+    }
+
+    /** Прямоугольник-«резинка» протяжки выделения (см. {@link #selectedNodes}) —
+     *  полупрозрачная заливка + пунктирная рамка, как в большинстве редакторов
+     *  схем; ничего не рисует, пока протяжка не идёт. */
+    private void drawRubberBand(Graphics2D g2) {
+        if (rubberBandStart == null || rubberBandCurrent == null) {
+            return;
+        }
+        int x1 = Math.min(rubberBandStart.x, rubberBandCurrent.x);
+        int y1 = Math.min(rubberBandStart.y, rubberBandCurrent.y);
+        int w = Math.abs(rubberBandCurrent.x - rubberBandStart.x);
+        int h = Math.abs(rubberBandCurrent.y - rubberBandStart.y);
+        g2.setColor(new Color(Palette.ACCENT.getRed(), Palette.ACCENT.getGreen(), Palette.ACCENT.getBlue(), 40));
+        g2.fillRect(x1, y1, w, h);
+        g2.setColor(Palette.ACCENT);
+        g2.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 0, new float[]{4, 4}, 0));
+        g2.drawRect(x1, y1, w, h);
     }
 
     /** Направляющие линии привязки (Shift-перетаскивание, см. snapPosition) — яркая
@@ -1708,7 +1883,7 @@ public class SchemaCanvasPanel extends JPanel {
         boolean verticalConnectors = settings.activeProfile().isConnectorsVertical(mode);
         overloadIconRects.clear();
         for (SchemaNode n : ns) {
-            boolean selected = n == selectedNode;
+            boolean selected = selectedNodes.contains(n);
             boolean pending = n.getId().equals(connectPendingId);
             int nw = (int) n.getWidth(), nh = (int) n.getHeight();
             Color fill = nodeColor(n.getType());
@@ -1853,30 +2028,6 @@ public class SchemaCanvasPanel extends JPanel {
         return sb.toString();
     }
 
-    /** Соотношение width:height (ширина/высота), которому должен подчиняться resize
-     *  узла-экрана, если включена настройка «узел экрана показывает схему расключения
-     *  его кабинетов» (Task #16) — та же формула физического размера экрана (мм), что
-     *  {@link #drawScreenWiringThumbnail} использует для вписывания миниатюры. null —
-     *  ограничивать нечем (не узел-экран, эта настройка выключена, узел не привязан к
-     *  реальному экрану библиотеки, или тип кабинета/сетка неизвестны) — resize
-     *  остаётся свободным, как раньше. */
-    private Double screenWiringAspect(SchemaNode n) {
-        if (n.getType() != SchemaNodeType.SCREEN || !settings.activeProfile().isSchemaScreensAsWiringDiagram()) {
-            return null;
-        }
-        Screen scr = screenById(n.getScreenRefId());
-        if (scr == null) {
-            return null;
-        }
-        CabinetType t = model.typeOf(scr);
-        if (t == null || t.getWidthMm() <= 0 || t.getHeightMm() <= 0 || scr.getCols() <= 0 || scr.getRows() <= 0) {
-            return null;
-        }
-        double widthMm = scr.getCols() * t.getWidthMm();
-        double heightMm = scr.getRows() * t.getHeightMm();
-        return widthMm / heightMm;
-    }
-
     /** "Тестовая" замена обычного текста статистики узла-экрана (см. renderScreenWiring
      *  в {@link #paint}) — рисует уменьшенную схему расключения ЭТОГО экрана (сетка
      *  кабинетов + цепочки текущего режима) внутри того же прямоугольника узла, где
@@ -1965,7 +2116,7 @@ public class SchemaCanvasPanel extends JPanel {
         clipped.clipRect((int) n.getX(), (int) n.getY(), nw, nh);
         SchemeRenderer.paintWiringDiagram(clipped, g.screen(), g.type(), mode == SchemaMode.POWER,
                 g.cellW(), g.cellH(), g.left(), g.top(), model.getWorkspace(), powerChains, signalChains,
-                settings.activeProfile().isPowerUnitKw());
+                model.controllersInScene(scene), settings.activeProfile().isPowerUnitKw());
         if (barH > 0) {
             SchemeRenderer.drawControllerSummaryBar(clipped, g.screen(), model.getWorkspace(),
                     g.left(), g.top() + g.screen().getRows() * g.cellH() + 2, availW);

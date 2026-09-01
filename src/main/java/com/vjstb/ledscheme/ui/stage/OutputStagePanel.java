@@ -78,7 +78,7 @@ public class OutputStagePanel extends JPanel {
             return chosenFolder;
         }
         Project project = model.getCurrentProject();
-        return project != null ? OutputPaths.defaultFolder(project, null) : null;
+        return project != null ? OutputPaths.defaultFolder(project, null, settings) : null;
     }
 
     private void refreshFolderField() {
@@ -145,8 +145,14 @@ public class OutputStagePanel extends JPanel {
         JFileChooser fc = new JFileChooser();
         fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
         fc.setDialogTitle("Выберите папку вывода");
-        if (chosenFolder != null) {
-            fc.setCurrentDirectory(chosenFolder);
+        // Баг-репорт: с настроенной папкой экспорта по умолчанию в «Предпочтения →
+        // Экспорт» диалог всё равно открывался в Documents — chosenFolder тут пуст,
+        // пока пользователь ХОТЬ РАЗ не выбрал папку САМ в этой сессии, поэтому
+        // resolveFolder() (которая как раз учитывает настройку) не подставлялась
+        // вообще. Стартуем от неё же, не только от уже явно выбранной раньше.
+        File initial = chosenFolder != null ? chosenFolder : resolveFolder();
+        if (initial != null) {
+            fc.setCurrentDirectory(initial);
         }
         if (fc.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
             chosenFolder = fc.getSelectedFile();
@@ -272,15 +278,17 @@ public class OutputStagePanel extends JPanel {
                     List<PowerChain> scrPowerChains = model.powerChainsTouchingScreen(scr);
                     List<SignalChain> scrSignalChains = model.signalChainsTouchingScreen(scr);
 
+                    List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers =
+                            model.controllersInScene(scr);
                     BufferedImage powerImg = SchemeRenderer.renderImage(scr, type, true, 120, model.getWorkspace(),
-                            scrPowerChains, scrSignalChains, kw, dpiScale);
+                            scrPowerChains, scrSignalChains, sceneControllers, kw, dpiScale);
                     SchemeRenderer.writeJpeg(powerImg,
                             new File(powerFolder, OutputPaths.sanitize(scr.getName() + " Сила") + ".jpg"),
                             docExportDpi);
                     jpegCount++;
 
                     BufferedImage signalImg = SchemeRenderer.renderImage(scr, type, false, 120, model.getWorkspace(),
-                            scrPowerChains, scrSignalChains, kw, dpiScale);
+                            scrPowerChains, scrSignalChains, sceneControllers, kw, dpiScale);
                     SchemeRenderer.writeJpeg(signalImg,
                             new File(signalFolder, OutputPaths.sanitize(scr.getName() + " Сигнал") + ".jpg"),
                             docExportDpi);

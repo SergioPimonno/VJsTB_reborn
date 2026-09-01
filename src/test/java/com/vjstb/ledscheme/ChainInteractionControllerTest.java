@@ -232,6 +232,75 @@ class ChainInteractionControllerTest {
     }
 
     @Test
+    void occupiedCabinetIsSkippedWhileContinuingChainByClickOrDrag(@TempDir Path dir) {
+        // Баг-репорт: "рисовал стрелками, выделение не только залезло на ячейки из
+        // другой цепочки, но и включило их в текущую, такого быть не должно" —
+        // раньше occupancyCheck не существовал вовсе, и ЛЮБОЙ кабинет, через который
+        // прошёл клик/протяжка ПОСЛЕ старта цепочки, включался в неё безусловно
+        // (проверка занятости была только у ChainStarter, т.е. для ПЕРВОГО кабинета).
+        AppModel model = freshModelWithScreen(dir, 2, 3);
+        Screen scr = model.getCurrentScreen();
+        String a = scr.cabinetAt(0, 0).getId();
+        String occupied = scr.cabinetAt(0, 1).getId();
+        String c = scr.cabinetAt(0, 2).getId();
+
+        List<List<String>> committed = new ArrayList<>();
+        ChainInteractionController ctrl = new ChainInteractionController(model, () -> { });
+        ctrl.setOccupancyCheck(occupied::equals);
+
+        ctrl.startFor(committed::add);
+        ctrl.cabinetClicked(a);
+        ctrl.cabinetClicked(occupied); // протяжка "залезла" на кабинет чужой цепочки
+        ctrl.cabinetClicked(c);
+        assertEquals(List.of(a, c), ctrl.activeChainCabIds(),
+                "кабинет, занятый ДРУГОЙ цепочкой, не должен попадать в строящуюся");
+
+        ctrl.finish();
+        assertEquals(List.of(a, c), committed.get(0));
+    }
+
+    @Test
+    void occupiedCabinetIsSkippedByArrowKeyMovement(@TempDir Path dir) {
+        AppModel model = freshModelWithScreen(dir, 1, 3);
+        Screen scr = model.getCurrentScreen();
+        String occupied = scr.cabinetAt(0, 1).getId();
+
+        List<List<String>> committed = new ArrayList<>();
+        ChainInteractionController ctrl = new ChainInteractionController(model, () -> { });
+        ctrl.setOccupancyCheck(occupied::equals);
+
+        ctrl.startFor(committed::add);
+        ctrl.moveCursor(0, 0); // курсор в (0,0)
+        ctrl.moveCursor(0, 1); // курсор в (0,1) -- занят другой цепочкой, не должен добавиться
+        ctrl.moveCursor(0, 1); // курсор в (0,2) -- свободен
+
+        assertEquals(List.of(scr.cabinetAt(0, 0).getId(), scr.cabinetAt(0, 2).getId()), ctrl.activeChainCabIds());
+    }
+
+    @Test
+    void resumeEditingReAddsItsOwnCabinetsDespiteOccupancyCheck(@TempDir Path dir) {
+        // Кабинеты СВОЕЙ же строящейся (редактируемой) цепочки формально всё ещё
+        // "заняты" в модели (пока правка не сохранена) — occupancyCheck не должен
+        // мешать повторному клику по НИМ (activeIds.contains — короткое замыкание
+        // ДО вызова occupancyCheck, см. cabinetClicked).
+        AppModel model = freshModelWithScreen(dir, 2, 2);
+        Screen scr = model.getCurrentScreen();
+        String a = scr.cabinetAt(0, 0).getId();
+        String b = scr.cabinetAt(0, 1).getId();
+
+        List<List<String>> updated = new ArrayList<>();
+        ChainInteractionController ctrl = new ChainInteractionController(model, () -> { });
+        ctrl.setOccupancyCheck(cabId -> cabId.equals(a) || cabId.equals(b)); // "занята" — это и есть своя цепочка
+
+        ctrl.resumeEditing(List.of(a, b), updated::add);
+        ctrl.cabinetClicked(a); // повторный клик по своему же кабинету -- не должен ничего сломать
+        assertEquals(List.of(a, b), ctrl.activeChainCabIds());
+
+        ctrl.finish();
+        assertEquals(List.of(a, b), updated.get(0));
+    }
+
+    @Test
     void resumeEditingPreloadsExistingCabinetsAndUpdatesSameChainOnFinish(@TempDir Path dir) {
         // Task #11/v1.6: клик по уже построенной цепочке в списке должен дать
         // достроить её, а по завершении обновить ТУ ЖЕ запись (по id), а не создать

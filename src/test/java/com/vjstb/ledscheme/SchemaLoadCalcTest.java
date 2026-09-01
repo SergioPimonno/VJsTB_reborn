@@ -153,6 +153,48 @@ class SchemaLoadCalcTest {
     }
 
     @Test
+    void understatedWireCountOnOneEdgeDoesNotInflateShareOfAnotherEdge(@TempDir Path dir) {
+        // Баг-репорт: "6 вводных показывают общую нагрузку в 22,4кВт, в то время как
+        // в окне расключения 6 вводных в сумме дают 20,16кВт (правильное значение)" —
+        // экран реально запитан 4 цепочками (2 каб. × 150 Вт = 300 Вт каждая, итого
+        // 1200 Вт на 8 кабинетов экрана), но связи в общей схеме промаркированы
+        // "1×" и "2×" (сумма меток = 3, а НЕ 4 — типичная забытая правка после
+        // добавления ещё одной цепочки через ту же проходную). Связь "2×" должна
+        // получить РОВНО половину реальной нагрузки (2 цепочки из 4), 600 Вт — а НЕ
+        // 2/3 от общей (800 Вт), как считал бы старый код по сумме меток.
+        AppModel model = freshModel(dir);
+        CabinetType type = sampleType(model); // 150 Вт/каб.
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("E", type.getId(), 2, 4, 0, 0); // 8 каб. × 150 = 1200 Вт
+        model.selectScreen(screen); // addPowerChain требует currentScreen
+        SchemaNode screenNode = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SCREEN, "E", 0, 0, screen.getId());
+
+        java.util.List<String> ids = screen.getCabinets().stream().map(c -> c.getId()).toList();
+        model.addPowerChain(1, ids.subList(0, 2));
+        model.addPowerChain(2, ids.subList(2, 4));
+        model.addPowerChain(3, ids.subList(4, 6));
+        model.addPowerChain(1, ids.subList(6, 8)); // 4 реальные цепочки, а не 3
+
+        SchemaNode proxy1 = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "Proxy1", 0, 200, null);
+        model.addPowerConnectorToNode(proxy1, "CEE 63A", PortDirection.IN, 1, 1, null);
+        model.setSchemaNodeLoadDeratingPercent(proxy1, 100.0); // заведомо не перегружен
+        SchemaEdge edge1 = model.addSchemaEdge(SchemaMode.POWER, proxy1.getId(), screenNode.getId(), "1×CEE 16A");
+        edge1.setWireCount(1);
+
+        SchemaNode proxy2 = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "Proxy2", 0, 400, null);
+        model.addPowerConnectorToNode(proxy2, "CEE 63A", PortDirection.IN, 1, 1, null);
+        model.setSchemaNodeLoadDeratingPercent(proxy2, 100.0);
+        SchemaEdge edge2 = model.addSchemaEdge(SchemaMode.POWER, proxy2.getId(), screenNode.getId(), "2×CEE 16A");
+        edge2.setWireCount(2); // помечено 2 линии из "3" (1+2), реально -- 2 из 4
+
+        SchemaLoadCalc.NodeLoad load2 = SchemaLoadCalc.evaluate(proxy2, scene, model);
+        assertTrue(Math.abs(load2.loadWatts() - 600.0) < 0.001,
+                "2 цепочки из 4 реальных = половина 1200 Вт = 600 Вт, получено: " + load2.loadWatts());
+    }
+
+    @Test
     void sumsLoadRecursivelyThroughIntermediateNode(@TempDir Path dir) {
         AppModel model = freshModel(dir);
         CabinetType type = sampleType(model); // 150 Вт/каб.
