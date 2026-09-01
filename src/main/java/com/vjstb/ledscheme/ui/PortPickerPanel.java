@@ -99,7 +99,15 @@ public class PortPickerPanel extends JPanel {
                 continue;
             }
             if (poolCount > 1) {
-                String cardName = !t.getCards().isEmpty() ? t.getCards().get(poolIdx).getName() : "";
+                // Баг-репорт: t.getCards().get(poolIdx) — СЫРОЙ индекс, считает ВСЕ карты
+                // подряд, включая чисто входные (без единого Ethernet-выхода) -- у H2-серии
+                // Novastar (карта 1 — HDMI+DP Input, карта 2 — Ethernet+Fiber Output)
+                // showed "Карта 1 — HDMI+DP Input card" над портами ВЫХОДНОЙ карты.
+                // sendingCardAt(poolIdx) резолвит ТЕМ ЖЕ способом, что и сама нумерация
+                // портов (ethernetPortCountInPool/globalPortFor чуть выше/ниже) — только
+                // среди карт с ethernetOutput, см. её javadoc в ControllerType.
+                com.vjstb.ledscheme.model.SchemaCard sendingCard = t.sendingCardAt(poolIdx);
+                String cardName = sendingCard != null ? sendingCard.getName() : "";
                 JLabel header = new JLabel("Карта " + (poolIdx + 1) + (cardName.isEmpty() ? "" : " — " + cardName));
                 header.setFont(header.getFont().deriveFont(Font.BOLD, 11f));
                 header.setForeground(Palette.MUTED);

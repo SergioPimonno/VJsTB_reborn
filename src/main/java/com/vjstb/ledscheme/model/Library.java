@@ -43,6 +43,11 @@ public class Library {
     /** Библиотека типов машин (габариты кузова, грузоподъёмность) — см. VehicleType
      *  и VEHICLE_CALC_NOTES.md. */
     private List<VehicleType> vehicleTypes = new ArrayList<>();
+    /** Библиотека типов сетевого оборудования (свитчи/роутеры/точки доступа/...) —
+     *  см. NetworkDeviceType и NETWORK_MANAGER_NOTES.md. Как и caseTypes/vehicleTypes,
+     *  на эти id нет персистентных FK нигде в проектных данных, кроме {@code
+     *  NetworkDevicePlacement#deviceTypeId} (данные ПРОЕКТА, не библиотеки). */
+    private List<NetworkDeviceType> networkDeviceTypes = new ArrayList<>();
     /** Подкатегории оборудования под "Прочее оборудование" — общая справочная
      *  данные (Task #135/v2.0), редактируется только через отдельную админ-консоль
      *  (ledscheme-admin), синхронизируется с сервера (вид EQUIPMENT_CUSTOM_CATEGORY,
@@ -89,6 +94,7 @@ public class Library {
     private List<StructureFrameType> sharedStructureFrameTypes = new ArrayList<>();
     private List<CaseType> sharedCaseTypes = new ArrayList<>();
     private List<VehicleType> sharedVehicleTypes = new ArrayList<>();
+    private List<NetworkDeviceType> sharedNetworkDeviceTypes = new ArrayList<>();
 
     public List<CabinetType> getCabinetTypes() {
         return cabinetTypes;
@@ -168,6 +174,14 @@ public class Library {
 
     public void setVehicleTypes(List<VehicleType> vehicleTypes) {
         this.vehicleTypes = vehicleTypes;
+    }
+
+    public List<NetworkDeviceType> getNetworkDeviceTypes() {
+        return networkDeviceTypes;
+    }
+
+    public void setNetworkDeviceTypes(List<NetworkDeviceType> networkDeviceTypes) {
+        this.networkDeviceTypes = networkDeviceTypes;
     }
 
     public Map<String, String> getServerCustomEquipmentCategoriesById() {
@@ -290,6 +304,14 @@ public class Library {
         this.sharedVehicleTypes = sharedVehicleTypes;
     }
 
+    public List<NetworkDeviceType> getSharedNetworkDeviceTypes() {
+        return sharedNetworkDeviceTypes;
+    }
+
+    public void setSharedNetworkDeviceTypes(List<NetworkDeviceType> sharedNetworkDeviceTypes) {
+        this.sharedNetworkDeviceTypes = sharedNetworkDeviceTypes;
+    }
+
     /** Общее, затем личное — см. class-javadoc про общую/личную библиотеку. */
     public CabinetType cabinetTypeById(String id) {
         if (id == null) {
@@ -392,6 +414,24 @@ public class Library {
         for (VehicleType v : vehicleTypes) {
             if (v.getId().equals(id)) {
                 return v;
+            }
+        }
+        return null;
+    }
+
+    /** Общее, затем личное — см. class-javadoc про общую/личную библиотеку. */
+    public NetworkDeviceType networkDeviceTypeById(String id) {
+        if (id == null) {
+            return null;
+        }
+        for (NetworkDeviceType t : sharedNetworkDeviceTypes) {
+            if (t.getId().equals(id)) {
+                return t;
+            }
+        }
+        for (NetworkDeviceType t : networkDeviceTypes) {
+            if (t.getId().equals(id)) {
+                return t;
             }
         }
         return null;

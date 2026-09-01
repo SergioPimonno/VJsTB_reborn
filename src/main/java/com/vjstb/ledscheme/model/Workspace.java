@@ -25,9 +25,10 @@ import java.util.Map;
  */
 @JsonIgnoreProperties({"cabinetTypes", "controllerTypes", "equipmentPresets", "cableTypes", "interfaceTypes",
         "cableLengthProfiles", "hoistTypes", "structureFrameTypes", "caseTypes", "vehicleTypes",
+        "networkDeviceTypes",
         "sharedCabinetTypes", "sharedControllerTypes", "sharedEquipmentPresets", "sharedCableTypes",
         "sharedInterfaceTypes", "sharedCableLengthProfiles", "sharedHoistTypes", "sharedStructureFrameTypes",
-        "sharedCaseTypes", "sharedVehicleTypes",
+        "sharedCaseTypes", "sharedVehicleTypes", "sharedNetworkDeviceTypes",
         "customEquipmentCategories", "equipmentCategoryLabelOverrides"})
 public class Workspace {
 
@@ -123,6 +124,14 @@ public class Workspace {
         library.setVehicleTypes(vehicleTypes);
     }
 
+    public List<NetworkDeviceType> getNetworkDeviceTypes() {
+        return library.getNetworkDeviceTypes();
+    }
+
+    public void setNetworkDeviceTypes(List<NetworkDeviceType> networkDeviceTypes) {
+        library.setNetworkDeviceTypes(networkDeviceTypes);
+    }
+
     public List<CabinetType> getSharedCabinetTypes() {
         return library.getSharedCabinetTypes();
     }
@@ -203,6 +212,14 @@ public class Workspace {
         library.setSharedVehicleTypes(sharedVehicleTypes);
     }
 
+    public List<NetworkDeviceType> getSharedNetworkDeviceTypes() {
+        return library.getSharedNetworkDeviceTypes();
+    }
+
+    public void setSharedNetworkDeviceTypes(List<NetworkDeviceType> sharedNetworkDeviceTypes) {
+        library.setSharedNetworkDeviceTypes(sharedNetworkDeviceTypes);
+    }
+
     public Map<String, String> getServerCustomEquipmentCategoriesById() {
         return library.getServerCustomEquipmentCategoriesById();
     }
@@ -249,5 +266,9 @@ public class Workspace {
 
     public VehicleType vehicleTypeById(String id) {
         return library.vehicleTypeById(id);
+    }
+
+    public NetworkDeviceType networkDeviceTypeById(String id) {
+        return library.networkDeviceTypeById(id);
     }
 }

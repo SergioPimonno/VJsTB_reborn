@@ -1,6 +1,7 @@
 package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.model.CabinetType;
+import com.vjstb.ledscheme.model.ScreenMountType;
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
@@ -19,15 +20,28 @@ import javax.swing.JTextField;
 import javax.swing.SpinnerNumberModel;
 
 /** Модальный диалог параметров нового экрана: имя, тип кабинета, размер сетки,
- *  базовый офсет (X/Y мм) — предзаполненный подсказанной автопозицией. */
+ *  способ монтажа, базовый офсет (X/Y мм) — предзаполненный подсказанной
+ *  автопозицией.
+ *
+ * <p>{@link #mountTypeField} (запрос пользователя: "при создании экрана тип
+ * монтажа выбирать сразу, а не только при корректировке параметров экрана")
+ * — раньше новый экран ВСЕГДА получал жёстко зашитый дефолт {@link
+ * ScreenMountType#RIGGED} ({@code Screen.mountType} инициализируется им же),
+ * менять его сразу после создания было неудобно (нужно было открыть
+ * «Параметры экрана» отдельным шагом). Значение по умолчанию в этом
+ * комбобоксе — {@code RIGGED}, первый элемент {@link
+ * ScreenMountType#values()} — то же, что и раньше, просто теперь явно
+ * выбираемо тут же, а не только позже. */
 public class NewScreenDialog extends JDialog {
 
     /** Заполненные и провалидированные параметры нового экрана. */
-    public record Result(String name, String cabinetTypeId, int rows, int cols, double posX, double posY) {
+    public record Result(String name, String cabinetTypeId, int rows, int cols, double posX, double posY,
+                          ScreenMountType mountType) {
     }
 
     private final JTextField nameField = new JTextField();
     private final JComboBox<CabinetType> typeField = new JComboBox<>();
+    private final JComboBox<ScreenMountType> mountTypeField = new JComboBox<>(ScreenMountType.values());
     private final JSpinner colsField = new JSpinner(new SpinnerNumberModel(3, 1, 200, 1));
     private final JSpinner rowsField = new JSpinner(new SpinnerNumberModel(5, 1, 200, 1));
     private final JTextField xField = new JTextField();
@@ -56,6 +70,8 @@ public class NewScreenDialog extends JDialog {
         form.add(nameField);
         form.add(new JLabel("Кабинет"));
         form.add(typeField);
+        form.add(new JLabel("Способ монтажа"));
+        form.add(mountTypeField);
         form.add(new JLabel("Колонны"));
         form.add(colsField);
         MathFields.enableExpressions(colsField);
@@ -100,7 +116,9 @@ public class NewScreenDialog extends JDialog {
             }
             double x = parseDouble(xField.getText(), "X");
             double y = parseDouble(yField.getText(), "Y");
-            result = new Result(name, type.getId(), (int) rowsField.getValue(), (int) colsField.getValue(), x, y);
+            ScreenMountType mountType = (ScreenMountType) mountTypeField.getSelectedItem();
+            result = new Result(name, type.getId(), (int) rowsField.getValue(), (int) colsField.getValue(), x, y,
+                    mountType);
             dispose();
         } catch (IllegalArgumentException ex) {
             JOptionPane.showMessageDialog(this, ex.getMessage(), "Проверка данных", JOptionPane.WARNING_MESSAGE);

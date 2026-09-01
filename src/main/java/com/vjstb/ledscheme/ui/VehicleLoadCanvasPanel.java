@@ -109,6 +109,16 @@ public class VehicleLoadCanvasPanel extends JPanel {
         double xMm;
         double yMm;
         boolean rotated;
+        /** Кофр стоит "на попа" — footprint пола = ширина×высота типа (длина
+         *  торчит вверх, должна помещаться под {@code vehicle.getCargoHeightMm()}),
+         *  а не обычное лежачее длина×ширина. См. {@link #footprintWMm()}/{@link
+         *  #footprintHMm()} — единственные два места, что читают габариты типа,
+         *  поэтому вся остальная геометрия (столкновения, привязка, отрисовка,
+         *  автоматическая раскладка) корректно работает с любым сочетанием
+         *  vertical/rotated без отдельных правок. Штабелирование ({@link
+         *  #stackCount}) в этом положении не предусмотрено — физически кофры "на
+         *  попа" друг на друга здесь не ставятся. */
+        boolean vertical;
         int stackCount = 1;
         /** Примечание менеджера (ПКМ по кофру), пусто — не задано. */
         String note = "";
@@ -118,11 +128,15 @@ public class VehicleLoadCanvasPanel extends JPanel {
         }
 
         double footprintWMm() {
-            return rotated ? type.getWidthMm() : type.getLengthMm();
+            double a = vertical ? type.getWidthMm() : type.getLengthMm();
+            double b = vertical ? type.getHeightMm() : type.getWidthMm();
+            return rotated ? b : a;
         }
 
         double footprintHMm() {
-            return rotated ? type.getLengthMm() : type.getWidthMm();
+            double a = vertical ? type.getWidthMm() : type.getLengthMm();
+            double b = vertical ? type.getHeightMm() : type.getWidthMm();
+            return rotated ? a : b;
         }
     }
 
@@ -335,10 +349,27 @@ public class VehicleLoadCanvasPanel extends JPanel {
         return vehicle;
     }
 
-    /** Новое размещение стартует в углу кузова (0,0) — пользователь перетаскивает
-     *  на нужное место сам (кнопка «Добавить сюда»). Для драг-н-дропа из палитры
-     *  прямо на нужное место — см. {@link #addPlacementAt}. */
+    /** Кнопка «Добавить сюда» — если СЕЙЧАС ВЫДЕЛЕН (см. {@link #selected}) кофр
+     *  ТОГО ЖЕ типа, новый кофр добавляется К НЕМУ в штабель (увеличивает {@code
+     *  stackCount}), а не заново ищет место с угла кузова. Баг-репорт: "если
+     *  выбран какой-то стек кофров, и нажимается кнопка добавить сюда, то новый
+     *  кофр добавляется к стопке в верхнем левом углу машины, а не выбранному"
+     *  — раньше метод ВСЕГДА звал {@code addPlacementAt(type, 0, 0)}, который
+     *  штабелирует в ПЕРВЫЙ попавшийся под этой точкой кофр того же типа (обычно
+     *  самый первый когда-либо размещённый — часто НЕ тот, что менеджер реально
+     *  выделил на канвасе). Если подходящего выделения нет (другой тип/ничего не
+     *  выделено) или выделенный стек уже на пределе {@code maxStackCount} —
+     *  прежнее поведение без изменений: {@link #addPlacementAt} с (0,0). Для
+     *  drag-n-drop из палитры прямо на нужное место — тоже {@link
+     *  #addPlacementAt}, но с явными координатами курсора, эта проблема его не
+     *  касалась. */
     public void addPlacement(CaseType type) {
+        if (selected != null && selected.type == type && selected.stackCount < type.getMaxStackCount()) {
+            selected.stackCount++;
+            onChanged.run();
+            repaint();
+            return;
+        }
         addPlacementAt(type, 0, 0);
     }
 
@@ -352,8 +383,8 @@ public class VehicleLoadCanvasPanel extends JPanel {
      *  проверяются). Не помечает {@link #selected}, не вызывает {@link
      *  #onChanged} — вызывающий код сам решает, когда это нужно (обычно не
      *  нужно, при массовой загрузке всех размещений плана сразу). */
-    public void restorePlacement(CaseType type, double xMm, double yMm, boolean rotated, int stackCount,
-                                  String note) {
+    public void restorePlacement(CaseType type, double xMm, double yMm, boolean rotated, boolean vertical,
+                                  int stackCount, String note) {
         if (type == null) {
             return;
         }
@@ -361,6 +392,7 @@ public class VehicleLoadCanvasPanel extends JPanel {
         p.xMm = xMm;
         p.yMm = yMm;
         p.rotated = rotated;
+        p.vertical = vertical;
         p.stackCount = Math.max(1, stackCount);
         p.note = note != null ? note : "";
         placements.add(p);
@@ -446,6 +478,24 @@ public class VehicleLoadCanvasPanel extends JPanel {
      * @return типы/количества, которые НЕ поместились в эту машину (пусто, если
      *         разместилось всё) */
     public Map<CaseType, Integer> autoPlaceAll(Map<CaseType, Integer> needed) {
+        return autoPlaceAll(needed, false);
+    }
+
+    /** {@code preferVertical} — запрос пользователя: "опция для автозаполнения...
+     *  для заполнения машины кофрами в вертикальной ориентации": вместо обычного
+     *  лежачего положения (footprint пола = длина×ширина, несколько штук стопкой
+     *  по высоте, см. {@link #stackCount}) кофр ставится "на попа" (footprint
+     *  пола = ширина×высота, ДЛИНА торчит вверх) — сильно меньший footprint пола
+     *  для типично длинных/невысоких кофров ценой высоты кузова. Штабелирование
+     *  в этом положении не предусмотрено (физически кофры "на попа" друг на
+     *  друга не ставятся) — каждая штука занимает СВОЮ клетку пола.
+     *
+     * <p>Решение ПО КАЖДОМУ ТИПУ ОТДЕЛЬНО, не глобально: если длина конкретного
+     * типа не помещается под потолок кузова (стоя не влезет физически), для
+     * ЭТОГО типа тихо используется обычное лежачее положение (со штабелированием,
+     * как без {@code preferVertical}) — не проваливается в {@code leftover}
+     * только из-за того, что "вертикально" не подошло, если "лёжа" подходит. */
+    public Map<CaseType, Integer> autoPlaceAll(Map<CaseType, Integer> needed, boolean preferVertical) {
         placements.clear();
         selected = null;
         Map<CaseType, Integer> leftover = new LinkedHashMap<>();
@@ -454,13 +504,20 @@ public class VehicleLoadCanvasPanel extends JPanel {
             return leftover;
         }
 
-        record Slot(CaseType type, int units, double footprintWMm, double footprintHMm) {
+        record Slot(CaseType type, int units, double footprintWMm, double footprintHMm, boolean vertical) {
         }
         List<Slot> slots = new ArrayList<>();
         for (Map.Entry<CaseType, Integer> entry : needed.entrySet()) {
             CaseType type = entry.getKey();
             int count = entry.getValue();
             if (count <= 0) {
+                continue;
+            }
+            if (preferVertical && type.getLengthMm() <= vehicle.getCargoHeightMm()) {
+                // "На попа" — без штабелирования, одна штука на клетку.
+                for (int i = 0; i < count; i++) {
+                    slots.add(new Slot(type, 1, type.getWidthMm(), type.getHeightMm(), true));
+                }
                 continue;
             }
             int heightCap = (int) Math.floor(vehicle.getCargoHeightMm() / type.getHeightMm());
@@ -472,7 +529,7 @@ public class VehicleLoadCanvasPanel extends JPanel {
             int remaining = count;
             while (remaining > 0) {
                 int units = Math.min(effectiveStack, remaining);
-                slots.add(new Slot(type, units, type.getLengthMm(), type.getWidthMm()));
+                slots.add(new Slot(type, units, type.getLengthMm(), type.getWidthMm(), false));
                 remaining -= units;
             }
         }
@@ -512,6 +569,7 @@ public class VehicleLoadCanvasPanel extends JPanel {
             }
             Placement p = new Placement(slot.type());
             p.rotated = rotated;
+            p.vertical = slot.vertical();
             p.xMm = curX;
             p.yMm = curY;
             p.stackCount = slot.units();
@@ -522,6 +580,17 @@ public class VehicleLoadCanvasPanel extends JPanel {
         revalidate();
         repaint();
         return leftover;
+    }
+
+    /** Кнопка «Убрать все» (запрос пользователя) — полностью очищает раскладку
+     *  этой машины, саму машину (комбобокс) не трогает. Вызывающий код сам решает,
+     *  спрашивать ли подтверждение и вызывать {@code onChanged}/обновление сводки
+     *  (см. {@code VehicleLoadVisualizerDialog#clearAllInSection}) — тот же
+     *  контракт, что и у {@link #autoPlaceAll}. */
+    public void clearAll() {
+        placements.clear();
+        selected = null;
+        repaint();
     }
 
     /** Экранные px (в координатах ЭТОЙ панели, включая {@link #PADDING}) →
@@ -562,6 +631,17 @@ public class VehicleLoadCanvasPanel extends JPanel {
 
     public List<Placement> getPlacements() {
         return placements;
+    }
+
+    /** Программно выделяет размещение — обычно выделение ставится кликом мыши
+     *  ({@link #mousePressed}), этот метод нужен тестам (см. {@code
+     *  VehicleLoadCanvasPanelTest}, проверяет {@link #addPlacement} для
+     *  выделенного стека без симуляции мыши) и потенциально внешнему коду,
+     *  которому нужно управлять выделением без клика. {@code null} снимает
+     *  выделение. */
+    public void select(Placement p) {
+        this.selected = p;
+        repaint();
     }
 
     // ---- геометрия / коллизии ----

@@ -50,6 +50,7 @@ public class App {
                     new OnboardingDialog(frame, model, settings).setVisible(true);
                 }
                 checkForUpdatesInBackground(frame, settings);
+                syncLibraryInBackground(model, settings);
             } catch (RuntimeException ex) {
                 JOptionPane.showMessageDialog(null,
                         "Не удалось запустить приложение: " + ex.getMessage(),
@@ -89,6 +90,46 @@ public class App {
                     }
                 } catch (Exception ignored) {
                     // сервер недоступен/сеть — не мешаем работе приложения
+                }
+            }
+        }.execute();
+    }
+
+    /** Автоматическая тихая синхронизация общей библиотеки при КАЖДОМ запуске
+     *  (баг-репорт пользователя: "при запуске приложения как будто не происходит
+     *  автоматической синхронизации с сервером, только по нажатии кнопки" — до
+     *  сих пор это было ТАК И ЕСТЬ: дельта библиотеки тянулась ТОЛЬКО через
+     *  ручное «Синхронизировать библиотеку…» в меню, см. {@link
+     *  com.vjstb.ledscheme.ui.LibrarySyncDialog} — никакого автозапуска при старте
+     *  не было вовсе, не баг конкретной логики, а отсутствующий вызов). Та же
+     *  последовательность действий, что и у {@link LibrarySyncDialog#runSync}
+     *  (fetchChanges(since) → applyLibrarySyncItems → бамп
+     *  librarySyncGlobalSeq), но ФОНОВО и БЕЗ диалога — тот же принцип, что у
+     *  {@link #checkForUpdatesInBackground} выше: недоступный сервер/сетевая
+     *  ошибка тихо игнорируется, не мешает работе с уже открытым окном. Ручной
+     *  пункт меню остаётся как есть — показывает прогресс/итог явно, на случай,
+     *  когда пользователь хочет явное подтверждение, что синхронизация прошла
+     *  (или явную ошибку, если сервер недоступен — этот тихий автозапуск такую
+     *  обратную связь сознательно не даёт). */
+    private static void syncLibraryInBackground(AppModel model, SettingsManager settings) {
+        long since = settings.getSettings().getLibrarySyncGlobalSeq();
+        new SwingWorker<LibrarySyncClient.ChangesResult, Void>() {
+            @Override
+            protected LibrarySyncClient.ChangesResult doInBackground() throws Exception {
+                return new LibrarySyncClient(LibrarySyncClient.resolveBaseUrl(settings)).fetchChanges(since);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    LibrarySyncClient.ChangesResult result = get();
+                    model.applyLibrarySyncItems(result.items());
+                    if (result.latestGlobalSeq() > since) {
+                        settings.setLibrarySyncGlobalSeq(result.latestGlobalSeq());
+                    }
+                } catch (Exception ignored) {
+                    // сервер недоступен/сеть -- не мешаем работе приложения; ручная
+                    // синхронизация (меню) остаётся доступна и покажет ошибку явно
                 }
             }
         }.execute();

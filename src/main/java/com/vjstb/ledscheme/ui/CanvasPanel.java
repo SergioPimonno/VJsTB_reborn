@@ -403,7 +403,8 @@ public class CanvasPanel extends JPanel {
         List<PowerChain> scenePowerChains = scene != null ? scene.getPowerChains() : List.of();
         List<SignalChain> sceneSignalChains = scene != null ? scene.getSignalChains() : List.of();
         SchemeRenderer.paintScheme(g2, scr, model.typeOf(scr), power, cw, ch, PADDING, PADDING, model.getWorkspace(),
-                scenePowerChains, sceneSignalChains, settings.activeProfile().isPowerUnitKw());
+                scenePowerChains, sceneSignalChains, model.controllersInScene(scene),
+                settings.activeProfile().isPowerUnitKw());
 
         // Кабинеты, уже занятые сигнальной цепочкой, но без видимого локального
         // отрезка на ЭТОМ экране (например, кабинет — единственный представитель

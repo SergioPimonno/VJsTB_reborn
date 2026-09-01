@@ -4,12 +4,15 @@ import com.vjstb.ledscheme.settings.SettingsManager;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Container;
+import java.awt.Desktop;
 import java.awt.Dimension;
+import java.net.URI;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JSplitPane;
 import javax.swing.SwingUtilities;
@@ -18,6 +21,78 @@ import javax.swing.SwingUtilities;
 public final class UiKit {
 
     private UiKit() {
+    }
+
+    /** Открывает {@code url} в системном браузере по умолчанию — вынесено сюда из
+     *  {@code MainMenuBar.openUrl} (был единственным местом с этим кодом), чтобы
+     *  использовать и там, и в новых местах (например, «Открыть веб-интерфейс»
+     *  устройства в Сетевом менеджере), не дублируя один и тот же try/catch. */
+    public static void openUrl(Component owner, String url) {
+        try {
+            if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
+                Desktop.getDesktop().browse(new URI(url));
+            }
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(owner, "Не удалось открыть ссылку:\n" + url, "Ошибка",
+                    JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    /** Предупреждает, что настройка вступит в силу только после перезапуска
+     *  приложения, и предлагает перезапустить сразу — используется вместо
+     *  «живого» применения там, где живое применение ненадёжно (баг-репорт про
+     *  смену темы — см. {@code MainMenuBar#applyTheme}/{@code
+     *  PersonalizationDialog#buildStylePanel}: холсты с собственной отрисовкой
+     *  «залипают» на цветах старой темы, т.к. один раз захватывают {@code
+     *  Palette}-цвет в конструкторе через {@code setBackground} и не перечитывают
+     *  его на каждой перерисовке). {@code reasonSentence} — законченное
+     *  предложение, поясняющее ЧТО изменится (без "перезапустите..." — это
+     *  добавляется здесь). Если автоперезапуск недоступен (не Windows, либо
+     *  приложение запущено не из jar-а — см. {@code UpdateManager.supportsAutoApply})
+     *  — просто информирует, без кнопки «Перезапустить». */
+    public static void promptRestartRequired(Component owner, String reasonSentence) {
+        String message = reasonSentence + " Изменение вступит в силу только после перезапуска приложения.";
+        if (com.vjstb.ledscheme.update.UpdateManager.supportsAutoApply()) {
+            int choice = JOptionPane.showConfirmDialog(owner, message + "\n\nПерезапустить сейчас?",
+                    "Требуется перезапуск", JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE);
+            if (choice == JOptionPane.YES_OPTION) {
+                try {
+                    com.vjstb.ledscheme.update.UpdateManager.restartCurrentJar();
+                    System.exit(0);
+                } catch (Exception ex) {
+                    JOptionPane.showMessageDialog(owner,
+                            "Не удалось перезапустить автоматически — закройте и откройте приложение вручную.",
+                            "Ошибка", JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        } else {
+            JOptionPane.showMessageDialog(owner, message, "Требуется перезапуск", JOptionPane.INFORMATION_MESSAGE);
+        }
+    }
+
+    /** Диалог выбора цвета с вкладкой «Недавние», ОБЩЕЙ для всех вызовов (см.
+     *  {@link RecentColorsChooserPanel}) — заменяет прямые вызовы {@code
+     *  JColorChooser.showDialog(...)} везде, где выбирается цвет «линии» схемы
+     *  (цепочки питания/сигнала, связи общей схемы, связи сетевого менеджера):
+     *  баг-репорт: "вкладка recent должна быть общей для всех линий схемы, а не
+     *  только для текущей выбранной — тяжело из-за количества оттенков". Возвращает
+     *  выбранный цвет, или {@code null}, если диалог закрыт без подтверждения
+     *  (Отмена/крестик) — та же семантика, что и у {@code JColorChooser.showDialog}. */
+    public static java.awt.Color showColorChooser(Component owner, String title, java.awt.Color initial) {
+        javax.swing.JColorChooser chooser = new javax.swing.JColorChooser(
+                initial != null ? initial : java.awt.Color.WHITE);
+        javax.swing.colorchooser.AbstractColorChooserPanel[] existing = chooser.getChooserPanels();
+        javax.swing.colorchooser.AbstractColorChooserPanel[] withRecent =
+                new javax.swing.colorchooser.AbstractColorChooserPanel[existing.length + 1];
+        withRecent[0] = new RecentColorsChooserPanel();
+        System.arraycopy(existing, 0, withRecent, 1, existing.length);
+        chooser.setChooserPanels(withRecent);
+        final java.awt.Color[] result = {null};
+        javax.swing.JDialog dialog = javax.swing.JColorChooser.createDialog(owner, title, true, chooser,
+                e -> result[0] = chooser.getColor(), null);
+        dialog.setVisible(true);
+        RecentColorsChooserPanel.remember(result[0]);
+        return result[0];
     }
 
     /** Привязывает Delete/Backspace на компоненте к действию — списки/панели с

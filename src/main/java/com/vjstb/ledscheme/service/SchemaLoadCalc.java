@@ -89,8 +89,24 @@ public final class SchemaLoadCalc {
     }
 
     /** Доля полной нагрузки экрана, приходящаяся на ОДНУ конкретную входящую связь —
-     *  пропорционально числу линий этой связи (wireCount) от суммарного числа линий,
-     *  заведённых на экран отовсюду (см. {@link #outputLoadWatts}). */
+     *  пропорционально числу линий этой связи (wireCount) от ОБЩЕГО числа линий.
+     *
+     * <p>Баг-репорт: "6 вводных показывают общую нагрузку в 22,4кВт, в то время как
+     * в окне расключения 6 вводных в сумме дают 20,16кВт (правильное значение)" —
+     * знаменатель складывался ТОЛЬКО из wireCount всех связей, заведённых на экран
+     * (см. {@link #outputLoadWatts}): если хотя бы ОДНА из ДРУГИХ связей того же
+     * экрана (например, с СОСЕДНЕЙ проходной) имела wireCount МЕНЬШЕ реального числа
+     * заведённых через неё цепочек (частый случай — пользователь консолидирует
+     * несколько автосозданных связей в одну с укрупнённым "N×тип" и забывает
+     * обновить при добавлении ещё одной цепочки через ту же проходную), знаменатель
+     * занижался — и ВСЕ остальные связи того же экрана (включая эту, полностью
+     * корректно промаркированную) получали завышенную долю. Теперь знаменатель —
+     * МАКСИМУМ из старой суммы меток И реального числа силовых цепочек экрана
+     * ({@code AppModel#powerChainsTouchingScreen}) — если метки где-то отстают от
+     * факта, авторитетный источник (реальные цепочки) не даёт знаменателю занизиться
+     * и "утечь" на другие связи; если цепочек питания вообще ещё нет (ранний этап,
+     * общая схема строится ДО прописки экрана) — сумма меток остаётся единственным
+     * источником, как и раньше (иначе экран без единой цепочки делил бы 0 Вт на 0). */
     private static double screenEdgeShareWatts(SchemaNode screenNode, SchemaEdge edge, Scene scene, AppModel model) {
         Screen scr = screenById(scene, screenNode.getScreenRefId());
         if (scr == null) {
@@ -104,10 +120,12 @@ public final class SchemaLoadCalc {
                 totalLines += lineCount(e);
             }
         }
-        if (totalLines <= 0) {
+        int totalChains = model.powerChainsTouchingScreen(scr).size();
+        int denominator = Math.max(totalLines, totalChains);
+        if (denominator <= 0) {
             return 0;
         }
-        return totalWatts * lineCount(edge) / (double) totalLines;
+        return totalWatts * lineCount(edge) / (double) denominator;
     }
 
     private static int lineCount(SchemaEdge edge) {

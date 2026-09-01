@@ -34,6 +34,7 @@ public class PreferencesDialog extends JDialog {
     private final SettingsManager settings;
     private JCheckBox previewWidgetCheck;
     private JCheckBox canvasSnapToCenterCheck;
+    private JCheckBox shapeEditorFloatingCheck;
     private JSpinner snapThresholdSpinner;
     private JSpinner snapStrengthSpinner;
     private JCheckBox signalSocketWiringCheck;
@@ -49,7 +50,10 @@ public class PreferencesDialog extends JDialog {
     private JCheckBox connectorsVerticalCheck;
     private JCheckBox loadTrackingCheck;
     private JCheckBox powerUnitKwCheck;
+    private JCheckBox powerSceneStatsCheck;
+    private JCheckBox signalSceneStatsCheck;
     private JLabel maskLogoPathLabel;
+    private JLabel exportRootFolderLabel;
     private JTextField syncServerUrlField;
 
     public PreferencesDialog(Window owner, SettingsManager settings) {
@@ -66,13 +70,19 @@ public class PreferencesDialog extends JDialog {
         content.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
         content.add(buildCanvasGroup());
         content.add(Box.createVerticalStrut(8));
+        content.add(buildShapeEditorGroup());
+        content.add(Box.createVerticalStrut(8));
         content.add(buildSchemaConnectionsGroup());
         content.add(Box.createVerticalStrut(8));
         content.add(buildSchemaNodesGroup());
         content.add(Box.createVerticalStrut(8));
         content.add(buildLoadGroup());
         content.add(Box.createVerticalStrut(8));
+        content.add(buildSceneStatsGroup());
+        content.add(Box.createVerticalStrut(8));
         content.add(buildMaskGroup());
+        content.add(Box.createVerticalStrut(8));
+        content.add(buildExportGroup());
         content.add(Box.createVerticalStrut(8));
         content.add(buildSyncGroup());
         content.add(Box.createVerticalStrut(10));
@@ -132,6 +142,28 @@ public class PreferencesDialog extends JDialog {
         body.add(snapRow);
 
         return (JPanel) UiKit.section("Холст и сцена", body);
+    }
+
+    /** «Форма экрана» отдельным окном (запрос пользователя: "давай добавим в
+     *  предпочтения опцию чтобы окно изменения формы экрана открывалось не
+     *  областью в сетапе а отдельным всплывающим окном... содержимое окна
+     *  должно динамически зависеть от выбранного экрана") — см. javadoc {@code
+     *  UserProfile#shapeEditorFloating}/{@code ui.ShapeEditorDialog}. */
+    private JPanel buildShapeEditorGroup() {
+        JPanel body = UiKit.vbox();
+        body.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        shapeEditorFloatingCheck = new JCheckBox("Открывать отдельным всплывающим окном, а не областью в «Сетапе»",
+                settings.activeProfile().isShapeEditorFloating());
+        shapeEditorFloatingCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        shapeEditorFloatingCheck.setToolTipText("Окно живое — показывает ТЕКУЩИЙ выбранный экран и обновляется"
+                + " при смене выбора, не фиксированный снимок на момент открытия. Кнопка «Изменить форму экрана»"
+                + " в «Сетапе» тогда открывает/поднимает это окно вместо показа встроенной секции на месте.");
+        shapeEditorFloatingCheck.addActionListener(e ->
+                settings.setShapeEditorFloating(shapeEditorFloatingCheck.isSelected()));
+        body.add(shapeEditorFloatingCheck);
+
+        return (JPanel) UiKit.section("Форма экрана", body);
     }
 
     private JPanel buildSchemaConnectionsGroup() {
@@ -316,6 +348,34 @@ public class PreferencesDialog extends JDialog {
         return (JPanel) UiKit.section("Общая схема — нагрузка", body);
     }
 
+    /** Блок «Статистика сцены» (под «Статистика экрана» на этапах Питание/Сигнал) —
+     *  запрос: «сделай статистику сцены переключаемой через галочку в
+     *  предпочтениях, раздельно для силы и сигнала». Раздельно, а не одним общим
+     *  чекбоксом — пользователю может быть нужна сводка только в одном из режимов. */
+    private JPanel buildSceneStatsGroup() {
+        JPanel body = UiKit.vbox();
+        body.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        powerSceneStatsCheck = new JCheckBox("Питание: показывать блок «Статистика сцены» под статистикой экрана",
+                settings.activeProfile().isPowerSceneStatsEnabled());
+        powerSceneStatsCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        powerSceneStatsCheck.setToolTipText("Суммарные кабинеты/мощность/вес и разбивка по фазам ПО ВСЕЙ сцене —"
+                + " отдельно от статистики активного экрана, видна независимо от «Показать все экраны сцены».");
+        powerSceneStatsCheck.addActionListener(e ->
+                settings.setPowerSceneStatsEnabled(powerSceneStatsCheck.isSelected()));
+        body.add(powerSceneStatsCheck);
+
+        signalSceneStatsCheck = new JCheckBox("Сигнал: показывать блок «Статистика сцены» под статистикой экрана",
+                settings.activeProfile().isSignalSceneStatsEnabled());
+        signalSceneStatsCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        signalSceneStatsCheck.setToolTipText("То же самое, но для этапа Сигнал — отдельная настройка от питания.");
+        signalSceneStatsCheck.addActionListener(e ->
+                settings.setSignalSceneStatsEnabled(signalSceneStatsCheck.isSelected()));
+        body.add(signalSceneStatsCheck);
+
+        return (JPanel) UiKit.section("Статистика сцены", body);
+    }
+
     private JPanel buildMaskGroup() {
         JPanel body = UiKit.vbox();
         body.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -347,6 +407,44 @@ public class PreferencesDialog extends JDialog {
         body.add(logoRow);
 
         return (JPanel) UiKit.section("Генерация масок", body);
+    }
+
+    /** Корневая папка по умолчанию для экспортов (запрос пользователя: "добавить
+     *  путь по умолчанию для экспорта схем... в предпочтениях" — раньше был жёстко
+     *  зашит как {@code ~/Documents/Video}, см. {@code ui.OutputPaths}). Явный выбор
+     *  папки кнопкой «Папка…» на конкретном этапе (Вывод/Генерация масок) по-прежнему
+     *  приоритетнее этой настройки — она влияет только на то, что подставляется
+     *  автоматически, пока пользователь ничего не выбрал в текущей сессии. */
+    private JPanel buildExportGroup() {
+        JPanel body = UiKit.vbox();
+        body.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setToolTipText("Папка, в которую по умолчанию сохраняются экспортированные схемы/маски/пресеты"
+                + " (пока не выбрана папка явно на конкретном этапе) — по умолчанию ~/Documents/Video.");
+        JButton chooseBtn = new JButton("Папка экспорта…");
+        chooseBtn.addActionListener(e -> {
+            JFileChooser fc = new JFileChooser();
+            fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+            fc.setDialogTitle("Выберите папку по умолчанию для экспорта");
+            String current = settings.activeProfile().getExportRootFolder();
+            if (current != null && !current.isBlank()) {
+                fc.setCurrentDirectory(new File(current));
+            }
+            if (fc.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+                settings.setExportRootFolder(fc.getSelectedFile().getAbsolutePath());
+            }
+        });
+        JButton clearBtn = new JButton("Сбросить");
+        clearBtn.addActionListener(e -> settings.setExportRootFolder(null));
+        exportRootFolderLabel = new JLabel();
+        row.add(chooseBtn);
+        row.add(clearBtn);
+        row.add(exportRootFolderLabel);
+        body.add(row);
+
+        return (JPanel) UiKit.section("Экспорт", body);
     }
 
     /** "Мост синхронизации" — на сетях, где прямое подключение к серверу по
@@ -403,6 +501,7 @@ public class PreferencesDialog extends JDialog {
     private void refresh() {
         previewWidgetCheck.setSelected(settings.activeProfile().isPreviewWidgetEnabled());
         canvasSnapToCenterCheck.setSelected(settings.activeProfile().isCanvasSnapToCenter());
+        shapeEditorFloatingCheck.setSelected(settings.activeProfile().isShapeEditorFloating());
         snapThresholdSpinner.setValue(settings.activeProfile().getSnapThresholdPx());
         snapStrengthSpinner.setValue(settings.activeProfile().getSnapStrengthPercent());
         signalSocketWiringCheck.setSelected(settings.activeProfile().isSignalSocketWiringEnabled());
@@ -421,8 +520,13 @@ public class PreferencesDialog extends JDialog {
         connectorsVerticalCheck.setSelected(settings.activeProfile().isConnectorsVertical());
         loadTrackingCheck.setSelected(settings.activeProfile().isLoadTrackingEnabled());
         powerUnitKwCheck.setSelected(settings.activeProfile().isPowerUnitKw());
+        powerSceneStatsCheck.setSelected(settings.activeProfile().isPowerSceneStatsEnabled());
+        signalSceneStatsCheck.setSelected(settings.activeProfile().isSignalSceneStatsEnabled());
         String logoPath = settings.activeProfile().getMaskLogoImagePath();
         maskLogoPathLabel.setText(logoPath != null ? new File(logoPath).getName() : "не задан");
+        String exportRoot = settings.activeProfile().getExportRootFolder();
+        exportRootFolderLabel.setText(exportRoot != null && !exportRoot.isBlank()
+                ? exportRoot : "не задана (по умолчанию ~/Documents/Video)");
         String urlOverride = settings.getSyncServerUrlOverride();
         if (!syncServerUrlField.getText().equals(urlOverride != null ? urlOverride : "")) {
             syncServerUrlField.setText(urlOverride != null ? urlOverride : "");

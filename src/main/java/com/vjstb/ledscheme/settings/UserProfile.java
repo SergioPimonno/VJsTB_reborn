@@ -167,6 +167,38 @@ public class UserProfile {
      *  не нужно выбирать файл заново на каждом канвасе. null — логотип не задан. */
     private String maskLogoImagePath;
 
+    /** Корневая папка по умолчанию для экспортов (маски/пресеты/пакет документации,
+     *  см. {@code ui.OutputPaths#defaultFolder}) — {@code null}/пусто = встроенный
+     *  дефолт {@code ~/Documents/Video} (запрос пользователя: "добавить путь по
+     *  умолчанию для экспорта схем... в предпочтениях" — раньше это было жёстко
+     *  зашитое значение без возможности сменить один раз на весь профиль). Явный
+     *  выбор папки кнопкой «Папка…» на конкретном этапе (Вывод/Генерация масок)
+     *  по-прежнему приоритетнее — эта настройка влияет только на АВТОПОДСТАВЛЯЕМОЕ
+     *  значение, когда пользователь ещё ничего не выбрал в текущей сессии. */
+    private String exportRootFolder;
+
+    /** «Форма экрана» (см. {@code ui.ShapeEditorPanel}) открывается ОТДЕЛЬНЫМ
+     *  всплывающим окном вместо встроенной секции в «Сетапе» — запрос
+     *  пользователя, тот же паттерн, что уже применялся к 3D-превью конструктива
+     *  (см. {@code ui.Structure3DDialog}: "вынеси в отдельное окно, как
+     *  калькулятор видеотаймингов"). Окно живое — показывает ТЕКУЩИЙ выбранный
+     *  экран приложения и обновляется при смене выбора, а не фиксированный
+     *  снимок на момент открытия (см. {@code ui.ShapeEditorDialog}). По
+     *  умолчанию выключено — прежнее встроенное поведение (кнопка «Изменить
+     *  форму экрана» показывает/прячет секцию на месте) не меняется, пока не
+     *  включат явно в «Предпочтения → Форма экрана». */
+    private boolean shapeEditorFloating;
+
+    /** Показывать ли блок «Статистика сцены» (под «Статистика экрана») на этапах
+     *  Питание/Сигнал — раздельно, т.к. пользователю может быть нужна сводка по
+     *  сцене только в одном из режимов (запрос: «сделай статистику сцены
+     *  переключаемой через галочку в предпочтениях, раздельно для силы и
+     *  сигнала»). По умолчанию включено — блок появился как всегда видимый
+     *  (см. {@code PowerStagePanel}/{@code SignalStagePanel}), выключение —
+     *  осознанный шаг пользователя, не смена поведения по умолчанию. */
+    private boolean powerSceneStatsEnabled = true;
+    private boolean signalSceneStatsEnabled = true;
+
     /** Id варианта отрисовки FlatLaf (см. {@code ui.LafStyle}) — свободная строка,
      *  а не FK на enum UI-слоя (та же конвенция, что и у остальных моделей, см.
      *  {@code ProjectorInstance#ambientLight}). "flatdark" по умолчанию — раньше
@@ -430,6 +462,38 @@ public class UserProfile {
         this.maskLogoImagePath = maskLogoImagePath;
     }
 
+    public String getExportRootFolder() {
+        return exportRootFolder;
+    }
+
+    public void setExportRootFolder(String exportRootFolder) {
+        this.exportRootFolder = exportRootFolder;
+    }
+
+    public boolean isShapeEditorFloating() {
+        return shapeEditorFloating;
+    }
+
+    public void setShapeEditorFloating(boolean shapeEditorFloating) {
+        this.shapeEditorFloating = shapeEditorFloating;
+    }
+
+    public boolean isPowerSceneStatsEnabled() {
+        return powerSceneStatsEnabled;
+    }
+
+    public void setPowerSceneStatsEnabled(boolean powerSceneStatsEnabled) {
+        this.powerSceneStatsEnabled = powerSceneStatsEnabled;
+    }
+
+    public boolean isSignalSceneStatsEnabled() {
+        return signalSceneStatsEnabled;
+    }
+
+    public void setSignalSceneStatsEnabled(boolean signalSceneStatsEnabled) {
+        this.signalSceneStatsEnabled = signalSceneStatsEnabled;
+    }
+
     public String getLafStyle() {
         return lafStyle != null && !lafStyle.isBlank() ? lafStyle : "flatdark";
     }
@@ -512,6 +576,10 @@ public class UserProfile {
         p.loadTrackingEnabled = loadTrackingEnabled;
         p.powerUnitKw = powerUnitKw;
         p.maskLogoImagePath = maskLogoImagePath;
+        p.exportRootFolder = exportRootFolder;
+        p.shapeEditorFloating = shapeEditorFloating;
+        p.powerSceneStatsEnabled = powerSceneStatsEnabled;
+        p.signalSceneStatsEnabled = signalSceneStatsEnabled;
         p.lafStyle = lafStyle;
         p.fontFamily = fontFamily;
         p.docExportDpi = docExportDpi;
