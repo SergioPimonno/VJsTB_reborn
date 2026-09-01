@@ -206,6 +206,15 @@ public class PowerStagePanel extends JPanel {
         updateCornerPreviewVisibility();
     }
 
+    /** Общая схема питания, если она сейчас показана (переключатель «Общая схема
+     *  питания» выбран), иначе null — используется MainFrame для хоткея
+     *  переключения инструмента Перемещение/Соединение (см. HotkeyAction
+     *  .TOGGLE_SCHEMA_INTERACTION), который не должен срабатывать поверх этапа
+     *  «Расключение экрана». */
+    public SchemaPanel schemaPanelIfActive() {
+        return schemaViewBtn.isSelected() ? schemaPanel : null;
+    }
+
     /** Радиальное меню из 8 шаблонов серпантина (NovaLCT-style «Быстрая прописка») —
      *  выбор шаблона строит и сразу сохраняет цепочку для ТЕКУЩЕЙ выбранной фазы
      *  по всем не скрытым и ещё не занятым кабинетам выделенной области. */

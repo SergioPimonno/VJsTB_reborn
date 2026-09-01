@@ -180,8 +180,13 @@ public class SettingsManager {
         persist();
     }
 
-    public void setConnectorsVertical(boolean vertical) {
-        activeProfile().setConnectorsVertical(vertical);
+    public void setSignalConnectorsVertical(boolean vertical) {
+        activeProfile().setSignalConnectorsVertical(vertical);
+        persist();
+    }
+
+    public void setPowerConnectorsVertical(boolean vertical) {
+        activeProfile().setPowerConnectorsVertical(vertical);
         persist();
     }
 

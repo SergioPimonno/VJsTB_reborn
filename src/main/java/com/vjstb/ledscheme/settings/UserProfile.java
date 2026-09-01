@@ -132,14 +132,30 @@ public class UserProfile {
      *  {@link #signalConnectorDisplayMode} (та же идея, отдельная настройка). */
     private ConnectorDisplayMode powerConnectorDisplayMode = ConnectorDisplayMode.GROUPED;
 
-    /** Ориентация разъёмов на блоке узла общей схемы (Task #2/v1.6, часть 2): false
-     *  (по умолчанию) — гнёзда у левого/правого края, строки сверху вниз, как раньше;
-     *  true — гнёзда у верхнего/нижнего края, строки колонками слева направо. Тоже
-     *  независимая ось — сочетается с любым режимом отображения разъёмов, общая для
-     *  обеих схем (в отличие от {@link #signalConnectorDisplayMode}/
-     *  {@link #powerConnectorDisplayMode} — тут разница между сигналом и питанием
-     *  не так значима, отдельные настройки не нужны). */
-    private boolean connectorsVertical = false;
+    /** Ориентация разъёмов на блоке узла общей схемы СИГНАЛА (Task #2/v1.6, часть 2;
+     *  разделено на сигнал/питание позже, по явному запросу — раньше была общая
+     *  {@code connectorsVertical} на обе схемы): false (по умолчанию) — гнёзда у
+     *  левого/правого края, строки сверху вниз, как раньше; true — гнёзда у
+     *  верхнего/нижнего края, строки колонками слева направо. Независимая ось —
+     *  сочетается с любым режимом отображения разъёмов ({@link #signalConnectorDisplayMode}). */
+    private boolean signalConnectorsVertical = false;
+
+    /** То же самое для схемы ПИТАНИЯ — см. {@link #signalConnectorsVertical}
+     *  (та же идея, отдельная настройка). */
+    private boolean powerConnectorsVertical = false;
+
+    /** УСТАРЕВШЕЕ поле — единая настройка ориентации разъёмов на обе схемы,
+     *  существовавшая до разделения на {@link #signalConnectorsVertical}/
+     *  {@link #powerConnectorsVertical}. Не читается и не пишется напрямую нигде,
+     *  кроме {@link #setLegacyConnectorsVertical} — тот принимает старое имя поля
+     *  из уже сохранённого JSON (Jackson, FAIL_ON_UNKNOWN_PROPERTIES выключен, иначе
+     *  значение молча терялось бы) и переносит его на оба новых поля, чтобы у ранее
+     *  сохранённых профилей поведение не изменилось молча после обновления. */
+    @com.fasterxml.jackson.annotation.JsonSetter("connectorsVertical")
+    private void setLegacyConnectorsVertical(boolean vertical) {
+        this.signalConnectorsVertical = vertical;
+        this.powerConnectorsVertical = vertical;
+    }
 
     /** Контроль электрической/сигнальной нагрузки (Task #80/#81/#86/#87): сравнение
      *  тока цепочки/суммарной нагрузки силового узла схемы с ёмкостью разъёма/автомата,
@@ -398,12 +414,28 @@ public class UserProfile {
                 ? getPowerConnectorDisplayMode() : getSignalConnectorDisplayMode();
     }
 
-    public boolean isConnectorsVertical() {
-        return connectorsVertical;
+    public boolean isSignalConnectorsVertical() {
+        return signalConnectorsVertical;
     }
 
-    public void setConnectorsVertical(boolean connectorsVertical) {
-        this.connectorsVertical = connectorsVertical;
+    public void setSignalConnectorsVertical(boolean signalConnectorsVertical) {
+        this.signalConnectorsVertical = signalConnectorsVertical;
+    }
+
+    public boolean isPowerConnectorsVertical() {
+        return powerConnectorsVertical;
+    }
+
+    public void setPowerConnectorsVertical(boolean powerConnectorsVertical) {
+        this.powerConnectorsVertical = powerConnectorsVertical;
+    }
+
+    /** Ориентация разъёмов для {@code mode} — маршрутизатор, см.
+     *  {@link #getConnectorDisplayMode(com.vjstb.ledscheme.model.SchemaMode)}
+     *  (тот же приём для соседней настройки). */
+    public boolean isConnectorsVertical(com.vjstb.ledscheme.model.SchemaMode mode) {
+        return mode == com.vjstb.ledscheme.model.SchemaMode.POWER
+                ? isPowerConnectorsVertical() : isSignalConnectorsVertical();
     }
 
     public boolean isLoadTrackingEnabled() {
@@ -508,7 +540,8 @@ public class UserProfile {
         p.schemaScreensAsWiringDiagram = schemaScreensAsWiringDiagram;
         p.signalConnectorDisplayMode = signalConnectorDisplayMode;
         p.powerConnectorDisplayMode = powerConnectorDisplayMode;
-        p.connectorsVertical = connectorsVertical;
+        p.signalConnectorsVertical = signalConnectorsVertical;
+        p.powerConnectorsVertical = powerConnectorsVertical;
         p.loadTrackingEnabled = loadTrackingEnabled;
         p.powerUnitKw = powerUnitKw;
         p.maskLogoImagePath = maskLogoImagePath;

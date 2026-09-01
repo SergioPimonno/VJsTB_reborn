@@ -152,6 +152,15 @@ public class MainFrame extends JFrame {
                 if (focus instanceof JTextComponent) {
                     return false; // не мешаем вводу текста
                 }
+                // Переключатель инструмента общей схемы (Перемещение/Соединение,
+                // по умолчанию Пробел) — не привязан к конкретному этапу построения
+                // цепочки, поэтому проверяется отдельно от блока ниже, до выхода
+                // из метода при отсутствии активного chainController.
+                SchemaPanel activeSchema = activeSchemaPanelIfShowing();
+                if (activeSchema != null && settings.bindingFor(HotkeyAction.TOGGLE_SCHEMA_INTERACTION).matchesKey(e)) {
+                    activeSchema.toggleInteraction();
+                    return true;
+                }
                 // Цифровые хоткеи фазы (Питание, 1-3) / порта (Сигнал, 1-9, 0 = 10) —
                 // выбирают цель для следующей цепочки без клика мышью по кнопке фазы/
                 // порта (см. PowerStagePanel.selectPhaseByHotkey/SignalStagePanel
@@ -219,6 +228,16 @@ public class MainFrame extends JFrame {
         return null;
     }
 
+    private SchemaPanel activeSchemaPanelIfShowing() {
+        if (currentStage.equals(StageSwitcher.POWER)) {
+            return powerStage.schemaPanelIfActive();
+        }
+        if (currentStage.equals(StageSwitcher.SIGNAL)) {
+            return signalStage.schemaPanelIfActive();
+        }
+        return null;
+    }
+
     private String hoveredCabinetOnActiveStage() {
         if (currentStage.equals(StageSwitcher.POWER)) {
             return powerStage.chainController().hoveredCabinetId();
@@ -239,6 +258,9 @@ public class MainFrame extends JFrame {
                 + settings.bindingFor(HotkeyAction.TOGGLE_HIDDEN).label()
                 + " — скрыть/показать кабинет под курсором (вне построения)\n"
                 + "Ctrl+колесо — масштаб холста\n\n"
+                + "На «Общей схеме» (Питание/Сигнал):\n"
+                + settings.bindingFor(HotkeyAction.TOGGLE_SCHEMA_INTERACTION).label()
+                + " — переключить инструмент «Перемещение»/«Соединение»\n\n"
                 + "Все горячие клавиши выше можно переназначить: Персонализация → «Горячие клавиши».";
         JOptionPane.showMessageDialog(this, msg, "Горячие клавиши", JOptionPane.INFORMATION_MESSAGE);
     }
