@@ -293,7 +293,11 @@ public class SchemaPanel extends JPanel {
         refreshPresetCombo();
         updateAddFormEnablement();
 
-        if (canvas.getSelectedNode() != null) {
+        int selectedCount = canvas.getSelectedNodes().size();
+        if (selectedCount > 1) {
+            selectionHint.setText("Выбрано узлов: " + selectedCount
+                    + " (Shift/Ctrl+клик или протяжка по пустому месту — изменить выделение)");
+        } else if (canvas.getSelectedNode() != null) {
             selectionHint.setText("Выбран узел: " + safeLabel(canvas.getSelectedNode().getLabel()));
         } else if (canvas.getSelectedEdge() != null) {
             selectionHint.setText("Выбрана связь");

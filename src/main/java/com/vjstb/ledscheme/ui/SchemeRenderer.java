@@ -104,10 +104,22 @@ public final class SchemeRenderer {
     public static void paintScheme(Graphics2D g2, Screen scr, CabinetType type, boolean power,
                                    int cellW, int cellH, int offX, int offY, Workspace workspace,
                                    List<PowerChain> powerChains, List<SignalChain> signalChains) {
-        paintScheme(g2, scr, type, power, cellW, cellH, offX, offY, workspace, powerChains, signalChains, false);
+        paintScheme(g2, scr, type, power, cellW, cellH, offX, offY, workspace, powerChains, signalChains,
+                List.of(), false);
     }
 
-    /** {@code powerUnitKw} — единица отображения мощности в подписи ячейки (см.
+    /** {@code sceneControllers} — контроллеры ВСЕЙ сцены этого экрана (см. {@code
+     *  AppModel.controllersInScene}), НЕ только {@code scr.getControllers()} —
+     *  контроллеры физически хранятся под конкретным экраном, но используются как
+     *  общий для сцены пул (см. {@code AppModel}'s комментарий у {@code
+     *  controllersInScene}), поэтому метка порта цепочки должна резолвиться той же
+     *  сценовой нумерацией, что и сайдбар прописи ({@code
+     *  SignalStagePanel.portDisplayLabel}), а не только контроллерами ЭТОГО экрана
+     *  — баг-репорт: "почему на расключении нумерация порта не совпадает с
+     *  выбранным портом в контроллере" — контроллер, добавленный, пока был выбран
+     *  ДРУГОЙ экран сцены, вообще не находился, и метка тихо откатывалась на сырой
+     *  номер порта без резолва пула/карты (см. {@link #controllerForPort}).
+     *  {@code powerUnitKw} — единица отображения мощности в подписи ячейки (см.
      *  {@code UserProfile#isPowerUnitKw}), только для {@code power == true}. Оставлен
      *  как перегрузка (не единственная сигнатура) — большинство вызывающих кодов вне
      *  Питание/Сигнал этапов не имеют под рукой SettingsManager и рисуют схему без
@@ -115,6 +127,7 @@ public final class SchemeRenderer {
     public static void paintScheme(Graphics2D g2, Screen scr, CabinetType type, boolean power,
                                    int cellW, int cellH, int offX, int offY, Workspace workspace,
                                    List<PowerChain> powerChains, List<SignalChain> signalChains,
+                                   List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers,
                                    boolean powerUnitKw) {
         // Подпись «строка,столбец» физически не помещается в мелкую ячейку (мини-
         // обзор сцены с несколькими экранами целиком, сильный зум-аут) — рисуем её,
@@ -169,8 +182,9 @@ public final class SchemeRenderer {
             for (int i = 0; i < signalChains.size(); i++) {
                 SignalChain chain = signalChains.get(i);
                 drawChain(g2, scr, chain.getCabinetInstanceIds(), chainColor(chain, i),
-                        false, cellW, cellH, offX, offY, type, workspace, signalChainLabel(scr, chain, workspace),
-                        signalChainEndLabel(scr, chain, workspace));
+                        false, cellW, cellH, offX, offY, type, workspace,
+                        signalChainLabel(sceneControllers, chain, workspace),
+                        signalChainEndLabel(sceneControllers, chain, workspace));
             }
         }
     }
@@ -190,13 +204,18 @@ public final class SchemeRenderer {
     public static void paintWiringDiagram(Graphics2D g2, Screen scr, CabinetType type, boolean power,
                                            int cellW, int cellH, int offX, int offY, Workspace workspace,
                                            List<PowerChain> powerChains, List<SignalChain> signalChains) {
-        paintWiringDiagram(g2, scr, type, power, cellW, cellH, offX, offY, workspace, powerChains, signalChains, false);
+        paintWiringDiagram(g2, scr, type, power, cellW, cellH, offX, offY, workspace, powerChains, signalChains,
+                List.of(), false);
     }
 
-    /** {@code powerUnitKw} — см. javadoc {@link #paintScheme}'s перегрузка с тем же параметром. */
+    /** {@code sceneControllers} — см. javadoc {@link #paintScheme}'s перегрузка с тем же
+     *  параметром (нужны, чтобы метка порта на кабинете резолвилась сценовой, а не
+     *  только пер-экранной нумерацией контроллеров). {@code powerUnitKw} — см. javadoc
+     *  {@link #paintScheme}'s перегрузка с тем же параметром. */
     public static void paintWiringDiagram(Graphics2D g2, Screen scr, CabinetType type, boolean power,
                                            int cellW, int cellH, int offX, int offY, Workspace workspace,
                                            List<PowerChain> powerChains, List<SignalChain> signalChains,
+                                           List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers,
                                            boolean powerUnitKw) {
         Map<String, ChainMembership> byCab = new HashMap<>();
         if (power) {
@@ -247,7 +266,8 @@ public final class SchemeRenderer {
 
             if (m != null && showLabels) {
                 List<String> lines = new ArrayList<>();
-                lines.add(power ? "L" + m.phase() : portLabel(scr, workspace, m.port() != null ? m.port() : 0));
+                lines.add(power ? "L" + m.phase()
+                        : portLabel(sceneControllers, workspace, m.port() != null ? m.port() : 0));
                 lines.add("#" + m.seq());
                 if (effective != null) {
                     lines.add(power ? UiKit.fmtPower(effective.getPowerConsumptionW(), powerUnitKw)
@@ -305,7 +325,7 @@ public final class SchemeRenderer {
                 drawChainWithDots(g2, scr, chain.getCabinetInstanceIds(), cellW, cellH, offX, offY, type, workspace,
                         chain.isBackup());
                 if (chain.getPortNumber() != null) {
-                    String lbl = portLabel(scr, workspace, chain.getPortNumber());
+                    String lbl = portLabel(sceneControllers, workspace, chain.getPortNumber());
                     // Раньше резервная цепочка получала префикс "рез:" — на мелких
                     // ячейках плашки бейджа он не помещался и обрезался до нечитаемого
                     // "pe...". Различаем резерв ЦВЕТОМ текста (см. drawStartLabelBadge),
@@ -314,7 +334,7 @@ public final class SchemeRenderer {
                             new LabelLine(lbl, chain.isBackup()));
                 }
                 if (chain.getBackupPortNumber() != null && !chain.getCabinetInstanceIds().isEmpty()) {
-                    String endLbl = portLabel(scr, workspace, chain.getBackupPortNumber());
+                    String endLbl = portLabel(sceneControllers, workspace, chain.getBackupPortNumber());
                     List<String> ids = chain.getCabinetInstanceIds();
                     endLabelsByCabinet.computeIfAbsent(ids.get(ids.size() - 1), k -> new ArrayList<>())
                             .add(new LabelLine(endLbl, true));
@@ -567,50 +587,109 @@ public final class SchemeRenderer {
         }
     }
 
-    /** Порт -> контроллер, которому он принадлежит (порты нумеруются подряд по
-     *  назначенным экрану контроллерам: 1..N1 — первый, N1+1..N1+N2 — второй и т.д.).
-     *  null, если контроллеров нет (порты вручную) или порт вне диапазона. */
-    private static com.vjstb.ledscheme.model.ControllerInstance controllerForPort(
-            Screen scr, Workspace workspace, int port) {
+    /** Контроллер, которому принадлежит порт, ВМЕСТЕ с его смещением (порты
+     *  нумеруются подряд по назначенным экрану контроллерам: 1..N1 — первый,
+     *  N1+1..N1+N2 — второй и т.д.) — {@code controller == null}, если
+     *  контроллеров нет (порты вручную) или порт вне диапазона; тогда
+     *  {@code offset} не имеет смысла. */
+    private record ControllerAndOffset(com.vjstb.ledscheme.model.ControllerInstance controller, int offset) {
+    }
+
+    /** Ищет владельца {@code port} СРЕДИ {@code sceneControllers} (контроллеров ВСЕЙ
+     *  сцены — см. javadoc {@link #paintScheme}'s одноимённый параметр), НЕ только
+     *  контроллеров одного экрана — та же сценовая нумерация/порядок обхода, что и
+     *  {@code AppModel.controllerForPort}/{@code portOffsetOf}, которую использует
+     *  сайдбар прописи. Раньше здесь принимался {@code Screen} и обходился только
+     *  его собственный {@code scr.getControllers()} — контроллер, физически
+     *  добавленный под ДРУГИМ экраном той же сцены, вообще не находился (см. баг-
+     *  репорт у {@code paintScheme}). */
+    private static ControllerAndOffset controllerForPort(
+            List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers, Workspace workspace, int port) {
         if (workspace == null) {
-            return null;
+            return new ControllerAndOffset(null, 0);
         }
         int offset = 0;
-        for (com.vjstb.ledscheme.model.ControllerInstance ci : scr.getControllers()) {
+        for (com.vjstb.ledscheme.model.ControllerInstance ci : sceneControllers) {
             com.vjstb.ledscheme.model.ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
             int count = t != null ? t.effectivePortCount() : 0;
             if (port > offset && port <= offset + count) {
-                return ci;
+                return new ControllerAndOffset(ci, offset);
             }
             offset += count;
         }
-        return null;
+        return new ControllerAndOffset(null, 0);
     }
 
-    /** Опознавательная подпись порта: номер порта, и — если на экране назначено
+    /** Опознавательная подпись порта: номер порта, и — если в СЦЕНЕ назначено
      *  НЕСКОЛЬКО контроллеров (иначе принадлежность и так однозначна) — номер
-     *  контроллера, которому этот порт принадлежит. */
-    static String portLabel(Screen scr, Workspace workspace, int port) {
-        if (scr.getControllers().size() <= 1) {
-            return "P" + port;
+     *  контроллера, которому этот порт принадлежит.
+     *
+     * <p>Номер порта — НЕ сырой сквозной {@code port} (тот считает подряд ВСЕ
+     * выходные порты контроллера, включая fiber-группы — баг-репорт: "почему на
+     * расключении нумерация порта не совпадает с выбранным портом в
+     * контроллере" — сырой номер расходился с "Портом К1·N", который показывает
+     * сайдбар {@code SignalStagePanel.portDisplayLabel}, ровно на число fiber-
+     * портов, стоящих перед этим на той же карте), а РЕЗОЛВЛЕННЫЙ через {@link
+     * com.vjstb.ledscheme.model.ControllerType#ethernetPoolLocalPort} — тот же
+     * номер, который видит пользователь в сетке портов сайдбара. Для контроллера
+     * с несколькими картами/пулами Ethernet-нумерации — тот же формат
+     * "К{карта}·{порт}", что и в {@code portDisplayLabel}, иначе просто номер
+     * порта в пределах ЕГО ethernet-пула (не сырой номер контроллера).
+     *
+     * <p>{@code sceneControllers} — контроллеры ВСЕЙ сцены (см. javadoc {@link
+     * #paintScheme}), а не только {@code scr.getControllers()} — второй баг-репорт
+     * на ту же тему: контроллер, добавленный, пока был выбран ДРУГОЙ экран сцены,
+     * не находился вовсе, и метка тихо откатывалась на сырой номер порта. */
+    static String portLabel(List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers,
+                             Workspace workspace, int port) {
+        ControllerAndOffset co = controllerForPort(sceneControllers, workspace, port);
+        com.vjstb.ledscheme.model.ControllerInstance ci = co.controller();
+        com.vjstb.ledscheme.model.ControllerType t = ci != null && workspace != null
+                ? workspace.controllerTypeById(ci.getControllerTypeId()) : null;
+        String portPart = resolvedPortPart(t, port - co.offset(), port);
+        if (sceneControllers.size() <= 1) {
+            return "P" + portPart;
         }
-        com.vjstb.ledscheme.model.ControllerInstance ci = controllerForPort(scr, workspace, port);
-        int idx = ci != null ? scr.getControllers().indexOf(ci) + 1 : 0;
-        return (idx > 0 ? "C" + idx + "·" : "") + "P" + port;
+        int idx = ci != null ? sceneControllers.indexOf(ci) + 1 : 0;
+        return (idx > 0 ? "C" + idx + "·" : "") + "P" + portPart;
     }
 
-    /** Метка НАЧАЛА сигнальной цепочки (первый кабинет) — основной порт. */
-    static String signalChainLabel(Screen scr, SignalChain chain, Workspace workspace) {
+    /** Часть подписи ПОСЛЕ "P"/"C{n}·P" — резолвит {@code controllerLocalPort}
+     *  (сырой, в пределах контроллера) через {@link com.vjstb.ledscheme.model
+     *  .ControllerType#ethernetPoolLocalPort} в "К{карта}·{порт}" (несколько
+     *  Ethernet-пулов) или просто номер порта В ПРЕДЕЛАХ его пула (один пул).
+     *  {@code null} от {@code ethernetPoolLocalPort} (fiber-порт или контроллер
+     *  не резолвился) — защитный откат на сырой глобальный {@code rawFallbackPort},
+     *  не должен встречаться для реально сохранённой цепочки (та строится только
+     *  на Ethernet-годных портах), но лучше показать хоть что-то, чем ничего. */
+    private static String resolvedPortPart(com.vjstb.ledscheme.model.ControllerType t, int controllerLocalPort,
+                                            int rawFallbackPort) {
+        if (t == null) {
+            return String.valueOf(rawFallbackPort);
+        }
+        int[] pool = t.ethernetPoolLocalPort(controllerLocalPort);
+        if (pool == null) {
+            return String.valueOf(rawFallbackPort);
+        }
+        return t.ethernetPoolCount() > 1 ? "К" + (pool[0] + 1) + "·" + pool[1] : String.valueOf(pool[1]);
+    }
+
+    /** Метка НАЧАЛА сигнальной цепочки (первый кабинет) — основной порт.
+     *  {@code sceneControllers} — см. javadoc {@link #portLabel}. */
+    static String signalChainLabel(List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers,
+                                    SignalChain chain, Workspace workspace) {
         Integer port = chain.getPortNumber();
-        return port == null ? null : portLabel(scr, workspace, port);
+        return port == null ? null : portLabel(sceneControllers, workspace, port);
     }
 
     /** Метка КОНЦА сигнальной цепочки (последний кабинет): если у порта назначен
      *  резервный порт — это конец цепочки, где подключён резерв, поэтому метка
      *  показывает резервный порт, а не повторяет основной. */
-    static String signalChainEndLabel(Screen scr, SignalChain chain, Workspace workspace) {
+    static String signalChainEndLabel(List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers,
+                                       SignalChain chain, Workspace workspace) {
         Integer backupPort = chain.getBackupPortNumber();
-        return backupPort != null ? portLabel(scr, workspace, backupPort) : signalChainLabel(scr, chain, workspace);
+        return backupPort != null ? portLabel(sceneControllers, workspace, backupPort)
+                : signalChainLabel(sceneControllers, chain, workspace);
     }
 
     /** Рисует одну цепочку линиями между центрами кабинетов со стрелками направления —
@@ -864,7 +943,7 @@ public final class SchemeRenderer {
 
     /** Рендерит схему экрана в изображение (с заголовком и характеристиками). */
     public static BufferedImage renderImage(Screen scr, CabinetType type, boolean power, int base) {
-        return renderImage(scr, type, power, base, null, List.of(), List.of(), false);
+        return renderImage(scr, type, power, base, null, List.of(), List.of(), List.of(), false);
     }
 
     /** То же, но вес/мощность в заголовке учитывают переопределение типа кабинета по ячейкам.
@@ -874,7 +953,7 @@ public final class SchemeRenderer {
     public static BufferedImage renderImage(Screen scr, CabinetType type, boolean power, int base,
                                              Workspace workspace, List<PowerChain> powerChains,
                                              List<SignalChain> signalChains) {
-        return renderImage(scr, type, power, base, workspace, powerChains, signalChains, false);
+        return renderImage(scr, type, power, base, workspace, powerChains, signalChains, List.of(), false);
     }
 
     /** {@code powerUnitKw} — единица отображения мощности в заголовке/ячейках (см.
@@ -883,7 +962,7 @@ public final class SchemeRenderer {
     public static BufferedImage renderImage(Screen scr, CabinetType type, boolean power, int base,
                                              Workspace workspace, List<PowerChain> powerChains,
                                              List<SignalChain> signalChains, boolean powerUnitKw) {
-        return renderImage(scr, type, power, base, workspace, powerChains, signalChains, powerUnitKw, 1.0);
+        return renderImage(scr, type, power, base, workspace, powerChains, signalChains, List.of(), powerUnitKw);
     }
 
     /** {@code dpiScale} — множитель качества экспорта (см. {@code UserProfile#getDocExportDpi},
@@ -896,6 +975,30 @@ public final class SchemeRenderer {
     public static BufferedImage renderImage(Screen scr, CabinetType type, boolean power, int base,
                                              Workspace workspace, List<PowerChain> powerChains,
                                              List<SignalChain> signalChains, boolean powerUnitKw, double dpiScale) {
+        return renderImage(scr, type, power, base, workspace, powerChains, signalChains, List.of(), powerUnitKw,
+                dpiScale);
+    }
+
+    /** {@code sceneControllers} — контроллеры ВСЕЙ сцены этого экрана (см. {@link
+     *  #paintScheme}'s одноимённый параметр) — нужны, чтобы метки портов цепочек
+     *  резолвились ТОЙ ЖЕ нумерацией, что и сайдбар прописи (см. баг-репорт у
+     *  {@link #controllerForPort}). Пустой список — как раньше (сырой номер порта). */
+    public static BufferedImage renderImage(Screen scr, CabinetType type, boolean power, int base,
+                                             Workspace workspace, List<PowerChain> powerChains,
+                                             List<SignalChain> signalChains,
+                                             List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers,
+                                             boolean powerUnitKw) {
+        return renderImage(scr, type, power, base, workspace, powerChains, signalChains, sceneControllers,
+                powerUnitKw, 1.0);
+    }
+
+    /** Полная сигнатура — см. javadoc у 8-параметрической перегрузки (sceneControllers)
+     *  и у перегрузки с dpiScale выше. */
+    public static BufferedImage renderImage(Screen scr, CabinetType type, boolean power, int base,
+                                             Workspace workspace, List<PowerChain> powerChains,
+                                             List<SignalChain> signalChains,
+                                             List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers,
+                                             boolean powerUnitKw, double dpiScale) {
         Dimension c = cellSize(type, base);
         int pad = 24;
         int gridW = scr.getCols() * c.width;
@@ -941,7 +1044,7 @@ public final class SchemeRenderer {
         g2.drawString(sub, pad, 84);
 
         paintScheme(g2, scr, type, power, c.width, c.height, pad, pad + headerH, workspace,
-                powerChains, signalChains, powerUnitKw);
+                powerChains, signalChains, sceneControllers, powerUnitKw);
         g2.dispose();
         return img;
     }

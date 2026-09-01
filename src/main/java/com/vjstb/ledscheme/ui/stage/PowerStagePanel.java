@@ -76,6 +76,12 @@ public class PowerStagePanel extends JPanel {
     private final JLabel statPower = new JLabel("—");
     private final JLabel statWeight = new JLabel("—");
     private final JLabel statPhases = new JLabel();
+    private javax.swing.JComponent sceneStatsSection;
+    private final JLabel sceneStatScreens = new JLabel("—");
+    private final JLabel sceneStatCount = new JLabel("—");
+    private final JLabel sceneStatPower = new JLabel("—");
+    private final JLabel sceneStatWeight = new JLabel("—");
+    private final JLabel sceneStatPhases = new JLabel();
 
     public PowerStagePanel(AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings) {
         this.model = model;
@@ -97,6 +103,11 @@ public class PowerStagePanel extends JPanel {
             int phase = model.getActivePhase();
             return ids -> model.addPowerChain(phase, ids);
         });
+        // Баг-репорт: "выделение не только залезло на ячейки из другой цепочки, но
+        // и включило их в текущую" — та же проверка занятости, что и при СТАРТЕ
+        // цепочки выше, теперь применяется и к каждому кабинету, добавляемому по
+        // ходу построения (клик/протяжка/стрелки) — см. javadoc setOccupancyCheck.
+        this.chainCtrl.setOccupancyCheck(model::isCabinetWiredForPower);
         this.chainCtrl.setOnCommitError(msg ->
                 JOptionPane.showMessageDialog(this, msg, "Не удалось завершить цепочку",
                         JOptionPane.ERROR_MESSAGE));
@@ -284,6 +295,24 @@ public class PowerStagePanel extends JPanel {
         // поэтому тоже «динамическая» секция, пересчитываем высоту после заполнения.
         statsSection = UiKit.dynamicSection("Статистика экрана", statsBody);
         body.add(statsSection);
+
+        // Статистика ПО ВСЕЙ СЦЕНЕ, отдельно от статистики активного экрана — раньше
+        // такие же суммарные цифры показывались только ВЗАМЕН статистики экрана,
+        // когда включена «Показать все экраны сцены» (Task #71) — приходилось
+        // переключаться туда-сюда, чтобы увидеть и то, и другое. Теперь блок сцены
+        // виден ВСЕГДА, независимо от этого чекбокса (запрос: «под статистикой
+        // экрана показывать ещё статистику по сцене»).
+        JPanel sceneStatsBody = UiKit.vbox();
+        sceneStatsBody.add(statRow("Экранов", sceneStatScreens));
+        sceneStatsBody.add(statRow("Кабинетов", sceneStatCount));
+        sceneStatsBody.add(statRow("Мощность", sceneStatPower));
+        sceneStatsBody.add(statRow("Вес", sceneStatWeight));
+        sceneStatsBody.add(UiKit.vgap());
+        sceneStatPhases.setForeground(Palette.MUTED);
+        sceneStatsBody.add(sceneStatPhases);
+        body.add(UiKit.vgap());
+        sceneStatsSection = UiKit.dynamicSection("Статистика сцены", sceneStatsBody);
+        body.add(sceneStatsSection);
         body.add(javax.swing.Box.createVerticalGlue());
 
         return body;
@@ -401,6 +430,33 @@ public class PowerStagePanel extends JPanel {
         }
         UiKit.recapHeight(statsSection);
 
+        boolean sceneStatsEnabled = settings.activeProfile().isPowerSceneStatsEnabled();
+        sceneStatsSection.setVisible(sceneStatsEnabled);
+        if (sceneStatsEnabled) {
+            Scene sceneForStats = model.getCurrentScene();
+            List<Screen> sceneScreens = sceneForStats != null ? sceneForStats.getScreens() : List.of();
+            if (!sceneScreens.isEmpty()) {
+                ScreenStats ss = ScreenLogic.aggregateStats(sceneScreens, model::typeOf, model.getWorkspace());
+                boolean kwScene = settings.activeProfile().isPowerUnitKw();
+                sceneStatScreens.setText(String.valueOf(sceneScreens.size()));
+                sceneStatCount.setText(String.valueOf(ss.activeCabinetCount()));
+                sceneStatPower.setText(UiKit.fmtPower(ss.totalPowerW(), kwScene));
+                sceneStatWeight.setText(UiKit.fmt(ss.totalWeightKg()) + " кг");
+                sceneStatPhases.setText(String.format(
+                        "<html>L1: %d каб. · %s<br>L2: %d каб. · %s<br>L3: %d каб. · %s</html>",
+                        ss.phaseCabinetCounts()[1], UiKit.fmtPower(ss.phasePowerW()[1], kwScene),
+                        ss.phaseCabinetCounts()[2], UiKit.fmtPower(ss.phasePowerW()[2], kwScene),
+                        ss.phaseCabinetCounts()[3], UiKit.fmtPower(ss.phasePowerW()[3], kwScene)));
+            } else {
+                sceneStatScreens.setText("—");
+                sceneStatCount.setText("—");
+                sceneStatPower.setText("—");
+                sceneStatWeight.setText("—");
+                sceneStatPhases.setText("");
+            }
+            UiKit.recapHeight(sceneStatsSection);
+        }
+
         canvas.revalidate();
         canvas.repaint();
         sceneOverview.revalidate();
@@ -459,7 +515,7 @@ public class PowerStagePanel extends JPanel {
                 javax.swing.JMenuItem colorItem = new javax.swing.JMenuItem("Цвет цепочки…");
                 colorItem.addActionListener(ev -> {
                     java.awt.Color initial = chain.getColor() != null ? new java.awt.Color(chain.getColor()) : dot;
-                    java.awt.Color chosen = javax.swing.JColorChooser.showDialog(PowerStagePanel.this,
+                    java.awt.Color chosen = UiKit.showColorChooser(PowerStagePanel.this,
                             "Цвет цепочки питания", initial);
                     if (chosen != null) {
                         model.setPowerChainColor(chain, chosen.getRGB());

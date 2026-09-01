@@ -275,6 +275,11 @@ public class VisualizationStagePanel extends JPanel {
         JPanel exportRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
         JButton exportMasks = new JButton("Экспорт масок (экраны + канвасы)…");
         exportMasks.addActionListener(e -> exportMasks());
+        JButton exportSelectedCanvas = new JButton("Экспорт текущего канваса…");
+        exportSelectedCanvas.setToolTipText("Маска только ВЫБРАННОГО сейчас в списке выше канваса (плюс маски"
+                + " экранов, размещённых именно на нём) — без остальных канвасов и сцен проекта, в отличие от"
+                + " «Экспорт масок» (та выгружает всё сразу).");
+        exportSelectedCanvas.addActionListener(e -> exportSelectedCanvasMask());
         JButton exportResolume = new JButton("Экспорт под Resolume…");
         exportResolume.addActionListener(e -> exportResolumePreset());
         JButton exportAfterEffects = new JButton("Экспорт под After Effects…");
@@ -283,6 +288,7 @@ public class VisualizationStagePanel extends JPanel {
                 + " (File → Scripts → Run Script File) создаёт композицию размером с канвас и по слою на каждый"
                 + " размещённый экран, footage слоя — PNG-маска этого экрана (сохраняется рядом со скриптом).");
         exportRow.add(exportMasks);
+        exportRow.add(exportSelectedCanvas);
         exportRow.add(exportResolume);
         exportRow.add(exportAfterEffects);
         body.add(exportRow);
@@ -345,7 +351,7 @@ public class VisualizationStagePanel extends JPanel {
         if (chosenFolder == null) {
             Project project = model.getCurrentProject();
             folderField.setText(project != null
-                    ? OutputPaths.defaultFolder(project, model.getCurrentScene()).getAbsolutePath()
+                    ? OutputPaths.defaultFolder(project, model.getCurrentScene(), settings).getAbsolutePath()
                     : "(сначала выберите проект)");
         }
     }
@@ -489,15 +495,21 @@ public class VisualizationStagePanel extends JPanel {
             return chosenFolder;
         }
         Project project = model.getCurrentProject();
-        return project != null ? OutputPaths.defaultFolder(project, model.getCurrentScene()) : null;
+        return project != null ? OutputPaths.defaultFolder(project, model.getCurrentScene(), settings) : null;
     }
 
     private void chooseFolder() {
         JFileChooser fc = new JFileChooser();
         fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
         fc.setDialogTitle("Выберите папку");
-        if (chosenFolder != null) {
-            fc.setCurrentDirectory(chosenFolder);
+        // Баг-репорт: с настроенной папкой экспорта по умолчанию в «Предпочтения →
+        // Экспорт» диалог всё равно открывался в Documents — chosenFolder тут пуст,
+        // пока пользователь ХОТЬ РАЗ не выбрал папку САМ в этой сессии, поэтому
+        // resolveFolder() (которая как раз учитывает настройку) не подставлялась
+        // вообще. Стартуем от неё же, не только от уже явно выбранной раньше.
+        File initial = chosenFolder != null ? chosenFolder : resolveFolder();
+        if (initial != null) {
+            fc.setCurrentDirectory(initial);
         }
         if (fc.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
             chosenFolder = fc.getSelectedFile();
@@ -543,6 +555,50 @@ public class VisualizationStagePanel extends JPanel {
             return;
         }
         showMaskPreviewDialog("Предпросмотр масок (экраны + канвасы)", images);
+    }
+
+    /** Маски ТОЛЬКО выбранного сейчас канваса ({@link #currentCanvas}) + маски
+     *  экранов, размещённых именно на нём (см. {@link CanvasPlacement#getScreenId()})
+     *  — запрос пользователя: "добавить для экспорта масок кнопку экспорта
+     *  отдельного выбранного канваса, а не всех сразу" ({@link #exportMasks()}
+     *  выше выгружает ВСЁ — все экраны и канвасы ВСЕХ сцен проекта разом, что
+     *  неудобно, если нужен только один конкретный канвас). Та же схема имён
+     *  файлов и то же превью-перед-сохранением, что и у {@link #exportMasks()}. */
+    private void exportSelectedCanvasMask() {
+        if (currentCanvas == null) {
+            JOptionPane.showMessageDialog(this, "Сначала выберите канвас", "Нет канваса", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        Scene scene = model.getCurrentScene();
+        if (scene == null) {
+            JOptionPane.showMessageDialog(this, "Сначала выберите сцену", "Нет сцены", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        List<NamedImage> images = new ArrayList<>();
+        try {
+            BufferedImage canvasImg = PixelGridRenderer.renderCanvasMask(currentCanvas, model, settings);
+            String canvasFname = OutputPaths.sanitize(scene.getName()) + "_канвас_"
+                    + OutputPaths.sanitize(currentCanvas.getName()) + "_" + canvasImg.getWidth() + "x"
+                    + canvasImg.getHeight() + ".png";
+            images.add(new NamedImage(canvasFname, canvasImg));
+            for (CanvasPlacement placement : currentCanvas.getPlacements()) {
+                Screen scr = screenById(placement.getScreenId());
+                if (scr == null) {
+                    continue; // экран с тех пор удалён из сцены -- та же защита, что и в exportMasks()
+                }
+                CabinetType type = model.typeOf(scr);
+                BufferedImage img = PixelGridRenderer.renderMask(scr, type, model.getWorkspace(),
+                        PixelGridRenderer.GridRenderOptions.defaultForScreen(scr));
+                String fname = OutputPaths.sanitize(scene.getName()) + "_" + OutputPaths.sanitize(scr.getName())
+                        + "_Маска_" + img.getWidth() + "x" + img.getHeight() + ".png";
+                images.add(new NamedImage(fname, img));
+            }
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(this, "Ошибка формирования масок: " + ex.getMessage(), "Ошибка",
+                    JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        showMaskPreviewDialog("Предпросмотр маски канваса «" + currentCanvas.getName() + "»", images);
     }
 
     /** Отдельная кнопка-пресет (не входит в общий пакет и НЕ генерирует маску —

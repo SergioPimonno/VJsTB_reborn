@@ -144,9 +144,17 @@ public class SetupStagePanel extends JPanel {
     private JPanel structureFieldsPanel;
 
     private final JPanel shapeSection;
+    private JPanel shapeBody;
     private final ShapeEditorPanel shapeEditor;
     private final JScrollPane shapeScroll;
     private final JLabel shapeHint = new JLabel();
+    /** Всплывающее окно «Форма экрана» (см. {@link UserProfile#isShapeEditorFloating}) —
+     *  ленивое, {@code null}, пока ни разу не открывалось в этой сессии редактора.
+     *  Держит {@link #shapeScroll} (тот же ЕДИНСТВЕННЫЙ экземпляр, что и у встроенной
+     *  секции — {@link #syncShapeEditorMode} переставляет его между секцией и этим
+     *  диалогом, не создаёт копию) — так масштаб/состояние {@link #shapeEditor} не
+     *  сбрасывается при переключении встроенный/всплывающий. */
+    private com.vjstb.ledscheme.ui.ShapeEditorDialog shapeEditorDialog;
 
     // Поля (не локальные переменные), чтобы rebuild() мог явно дёрнуть revalidate/repaint
     // именно на тех разделителях, чьи дети меняют видимость — иначе секции иногда не
@@ -384,7 +392,8 @@ public class SetupStagePanel extends JPanel {
             return;
         }
         try {
-            Screen s = model.addScreen(r.name(), r.cabinetTypeId(), r.rows(), r.cols(), r.posX(), r.posY());
+            Screen s = model.addScreen(r.name(), r.cabinetTypeId(), r.rows(), r.cols(), r.posX(), r.posY(),
+                    r.mountType());
             model.selectScreen(s);
         } catch (RuntimeException ex) {
             JOptionPane.showMessageDialog(this, ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
@@ -508,8 +517,12 @@ public class SetupStagePanel extends JPanel {
         toggleShapeBtn.setToolTipText("Показать/скрыть редактор формы экрана (вырезание ячеек, арки и т.п.) —"
                 + " по умолчанию скрыт, чтобы не занимать место, когда форма не редактируется.");
         toggleShapeBtn.addActionListener(e -> {
-            shapeEditorRequested = !shapeEditorRequested;
-            rebuild();
+            if (settings.activeProfile().isShapeEditorFloating()) {
+                openShapeEditorWindow();
+            } else {
+                shapeEditorRequested = !shapeEditorRequested;
+                rebuild();
+            }
         });
         JPanel alwaysVisibleButtonsRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         alwaysVisibleButtonsRow.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
@@ -751,7 +764,7 @@ public class SetupStagePanel extends JPanel {
 
         try {
             java.io.File folder = com.vjstb.ledscheme.ui.OutputPaths.defaultFolder(
-                    model.getCurrentProject(), model.getCurrentScene());
+                    model.getCurrentProject(), model.getCurrentScene(), settings);
             java.io.File out = new java.io.File(folder,
                     "rigging_" + com.vjstb.ledscheme.ui.OutputPaths.sanitize(scr.getName()) + ".png");
             java.awt.image.BufferedImage img = com.vjstb.ledscheme.ui.RiggingSchemaImageWriter.render(
@@ -1039,6 +1052,7 @@ public class SetupStagePanel extends JPanel {
 
     private JPanel buildShapeEditor() {
         JPanel body = UiKit.vbox();
+        shapeBody = body;
 
         shapeHint.setForeground(Palette.MUTED);
         shapeHint.setText(UiKit.wrapHtml("<html>Клик (или протяжка ЛКМ) по ячейке — исключить/включить (так задаётся не"
@@ -1057,6 +1071,51 @@ public class SetupStagePanel extends JPanel {
         body.add(shapeScroll);
 
         return (JPanel) UiKit.section("Форма экрана", body);
+    }
+
+    /** Переставляет {@link #shapeScroll} между встроенной секцией и всплывающим
+     *  окном (см. {@link #shapeEditorDialog} javadoc) — ОДИН и тот же компонент,
+     *  {@code Container.add} сам открепляет его от прежнего родителя, копия не
+     *  заводится. Вызывается на КАЖДЫЙ {@link #doRebuild()} (в т.ч. когда настройка
+     *  меняется, пока диалог уже открыт, — {@link #settings} тоже в списке подписки
+     *  на {@code rebuild}, см. конструктор), поэтому переключение в «Предпочтения»
+     *  подхватывается сразу, без необходимости заново нажимать {@link #toggleShapeBtn}. */
+    private void syncShapeEditorMode(boolean floating) {
+        if (floating) {
+            if (shapeScroll.getParent() == shapeBody) {
+                shapeBody.remove(shapeScroll);
+            }
+            if (shapeEditorDialog != null) {
+                shapeEditorDialog.attach(shapeScroll);
+                if (shapeEditorDialog.isVisible()) {
+                    shapeEditorDialog.refresh();
+                }
+            }
+        } else {
+            if (shapeEditorDialog != null) {
+                shapeEditorDialog.setVisible(false);
+            }
+            if (shapeScroll.getParent() != shapeBody) {
+                shapeBody.add(shapeScroll);
+                shapeBody.revalidate();
+            }
+        }
+    }
+
+    /** Кнопка «Форма экрана…» в режиме всплывающего окна — создаёт диалог лениво
+     *  (один раз за сессию редактора, как {@link #structure3DDialog}) и поднимает
+     *  его на передний план; повторное нажатие, пока окно уже открыто, просто
+     *  фокусирует его заново — отдельного "скрыть" через эту же кнопку в этом
+     *  режиме нет (закрывается своей кнопкой «Закрыть»/крестиком окна). */
+    private void openShapeEditorWindow() {
+        if (shapeEditorDialog == null) {
+            shapeEditorDialog = new com.vjstb.ledscheme.ui.ShapeEditorDialog(
+                    SwingUtilities.getWindowAncestor(this), model);
+        }
+        shapeEditorDialog.attach(shapeScroll);
+        shapeEditorDialog.setVisible(true);
+        shapeEditorDialog.toFront();
+        shapeEditorDialog.refresh();
     }
 
     // ---- rebuild ----
@@ -1129,10 +1188,14 @@ public class SetupStagePanel extends JPanel {
                 rebuildPrerig();
             }
 
-            shapeSection.setVisible(scr != null && shapeEditorRequested);
+            boolean shapeFloating = settings.activeProfile().isShapeEditorFloating();
+            syncShapeEditorMode(shapeFloating);
+            shapeSection.setVisible(!shapeFloating && scr != null && shapeEditorRequested);
             toggleShapeBtn.setEnabled(scr != null);
-            toggleShapeBtn.setText(shapeEditorRequested ? "Скрыть форму экрана" : "Изменить форму экрана");
-            if ((hasScene && !prerigWasVisible) || (scr != null && shapeEditorRequested && !shapeWasVisible)) {
+            toggleShapeBtn.setText(shapeFloating ? "Форма экрана…"
+                    : (shapeEditorRequested ? "Скрыть форму экрана" : "Изменить форму экрана"));
+            if ((hasScene && !prerigWasVisible)
+                    || (!shapeFloating && scr != null && shapeEditorRequested && !shapeWasVisible)) {
                 UiKit.restoreDividerProportion(rightSplit, settings, "setup.prerigShape", 0.58);
                 // prerigSplit (холст vs точки подвеса ВНУТРИ "Прериг сцены") зависит от
                 // высоты prerigSection, которую только что поменял вызов выше — если
