@@ -1162,6 +1162,76 @@ class AppModelTest {
     }
 
     @Test
+    void cardLevelBackupLinkReservesThatCardBackfillsChainsAndClearsOnUnlink(@TempDir Path dir) {
+        // Фича-запрос: "сделать так же [как резерв всего контроллера,
+        // setControllerBackupLink], но для контроллеров с картами — клик по
+        // заголовкам карт в окне портов". Модульный контроллер (Novastar H2,
+        // 2 карты) резервирует ОДНУ свою карту картой другого контроллера сцены,
+        // а не весь контроллер целиком. setCardBackupLink обязан, как и его
+        // контроллер-уровневый аналог: (1) целиком отдать порты резервной карты
+        // под подхват (isPortReservedAsBackup → true, собственную цепочку на них
+        // не завести), (2) задним числом проставить backupPortNumber уже
+        // существующим цепочкам зарезервированной карты и делать это же для новых,
+        // (3) сбросить backupPortNumber при снятии связки. Соседняя карта того же
+        // резервного контроллера при этом не затрагивается.
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 3, 3, 0, 0);
+        model.selectScreen(screen);
+
+        // H2: две отдающие карты по 4 Ethernet-порта → пулы 0 (порты 1-4) и 1 (5-8).
+        ControllerType h = new ControllerType();
+        h.setName("H2");
+        h.getCards().add(new SchemaCard("Карта 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 4))));
+        h.getCards().add(new SchemaCard("Карта 2", List.of(new CardPort("Ethernet", PortDirection.OUT, 4))));
+        h = model.addControllerType(h);
+
+        ControllerInstance main = model.addControllerToScreen(screen, h.getId());
+        ControllerInstance backup = model.addControllerToScreen(screen, h.getId());
+        assertEquals(16, model.effectiveSignalPortCount(screen)); // 8 + 8, все Ethernet
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+        // Цепочка на карте 0 основного (порт 1) — создана ДО связки, резерва ещё нет.
+        model.addSignalChain(1, false, List.of(ids.get(0), ids.get(1)));
+        assertNull(model.signalChainByPort(screen, 1, false).getBackupPortNumber());
+
+        // Резервируем карту 0 основного картой 0 резервного (порты 1-4 ↔ 9-12).
+        model.setCardBackupLink(screen, main.getId(), 0, backup.getId(), 0);
+
+        assertTrue(model.isCardReservedAsBackup(model.getCurrentScene(), backup.getId(), 0));
+        assertFalse(model.isCardReservedAsBackup(model.getCurrentScene(), backup.getId(), 1),
+                "вторая карта резервного контроллера связкой не затронута");
+        assertTrue(model.isPortReservedAsBackup(screen, 9), "порт зарезервированной карты 0 резервного");
+        assertTrue(model.isPortReservedAsBackup(screen, 12));
+        assertFalse(model.isPortReservedAsBackup(screen, 13), "карта 1 резервного свободна");
+        assertFalse(model.isPortReservedAsBackup(screen, 1), "карта 0 основного доступна под свою цепочку");
+
+        // Существующая цепочка порта 1 задним числом получила зеркальный порт (9).
+        assertEquals(9, model.signalChainByPort(screen, 1, false).getBackupPortNumber(),
+                "backupPortNumber = тот же локальный индекс порта на резервной карте");
+        // Новая цепочка на другом порту той же карты — тоже сразу с резервом (10).
+        model.addSignalChain(2, false, List.of(ids.get(2)));
+        assertEquals(10, model.signalChainByPort(screen, 2, false).getBackupPortNumber());
+
+        // Порт зарезервированной карты нельзя занять собственной цепочкой.
+        assertTrue(assertThrowsRuntime(() -> model.addSignalChain(9, false, List.of(ids.get(3)))));
+
+        // Снятие связки сбрасывает backupPortNumber, указывавшие на резервную карту.
+        model.setCardBackupLink(screen, main.getId(), 0, null, null);
+        assertFalse(model.isCardReservedAsBackup(model.getCurrentScene(), backup.getId(), 0));
+        assertNull(model.signalChainByPort(screen, 1, false).getBackupPortNumber());
+        assertNull(model.signalChainByPort(screen, 2, false).getBackupPortNumber());
+
+        // Удаление резервного контроллера убирает карточную связку с основного.
+        model.setCardBackupLink(screen, main.getId(), 0, backup.getId(), 0);
+        assertFalse(main.getCardBackupLinks().isEmpty());
+        model.removeControllerFromScreen(screen, backup.getId());
+        assertTrue(main.getCardBackupLinks().isEmpty(), "висячая ссылка на удалённый контроллер не осталась");
+    }
+
+    @Test
     void cardBasedControllerPortCountOverridesManualCount() {
         // Novastar H-серии и подобные модульные контроллеры: если заданы карты,
         // эффективное число портов считается по ним, а не по ручному portCount.

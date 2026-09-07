@@ -129,6 +129,15 @@ submodule).
   Cloudflare-домен для сетей, блокирующих 8443 — `ARCHITECTURE.md` §5.
 - **Стиль javadoc — часть документации**: комментарии часто объясняют ПОЧЕМУ
   (баг-репорт, что было раньше). Не вычищать «ради краткости».
+- **Интерактивные примеры** (`Scenario`/`ScenarioListDialog`, синглтон сервера
+  `INTERACTIVE_SCENARIOS`) — данных по умолчанию в клиенте НЕТ, наполняются
+  через `ledscheme-admin` (вкладка «Интерактивные сценарии»). Текстовый мастер
+  7 экскурсов по этапам — `interactive-scenarios.seed.json` в корне репо;
+  сборка версии со скринами/хотспотами и публикация — `tools/interactive-
+  scenarios/` (JUnit-генератор `ScenarioShotSpike` под флагом
+  `-Dscenario.shots=true` → `build_full_scenarios.py` → `push_scenarios.py`,
+  см. его README). Пользовательская справка — `GuideDialog.DEFAULT_SECTIONS`
+  (тоже переопределяется синглтоном `GUIDE_TEXT` с сервера).
 - **Тесты**: JUnit 5, `mvn test` в каждом репозитории отдельно. У сервера —
   общий Spring-контекст на весь прогон surefire, без отката между тестами
   (скилл `run-tests`).
