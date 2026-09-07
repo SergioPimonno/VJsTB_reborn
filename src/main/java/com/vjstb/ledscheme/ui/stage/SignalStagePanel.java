@@ -83,6 +83,16 @@ public class SignalStagePanel extends JPanel {
      *  контроллеру в списке создаёт связку main→backup между ними (весь контроллер
      *  целиком подхватывает сигнал другого, см. AppModel.setControllerBackupLink). */
     private String pendingBackupControllerId;
+    /** Тот же механизм, что и {@link #pendingBackupControllerId}, но на уровне ОДНОЙ
+     *  КАРТЫ (пула Ethernet-портов) вместо всего контроллера — ПКМ по заголовку карты
+     *  в сетке портов ({@link PortPickerPanel}) помечает {@code pendingCardBackup...}
+     *  парой (контроллер, индекс пула), следующий ЛКМ по ЛЮБОМУ (в т.ч. другого
+     *  контроллера) заголовку карты завершает связку через
+     *  {@link AppModel#setCardBackupLink} — контроллеры с несколькими картами
+     *  (например, Novastar H2) резервируют их зачастую по отдельности, а не весь
+     *  контроллер разом. */
+    private String pendingCardBackupControllerId;
+    private Integer pendingCardBackupPoolIdx;
     /** id контроллера, чьи порты сейчас показаны в сетке (ЛКМ по строке контроллера
      *  выбирает его) — расключение всегда идёт по ОДНОМУ конкретному контроллеру,
      *  локальными номерами портов, а не сквозной суммой по всем контроллерам сцены
@@ -230,6 +240,47 @@ public class SignalStagePanel extends JPanel {
                     JOptionPane.showMessageDialog(SignalStagePanel.this, ex.getMessage(),
                             "Ошибка", JOptionPane.ERROR_MESSAGE);
                 }
+            }
+
+            @Override
+            public void onCardHeaderRightClick(int poolIdx) {
+                Screen scr = model.getCurrentScreen();
+                ControllerInstance selected = scr != null ? selectedController(scr) : null;
+                if (selected == null) {
+                    return;
+                }
+                boolean pending = selected.getId().equals(pendingCardBackupControllerId)
+                        && Integer.valueOf(poolIdx).equals(pendingCardBackupPoolIdx);
+                if (pending) {
+                    pendingCardBackupControllerId = null;
+                    pendingCardBackupPoolIdx = null;
+                } else {
+                    pendingCardBackupControllerId = selected.getId();
+                    pendingCardBackupPoolIdx = poolIdx;
+                }
+                refresh();
+            }
+
+            @Override
+            public void onCardHeaderLeftClick(int poolIdx) {
+                Screen scr = model.getCurrentScreen();
+                ControllerInstance selected = scr != null ? selectedController(scr) : null;
+                if (selected == null || pendingCardBackupControllerId == null) {
+                    return;
+                }
+                String backupId = pendingCardBackupControllerId;
+                int backupPoolIdx = pendingCardBackupPoolIdx;
+                pendingCardBackupControllerId = null;
+                pendingCardBackupPoolIdx = null;
+                if (!(backupId.equals(selected.getId()) && backupPoolIdx == poolIdx)) {
+                    try {
+                        model.setCardBackupLink(scr, selected.getId(), poolIdx, backupId, backupPoolIdx);
+                    } catch (RuntimeException ex) {
+                        JOptionPane.showMessageDialog(SignalStagePanel.this, ex.getMessage(),
+                                "Ошибка", JOptionPane.ERROR_MESSAGE);
+                    }
+                }
+                refresh();
             }
         });
 
@@ -774,6 +825,14 @@ public class SignalStagePanel extends JPanel {
             }
         }
         UiKit.recapHeight(controllersSection);
+        // Баг-репорт: добавленный контроллер (напр. 4-й) не появлялся в списке и
+        // список не скроллился/растягивался — recapHeight() пересчитывает только
+        // maximumSize секции, но без revalidate() BoxLayout родителя (и, выше по
+        // дереву, JScrollPane боковой панели) не переразмечается, поэтому новый
+        // preferredSize так и не долетал до вьюпорта. У chainsSection/chainListPanel
+        // ниже эта пара вызовов уже была — здесь её просто не хватало.
+        controllerListPanel.revalidate();
+        controllerListPanel.repaint();
 
         ControllerInstance selected = has ? selectedController(scr) : null;
         if (has && selected != null) {
@@ -795,7 +854,7 @@ public class SignalStagePanel extends JPanel {
         } else {
             portCountLabel.setText(" ");
         }
-        portPicker.rebuild(activePort, selected);
+        portPicker.rebuild(activePort, selected, pendingCardBackupControllerId, pendingCardBackupPoolIdx);
         UiKit.recapHeight(portsSection);
 
         // Выбор "текущей карты" для хоткеев — показываем переключатель, только если

@@ -33,6 +33,15 @@ public class PortPickerPanel extends JPanel {
         void onPortSelected(int port);
         /** Двойной клик — запросить назначение резервного (другого) порта для этого порта. */
         void onPortBackupLinkRequested(int port);
+        /** ПКМ по заголовку карты (виден только когда у контроллера карт больше
+         *  одной) — пометить/снять эту карту ПОКАЗАННОГО (см. {@link #rebuild})
+         *  контроллера как «ждущую» резервной связки. Аналог ПКМ по строке
+         *  контроллера в {@code SignalStagePanel}, только на уровне карты. */
+        void onCardHeaderRightClick(int poolIdx);
+        /** ЛКМ по заголовку ДРУГОЙ карты, пока метка от {@link #onCardHeaderRightClick}
+         *  ждёт — завершает связку: эта карта становится ОСНОВНОЙ, отмеченная —
+         *  резервной для неё. Без ожидающей метки ничего не делает. */
+        void onCardHeaderLeftClick(int poolIdx);
     }
 
     private final AppModel model;
@@ -72,6 +81,16 @@ public class PortPickerPanel extends JPanel {
      *  данные, баг-репорт v1.5). Панель над сеткой уже сообщает "Контроллеры не
      *  назначены" — рисовать под этим сообщением активные кнопки нечего. */
     public void rebuild(Integer activePort, ControllerInstance selectedController) {
+        rebuild(activePort, selectedController, null, null);
+    }
+
+    /** {@code pendingCardBackupControllerId}/{@code pendingCardBackupPoolIdx} —
+     *  карта, помеченная ПКМ как «ждущая» резервной связки (см. {@link
+     *  PortListener#onCardHeaderRightClick}) — подсвечивается заголовком в рамке,
+     *  ТОЛЬКО если она принадлежит {@code selectedController} (иначе метка стоит на
+     *  карте контроллера, который сейчас не показан в этой сетке вовсе). */
+    public void rebuild(Integer activePort, ControllerInstance selectedController,
+            String pendingCardBackupControllerId, Integer pendingCardBackupPoolIdx) {
         removeAll();
         Screen scr = model.getCurrentScreen();
         if (scr == null || selectedController == null) {
@@ -110,8 +129,27 @@ public class PortPickerPanel extends JPanel {
                 String cardName = sendingCard != null ? sendingCard.getName() : "";
                 JLabel header = new JLabel("Карта " + (poolIdx + 1) + (cardName.isEmpty() ? "" : " — " + cardName));
                 header.setFont(header.getFont().deriveFont(Font.BOLD, 11f));
-                header.setForeground(Palette.MUTED);
                 header.setAlignmentX(LEFT_ALIGNMENT);
+                boolean pending = selectedController.getId().equals(pendingCardBackupControllerId)
+                        && Objects.equals(poolIdx, pendingCardBackupPoolIdx);
+                boolean reservedAsBackup = model.isCardReservedAsBackup(
+                        model.getCurrentScene(), selectedController.getId(), poolIdx);
+                header.setForeground(reservedAsBackup ? Color.ORANGE : Palette.MUTED);
+                header.setBorder(pending ? BorderFactory.createLineBorder(Color.ORANGE, 2) : null);
+                header.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+                header.setToolTipText("ЛКМ по заголовку — назначить основной картой для помеченной ПКМ"
+                        + " (если такая метка ждёт) · ПКМ — пометить эту карту как резервную для другой");
+                int capturedPoolIdx = poolIdx;
+                header.addMouseListener(new MouseAdapter() {
+                    @Override
+                    public void mousePressed(MouseEvent e) {
+                        if (SwingUtilities.isRightMouseButton(e)) {
+                            listener.onCardHeaderRightClick(capturedPoolIdx);
+                        } else if (SwingUtilities.isLeftMouseButton(e)) {
+                            listener.onCardHeaderLeftClick(capturedPoolIdx);
+                        }
+                    }
+                });
                 add(header);
             }
             JPanel grid = new JPanel(new GridLayout(0, COLUMNS, 4, 4));

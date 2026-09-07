@@ -562,6 +562,11 @@ public class AppModel {
             if (controllerInstanceId.equals(ci.getBackupControllerId())) {
                 ci.setBackupControllerId(null);
             }
+            // Как и с backupControllerId выше — карточные связки (см.
+            // setCardBackupLink), указывавшие на удаляемый контроллер, тоже не
+            // должны остаться висячей ссылкой.
+            ci.getCardBackupLinks().values().removeIf(link ->
+                    link != null && controllerInstanceId.equals(link.getControllerId()));
         }
         changed();
     }
@@ -3630,7 +3635,7 @@ public class AppModel {
         // проставляем backupPortNumber сразу при создании/заполнении цепочки, а не
         // только когда пользователь явно вызовет setSignalBackupPortLink вручную.
         if (!backup && port != null) {
-            applyControllerLevelBackupPort(currentScene, chain, port);
+            applyAutoBackupPort(currentScene, chain, port);
         }
         resyncSignalSockets(currentScreen);
         changed();
@@ -3658,6 +3663,188 @@ public class AppModel {
         }
         int backupPort = portOffsetOf(scene, backupCi) + (port - portOffsetOf(scene, owner));
         chain.setBackupPortNumber(backupPort);
+    }
+
+    /** Пробует автоматически проставить {@code backupPortNumber} новой/дозаполняемой
+     *  цепочке порта {@code port} — сначала по резерву ВСЕГО контроллера ({@link
+     *  #applyControllerLevelBackupPort}, {@link #setControllerBackupLink}), если его
+     *  нет — по резерву ОТДЕЛЬНОЙ КАРТЫ ({@link #applyCardLevelBackupPort}, {@link
+     *  #setCardBackupLink}). Оба уровня взаимоисключающие для одного порта: если у
+     *  контроллера порта есть {@code backupControllerId}, ВСЕ его карты (и порты)
+     *  уже резервируются целиком, отдельная связка на карту для него бессмысленна
+     *  (собственную цепочку такой порт вообще не может получить, см. {@link
+     *  #isPortReservedAsBackup}, так что до этого метода дело не дойдёт). */
+    private void applyAutoBackupPort(Scene scene, SignalChain chain, int port) {
+        ControllerInstance owner = controllerForPortInScene(scene, port);
+        if (owner != null && owner.getBackupControllerId() != null) {
+            applyControllerLevelBackupPort(scene, chain, port);
+        } else {
+            applyCardLevelBackupPort(scene, chain, port);
+        }
+    }
+
+    /** Как {@link #applyControllerLevelBackupPort}, но резерв назначен не всему
+     *  контроллеру порта {@code port}, а только ОДНОЙ ЕГО КАРТЕ (пулу Ethernet-
+     *  портов, см. {@link ControllerInstance#getCardBackupLinks()}) — резервный порт
+     *  ищется тем же ЛОКАЛЬНЫМ номером внутри резервной карты, что и {@code port}
+     *  внутри своей (см. {@link #setCardBackupLink}). Ничего не делает, если у карты
+     *  этого порта резервной связки нет. */
+    private void applyCardLevelBackupPort(Scene scene, SignalChain chain, int port) {
+        ControllerInstance owner = controllerForPortInScene(scene, port);
+        if (owner == null) {
+            return;
+        }
+        ControllerType ownerType = workspace.controllerTypeById(owner.getControllerTypeId());
+        if (ownerType == null) {
+            return;
+        }
+        int controllerLocal = port - portOffsetOf(scene, owner);
+        int[] pool = ownerType.ethernetPoolLocalPort(controllerLocal);
+        if (pool == null) {
+            return;
+        }
+        ControllerInstance.CardBackupLink link = owner.getCardBackupLinks().get(pool[0]);
+        if (link == null) {
+            return;
+        }
+        ControllerInstance backupCi = controllerById(scene, link.getControllerId());
+        if (backupCi == null) {
+            return;
+        }
+        ControllerType backupType = workspace.controllerTypeById(backupCi.getControllerTypeId());
+        if (backupType == null) {
+            return;
+        }
+        int backupControllerLocal = backupType.globalPortFor(link.getPoolIndex(), pool[1]);
+        chain.setBackupPortNumber(portOffsetOf(scene, backupCi) + backupControllerLocal);
+    }
+
+    /**
+     * Назначает/снимает для КАРТЫ {@code mainPoolIdx} контроллера {@code mainId}
+     * резервную карту {@code backupPoolIdx} контроллера {@code backupId}, которая
+     * подхватывает сигнал именно этой карты при отказе — резерв на уровне ОДНОЙ
+     * карты, а не всего контроллера (см. {@link #setControllerBackupLink}), нужен
+     * контроллерам с несколькими независимыми выходными картами (например, Novastar
+     * H2 — 2 карты), которые резервируют их по отдельности, а не разом. Оба
+     * контроллера ищутся по всей СЦЕНЕ экрана, не только по нему самому.
+     * {@code backupId == null} снимает связку (тогда {@code backupPoolIdx}
+     * игнорируется).
+     */
+    public void setCardBackupLink(Screen screen, String mainId, int mainPoolIdx, String backupId, Integer backupPoolIdx) {
+        Scene scene = sceneContaining(screen);
+        ControllerInstance main = controllerById(scene, mainId);
+        if (main == null) {
+            throw new IllegalArgumentException("Основной контроллер не найден");
+        }
+        ControllerType mainType = workspace.controllerTypeById(main.getControllerTypeId());
+        if (mainType == null || mainPoolIdx < 0 || mainPoolIdx >= mainType.ethernetPoolCount()) {
+            throw new IllegalArgumentException("Карта основного контроллера не найдена");
+        }
+        int mainPoolPorts = mainType.ethernetPortCountInPool(mainPoolIdx);
+        ControllerInstance.CardBackupLink oldLink = main.getCardBackupLinks().get(mainPoolIdx);
+
+        ControllerInstance backup = null;
+        ControllerType backupType = null;
+        if (backupId != null) {
+            if (backupPoolIdx == null) {
+                throw new IllegalArgumentException("Не выбрана резервная карта");
+            }
+            if (backupId.equals(mainId) && backupPoolIdx == mainPoolIdx) {
+                throw new IllegalArgumentException("Резервная карта должна отличаться от основной");
+            }
+            backup = controllerById(scene, backupId);
+            if (backup == null) {
+                throw new IllegalArgumentException("Резервный контроллер не найден");
+            }
+            backupType = workspace.controllerTypeById(backup.getControllerTypeId());
+            if (backupType == null || backupPoolIdx < 0 || backupPoolIdx >= backupType.ethernetPoolCount()) {
+                throw new IllegalArgumentException("Карта резервного контроллера не найдена");
+            }
+            if (isCardReservedAsBackup(scene, backupId, backupPoolIdx)) {
+                throw new IllegalArgumentException("Эта карта уже резервирует другую — сначала снимите ту связку");
+            }
+            int backupPoolPorts = backupType.ethernetPortCountInPool(backupPoolIdx);
+            if (backupPoolPorts < mainPoolPorts) {
+                throw new IllegalArgumentException("В резервной карте меньше портов, чем в основной — резерв невозможен");
+            }
+            int backupOffset = portOffsetOf(scene, backup);
+            for (int local = 1; local <= mainPoolPorts; local++) {
+                int backupPort = backupOffset + backupType.globalPortFor(backupPoolIdx, local);
+                for (SignalChain c : scene.getSignalChains()) {
+                    if (c.getPortNumber() != null && c.getPortNumber() == backupPort
+                            && !c.getCabinetInstanceIds().isEmpty()) {
+                        throw new IllegalArgumentException("У резервной карты уже есть собственная цепочка"
+                                + " (порт " + backupPort + ") — сначала очистите её");
+                    }
+                }
+            }
+        }
+
+        pushUndo();
+        if (backupId != null) {
+            main.getCardBackupLinks().put(mainPoolIdx, new ControllerInstance.CardBackupLink(backupId, backupPoolIdx));
+        } else {
+            main.getCardBackupLinks().remove(mainPoolIdx);
+        }
+
+        int mainOffset = portOffsetOf(scene, main);
+        ControllerInstance oldBackup = oldLink != null ? controllerById(scene, oldLink.getControllerId()) : null;
+        ControllerType oldBackupType = oldBackup != null
+                ? workspace.controllerTypeById(oldBackup.getControllerTypeId()) : null;
+        int oldBackupOffset = oldBackup != null ? portOffsetOf(scene, oldBackup) : 0;
+        for (int local = 1; local <= mainPoolPorts; local++) {
+            int p = mainOffset + mainType.globalPortFor(mainPoolIdx, local);
+            for (SignalChain c : scene.getSignalChains()) {
+                if (c.isBackup() || c.getPortNumber() == null || c.getPortNumber() != p) {
+                    continue;
+                }
+                if (backupId != null) {
+                    applyCardLevelBackupPort(scene, c, p);
+                } else if (oldBackupType != null && c.getBackupPortNumber() != null) {
+                    int bp = c.getBackupPortNumber();
+                    int oldBackupPort = oldBackupOffset + oldBackupType.globalPortFor(oldLink.getPoolIndex(), local);
+                    if (bp == oldBackupPort) {
+                        c.setBackupPortNumber(null);
+                    }
+                }
+            }
+        }
+        changed();
+    }
+
+    /** true, если карта {@code poolIdx} контроллера {@code controllerId} уже назначена
+     *  чьей-то резервной картой (см. {@link #setCardBackupLink}) — такая карта целиком
+     *  отдана под подхват сигнала другой и не должна получать собственную независимую
+     *  прописку портов (аналог {@link #isControllerReservedAsBackup}, но на уровне
+     *  карты, а не всего контроллера). */
+    public boolean isCardReservedAsBackup(Scene scene, String controllerId, int poolIdx) {
+        for (ControllerInstance ci : controllersInScene(scene)) {
+            for (ControllerInstance.CardBackupLink link : ci.getCardBackupLinks().values()) {
+                if (link != null && controllerId.equals(link.getControllerId()) && link.getPoolIndex() == poolIdx) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** true — карта (пул Ethernet-портов) этого порта целиком отдана под резерв
+     *  другой карты сцены (см. {@link #setCardBackupLink}) — тогда каждый её порт
+     *  дублирует соответствующий порт основной карты один в один. Часть общей
+     *  проверки {@link #isPortReservedAsBackup}. */
+    public boolean isCardLevelBackupPort(Screen screen, int port) {
+        Scene scene = sceneContaining(screen);
+        ControllerInstance owner = controllerForPortInScene(scene, port);
+        if (owner == null) {
+            return false;
+        }
+        ControllerType ownerType = workspace.controllerTypeById(owner.getControllerTypeId());
+        if (ownerType == null) {
+            return false;
+        }
+        int controllerLocal = port - portOffsetOf(scene, owner);
+        int[] pool = ownerType.ethernetPoolLocalPort(controllerLocal);
+        return pool != null && isCardReservedAsBackup(scene, owner.getId(), pool[0]);
     }
 
     public void deletePowerChain(String chainId) {
@@ -3893,7 +4080,7 @@ public class AppModel {
                 }
             }
         }
-        return isControllerLevelBackupPort(screen, port);
+        return isControllerLevelBackupPort(screen, port) || isCardLevelBackupPort(screen, port);
     }
 
     /** true — весь контроллер этого порта целиком отдан под резерв другого
