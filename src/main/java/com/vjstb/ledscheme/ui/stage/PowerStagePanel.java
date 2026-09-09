@@ -52,6 +52,7 @@ public class PowerStagePanel extends JPanel {
     private final JToggleButton schemaViewBtn = new JToggleButton("Общая схема питания");
     private final JCheckBox showAllScreens = new JCheckBox("Показать все экраны сцены");
     private final JToggleButton quickConnectBtn = new JToggleButton("⚡ Быстрое подключение");
+    private final JButton exportSchemeBtn = new JButton("Экспорт схемы…");
     private final SceneCanvasPanel sceneOverview;
     private final JScrollPane canvasScroll;
     private final com.vjstb.ledscheme.settings.SettingsManager settings;
@@ -198,11 +199,16 @@ public class PowerStagePanel extends JPanel {
         quickConnectBtn.setToolTipText("Протяжка ЛКМ по холсту выделяет область — радиальное меню предложит"
                 + " шаблон серпантина для быстрой прописки (как в NovaLCT)");
         quickConnectBtn.addActionListener(e -> canvas.setQuickConnectMode(quickConnectBtn.isSelected()));
+        exportSchemeBtn.setToolTipText("Сохранить текущую открытую схему (расключение экрана, обзор всех"
+                + " экранов сцены или общую схему питания) в JPEG — папка спрашивается каждый раз,"
+                + " стартовая папка и качество берутся из настроек пакета документации (этап «Вывод»)");
+        exportSchemeBtn.addActionListener(e -> exportCurrentScheme());
         JPanel toggleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
         toggleRow.add(chainViewBtn);
         toggleRow.add(schemaViewBtn);
         toggleRow.add(showAllScreens);
         toggleRow.add(quickConnectBtn);
+        toggleRow.add(exportSchemeBtn);
 
         JPanel top = new JPanel(new BorderLayout());
         top.add(new ContextBar(model, true), BorderLayout.NORTH);
@@ -254,6 +260,51 @@ public class PowerStagePanel extends JPanel {
 
     public CanvasPanel canvas() {
         return canvas;
+    }
+
+    /** Кнопка «Экспорт схемы…» — сохраняет в JPEG ровно тот вид, что открыт сейчас:
+     *  общую схему питания площадки (если выбран этот вид), обзор всех экранов сцены
+     *  (если включено «Показать все экраны сцены») либо расключение текущего экрана.
+     *  Стартовая папка и качество — те же, что у пакета документации на этапе
+     *  «Вывод» (см. {@link CurrentSchemeExporter}). */
+    private void exportCurrentScheme() {
+        Scene scene = model.getCurrentScene();
+        if (schemaViewBtn.isSelected()) {
+            String name = (scene != null ? scene.getName() : "Схема") + " Сила";
+            boolean screensAsWiring = settings.activeProfile().isSchemaScreensAsWiringDiagram();
+            CurrentSchemeExporter.export(this, model, settings, name, dpiScale -> {
+                com.vjstb.ledscheme.ui.SchemaCanvasPanel c =
+                        new com.vjstb.ledscheme.ui.SchemaCanvasPanel(model, SchemaMode.POWER, settings);
+                Dimension size = c.getPreferredSize();
+                return c.renderImage(size.width, size.height, screensAsWiring, dpiScale);
+            });
+            return;
+        }
+        Screen scr = model.getCurrentScreen();
+        if (scr == null) {
+            JOptionPane.showMessageDialog(this, "Сначала выберите экран", "Нет экрана",
+                    JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        if (showAllScreens.isSelected() && scene != null && scene.getScreens().size() > 1) {
+            String name = scene.getName() + " Все экраны Сила";
+            CurrentSchemeExporter.export(this, model, settings, name, dpiScale -> {
+                SceneCanvasPanel overview = new SceneCanvasPanel(model, settings);
+                overview.setDetailMode(true, true, false);
+                Dimension size = overview.getPreferredSize();
+                return overview.renderImage(size.width, size.height, dpiScale);
+            });
+            return;
+        }
+        com.vjstb.ledscheme.model.CabinetType type = model.typeOf(scr);
+        java.util.List<PowerChain> pc = model.powerChainsTouchingScreen(scr);
+        java.util.List<com.vjstb.ledscheme.model.SignalChain> sc = model.signalChainsTouchingScreen(scr);
+        java.util.List<com.vjstb.ledscheme.model.ControllerInstance> ctrls = model.controllersInScene(scr);
+        boolean kw = settings.activeProfile().isPowerUnitKw();
+        String name = scr.getName() + " Сила";
+        CurrentSchemeExporter.export(this, model, settings, name, dpiScale ->
+                com.vjstb.ledscheme.ui.SchemeRenderer.renderImage(scr, type, true, 120, model.getWorkspace(),
+                        pc, sc, ctrls, kw, dpiScale));
     }
 
     private static final int SIDE_WIDTH = 300;
