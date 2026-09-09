@@ -16,11 +16,16 @@ import java.awt.Dimension;
 import java.awt.KeyEventDispatcher;
 import java.awt.KeyboardFocusManager;
 import java.awt.event.KeyEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
+import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.SwingUtilities;
 import javax.swing.text.JTextComponent;
 
@@ -79,8 +84,19 @@ public class MainFrame extends JFrame {
         StageSwitcher switcher = new StageSwitcher(this::switchStage);
         top.add(switcher, BorderLayout.CENTER);
         JPanel toolRow = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 8, 4));
-        undoButton.setToolTipText("Отменить последнее действие (Ctrl+Z)");
+        undoButton.setToolTipText("Отменить последнее действие (Ctrl+Z). ПКМ — список действий для отмены сразу нескольких");
         undoButton.addActionListener(e -> model.undo());
+        undoButton.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                maybeShowUndoMenu(e);
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                maybeShowUndoMenu(e);
+            }
+        });
         javax.swing.JButton shortcutsBtn = new javax.swing.JButton("⌨");
         shortcutsBtn.setToolTipText("Горячие клавиши");
         shortcutsBtn.addActionListener(e -> showShortcuts());
@@ -113,6 +129,31 @@ public class MainFrame extends JFrame {
         settings.addListener(this::repaint);
         installShortcuts();
         refresh();
+    }
+
+    /** ПКМ по кнопке «Отменить» — выпадающий список отменяемых действий (сверху
+     *  самое свежее). Выбор пункта N отменяет все действия вплоть до него
+     *  включительно ({@link AppModel#undo(int)}). */
+    private void maybeShowUndoMenu(MouseEvent e) {
+        if (!e.isPopupTrigger()) {
+            return;
+        }
+        List<String> labels = model.undoLabels();
+        JPopupMenu menu = new JPopupMenu();
+        if (labels.isEmpty()) {
+            JMenuItem empty = new JMenuItem("Нет действий для отмены");
+            empty.setEnabled(false);
+            menu.add(empty);
+        } else {
+            for (int i = 0; i < labels.size(); i++) {
+                int steps = i + 1;
+                JMenuItem item = new JMenuItem(steps + ". " + labels.get(i)
+                        + (steps > 1 ? "   (отменить действий: " + steps + ")" : ""));
+                item.addActionListener(ev -> model.undo(steps));
+                menu.add(item);
+            }
+        }
+        menu.show(e.getComponent(), e.getX(), e.getY());
     }
 
     private void switchStage(String stage) {

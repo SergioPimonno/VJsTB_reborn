@@ -33,6 +33,8 @@ public class PersonalizationDialog extends javax.swing.JDialog {
 
     private final SettingsManager settings;
     private final JComboBox<UserProfile> profileCombo = new JComboBox<>();
+    private final JComboBox<String> preferencesViewCombo =
+            new JComboBox<>(new String[] {"Список по этапам", "Матрица «функция × этап»"});
     private final List<JButton> signalSwatches = new ArrayList<>();
     private JButton phase1Swatch;
     private JButton phase2Swatch;
@@ -49,6 +51,8 @@ public class PersonalizationDialog extends javax.swing.JDialog {
         content.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
 
         content.add(buildProfileRow());
+        content.add(Box.createVerticalStrut(10));
+        content.add(buildPreferencesViewRow());
         content.add(Box.createVerticalStrut(10));
         content.add(buildStylePanel());
         content.add(Box.createVerticalStrut(10));
@@ -99,6 +103,7 @@ public class PersonalizationDialog extends javax.swing.JDialog {
                 settings.setActiveProfile(sel.getId());
                 Palette.applyProfile(settings.activeProfile());
                 refreshSwatches();
+                refreshPreferencesViewCombo();
             }
         });
         row.add(new JLabel("Профиль:"), java.awt.BorderLayout.WEST);
@@ -144,6 +149,38 @@ public class PersonalizationDialog extends javax.swing.JDialog {
         btns.add(delBtn);
         row.add(btns, java.awt.BorderLayout.EAST);
         return row;
+    }
+
+    /** Переключатель раскладки окна {@link PreferencesDialog} — список по этапам
+     *  (как раньше) или таблица-матрица «настройка × этап». Живёт здесь, а не в
+     *  самом окне предпочтений, чтобы вид выбирался рядом с профилем и стилем;
+     *  флаг профильный ({@code UserProfile.preferencesMatrixView}), окно
+     *  предпочтений подхватывает смену через свой слушатель настроек. */
+    private JPanel buildPreferencesViewRow() {
+        preferencesViewCombo.setSelectedIndex(settings.activeProfile().isPreferencesMatrixView() ? 1 : 0);
+        preferencesViewCombo.addActionListener(e -> {
+            boolean matrix = preferencesViewCombo.getSelectedIndex() == 1;
+            if (matrix != settings.activeProfile().isPreferencesMatrixView()) {
+                settings.setPreferencesMatrixView(matrix);
+            }
+        });
+        JPanel row = new JPanel(new java.awt.BorderLayout(8, 0));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+        row.setToolTipText("Как показывать окно «Персонализация — предпочтения»: обычным списком, сгруппированным"
+                + " по этапу, или единой таблицей «настройка × этап» (Общие/Сигнал/Питание) — нагляднее видно"
+                + " зеркальные пары сигнал/питание и где какой этап неприменим. Если матрица не вмещается — окно"
+                + " предпочтений растянется под неё.");
+        row.add(new JLabel("Вид окна «Предпочтения»"), java.awt.BorderLayout.CENTER);
+        row.add(preferencesViewCombo, java.awt.BorderLayout.EAST);
+        return (JPanel) UiKit.section("Вид", row);
+    }
+
+    private void refreshPreferencesViewCombo() {
+        int want = settings.activeProfile().isPreferencesMatrixView() ? 1 : 0;
+        if (preferencesViewCombo.getSelectedIndex() != want) {
+            preferencesViewCombo.setSelectedIndex(want);
+        }
     }
 
     /** Стиль отрисовки (см. {@link LafStyle} — 4 варианта, все из уже подключённого
@@ -283,6 +320,7 @@ public class PersonalizationDialog extends javax.swing.JDialog {
         }
         profileCombo.setModel(m);
         profileCombo.setSelectedItem(settings.activeProfile());
+        refreshPreferencesViewCombo();
     }
 
     private void refreshSwatches() {
