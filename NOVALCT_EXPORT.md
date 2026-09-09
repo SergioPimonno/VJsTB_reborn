@@ -31,9 +31,9 @@ NovaLCT — проприетарное ПО NovaStar/Xixun для настрой
 
 | Файл | Роль |
 |---|---|
-| `ui/NovaLctControllerExportDialog.java` | Точка входа: диалог-оркестратор — выбор контроллера, разрешение кабинетов, ветвление одиночный/combine/separate, сохранение `.scr`, опционально следом скачивание `.rcfgx`. |
+| `ui/NovaLctControllerExportDialog.java` | Точка входа: диалог-оркестратор — выбор контроллера, разрешение кабинетов, ветвление одиночный/combine/separate/пере-индексация куска/смешанный (Standard+Complex), сохранение ОДНОГО `.scr`, опционально следом скачивание `.rcfgx`. |
 | `ui/LctPresetMasterDialog.java` | «LCTPresetMaster» — редактор раскладки экранов при мультиэкранном контроллере (визуально имитирует панель Basic Information самой NovaLCT). |
-| `service/NovaLctScrWriter.java` | Сам бинарный писатель `.scr` — Standard Screen, Complex Screen, мультиэкранный (экспериментальный) форматы. Это ядро фичи. |
+| `service/NovaLctScrWriter.java` | Сам бинарный писатель `.scr` — Standard Screen, Complex Screen, мультиэкранный `writeStandardMultiScreen`, смешанный `writeMixedMultiScreen` (Standard+Complex в одном файле), пере-индексированный кусок `writeResolvedSubScreen`. Это ядро фичи. |
 | `service/NovaLctControllerResolver.java` | Собирает ВСЕ кабинеты по всем экранам сцены, расключённые через ОДИН конкретный контроллер. |
 | `service/NovaLctCombineHelper.java` | Объединяет несколько разрешённых экранов в один виртуальный Standard-Screen грид (или оставляет раздельными). |
 | `service/ScreenLogic.java` | Сквозные геометрия/порты, используются писателем: `isUniformRectangularGrid`, `cardAndLocalPort`, `effectiveType`, `offsetPx`. |
@@ -51,7 +51,7 @@ NovaLCT — проприетарное ПО NovaStar/Xixun для настрой
 
 | Файл | Что покрывает |
 |---|---|
-| `NovaLctScrWriterTest.java` | Golden byte-exact тесты `writeStandard` (один экран) + тест дефолтов заголовка. |
+| `NovaLctScrWriterTest.java` | Golden byte-exact тесты `writeStandard` (один экран), `writeMixedMultiScreen` (2 реальных образца: Standard+Complex и Complex+Complex), пере-индексация куска экрана, контроллер не первый в сцене + тест дефолтов заголовка. |
 | `NovaLctComplexScrWriterTest.java` | Golden byte-exact тесты `writeComplex`. |
 | `NovaLctCombineHelperTest.java` | `validateSlots`/`combine`, включая эквивалентность вырожденного случая и размещение «дырок». |
 | `NovaLctControllerResolverTest.java` | Корректность резолвера (простой контроллер, много карт, цепочка через 2 экрана). |
@@ -124,6 +124,13 @@ NovaLCT для контроллера…» (`MainMenuBar.java`). Ни одна �
   считалось, что это выводимая формула — «случайно совпадало на 2 из 3
   сэмплов», реальный источник — прямой баг-репорт «неверный номер именно
   у ячейки (0,0)».
+- **Coordinate X экрана (`0x141` + дубль `0x14d`) — ПОЛНЫЙ LE16, не 1 байт.**
+  `writeStandardCore` раньше писал их одним байтом (`& 0xff`) — держалось лишь
+  потому, что для одноэкранного экспорта `screenX` всегда был 0. Мультиэкранный
+  `writeScreenDescriptor` в той же относительной позиции (`base+2`/`base+14`)
+  уже писал `putU16` (подтверждено на 4 образцах). Приведено к LE16, когда
+  появился контроллер-центричный экспорт части экрана со смещением
+  (`writeResolvedSubScreen`), где X может быть > 255 px.
 - Хвост: якорь ещё раз, 2-байтовая длина, затем ASCII JSON-массив
   warp-координат на экран (сейчас всегда один элемент с нулевыми
   искажениями — реальный warp не поддерживается/не нужен).
@@ -237,6 +244,27 @@ javadoc `NovaLctScrWriter.writeStandardMultiScreen`, не дублируются
 фактически затронутых экранов, ветвление `== 1` vs `> 1` — единственный
 признак, отдельного поля в модели «этот контроллер мультиэкранный» нет.
 
+**c) ОДИН экран, расключённый НЕСКОЛЬКИМИ контроллерами** (обратная ситуация к
+`b` — там один контроллер на много экранов, тут много контроллеров на один
+экран; типовой кейс — левая/правая половина экрана на разных Sending Card).
+Детект: `NovaLctControllerResolver.controllersWiringScreen(scene, screen, model)
+.size() > 1`. Экспорт КАЖДОГО такого контроллера раньше (даже после фикса
+`writeForResolvedScreen`, см. секцию 9) писал ПОЛНУЮ сетку экрана с записями
+только для своих колонок → остальные видимые ячейки без записи вовсе → NovaLCT
+отклоняет импорт («Failed to load screen information file!»). Сейчас
+`NovaLctScrWriter.writeResolvedSubScreen` берёт габаритный прямоугольник ячеек
+ЭТОГО контроллера и пере-индексирует его в собственную локальную сетку
+`(0,0)..(localCols-1, localRows-1)`; не покрытые ячейки ВНУТРИ прямоугольника
+(L-образная зона) получают blank-сентинел `card=0xFF`. Диалог
+(`NovaLctControllerExportDialog.askSubScreenPlacement`) спрашивает, писать кусок
+как **отдельный screen** (Coordinate X/Y = 0) или **сохранить положение** на
+канвасе — тогда подставляется редактируемый пиксельный оффсет
+(`minCol×cabW` / `minRow×cabH`). Формат: **Standard** (Coordinate X в
+заголовке), если сдвиг по Y = 0 и кусок ровный; иначе **Complex** — Y (и любой
+ненулевой сдвиг) вписывается прямо в пиксельные X/Y каждой карты, т.к. Standard
+Screen Y-координату экрана не хранит. Мультиэкранный (`involvedScreens.size()
+> 1`) путь этот кейс пока НЕ обрабатывает — только одноэкранная ветка.
+
 **LCTPresetMaster** (`LctPresetMasterDialog`) — UI размещения экранов,
 показывается только в мультиэкранном случае. Мотивация из javadoc класса:
 более раннюю попытку использовать существующий `ContentCanvas` (пиксельный
@@ -268,21 +296,60 @@ LCTPresetMaster визуально имитирует именно эту пан
   покрыт тестами). Golden/структурные тесты — `NovaLctCombineHelperTest`
   (`splitSeparateGrouped_*`).
 
-**Complex-экраны и мультиэкранный путь (2026-08-11)**: `combine`/
-`splitSeparateGrouped` полностью полагаются на равномерную row/col-сетку
-`LctPresetMasterDialog` и ничего не знают про произвольные Complex-прямоугольники
-(секция 4) — раньше, если контроллер затрагивал несколько экранов и хотя бы
-один был неровным (Complex), код молча применял к нему Standard-математику без
-единой ошибки, результат непредсказуем. `NovaLctControllerExportDialog.showExportFlow`
-теперь ДО показа `LctPresetMasterDialog` проверяет `NovaLctScrWriter.isComplexExport`
-по каждому затронутому экрану и полностью блокирует мультиэкранный путь (Combine
-И Separate), если хоть один из них Complex — с сообщением экспортировать такой
-экран отдельно (через контроллер, обслуживающий только его — там `write`/
-`writeComplex` уже подтверждены). Реальный тестовый случай (Complex-экран с
-несколькими цепочками/портами В СОСТАВЕ мультиэкранного контроллера) по-прежнему
-не получен — см. пункт про "Порядок карт при НЕСКОЛЬКИХ цепочках/портах на один
-Complex Screen" в секции 9 ниже; блокировка — защитная мера до появления такого
-образца, не полноценная поддержка сценария.
+**Смешанный мультиэкранный `.scr` (Standard + Complex в одном файле) —
+статус: ПОДТВЕРЖДЕНО побайтово (2026-09)**. История:
+
+- *Было (2026-08-11)*: `combine`/`splitSeparateGrouped` полностью полагаются на
+  равномерную row/col-сетку `LctPresetMasterDialog` и ничего не знают про
+  произвольные Complex-прямоугольники — раньше молча применяли к Complex-экрану
+  Standard-математику. `showExportFlow` стал **полностью блокировать**
+  мультиэкранный путь, если хоть один затронутый экран Complex.
+- *Ключевое ограничение*: экспорт ОДНОГО контроллера обязан давать РОВНО ОДИН
+  `.scr` — импорт в NovaLCT («Load from File») заменяет всю конфигурацию
+  целиком, второй файл затёр бы первый. Значит смешанный случай нужно писать
+  как ОДИН мультиэкранный `.scr` (Screen1 Standard, Screen2 Complex, …).
+- *Стало*: пользователь прислал два реальных образца NovaLCT
+  (`standart+complex.scr` — Screen1 Standard 2×2 + Screen2 Complex 4 карты с
+  ненулевыми StartX/StartY; `complex+complex.scr` — оба Complex). По ним
+  контейнер разобран до байта и реализован — `NovaLctScrWriter.writeMixedMultiScreen`
+  (golden-byte тесты `mixedMultiScreen_*_matchesRealNovaLctSample`). Блокировка
+  снята: `showExportFlow` делит затронутые экраны на `complexScreens`/
+  `standardScreens`, обычные проходят прежнее ветвление Combine/Separate и дают
+  Standard-блок(и), каждый Complex-экран даёт Complex-блок, всё пакуется в один
+  файл. Порядок блоков — по возрастанию (Sending Card, Port) первой записи
+  (требование NovaLCT, см. секцию 9).
+
+**Раскладка смешанного контейнера** (все смещения сверены с обоими образцами;
+`N` = число экранов):
+
+| Поле | Значение |
+|---|---|
+| `shift` | `4·(N−1)` |
+| `descBase` | `0x13f + shift` — начало блока экрана 0; фиксированный заголовок — байты `0x00..descBase−1` |
+| `0x0e` (LE16) | `133 + 40·N` — длина хвостового блока (`buildMultiScreenTailFooter`) |
+| `0x13a` | `N` |
+| `0x13b` (LE16) | «инфо-длина» экрана 0 |
+| `0x13f + 4·(i−1)` (LE16) | «инфо-длина» экрана `i` (i=1..N−1); след. 2 байта 0 |
+| «инфо-длина» Standard | `HEADER_LEN + rc·17 − 313` |
+| «инфо-длина» Complex | `6 + cards·16` |
+| `0x0a` (LE16) | `footerStart − 0xb6` |
+| `0xd2` (LE16) | `(jsonlenOffset − 6) − 176` |
+
+Блок экрана: Standard — 21-байтный дескриптор (`writeScreenDescriptor`) +
+17-байтные записи; Complex — `Type=2, VirtualMode=0, Count(LE32)` + 16-байтные
+записи (та же раскладка, что у одноэкранного `writeComplex`). **За записями
+КАЖДОГО Standard-экрана идёт 6-байтный якорь** (`buildAnchor`), за Complex-экраном
+— ничего; перед экраном 0 якоря нет. `jsonlenOffset` = конец записей последнего
+экрана `+ (последний Standard ? 6 : 0)`. Итоговый JSON — по одному `{"si":k,…}`
+на каждый Standard-экран (k — индекс среди всех экранов), либо `"[]"`, если
+Standard-экранов нет. Обе чек-суммы и хвостовой блок — как в
+`writeStandardMultiScreen`.
+
+**Всё ещё не проверено реальной загрузкой**: экспорт из самого приложения
+(диалог → `resolvedStandardScreen`/`resolvedComplexScreen` → `writeMixedMultiScreen`)
+— писатель совпадает с образцами NovaLCT побайтово, но полный путь UI-диалога
+пользователь ещё не прогонял через Load from File. Complex-экран с НЕСКОЛЬКИМИ
+цепочками/портами по-прежнему без реального образца (секция 9).
 
 **Механизм «дырок» (blank cells)** в `combine`/`splitSeparateGrouped`: любая
 ячейка внутри общего бокса (всей сетки — для `combine`, bounding box ГРУППЫ —

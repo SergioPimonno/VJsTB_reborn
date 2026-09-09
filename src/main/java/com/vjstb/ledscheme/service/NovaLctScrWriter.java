@@ -11,6 +11,7 @@ import com.vjstb.ledscheme.model.Workspace;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -251,6 +252,176 @@ public final class NovaLctScrWriter {
         return defaultType == null || !ScreenLogic.isUniformRectangularGrid(screen, defaultType, workspace);
     }
 
+    /** Контроллер-центричный экспорт РОВНО ОДНОГО экрана — использует уже
+     *  разрешённые {@link NovaLctControllerResolver.CabinetRec} (сквозная по сцене
+     *  нумерация портов через {@link AppModel#portOffsetOf}), а НЕ
+     *  {@link #write(Screen, Scene, Workspace)}, который резолвит цепочки сам через
+     *  {@link ScreenLogic#cardAndLocalPort}.
+     *
+     * <p><b>Зачем (баг-репорт)</b>: {@code cardAndLocalPort} суммирует ТОЛЬКО
+     * контроллеры, физически лежащие под самим экраном, и отсчитывает локальный
+     * порт с нуля. Если контроллер экрана не первый в сцене, а scene-wide номер
+     * порта его цепочек больше его собственной ёмкости портов (напр. второй
+     * MCTRL4k: цепочки на портах 17..32 при ёмкости 16), {@code cardAndLocalPort}
+     * возвращает {@code null} для КАЖДОЙ цепочки — и {@link #write} отдаёт .scr
+     * вообще без кабинетных записей, который реальная NovaLCT отклоняет при
+     * импорте ("Failed to load screen information file!"). Реальный случай: проект
+     * с 4 контроллерами MCTRL4k, по одному на экран — грузился только экран
+     * первого контроллера. Резолвер ({@link NovaLctControllerResolver}) считает
+     * смещение порта правильно, здесь его результат и используется напрямую.
+     *
+     * <p>Standard/Complex выбирается так же, как в {@link #write}. {@code recs}
+     * относятся к одному {@code screen} (вызывающий код —
+     * {@code NovaLctControllerExportDialog} — заходит сюда только когда
+     * {@code involvedScreens.size() == 1}); записи с другого экрана игнорируются. */
+    public static byte[] writeForResolvedScreen(Screen screen, List<NovaLctControllerResolver.CabinetRec> recs,
+                                                 Workspace workspace) {
+        CabinetType defaultType = workspace != null ? workspace.cabinetTypeById(screen.getCabinetTypeId()) : null;
+        if (defaultType != null && !ScreenLogic.isUniformRectangularGrid(screen, defaultType, workspace)) {
+            return writeComplexCore(complexCardsFromRecs(screen, recs, workspace, defaultType));
+        }
+        return writeStandardFromRecs(screen, recs, workspace);
+    }
+
+    /** Standard-ветка {@link #writeForResolvedScreen} — та же логика, что у
+     *  {@link #writeStandard} (включая явные blank-записи {@code card=0xFF} для
+     *  скрытых ячеек), но сетка (col,row)→{@link Rec} берётся из уже разрешённых
+     *  {@link NovaLctControllerResolver.CabinetRec}, а не из {@link #resolve}. */
+    private static byte[] writeStandardFromRecs(Screen screen, List<NovaLctControllerResolver.CabinetRec> recs,
+                                                 Workspace workspace) {
+        ScreenBlock b = resolvedStandardScreen(screen, recs, workspace);
+        return writeStandardCore(b.cols(), b.rows(), b.cabW(), b.cabH(), b.screenXPx(), b.cells());
+    }
+
+    /** Complex-ветка {@link #writeForResolvedScreen} — пиксельная геометрия карт
+     *  считается по {@link CabinetInstance} экрана (тот же расчёт, что у
+     *  {@link #writeComplex}), а card/port/seq берутся из уже разрешённых
+     *  {@link NovaLctControllerResolver.CabinetRec}. Порядок карт совпадает с тем,
+     *  что дал бы {@link #writeComplex}: резолвер обходит цепочки сцены и кабинеты
+     *  внутри цепочки в том же порядке, {@code seq} тоже per-chain от 0. */
+    private static List<ComplexCard> complexCardsFromRecs(Screen screen,
+                                                          List<NovaLctControllerResolver.CabinetRec> recs,
+                                                          Workspace workspace, CabinetType defaultType) {
+        int nativeCellW = defaultType.getResolutionWidth();
+        int nativeCellH = defaultType.getResolutionHeight();
+        List<ComplexCard> cards = new ArrayList<>();
+        for (NovaLctControllerResolver.CabinetRec r : recs) {
+            if (r.sourceScreen() != screen) {
+                continue;
+            }
+            CabinetInstance cab = screen.cabinetAt(r.row(), r.col());
+            if (cab == null || cab.isHidden()) {
+                continue;
+            }
+            CabinetType eff = ScreenLogic.effectiveType(cab, defaultType, workspace);
+            int x = (int) Math.round(cab.getColIndex() * nativeCellW
+                    + ScreenLogic.offsetPx(cab.getOffsetXMm(), nativeCellW, defaultType.getWidthMm()));
+            int y = (int) Math.round(cab.getRowIndex() * nativeCellH
+                    + ScreenLogic.offsetPx(cab.getOffsetYMm(), nativeCellH, defaultType.getHeightMm()));
+            int w = eff != null ? eff.getResolutionWidth() : nativeCellW;
+            int h = eff != null ? eff.getResolutionHeight() : nativeCellH;
+            cards.add(new ComplexCard(x, y, w, h, r.cardIndex(), r.portInPool(), r.seq()));
+        }
+        return cards;
+    }
+
+    /** Контроллер-центричный экспорт ЧАСТИ экрана, расключённого НЕСКОЛЬКИМИ
+     *  контроллерами сцены (см. {@link NovaLctControllerResolver#controllersWiringScreen}).
+     *  В отличие от {@link #writeForResolvedScreen} (пишет полную сетку экрана и
+     *  для не покрытых этим контроллером ВИДИМЫХ ячеек не пишет ничего — файл с
+     *  «дырами» в сетке NovaLCT отклоняет), здесь берётся ГАБАРИТНЫЙ прямоугольник
+     *  ячеек этого контроллера и пере-индексируется в собственную локальную сетку
+     *  {@code (0,0)..(localCols-1, localRows-1)}. Не покрытые ячейки ВНУТРИ этого
+     *  прямоугольника (L-образная зона и т.п.) получают подтверждённый blank-сентинел
+     *  {@code card=0xFF} — как вырезы/{@code combine}.
+     *
+     * <p>{@code offsetXPx}/{@code offsetYPx} — положение левого верхнего угла куска
+     * на общем контент-канвасе NovaLCT (поле Coordinate X/Y). Вызывающий диалог
+     * подставляет {@code minCol×cabW}/{@code minRow×cabH} и даёт пользователю
+     * изменить (режим «сохранить положение») либо передаёт {@code 0,0} (режим
+     * «отдельный screen»).
+     *
+     * <p>Формат: <b>Standard</b> (Coordinate X в заголовке), если {@code offsetYPx == 0}
+     * и кусок — ровный прямоугольник одинаковых кабинетов без свободных смещений
+     * (Standard Screen не хранит Y-координату экрана — только X). Иначе —
+     * <b>Complex</b>, где Y (и любой ненулевой X/сдвиг) вписывается прямо в
+     * пиксельные X/Y каждой карты. */
+    public static byte[] writeResolvedSubScreen(Screen screen, List<NovaLctControllerResolver.CabinetRec> recs,
+                                                 Workspace workspace, int offsetXPx, int offsetYPx) {
+        List<NovaLctControllerResolver.CabinetRec> mine = new ArrayList<>();
+        for (NovaLctControllerResolver.CabinetRec r : recs) {
+            if (r.sourceScreen() == screen) {
+                mine.add(r);
+            }
+        }
+        if (mine.isEmpty()) {
+            return writeForResolvedScreen(screen, recs, workspace);
+        }
+
+        int minCol = Integer.MAX_VALUE;
+        int minRow = Integer.MAX_VALUE;
+        int maxCol = 0;
+        int maxRow = 0;
+        for (NovaLctControllerResolver.CabinetRec r : mine) {
+            minCol = Math.min(minCol, r.col());
+            maxCol = Math.max(maxCol, r.col());
+            minRow = Math.min(minRow, r.row());
+            maxRow = Math.max(maxRow, r.row());
+        }
+        int localCols = maxCol - minCol + 1;
+        int localRows = maxRow - minRow + 1;
+
+        CabinetType defaultType = workspace != null ? workspace.cabinetTypeById(screen.getCabinetTypeId()) : null;
+        int cabW = defaultType != null ? defaultType.getResolutionWidth() : 128;
+        int cabH = defaultType != null ? defaultType.getResolutionHeight() : 128;
+
+        boolean pieceUniform = defaultType != null;
+        for (NovaLctControllerResolver.CabinetRec r : mine) {
+            CabinetInstance cab = screen.cabinetAt(r.row(), r.col());
+            if (cab == null) {
+                continue;
+            }
+            if (cab.getOffsetXMm() != 0 || cab.getOffsetYMm() != 0) {
+                pieceUniform = false;
+            }
+            CabinetType eff = ScreenLogic.effectiveType(cab, defaultType, workspace);
+            if (eff != null && defaultType != null && !eff.getId().equals(defaultType.getId())) {
+                pieceUniform = false;
+            }
+        }
+
+        if (offsetYPx == 0 && pieceUniform) {
+            Map<CellKey, Rec> byCell = new HashMap<>();
+            for (NovaLctControllerResolver.CabinetRec r : mine) {
+                int lc = r.col() - minCol;
+                int lr = r.row() - minRow;
+                byCell.put(new CellKey(lc, lr), new Rec(lr, lc, r.cardIndex(), r.portInPool(), r.seq()));
+            }
+            for (int lc = 0; lc < localCols; lc++) {
+                for (int lr = 0; lr < localRows; lr++) {
+                    byCell.putIfAbsent(new CellKey(lc, lr), new Rec(lr, lc, 255, 0, 0));
+                }
+            }
+            return writeStandardCore(localCols, localRows, cabW, cabH, offsetXPx, byCell);
+        }
+
+        List<ComplexCard> cards = new ArrayList<>();
+        for (NovaLctControllerResolver.CabinetRec r : mine) {
+            CabinetInstance cab = screen.cabinetAt(r.row(), r.col());
+            CabinetType eff = cab != null ? ScreenLogic.effectiveType(cab, defaultType, workspace) : defaultType;
+            double ox = cab != null && defaultType != null
+                    ? ScreenLogic.offsetPx(cab.getOffsetXMm(), cabW, defaultType.getWidthMm()) : 0;
+            double oy = cab != null && defaultType != null
+                    ? ScreenLogic.offsetPx(cab.getOffsetYMm(), cabH, defaultType.getHeightMm()) : 0;
+            int x = (int) Math.round((r.col() - minCol) * cabW + ox) + offsetXPx;
+            int y = (int) Math.round((r.row() - minRow) * cabH + oy) + offsetYPx;
+            int w = eff != null ? eff.getResolutionWidth() : cabW;
+            int h = eff != null ? eff.getResolutionHeight() : cabH;
+            cards.add(new ComplexCard(x, y, w, h, r.cardIndex(), r.portInPool(), r.seq()));
+        }
+        return writeComplexCore(cards);
+    }
+
     /** Контроллер-центричный экспорт — все кабинеты, резолвнутые
      *  {@link NovaLctControllerResolver} для {@code controller} (с ЛЮБОГО экрана
      *  сцены), объединяются в ОДНУ виртуальную Standard Screen сетку по пиксельной
@@ -423,17 +594,24 @@ public final class NovaLctScrWriter {
         // никогда не проверялся -- см. подробности у мультиэкранной версии этого поля.
         putU16(header, 0x13b, trailerOffset - 313);
         header[0x13f] = 0x01; // константа
-        header[0x141] = (byte) (screenX & 0xff); // X-координата экрана — подтверждено на 1 образце
+        // ПОЛНЫЙ LE16, не однобайтовое усечение & 0xff — та же раскладка "паспорта
+        // экрана", что у мультиэкранного writeScreenDescriptor (base+2 / base+14,
+        // оба putU16, подтверждено на 4 образцах). Раньше писался 1 байтом —
+        // "подтверждено на 1 образце" держалось лишь потому, что для одноэкранного
+        // экспорта screenX всегда был 0; для контроллер-центричного экспорта части
+        // экрана со смещением (writeResolvedSubScreen) координата X уже может
+        // превышать 255 px (напр. правый столбец кабинетов 192×192 → 768).
+        putU16(header, 0x141, screenX); // X-координата экрана
         putU16(header, 0x145, cols);
         putU16(header, 0x147, rows);
         header[0x149] = (byte) (firstCard & 0xff); // Sending Card (0-based) — подтверждено на 2 образцах
         header[0x14a] = (byte) (firstPort & 0xff); // Ethernet Port (0-based) — подтверждено на 2 образцах
         putU16(header, 0x14b, originSeq); // seq кабинета (0,0) — см. комментарий выше
-        header[0x14d] = (byte) (screenX & 0xff); // дубль X-координаты — подтверждено на 1 образце
+        putU16(header, 0x14d, screenX); // дубль X-координаты
         writeBytes(out, header);
 
         byte[] anchor = buildAnchor(cabW, cabH);
-        writeCabinetRecords(out, anchor, cols, rows, cabW, cabH, cellsByKey);
+        writeCabinetRecords(out, anchor, cols, rows, cabW, cabH, screenX, cellsByKey);
 
         // Завершающий блок warp-искажений (в терминах декомпилированного оригинала —
         // хвост секции "screen info"): тот же 6-байтовый якорь (см. buildAnchor), что
@@ -806,6 +984,281 @@ public final class NovaLctScrWriter {
         return f;
     }
 
+    // ================= Смешанный мультиэкранный .scr (Standard + Complex в одном файле) =================
+
+    /** Complex-экран как БЛОК внутри смешанного мультиэкранного .scr
+     *  (см. {@link #writeMixedMultiScreen}) — в отличие от одноэкранного
+     *  {@link #writeComplex}, тут только тело блока (Type/VirtualMode/Count +
+     *  16-байтные записи), без файловой преамбулы/чек-сумм/хвоста. */
+    public record ComplexScreenBlock(int cabW, int cabH, List<ComplexRec> cards) {
+    }
+
+    /** Одна пиксельная карта Complex-экрана — публичная (в отличие от внутреннего
+     *  {@link ComplexCard}), чтобы диалог экспорта мог собрать
+     *  {@link ComplexScreenBlock} из резолвнутых записей. */
+    public record ComplexRec(int card, int port, int seq, int x, int y, int w, int h) {
+    }
+
+    /** Экран внутри смешанного мультиэкранного .scr: РОВНО одно из полей непусто —
+     *  {@code standard} для Standard-блока (ровная сетка), {@code complex} для
+     *  Complex-блока (произвольные пиксельные прямоугольники). */
+    public record MixedScreen(ScreenBlock standard, ComplexScreenBlock complex) {
+        public static MixedScreen of(ScreenBlock b) {
+            return new MixedScreen(b, null);
+        }
+
+        public static MixedScreen of(ComplexScreenBlock b) {
+            return new MixedScreen(null, b);
+        }
+
+        boolean isStandard() {
+            return standard != null;
+        }
+
+        int firstCard() {
+            if (standard != null) {
+                return firstCardPort(standard)[0];
+            }
+            return complex != null && !complex.cards().isEmpty() ? complex.cards().get(0).card() : 0;
+        }
+
+        int firstPort() {
+            if (standard != null) {
+                return firstCardPort(standard)[1];
+            }
+            return complex != null && !complex.cards().isEmpty() ? complex.cards().get(0).port() : 0;
+        }
+    }
+
+    /** {@link ScreenBlock} одного ЭКРАНА из резолвнутых {@link NovaLctControllerResolver.CabinetRec}
+     *  — та же сетка (col,row)→{@link Rec} (+ blank-сентинелы скрытых ячеек), что
+     *  строит {@link #writeStandardFromRecs}, но как переиспользуемый блок для
+     *  {@link #writeMixedMultiScreen}. */
+    public static ScreenBlock resolvedStandardScreen(Screen screen,
+            List<NovaLctControllerResolver.CabinetRec> recs, Workspace workspace) {
+        Map<CellKey, Rec> byCell = new HashMap<>();
+        for (NovaLctControllerResolver.CabinetRec r : recs) {
+            if (r.sourceScreen() != screen) {
+                continue;
+            }
+            byCell.put(new CellKey(r.col(), r.row()),
+                    new Rec(r.row(), r.col(), r.cardIndex(), r.portInPool(), r.seq()));
+        }
+        for (CabinetInstance cab : screen.getCabinets()) {
+            if (cab.isHidden()) {
+                byCell.putIfAbsent(new CellKey(cab.getColIndex(), cab.getRowIndex()),
+                        new Rec(cab.getRowIndex(), cab.getColIndex(), 255, 0, 0));
+            }
+        }
+        CabinetType defaultType = workspace != null ? workspace.cabinetTypeById(screen.getCabinetTypeId()) : null;
+        int cabW = defaultType != null ? defaultType.getResolutionWidth() : 128;
+        int cabH = defaultType != null ? defaultType.getResolutionHeight() : 128;
+        return new ScreenBlock(screen.getCols(), screen.getRows(), cabW, cabH, 0, byCell);
+    }
+
+    /** {@link ComplexScreenBlock} одного Complex-экрана из резолвнутых
+     *  {@link NovaLctControllerResolver.CabinetRec} — геометрия карт та же, что у
+     *  {@link #complexCardsFromRecs}/{@link #writeComplex}. */
+    public static ComplexScreenBlock resolvedComplexScreen(Screen screen,
+            List<NovaLctControllerResolver.CabinetRec> recs, Workspace workspace) {
+        CabinetType defaultType = workspace != null ? workspace.cabinetTypeById(screen.getCabinetTypeId()) : null;
+        int cabW = defaultType != null ? defaultType.getResolutionWidth() : 128;
+        int cabH = defaultType != null ? defaultType.getResolutionHeight() : 128;
+        List<ComplexRec> cards = new ArrayList<>();
+        if (defaultType != null) {
+            for (ComplexCard c : complexCardsFromRecs(screen, recs, workspace, defaultType)) {
+                cards.add(new ComplexRec(c.card(), c.port(), c.seq(), c.x(), c.y(), c.w(), c.h()));
+            }
+        }
+        return new ComplexScreenBlock(cabW, cabH, cards);
+    }
+
+    /** {@link ScreenBlock} из результата объединения экранов
+     *  ({@link NovaLctCombineHelper#combine}) — для использования как ОДНОГО экрана
+     *  в {@link #writeMixedMultiScreen} (эквивалент {@link #writeStandardCombined},
+     *  но не финальный файл). */
+    public static ScreenBlock standardBlock(NovaLctCombineHelper.CombineResult combined) {
+        return new ScreenBlock(combined.cols(), combined.rows(), combined.cabW(), combined.cabH(), 0,
+                combined.cells());
+    }
+
+    /** <b>Статус: ПОДТВЕРЖДЕНО побайтово на 2 реальных образцах NovaLCT</b>
+     *  ({@code standart+complex.scr} — Screen1 Standard 2×2 + Screen2 Complex 4 карты
+     *  с ненулевыми StartX/StartY; {@code complex+complex.scr} — оба экрана Complex).
+     *  Пишет ОДИН .scr, содержащий несколько NovaLCT-экранов ЛЮБОГО типа (Standard
+     *  и/или Complex) — то, чего не умеет {@link #writeStandardMultiScreen} (только
+     *  Standard-подобные блоки). Экспорт одного контроллера, обслуживающего и
+     *  Complex-, и обычные экраны, собирается ИМЕННО этим методом: импорт в NovaLCT
+     *  ("Load from File") заменяет всю конфигурацию, поэтому у контроллера должен
+     *  быть РОВНО один файл.
+     *
+     *  <p>Раскладка (все смещения/формулы сверены с образцами):
+     *  <ul>
+     *    <li>{@code shift = 4×(N−1)}, {@code descBase = 0x13f + shift}; фиксированный
+     *    заголовок — байты {@code 0x00 .. descBase−1}.</li>
+     *    <li>{@code 0x0e} = {@code 133 + 40×N} (длина хвостового блока,
+     *    {@link #buildMultiScreenTailFooter}); {@code 0x13a} = N.</li>
+     *    <li>{@code 0x13b} (LE16) = «инфо-длина» экрана 0; сдвиговая зона
+     *    ({@code 0x13f + 4×(i−1)} для i=1..N−1, LE16) = «инфо-длина» экрана i.
+     *    Для Standard это {@code HEADER_LEN + rc×17 − 313}, для Complex —
+     *    {@code 6 + cards×16}.</li>
+     *    <li>Блок экрана 0 начинается с {@code descBase}: Standard — 21-байтный
+     *    дескриптор ({@link #writeScreenDescriptor}) + 17-байтные записи; Complex —
+     *    {@code Type=2, VirtualMode=0, Count(LE32)} + 16-байтные записи.</li>
+     *    <li>За записями КАЖДОГО Standard-экрана идёт 6-байтный якорь
+     *    ({@link #buildAnchor}); за Complex-экраном — ничего. Перед экраном 0
+     *    якоря нет.</li>
+     *    <li>Итоговый JSON warp-координат: по одному {@code {"si":k,…}} на КАЖДЫЙ
+     *    Standard-экран (k — его индекс среди всех экранов после сортировки), либо
+     *    {@code "[]"}, если Standard-экранов нет.</li>
+     *    <li>{@code 0x0a} (LE16) = {@code footerStart − 0xb6};
+     *    {@code 0xd2} (LE16) = {@code (jsonlenOffset − 6) − 176}, где
+     *    {@code jsonlenOffset} = конец записей последнего экрана {@code + (последний
+     *    Standard ? 6 : 0)}.</li>
+     *    <li>Обе чек-суммы и хвостовой блок — как в {@link #writeStandardMultiScreen}.</li>
+     *  </ul>
+     *
+     *  <p>Экраны СОРТИРУЮТСЯ по {@code (Sending Card, Port)} первой записи —
+     *  требование NovaLCT (иначе {@code LoadFromFile} отклоняет файл целиком, см.
+     *  {@code NOVALCT_EXPORT.md} §9). */
+    public static byte[] writeMixedMultiScreen(List<MixedScreen> screensIn) {
+        if (screensIn == null || screensIn.isEmpty()) {
+            throw new IllegalArgumentException("Нужен хотя бы один экран");
+        }
+        List<MixedScreen> screens = new ArrayList<>(screensIn);
+        screens.sort(Comparator.comparingInt(MixedScreen::firstCard).thenComparingInt(MixedScreen::firstPort));
+
+        int n = screens.size();
+        int shift = 4 * (n - 1);
+        int descBase = 0x13f + shift;
+
+        int[] infoLen = new int[n];
+        for (int i = 0; i < n; i++) {
+            MixedScreen ms = screens.get(i);
+            if (ms.isStandard()) {
+                infoLen[i] = HEADER_LEN + standardRecordCount(ms.standard()) * 17 - 313;
+            } else {
+                infoLen[i] = 6 + ms.complex().cards().size() * 16;
+            }
+        }
+
+        byte[] header = new byte[descBase];
+        System.arraycopy(MAGIC, 0, header, 0, MAGIC.length);
+        putU16(header, 0x06, 0x0080);
+        putU16(header, 0x0e, 133 + 40 * n);
+        header[0x36] = (byte) 0xe9; header[0x37] = 0x03; header[0x38] = (byte) 0xfc;
+        header[0x3a] = 0x01; header[0x3b] = 0x01; header[0x3c] = (byte) 0x90;
+        header[0x3d] = 0x06; header[0x3e] = 0x60; header[0x3f] = 0x04;
+        header[0xb6] = (byte) 0xee; header[0xb7] = 0x03;
+        header[0x13a] = (byte) (n & 0xff);
+        putU16(header, 0x13b, infoLen[0] & 0xffff);
+        for (int i = 1; i < n; i++) {
+            putU16(header, 0x13f + 4 * (i - 1), infoLen[i] & 0xffff);
+        }
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeBytes(out, header);
+
+        for (int i = 0; i < n; i++) {
+            MixedScreen ms = screens.get(i);
+            if (i >= 1 && screens.get(i - 1).isStandard()) {
+                ScreenBlock prev = screens.get(i - 1).standard();
+                writeBytes(out, buildAnchor(prev.cabW(), prev.cabH()));
+            }
+            if (ms.isStandard()) {
+                ScreenBlock sb = ms.standard();
+                int[] fcp = firstCardPort(sb);
+                Rec originRec = sb.cells().get(new CellKey(0, 0));
+                int originSeq = originRec != null ? originRec.seq() : 0;
+                byte[] desc = new byte[21];
+                writeScreenDescriptor(desc, 0, sb.cols(), sb.rows(), fcp[0], fcp[1], originSeq, sb.screenXPx());
+                writeBytes(out, desc);
+                writeCabinetRecords(out, buildAnchor(sb.cabW(), sb.cabH()),
+                        sb.cols(), sb.rows(), sb.cabW(), sb.cabH(), sb.screenXPx(), sb.cells());
+            } else {
+                ComplexScreenBlock cb = ms.complex();
+                out.write(2); // Type -- Complex/IrRegular
+                out.write(0); // VirtualMode
+                writeU16(out, cb.cards().size());
+                writeU16(out, 0); // старшие 2 байта Count (LE32)
+                for (ComplexRec r : cb.cards()) {
+                    out.write(r.card() & 0xff);
+                    out.write(r.port() & 0xff);
+                    writeU16(out, r.seq());
+                    writeU16(out, r.x());
+                    writeU16(out, r.y());
+                    writeU16(out, 0); // XInPort
+                    writeU16(out, 0); // YInPort
+                    writeU16(out, r.w());
+                    writeU16(out, r.h());
+                }
+            }
+        }
+
+        MixedScreen last = screens.get(n - 1);
+        if (last.isStandard()) {
+            writeBytes(out, buildAnchor(last.standard().cabW(), last.standard().cabH()));
+        }
+
+        StringBuilder jsonBuilder = new StringBuilder("[");
+        boolean firstJson = true;
+        for (int i = 0; i < n; i++) {
+            if (!screens.get(i).isStandard()) {
+                continue;
+            }
+            if (!firstJson) {
+                jsonBuilder.append(',');
+            }
+            firstJson = false;
+            jsonBuilder.append("{\"si\":").append(i)
+                    .append(",\"x1\":0,\"y1\":0,\"x2\":0,\"y2\":0,\"x3\":0,\"y3\":0,\"x4\":0,\"y4\":0}");
+        }
+        jsonBuilder.append(']');
+        byte[] jsonBytes = jsonBuilder.toString().getBytes(StandardCharsets.US_ASCII);
+
+        int jsonlenOffset = out.size();
+        writeU16(out, jsonBytes.length);
+        writeBytes(out, jsonBytes);
+
+        byte[] body = out.toByteArray();
+        int footerStart = body.length;
+        putU16(body, 0x0a, footerStart - 0xb6);
+        putU16(body, 0xd2, (jsonlenOffset - 6) - 176);
+
+        int innerChecksum = 0;
+        for (int i = 0xba; i < footerStart; i++) {
+            innerChecksum = (innerChecksum + (body[i] & 0xff)) & 0xffff;
+        }
+        body[0xb8] = (byte) (innerChecksum & 0xff);
+        body[0xb9] = (byte) ((innerChecksum >> 8) & 0xff);
+        int checksum = 0;
+        for (int i = 6; i < footerStart; i++) {
+            checksum = (checksum + (body[i] & 0xff)) & 0xffff;
+        }
+        body[4] = (byte) (checksum & 0xff);
+        body[5] = (byte) ((checksum >> 8) & 0xff);
+
+        ByteArrayOutputStream result = new ByteArrayOutputStream();
+        writeBytes(result, body);
+        writeBytes(result, buildMultiScreenTailFooter(n));
+        return result.toByteArray();
+    }
+
+    /** Число реально записываемых 17-байтных записей Standard-блока (все ячейки с
+     *  {@link Rec}, кроме origin (0,0) — та в записи не пишется, её seq в дескрипторе),
+     *  включая blank-сентинелы. Та же логика подсчёта, что в
+     *  {@link #writeStandardMultiScreen}/{@link #writeStandardCore}. */
+    private static int standardRecordCount(ScreenBlock sb) {
+        int rc = 0;
+        CellKey originKey = new CellKey(0, 0);
+        for (CellKey k : orderedCells(sb.cols(), sb.rows())) {
+            if (!k.equals(originKey) && sb.cells().containsKey(k)) {
+                rc++;
+            }
+        }
+        return rc;
+    }
+
     private record ComplexCard(int x, int y, int w, int h, int card, int port, int seq) {
     }
 
@@ -887,6 +1340,17 @@ public final class NovaLctScrWriter {
             }
         }
 
+        return writeComplexCore(cards);
+    }
+
+    /** Сериализация Complex Screen из уже собранного списка карт — общая для
+     *  экрана-центричного {@link #writeComplex} (резолв цепочек через
+     *  {@link ScreenLogic#cardAndLocalPort}) и контроллер-центричного
+     *  {@link #writeForResolvedScreen} (готовые
+     *  {@link NovaLctControllerResolver.CabinetRec} со сквозной по сцене
+     *  нумерацией портов). Байтовый вывод для экрана-центричного пути должен
+     *  оставаться идентичным тому, что был до выделения этого метода. */
+    private static byte[] writeComplexCore(List<ComplexCard> cards) {
         int recordsEnd = COMPLEX_HEADER_LEN + 6 + cards.size() * 16;
         byte[] json = "[]".getBytes(StandardCharsets.US_ASCII);
         int endOfJson = recordsEnd + 2 + json.length;
