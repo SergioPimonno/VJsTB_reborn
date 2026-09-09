@@ -8,7 +8,9 @@ import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SignalChain;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /** Собирает ВСЕ кабинеты сцены (с ЛЮБОГО её экрана — цепочка физически может
  *  проходить через несколько экранов, см. Task #54), расключённые через
@@ -79,6 +81,28 @@ public final class NovaLctControllerResolver {
             }
         }
         return result;
+    }
+
+    /** Контроллеры сцены, у которых есть хотя бы один расключённый (не скрытый)
+     *  кабинет на {@code screen}. {@code size() > 1} — экран расключён НЕСКОЛЬКИМИ
+     *  контроллерами: экспорт каждого из них должен писать не полную сетку экрана,
+     *  а свой пере-индексированный кусок (см.
+     *  {@link NovaLctScrWriter#writeResolvedSubScreen}), иначе файл уходит с
+     *  «дырами» в сетке и NovaLCT его отклоняет. */
+    public static Set<ControllerInstance> controllersWiringScreen(Scene scene, Screen screen, AppModel model) {
+        Set<ControllerInstance> out = new LinkedHashSet<>();
+        if (scene == null || screen == null || model == null) {
+            return out;
+        }
+        for (ControllerInstance ci : model.controllersInScene(scene)) {
+            for (CabinetRec r : resolve(scene, ci, model)) {
+                if (r.sourceScreen() == screen) {
+                    out.add(ci);
+                    break;
+                }
+            }
+        }
+        return out;
     }
 
     private record CabinetLocation(Screen screen, CabinetInstance cabinet) {

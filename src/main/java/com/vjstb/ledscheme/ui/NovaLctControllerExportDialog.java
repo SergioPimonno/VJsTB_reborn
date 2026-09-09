@@ -135,76 +135,127 @@ public final class NovaLctControllerExportDialog {
         CabinetType exportedCabinetType = null;
         if (involvedScreens.size() == 1) {
             Screen screen = involvedScreens.iterator().next();
-            if (hasUnwiredWarningDeclined(owner, scene, controller, model)) {
-                return;
+            if (NovaLctControllerResolver.controllersWiringScreen(scene, screen, model).size() > 1) {
+                // Экран расключён НЕСКОЛЬКИМИ контроллерами — этот пишет не полную
+                // сетку экрана (тогда файл ушёл бы с «дырами» и NovaLCT его
+                // отклоняет), а свой пере-индексированный кусок. Предупреждение о
+                // «нерасключённых» тут не показываем — остальное экрана на другом
+                // контроллере, это ожидаемо, а не ошибка.
+                int[] placement = askSubScreenPlacement(owner, screen, recs, model);
+                if (placement == null) {
+                    return;
+                }
+                data = NovaLctScrWriter.writeResolvedSubScreen(screen, recs, model.getWorkspace(),
+                        placement[0], placement[1]);
+            } else {
+                if (hasUnwiredWarningDeclined(owner, scene, controller, model)) {
+                    return;
+                }
+                // НЕ NovaLctScrWriter.write(screen, ...) — тот резолвит цепочки заново
+                // через ScreenLogic.cardAndLocalPort, который для контроллера, не
+                // первого в сцене, роняет все цепочки (scene-wide номер порта > его
+                // локальной ёмкости) и отдаёт файл без кабинетных записей — реальная
+                // NovaLCT такой .scr отклоняет при импорте. Передаём уже правильно
+                // разрешённые записи резолвера (см. NovaLctScrWriter.writeForResolvedScreen).
+                data = NovaLctScrWriter.writeForResolvedScreen(screen, recs, model.getWorkspace());
             }
-            data = NovaLctScrWriter.write(screen, scene, model.getWorkspace());
             defaultName = screen.getName();
             exportedCabinetType = model.typeOf(screen);
         } else {
-            // Combine/splitSeparateGrouped (см. NovaLctCombineHelper) полагаются на
-            // равномерную row/col-сетку LctPresetMasterDialog и понятия не имеют про
-            // произвольные Complex-прямоугольники (см. class-javadoc NovaLctScrWriter,
-            // раздел про Complex Screen) — молча применённая Standard-математика к
-            // Complex-экрану дала бы непредсказуемый результат без единой ошибки.
-            // Блокируем весь мультиэкранный путь, если хоть один из затронутых экранов
-            // неровный — единственный экрана-центричный путь (write/writeComplex),
-            // уже подтверждённый побайтово, всё ещё доступен через контроллер,
-            // обслуживающий ТОЛЬКО этот экран.
-            List<String> complexScreenNames = new ArrayList<>();
+            // Экспорт одного контроллера — ВСЕГДА один .scr (импорт в NovaLCT
+            // "Load from File" заменяет всю конфигурацию, второй файл затёр бы
+            // первый). Затронутые экраны делятся: обычные (ровные) идут прежним
+            // ветвлением — сшить в одно полотно (Combine) либо разными screen-ами
+            // (Separate); каждый Complex-экран даёт свой Complex-блок; всё
+            // собирается в ОДИН мультиэкранный .scr (writeMixedMultiScreen —
+            // подтверждён побайтово реальными образцами NovaLCT). Complex-экранов
+            // нет — прежний путь без изменений.
+            List<Screen> complexScreens = new ArrayList<>();
+            List<Screen> standardScreens = new ArrayList<>();
             for (Screen s : involvedScreens) {
                 if (NovaLctScrWriter.isComplexExport(s, model.getWorkspace())) {
-                    complexScreenNames.add(s.getName());
+                    complexScreens.add(s);
+                } else {
+                    standardScreens.add(s);
                 }
             }
-            if (!complexScreenNames.isEmpty()) {
-                JOptionPane.showMessageDialog(owner,
-                        "<html><body style='width:340px'>Контроллер затрагивает несколько экранов сразу, а"
-                                + " экран(ы) «" + String.join("», «", complexScreenNames) + "» имеют неровную"
-                                + " (Complex) раскладку кабинетов. Объединение и раздельный мультиэкранный"
-                                + " экспорт рассчитаны на равномерную сетку и не поддерживают Complex-раскладку."
-                                + "<br><br>Экспортируйте такой экран отдельно — через контроллер, обслуживающий"
-                                + " только его: этот путь Complex уже полностью поддерживает.</body></html>",
-                        "Экспорт NovaLCT для контроллера", JOptionPane.WARNING_MESSAGE);
-                return;
-            }
-            ExportMode mode = pickExportMode(owner, involvedScreens.size());
-            if (mode == null) {
-                return; // отменено пользователем
-            }
-            if (mode == ExportMode.SEPARATE && !confirmMultiScreenExperimentalWarning(owner)) {
-                return;
-            }
-            int cabW = 128;
-            int cabH = 128;
-            for (Screen s : involvedScreens) {
-                CabinetType t = model.typeOf(s);
-                if (t != null && t.getResolutionWidth() > 0) {
-                    cabW = t.getResolutionWidth();
-                    cabH = t.getResolutionHeight();
-                    break;
+
+            if (complexScreens.isEmpty()) {
+                ExportMode mode = pickExportMode(owner, standardScreens.size());
+                if (mode == null) {
+                    return; // отменено пользователем
                 }
-            }
-            LctPresetMasterDialog.Result placement = LctPresetMasterDialog.showDialog(owner,
-                    new ArrayList<>(involvedScreens), recs, cabW, cabH);
-            if (placement == null) {
-                return; // отменено пользователем
-            }
-            if (hasUnwiredWarningDeclined(owner, scene, controller, model)) {
-                return;
-            }
-            if (mode == ExportMode.COMBINE) {
-                NovaLctCombineHelper.CombineResult combined = NovaLctCombineHelper.combine(
-                        placement.slots(), placement.cols(), placement.rows(), recs, model);
-                data = NovaLctScrWriter.writeStandardCombined(combined);
+                if (mode == ExportMode.SEPARATE && !confirmMultiScreenExperimentalWarning(owner)) {
+                    return;
+                }
+                int[] cab = firstCabinetResolution(standardScreens, model);
+                LctPresetMasterDialog.Result placement = LctPresetMasterDialog.showDialog(owner,
+                        new ArrayList<>(standardScreens), recs, cab[0], cab[1]);
+                if (placement == null) {
+                    return; // отменено пользователем
+                }
+                if (hasUnwiredWarningDeclined(owner, scene, controller, model)) {
+                    return;
+                }
+                if (mode == ExportMode.COMBINE) {
+                    NovaLctCombineHelper.CombineResult combined = NovaLctCombineHelper.combine(
+                            placement.slots(), placement.cols(), placement.rows(), recs, model);
+                    data = NovaLctScrWriter.writeStandardCombined(combined);
+                } else {
+                    // splitSeparateGrouped -- ОБЩИЙ случай, включающий старое 1:1 поведение
+                    // splitSeparate как частный (пустая/нулевая карта групп) -- см. её javadoc.
+                    List<NovaLctScrWriter.ScreenBlock> blocks = NovaLctCombineHelper.splitSeparateGrouped(
+                            placement.slots(), placement.groupIdByScreenId(), recs, model);
+                    data = NovaLctScrWriter.writeStandardMultiScreen(blocks);
+                }
+                defaultName = controller.getLabel();
             } else {
-                // splitSeparateGrouped -- ОБЩИЙ случай, включающий старое 1:1 поведение
-                // splitSeparate как частный (пустая/нулевая карта групп) -- см. её javadoc.
-                List<NovaLctScrWriter.ScreenBlock> blocks = NovaLctCombineHelper.splitSeparateGrouped(
-                        placement.slots(), placement.groupIdByScreenId(), recs, model);
-                data = NovaLctScrWriter.writeStandardMultiScreen(blocks);
+                if (hasUnwiredWarningDeclined(owner, scene, controller, model)) {
+                    return;
+                }
+                List<NovaLctScrWriter.MixedScreen> mixed = new ArrayList<>();
+                if (standardScreens.size() == 1) {
+                    mixed.add(NovaLctScrWriter.MixedScreen.of(NovaLctScrWriter.resolvedStandardScreen(
+                            standardScreens.get(0), recs, model.getWorkspace())));
+                } else if (standardScreens.size() > 1) {
+                    ExportMode mode = pickExportMode(owner, standardScreens.size());
+                    if (mode == null) {
+                        return;
+                    }
+                    if (mode == ExportMode.SEPARATE && !confirmMultiScreenExperimentalWarning(owner)) {
+                        return;
+                    }
+                    int[] cab = firstCabinetResolution(standardScreens, model);
+                    java.util.Set<Screen> keep = new java.util.HashSet<>(standardScreens);
+                    List<NovaLctControllerResolver.CabinetRec> recsStd = new ArrayList<>();
+                    for (NovaLctControllerResolver.CabinetRec r : recs) {
+                        if (keep.contains(r.sourceScreen())) {
+                            recsStd.add(r);
+                        }
+                    }
+                    LctPresetMasterDialog.Result placement = LctPresetMasterDialog.showDialog(owner,
+                            new ArrayList<>(standardScreens), recsStd, cab[0], cab[1]);
+                    if (placement == null) {
+                        return;
+                    }
+                    if (mode == ExportMode.COMBINE) {
+                        NovaLctCombineHelper.CombineResult combined = NovaLctCombineHelper.combine(
+                                placement.slots(), placement.cols(), placement.rows(), recsStd, model);
+                        mixed.add(NovaLctScrWriter.MixedScreen.of(NovaLctScrWriter.standardBlock(combined)));
+                    } else {
+                        for (NovaLctScrWriter.ScreenBlock b : NovaLctCombineHelper.splitSeparateGrouped(
+                                placement.slots(), placement.groupIdByScreenId(), recsStd, model)) {
+                            mixed.add(NovaLctScrWriter.MixedScreen.of(b));
+                        }
+                    }
+                }
+                for (Screen s : complexScreens) {
+                    mixed.add(NovaLctScrWriter.MixedScreen.of(
+                            NovaLctScrWriter.resolvedComplexScreen(s, recs, model.getWorkspace())));
+                }
+                data = NovaLctScrWriter.writeMixedMultiScreen(mixed);
+                defaultName = controller.getLabel();
             }
-            defaultName = controller.getLabel();
         }
 
         saveToFile(owner, data, defaultName);
@@ -218,6 +269,104 @@ public final class NovaLctControllerExportDialog {
                 CabinetConfigPickerDialog.showForType(owner, model, settings, exportedCabinetType);
             }
         }
+    }
+
+    /** Диалог размещения куска экрана, расключённого несколькими контроллерами
+     *  (см. {@link NovaLctScrWriter#writeResolvedSubScreen}). {@code null} —
+     *  пользователь отменил. Возвращает {@code {offsetXPx, offsetYPx}}:
+     *  {@code {0, 0}} для режима «отдельный screen», иначе — введённые
+     *  пользователем (по умолчанию авто {@code minCol×cabW} / {@code minRow×cabH}). */
+    private static int[] askSubScreenPlacement(Frame owner, Screen screen,
+            List<NovaLctControllerResolver.CabinetRec> recs, AppModel model) {
+        int minCol = Integer.MAX_VALUE;
+        int minRow = Integer.MAX_VALUE;
+        int maxCol = 0;
+        int maxRow = 0;
+        for (NovaLctControllerResolver.CabinetRec r : recs) {
+            if (r.sourceScreen() != screen) {
+                continue;
+            }
+            minCol = Math.min(minCol, r.col());
+            maxCol = Math.max(maxCol, r.col());
+            minRow = Math.min(minRow, r.row());
+            maxRow = Math.max(maxRow, r.row());
+        }
+        CabinetType type = model.typeOf(screen);
+        int cabW = type != null && type.getResolutionWidth() > 0 ? type.getResolutionWidth() : 128;
+        int cabH = type != null && type.getResolutionHeight() > 0 ? type.getResolutionHeight() : 128;
+        int autoX = minCol * cabW;
+        int autoY = minRow * cabH;
+        int wCabs = maxCol - minCol + 1;
+        int hCabs = maxRow - minRow + 1;
+
+        javax.swing.JRadioButton separateBtn = new javax.swing.JRadioButton(
+                "Отдельный screen (Coordinate X/Y = 0)", true);
+        javax.swing.JRadioButton keepBtn = new javax.swing.JRadioButton(
+                "Сохранить положение куска на канвасе NovaLCT");
+        javax.swing.ButtonGroup group = new javax.swing.ButtonGroup();
+        group.add(separateBtn);
+        group.add(keepBtn);
+
+        javax.swing.JSpinner xSpinner =
+                new javax.swing.JSpinner(new javax.swing.SpinnerNumberModel(autoX, 0, 1_000_000, 1));
+        javax.swing.JSpinner ySpinner =
+                new javax.swing.JSpinner(new javax.swing.SpinnerNumberModel(autoY, 0, 1_000_000, 1));
+        xSpinner.setEnabled(false);
+        ySpinner.setEnabled(false);
+        keepBtn.addItemListener(e -> {
+            xSpinner.setEnabled(keepBtn.isSelected());
+            ySpinner.setEnabled(keepBtn.isSelected());
+        });
+
+        JPanel panel = new JPanel(new java.awt.GridBagLayout());
+        java.awt.GridBagConstraints c = new java.awt.GridBagConstraints();
+        c.gridx = 0;
+        c.gridy = 0;
+        c.gridwidth = 2;
+        c.anchor = java.awt.GridBagConstraints.WEST;
+        c.insets = new java.awt.Insets(3, 3, 3, 3);
+        panel.add(new JLabel("<html><body style='width:380px'>Экран «" + screen.getName()
+                + "» расключён несколькими контроллерами. Этот контроллер держит блок "
+                + wCabs + "×" + hCabs + " кабинетов (столбцы " + (minCol + 1) + "–" + (maxCol + 1)
+                + ", ряды " + (minRow + 1) + "–" + (maxRow + 1)
+                + "). В шаблон пишется только он, пере-индексированный в собственную сетку."
+                + "</body></html>"), c);
+        c.gridy++;
+        panel.add(separateBtn, c);
+        c.gridy++;
+        panel.add(keepBtn, c);
+        c.gridwidth = 1;
+        c.gridy++;
+        panel.add(new JLabel("Coordinate X, px:"), c);
+        c.gridx = 1;
+        panel.add(xSpinner, c);
+        c.gridx = 0;
+        c.gridy++;
+        panel.add(new JLabel("Coordinate Y, px:"), c);
+        c.gridx = 1;
+        panel.add(ySpinner, c);
+
+        if (JOptionPane.showConfirmDialog(owner, panel, "Экспорт NovaLCT — часть экрана",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE) != JOptionPane.OK_OPTION) {
+            return null;
+        }
+        if (separateBtn.isSelected()) {
+            return new int[]{0, 0};
+        }
+        return new int[]{((Number) xSpinner.getValue()).intValue(), ((Number) ySpinner.getValue()).intValue()};
+    }
+
+    /** Разрешение кабинета ({@code {w, h}} px) первого экрана списка с непустым
+     *  типом — для сетки {@link LctPresetMasterDialog}. {@code {128, 128}}, если
+     *  тип нигде не задан. */
+    private static int[] firstCabinetResolution(List<Screen> screens, AppModel model) {
+        for (Screen s : screens) {
+            CabinetType t = model.typeOf(s);
+            if (t != null && t.getResolutionWidth() > 0) {
+                return new int[]{t.getResolutionWidth(), t.getResolutionHeight()};
+            }
+        }
+        return new int[]{128, 128};
     }
 
     private enum ExportMode { COMBINE, SEPARATE }
