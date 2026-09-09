@@ -529,7 +529,7 @@ public class AppModel {
         if (workspace.controllerTypeById(controllerTypeId) == null) {
             throw new IllegalArgumentException("Тип контроллера не найден");
         }
-        pushUndo();
+        pushUndo("Добавление контроллера на экран");
         Scene scene = sceneContaining(screen);
         int n = controllersInScene(scene).size() + 1;
         ControllerInstance ci = new ControllerInstance(controllerTypeId, "Контроллер " + n);
@@ -553,7 +553,7 @@ public class AppModel {
     }
 
     public void removeControllerFromScreen(Screen screen, String controllerInstanceId) {
-        pushUndo();
+        pushUndo("Удаление контроллера с экрана");
         screen.getControllers().removeIf(c -> c.getId().equals(controllerInstanceId));
         // Не оставляем висячую ссылку — если удаляемый контроллер был чьим-то
         // резервом (или чей-то резерв удаляли), связка снимается вместе с ним.
@@ -641,7 +641,7 @@ public class AppModel {
                 }
             }
         }
-        pushUndo();
+        pushUndo("Правка резерва контроллера");
         String oldBackupId = main.getBackupControllerId();
         main.setBackupControllerId(backupId);
         int mainOffset = portOffsetOf(scene, main);
@@ -886,7 +886,7 @@ public class AppModel {
     }
 
     public void updateScreenPosition(Screen screen, double posX, double posY) {
-        pushUndo();
+        pushUndo("Перемещение экрана");
         screen.setPosXMm(posX);
         screen.setPosYMm(posY);
         changed();
@@ -903,7 +903,7 @@ public class AppModel {
     public void updateScreenMount(Screen screen, ScreenMountType mountType, int riggingPointsCount,
                                    String riggingNotes, double riggingSafetyFactorMin, Double riggingHoistCapacityKg,
                                    String riggingHoistTypeId) {
-        pushUndo();
+        pushUndo("Правка подвеса экрана");
         screen.setMountType(mountType);
         screen.setRiggingPointsCount(Math.max(0, riggingPointsCount));
         screen.setRiggingNotes(riggingNotes);
@@ -947,7 +947,7 @@ public class AppModel {
                                        int peremychkaLevels, double baseExtensionMm, double ballastRatio,
                                        String frameTypeId, String cupTypeId, String ballastTypeId,
                                        double screenElevationMm, String notes) {
-        pushUndo();
+        pushUndo("Правка наземного конструктива экрана");
         screen.setStructureTowerHeightMm(towerHeightMm);
         screen.setStructureTowerCount(towerCount);
         screen.setStructureVerticalFramesPerTower(verticalFramesPerTower);
@@ -997,7 +997,7 @@ public class AppModel {
      *  значение только в момент первого создания записи. */
     public void toggleStructureFrameCell(Screen screen, int towerIndex, int row, int segmentIndex,
             String frameTypeIdForNewCell) {
-        pushUndo();
+        pushUndo("Правка рамы конструктива");
         List<com.vjstb.ledscheme.model.StructureFrameCell> cells = screen.getStructureFrameCells();
         var existing = cells.stream().filter(c -> c.matches(towerIndex, row, segmentIndex)).findFirst();
         if (existing.isPresent()) {
@@ -1016,7 +1016,7 @@ public class AppModel {
      *  передний↔задний ряд одной башни (эта роль упразднена, см. {@code
      *  StructurePeremychkaCell} class-javadoc) — см. {@link #toggleStructureFrameCell}. */
     public void toggleStructurePeremychkaCell(Screen screen, int towerIndex, int row, int levelIndex) {
-        pushUndo();
+        pushUndo("Правка перемычек конструктива");
         List<com.vjstb.ledscheme.model.StructurePeremychkaCell> cells = screen.getStructurePeremychkaCells();
         var existing = cells.stream().filter(c -> c.matches(towerIndex, row, levelIndex)).findFirst();
         if (existing.isPresent()) {
@@ -1030,7 +1030,7 @@ public class AppModel {
     /** Точечно включает/выключает ОДНУ секцию базовой (опорной) рамы ОДНОЙ башни (0 = ядро под
      *  объёмом башни, 1+ = вынос под балласт) — см. {@link #toggleStructureFrameCell}. */
     public void toggleStructureBaseFrameSection(Screen screen, int towerIndex, int sectionIndex) {
-        pushUndo();
+        pushUndo("Правка базовой рамы конструктива");
         List<com.vjstb.ledscheme.model.StructureBaseFrameCell> cells = screen.getStructureBaseFrameCells();
         var existing = cells.stream().filter(c -> c.matches(towerIndex, sectionIndex)).findFirst();
         if (existing.isPresent()) {
@@ -1050,7 +1050,7 @@ public class AppModel {
         if (colorBitDepth <= 0) {
             throw new IllegalArgumentException("Глубина цвета должна быть больше 0");
         }
-        pushUndo();
+        pushUndo("Правка сигнальных параметров экрана");
         screen.setRefreshRateHz(refreshRateHz);
         screen.setColorBitDepth(colorBitDepth);
         changed();
@@ -1156,7 +1156,7 @@ public class AppModel {
         if (currentScene == null) {
             throw new IllegalStateException("Не выбрана сцена");
         }
-        pushUndo();
+        pushUndo("Добавление узла схемы");
         SchemaNode n = new SchemaNode(mode, type, label, x, y, screenRefId);
         currentScene.getSchemaNodes().add(n);
         if (type == SchemaNodeType.SCREEN && screenRefId != null) {
@@ -1190,7 +1190,7 @@ public class AppModel {
 
     /** Перемещение узла (драг мышью) — вызывать один раз по отпусканию кнопки, не на каждый кадр. */
     public void moveSchemaNode(SchemaNode node, double x, double y) {
-        pushUndo();
+        pushUndo("Перемещение узла схемы");
         node.setX(x);
         node.setY(y);
         changed();
@@ -1207,7 +1207,7 @@ public class AppModel {
         if (positions.isEmpty()) {
             return;
         }
-        pushUndo();
+        pushUndo("Перемещение узлов схемы");
         for (java.util.Map.Entry<SchemaNode, double[]> e : positions.entrySet()) {
             e.getKey().setX(e.getValue()[0]);
             e.getKey().setY(e.getValue()[1]);
@@ -1220,7 +1220,7 @@ public class AppModel {
 
     /** Изменение размера узла (драг за угол) — вызывать один раз по отпусканию кнопки. */
     public void resizeSchemaNode(SchemaNode node, double width, double height) {
-        pushUndo();
+        pushUndo("Изменение размера узла схемы");
         node.setWidth(Math.max(SCHEMA_NODE_MIN_WIDTH, width));
         node.setHeight(Math.max(SCHEMA_NODE_MIN_HEIGHT, height));
         changed();
@@ -1402,7 +1402,7 @@ public class AppModel {
     }
 
     public void updateSchemaNode(SchemaNode node, String label, SchemaNodeType type, String screenRefId) {
-        pushUndo();
+        pushUndo("Правка узла схемы");
         node.setLabel(label);
         node.setType(type);
         node.setScreenRefId(screenRefId);
@@ -1414,7 +1414,7 @@ public class AppModel {
         if (currentScene == null) {
             return;
         }
-        pushUndo();
+        pushUndo("Удаление узла схемы");
         currentScene.getSchemaNodes().remove(node);
         currentScene.getSchemaEdges().removeIf(e ->
                 node.getId().equals(e.getFromNodeId()) || node.getId().equals(e.getToNodeId()));
@@ -1428,7 +1428,7 @@ public class AppModel {
         if (currentScene == null || nodesToDelete.isEmpty()) {
             return;
         }
-        pushUndo();
+        pushUndo("Удаление узлов схемы");
         Set<String> ids = new java.util.HashSet<>();
         for (SchemaNode n : nodesToDelete) {
             ids.add(n.getId());
@@ -1437,6 +1437,95 @@ public class AppModel {
         currentScene.getSchemaEdges().removeIf(e ->
                 ids.contains(e.getFromNodeId()) || ids.contains(e.getToNodeId()));
         changed();
+    }
+
+    /** Вставка КОПИЙ узлов схемы (Ctrl+V после Ctrl+C по многовыделению на общей
+     *  схеме, см. {@code SchemaCanvasPanel}) — ОДНИМ действием отмены (тот же мотив,
+     *  что у {@link #moveSchemaNodes}/{@link #deleteSchemaNodes}).
+     *
+     *  <p>Каждому вставленному узлу и КАЖДОМУ его гнезду (CardPort во всех
+     *  {@code cards} и в {@code powerConnectors}) выдаётся свежий id — иначе
+     *  коммутация через гнёзда и подсчёт занятых линий (портовый id — ключ
+     *  сравнения) путали бы копию с оригиналом (та же причина, что у
+     *  {@link #duplicateCardWithFreshIds}). Вся остальная комплектация
+     *  (имя/тип карты, тип разъёма, направление, count, phaseCount, breakerAmps,
+     *  autoTracked) переносится как есть — глубокая копия через {@link SchemaNode#copy()}.
+     *
+     *  <p>{@code controllerInstanceRefId} сбрасывается: это уникальный якорь
+     *  автозаполнения (см. {@link SchemaNode}), двух узлов с одним якорем быть не
+     *  должно. {@code screenRefId} сохраняется — вставленная копия узла-экрана
+     *  остаётся привязанной к тому же реальному экрану (авто-гнёзда такого узла
+     *  ресинкаются по экрану, дубль безвреден).
+     *
+     *  <p>Связи копируются ТОЛЬКО между узлами внутри самого набора (оба конца
+     *  скопированы); {@code fromNodeId}/{@code toNodeId} и {@code fromPortId}/
+     *  {@code toPortId} ремапятся на новые id. Привязка конца связи к кабинету-
+     *  «гнезду» ({@code from/toCabinetInstanceId}) сохраняется только у концов,
+     *  оставшихся узлами-экранами.
+     *
+     *  @return вставленные узлы (для выделения на холсте) */
+    public List<SchemaNode> pasteSchemaNodes(SchemaMode mode, List<SchemaNode> nodeCopies,
+                                              List<SchemaEdge> edgeCopies,
+                                              double offsetX, double offsetY) {
+        if (currentScene == null || nodeCopies == null || nodeCopies.isEmpty()) {
+            return List.of();
+        }
+        pushUndo("Вставка узлов схемы");
+        Map<String, String> nodeIdMap = new HashMap<>();
+        Map<String, String> portIdMap = new HashMap<>();
+        Map<String, Boolean> pastedNodeIsScreen = new HashMap<>();
+        List<SchemaNode> inserted = new ArrayList<>();
+        for (SchemaNode src : nodeCopies) {
+            SchemaNode n = src.copy();
+            String newId = java.util.UUID.randomUUID().toString();
+            nodeIdMap.put(src.getId(), newId);
+            n.setId(newId);
+            n.setMode(mode);
+            n.setControllerInstanceRefId(null);
+            n.setX(n.getX() + offsetX);
+            n.setY(n.getY() + offsetY);
+            for (SchemaCard c : n.getCards()) {
+                c.setId(java.util.UUID.randomUUID().toString());
+                for (CardPort p : c.getPorts()) {
+                    String np = java.util.UUID.randomUUID().toString();
+                    portIdMap.put(p.getId(), np);
+                    p.setId(np);
+                }
+            }
+            for (CardPort p : n.getPowerConnectors()) {
+                String np = java.util.UUID.randomUUID().toString();
+                portIdMap.put(p.getId(), np);
+                p.setId(np);
+            }
+            pastedNodeIsScreen.put(newId, n.getScreenRefId() != null);
+            currentScene.getSchemaNodes().add(n);
+            inserted.add(n);
+        }
+        if (edgeCopies != null) {
+            for (SchemaEdge src : edgeCopies) {
+                String from = nodeIdMap.get(src.getFromNodeId());
+                String to = nodeIdMap.get(src.getToNodeId());
+                if (from == null || to == null) {
+                    continue; // связь наружу выделения — не переносим
+                }
+                SchemaEdge e = src.copy();
+                e.setId(java.util.UUID.randomUUID().toString());
+                e.setMode(mode);
+                e.setFromNodeId(from);
+                e.setToNodeId(to);
+                e.setFromPortId(src.getFromPortId() != null ? portIdMap.get(src.getFromPortId()) : null);
+                e.setToPortId(src.getToPortId() != null ? portIdMap.get(src.getToPortId()) : null);
+                if (!Boolean.TRUE.equals(pastedNodeIsScreen.get(from))) {
+                    e.setFromCabinetInstanceId(null);
+                }
+                if (!Boolean.TRUE.equals(pastedNodeIsScreen.get(to))) {
+                    e.setToCabinetInstanceId(null);
+                }
+                currentScene.getSchemaEdges().add(e);
+            }
+        }
+        changed();
+        return inserted;
     }
 
     /**
@@ -1470,7 +1559,7 @@ public class AppModel {
         if (fromNodeId.equals(toNodeId)) {
             throw new IllegalArgumentException("Нельзя соединить узел сам с собой");
         }
-        pushUndo();
+        pushUndo("Добавление связи");
         SchemaEdge edge = new SchemaEdge(mode, fromNodeId, toNodeId, label);
         edge.setFromPortId(fromPortId);
         edge.setToPortId(toPortId);
@@ -1482,7 +1571,7 @@ public class AppModel {
     }
 
     public void updateSchemaEdgeLabel(SchemaEdge edge, String label) {
-        pushUndo();
+        pushUndo("Правка подписи связи");
         edge.setLabel(label);
         edge.setWireCount(null);
         edge.setWireType(null);
@@ -1499,7 +1588,7 @@ public class AppModel {
         if (wireType == null || wireType.isBlank()) {
             throw new IllegalArgumentException("Укажите тип линии");
         }
-        pushUndo();
+        pushUndo("Правка провода связи");
         edge.setWireCount(count);
         edge.setWireType(wireType.trim());
         edge.setLengthM(lengthM != null && lengthM > 0 ? lengthM : null);
@@ -1511,20 +1600,20 @@ public class AppModel {
      *  пустой список сбрасывает её к прямой линии узел-узел (см. пункт «Выпрямить»
      *  в контекстном меню связи схемы). */
     public void setSchemaEdgeWaypoints(SchemaEdge edge, List<com.vjstb.ledscheme.model.EdgeWaypoint> waypoints) {
-        pushUndo();
+        pushUndo("Правка маршрута связи");
         edge.setWaypoints(waypoints);
         changed();
     }
 
     public void setSchemaEdgeDashed(SchemaEdge edge, boolean dashed) {
-        pushUndo();
+        pushUndo("Связь пунктиром / сплошной");
         edge.setDashed(dashed);
         changed();
     }
 
     /** null — сбросить на стандартный цвет режима схемы (см. SchemaCanvasPanel.edgeColor). */
     public void setSchemaEdgeColor(SchemaEdge edge, Integer rgb) {
-        pushUndo();
+        pushUndo("Цвет связи");
         edge.setColor(rgb);
         changed();
     }
@@ -1532,7 +1621,7 @@ public class AppModel {
     /** Смещение чипа подписи связи от расчётной точки, экранные пиксели схемы
      *  (Task #3) — задаётся перетаскиванием в SchemaCanvasPanel. */
     public void setSchemaEdgeLabelOffset(SchemaEdge edge, double dx, double dy) {
-        pushUndo();
+        pushUndo("Сдвиг подписи связи");
         edge.setLabelDx(dx);
         edge.setLabelDy(dy);
         changed();
@@ -1542,7 +1631,7 @@ public class AppModel {
         if (currentScene == null) {
             return;
         }
-        pushUndo();
+        pushUndo("Удаление связи");
         currentScene.getSchemaEdges().remove(edge);
         changed();
     }
@@ -1551,7 +1640,7 @@ public class AppModel {
         if (currentScene == null) {
             return;
         }
-        pushUndo();
+        pushUndo("Очистка схемы");
         currentScene.getSchemaNodes().removeIf(n -> n.getMode() == mode);
         currentScene.getSchemaEdges().removeIf(e -> e.getMode() == mode);
         changed();
@@ -1560,7 +1649,7 @@ public class AppModel {
     // ---- карты ввода/вывода узла (медиасерверы/видеопроцессоры) ----
 
     public SchemaCard addCardToNode(SchemaNode node, String name, List<CardPort> ports) {
-        pushUndo();
+        pushUndo("Добавление карты в узел");
         SchemaCard card = new SchemaCard(name, ports);
         node.getCards().add(card);
         autoFitNodeToPorts(node);
@@ -1569,7 +1658,7 @@ public class AppModel {
     }
 
     public void removeCardFromNode(SchemaNode node, String cardId) {
-        pushUndo();
+        pushUndo("Удаление карты из узла");
         node.getCards().removeIf(c -> c.getId().equals(cardId));
         changed();
     }
@@ -1581,7 +1670,7 @@ public class AppModel {
         if (card == null) {
             throw new IllegalArgumentException("Карта не найдена");
         }
-        pushUndo();
+        pushUndo("Правка карты узла");
         card.setName(name);
         card.setPorts(ports);
         autoFitNodeToPorts(node);
@@ -1599,7 +1688,7 @@ public class AppModel {
      *  а не потерялись бы при мутации уже возвращённого объекта постфактум. */
     public CardPort addPowerConnectorToNode(SchemaNode node, String connectorType, PortDirection direction,
                                              int count, int phaseCount, Double breakerAmps) {
-        pushUndo();
+        pushUndo("Добавление разъёма питания в узел");
         CardPort port = new CardPort(connectorType, direction, count);
         port.setPhaseCount(phaseCount);
         port.setBreakerAmps(breakerAmps);
@@ -1610,7 +1699,7 @@ public class AppModel {
     }
 
     public void removePowerConnectorFromNode(SchemaNode node, String portId) {
-        pushUndo();
+        pushUndo("Удаление разъёма питания из узла");
         node.getPowerConnectors().removeIf(p -> p.getId().equals(portId));
         changed();
     }
@@ -1626,7 +1715,7 @@ public class AppModel {
         if (port == null) {
             throw new IllegalArgumentException("Разъём не найден");
         }
-        pushUndo();
+        pushUndo("Правка разъёма питания узла");
         port.setConnectorType(connectorType);
         port.setDirection(direction);
         port.setCount(count);
@@ -1639,7 +1728,7 @@ public class AppModel {
     /** Запас (%) для проверки суммарной нагрузки этого силового узла (Task #86/#87) —
      *  null сбрасывает на значение по умолчанию (см. PowerCalc.defaultDeratingPercentFor). */
     public void setSchemaNodeLoadDeratingPercent(SchemaNode node, Double percent) {
-        pushUndo();
+        pushUndo("Правка запаса по нагрузке узла");
         node.setLoadDeratingPercent(percent);
         changed();
     }
@@ -3151,7 +3240,7 @@ public class AppModel {
         if (cab == null) {
             return;
         }
-        pushUndo();
+        pushUndo("Скрытие / показ кабинета");
         boolean nowHidden = !cab.isHidden();
         cab.setHidden(nowHidden);
         if (nowHidden) {
@@ -3196,7 +3285,7 @@ public class AppModel {
         if (cabinetTypeId != null && workspace.cabinetTypeById(cabinetTypeId) == null) {
             throw new IllegalArgumentException("Тип кабинета не найден в библиотеке");
         }
-        pushUndo();
+        pushUndo("Смена типа кабинета");
         cab.setCabinetTypeId(cabinetTypeId);
         // Форма по умолчанию (без ручного переопределения) и так автоматически
         // следует за типом — см. эффективное разрешение формы в ShapeEditorPanel.
@@ -3223,7 +3312,7 @@ public class AppModel {
         if (cab == null) {
             return;
         }
-        pushUndo();
+        pushUndo("Смена формы кабинета");
         cab.setShapeOverride(shape);
         changed();
     }
@@ -3238,7 +3327,7 @@ public class AppModel {
         if (cab == null) {
             return;
         }
-        pushUndo();
+        pushUndo("Поворот кабинета");
         cab.setRotationOverride(rotationDeg);
         changed();
     }
@@ -3250,7 +3339,7 @@ public class AppModel {
      *  живого превью (тот же приём, что и у перетаскивания узлов схемы/размещений
      *  канваса), не дёргая этот метод (и pushUndo()) на каждый кадр драга. */
     public void updateCabinetOffset(CabinetInstance cab, double offsetXMm, double offsetYMm) {
-        pushUndo();
+        pushUndo("Сдвиг кабинета");
         cab.setOffsetXMm(offsetXMm);
         cab.setOffsetYMm(offsetYMm);
         autoDisableOverlapping(currentScene != null ? screenOfCabinet(currentScene, cab.getId()) : null, cab);
@@ -3282,7 +3371,7 @@ public class AppModel {
         if (!anyOffset) {
             return;
         }
-        pushUndo();
+        pushUndo("Выравнивание кабинетов по сетке");
         for (CabinetInstance cab : screen.getCabinets()) {
             cab.setOffsetXMm(0);
             cab.setOffsetYMm(0);
@@ -3334,7 +3423,7 @@ public class AppModel {
         // ошибки от commitHandler) — пользователь физически не мог завершить
         // построение (см. Task #64).
         validateCabinetIdsAcrossScene(cabinetIds);
-        pushUndo();
+        pushUndo("Добавление цепочки питания");
         for (String cabId : cabinetIds) {
             CabinetInstance cab = cabinetInScene(cabId);
             if (cab != null) {
@@ -3520,7 +3609,7 @@ public class AppModel {
         // одного экрана на другой (общий даунлинк на смежные экраны) — поэтому
         // кабинет ищется по ВСЕЙ сцене, а не только на текущем экране.
         validateCabinetIdsAcrossScene(cabinetIds);
-        pushUndo();
+        pushUndo("Добавление сигнальной цепочки");
         // Если для порта уже есть цепочка-заглушка (создана setSignalBackupPortLink
         // только чтобы было куда сохранить резервный порт, кабинетов ещё нет) —
         // заполняем именно её, а не добавляем вторую запись того же порта: резерв
@@ -3577,7 +3666,7 @@ public class AppModel {
         }
         PowerChain chain = currentScene.getPowerChains().stream()
                 .filter(c -> c.getId().equals(chainId)).findFirst().orElse(null);
-        pushUndo();
+        pushUndo("Удаление цепочки питания");
         currentScene.getPowerChains().removeIf(c -> c.getId().equals(chainId));
         if (chain != null) {
             resyncPowerSocketsForScreensOf(currentScene, chain.getCabinetInstanceIds());
@@ -3591,7 +3680,7 @@ public class AppModel {
         }
         SignalChain chain = currentScene.getSignalChains().stream()
                 .filter(c -> c.getId().equals(chainId)).findFirst().orElse(null);
-        pushUndo();
+        pushUndo("Удаление сигнальной цепочки");
         currentScene.getSignalChains().removeIf(c -> c.getId().equals(chainId));
         if (chain != null) {
             resyncSignalSocketsForScreensOf(currentScene, chain.getCabinetInstanceIds());
@@ -3617,7 +3706,7 @@ public class AppModel {
             return;
         }
         validateCabinetIdsAcrossScene(cabinetIds);
-        pushUndo();
+        pushUndo("Правка цепочки питания");
         List<String> oldIds = new ArrayList<>(chain.getCabinetInstanceIds());
         for (String cabId : cabinetIds) {
             CabinetInstance cab = cabinetInScene(cabId);
@@ -3644,7 +3733,7 @@ public class AppModel {
             return;
         }
         validateCabinetIdsAcrossScene(cabinetIds);
-        pushUndo();
+        pushUndo("Правка сигнальной цепочки");
         List<String> oldIds = new ArrayList<>(chain.getCabinetInstanceIds());
         chain.setCabinetInstanceIds(new ArrayList<>(cabinetIds));
         java.util.LinkedHashSet<String> touched = new java.util.LinkedHashSet<>(oldIds);
@@ -3700,7 +3789,7 @@ public class AppModel {
         }
         List<String> first = new ArrayList<>(ids.subList(0, linkIndex + 1));
         List<String> second = new ArrayList<>(ids.subList(linkIndex + 1, ids.size()));
-        pushUndo();
+        pushUndo("Разбиение звена цепочки питания");
         currentScene.getPowerChains().removeIf(c -> c.getId().equals(chainId));
         if (!first.isEmpty()) {
             currentScene.getPowerChains().add(new PowerChain(chain.getPhase(), first));
@@ -3729,7 +3818,7 @@ public class AppModel {
         }
         List<String> first = new ArrayList<>(ids.subList(0, linkIndex + 1));
         List<String> second = new ArrayList<>(ids.subList(linkIndex + 1, ids.size()));
-        pushUndo();
+        pushUndo("Разбиение звена сигнальной цепочки");
         currentScene.getSignalChains().removeIf(c -> c.getId().equals(chainId));
         if (!first.isEmpty()) {
             currentScene.getSignalChains().add(new SignalChain(chain.getPortNumber(), chain.isBackup(), first));
@@ -3761,7 +3850,7 @@ public class AppModel {
                         + " цепочки — сначала очистите её, чтобы отдать порт под резерв");
             }
         }
-        pushUndo();
+        pushUndo("Правка резервного порта сигнала");
         SignalChain main = signalChainByPortInScene(currentScene, port, false);
         if (main == null) {
             main = new SignalChain(port, false, List.of());
@@ -4262,7 +4351,7 @@ public class AppModel {
         if (count < 1) {
             throw new IllegalArgumentException("Портов должно быть не меньше 1");
         }
-        pushUndo();
+        pushUndo("Правка числа сигнальных портов экрана");
         screen.setSignalPortCount(count);
         changed();
     }
@@ -4278,7 +4367,7 @@ public class AppModel {
         if (currentScreen == null || currentScene == null) {
             return;
         }
-        pushUndo();
+        pushUndo("Очистка цепочек");
         if (mode == Mode.POWER) {
             currentScene.getPowerChains().removeIf(c ->
                     c.getCabinetInstanceIds().stream().anyMatch(id -> currentScreen.cabinetById(id) != null));
@@ -4599,10 +4688,29 @@ public class AppModel {
     }
 
     public void undo() {
-        if (currentScene == null || undoStack.isEmpty()) {
+        undo(1);
+    }
+
+    /** Отменяет {@code count} последних действий разом: снимает {@code count}
+     *  записей со стека и восстанавливает снимок САМОЙ СТАРОЙ из снятых (он
+     *  зафиксировал состояние до первого из отменяемых действий). {@code count}
+     *  больше глубины стека — отматываем на сколько есть; {@code count <= 0} или
+     *  пустой стек — ничего не делаем. Питает ПКМ-меню кнопки «Отменить»
+     *  (см. {@code MainFrame}) — выбор пункта N отменяет действия вплоть до него
+     *  включительно. */
+    public void undo(int count) {
+        if (currentScene == null || undoStack.isEmpty() || count <= 0) {
             return;
         }
-        UndoEntry snap = undoStack.pop();
+        UndoEntry snap = null;
+        for (int i = 0; i < count && !undoStack.isEmpty(); i++) {
+            snap = undoStack.pop();
+        }
+        restore(snap);
+        changed();
+    }
+
+    private void restore(UndoEntry snap) {
         if (snap.screenSnapshot() != null && currentScreen != null) {
             ScreenLogic.restore(currentScreen, snap.screenSnapshot());
         }
@@ -4611,6 +4719,17 @@ public class AppModel {
         currentScene.setCanvases(snap.canvasesSnapshot());
         currentScene.setSchemaNodes(snap.schemaNodesSnapshot());
         currentScene.setSchemaEdges(snap.schemaEdgesSnapshot());
-        changed();
+    }
+
+    /** Подписи отменяемых действий, сверху — самое свежее (индекс 0 = «отменить
+     *  один шаг»). Где действие записывалось без метки (большинство точек вызова
+     *  {@code pushUndo()}, см. javadoc {@code UndoEntry}) — «предыдущее
+     *  состояние». Для ПКМ-меню кнопки «Отменить». */
+    public List<String> undoLabels() {
+        List<String> labels = new ArrayList<>(undoStack.size());
+        for (UndoEntry e : undoStack) { // итератор Deque идёт с вершины стека
+            labels.add(e.actionLabel() != null ? e.actionLabel() : "предыдущее состояние");
+        }
+        return labels;
     }
 }

@@ -170,6 +170,21 @@ public class SettingsManager {
         persist();
     }
 
+    public void setSchemaWireHops(boolean enabled) {
+        activeProfile().setSchemaWireHops(enabled);
+        persist();
+    }
+
+    public void setSchemaWireHopStyle(WireHopStyle style) {
+        activeProfile().setSchemaWireHopStyle(style);
+        persist();
+    }
+
+    public void setPreferencesMatrixView(boolean matrix) {
+        activeProfile().setPreferencesMatrixView(matrix);
+        persist();
+    }
+
     public void setSignalConnectorDisplayMode(ConnectorDisplayMode mode) {
         activeProfile().setSignalConnectorDisplayMode(mode);
         persist();

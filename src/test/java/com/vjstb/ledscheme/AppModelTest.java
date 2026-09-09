@@ -111,6 +111,32 @@ class AppModelTest {
     }
 
     @Test
+    void undoWithCountRollsBackSeveralActionsAtOnceWithLabels(@TempDir Path dir) {
+        // ПКМ-меню кнопки «Отменить»: undoLabels() отдаёт человекочитаемые метки
+        // (сверху — самое свежее), undo(N) откатывает N последних действий одним
+        // шагом на снимок самого старого из снятых.
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "A", 0, 0, null);
+        model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "B", 10, 0, null);
+        model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "C", 20, 0, null);
+
+        assertEquals(3, model.getCurrentScene().getSchemaNodes().size());
+        assertEquals(List.of("Добавление узла схемы", "Добавление узла схемы", "Добавление узла схемы"),
+                model.undoLabels());
+
+        model.undo(2); // откат добавления C и B за один шаг
+        assertEquals(1, model.getCurrentScene().getSchemaNodes().size());
+        assertEquals("A", model.getCurrentScene().getSchemaNodes().get(0).getLabel());
+        assertEquals(1, model.undoDepth());
+
+        model.undo(9); // больше, чем в стеке — откатываем на сколько есть
+        assertEquals(0, model.getCurrentScene().getSchemaNodes().size());
+        assertFalse(model.canUndo());
+    }
+
+    @Test
     void powerChainLoadWattsSumsEffectiveCabinetPower(@TempDir Path dir) {
         AppModel model = freshModel(dir);
         CabinetType type = model.addCabinetType(sampleType()); // 150 Вт/каб.
@@ -3097,5 +3123,123 @@ class AppModelTest {
         model.toggleStructureFrameCell(screen, 0, 2, 1);
         assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(0, 2, 1) && c.isHidden()),
                 "клик по существующей усилительной раме прячет её");
+    }
+
+    // --- Ctrl+C / Ctrl+V по многовыделению на общей схеме (AppModel.pasteSchemaNodes) ---
+    // Баг-репорт: "выделенную группу блоков должна быть возможность скопировать и
+    // вставить через ctrl+с", + отдельная просьба: убедиться, что комплектация блоков
+    // (разъёмы/карты, вместе с phaseCount/breakerAmps) переносится в копию целиком.
+
+    @Test
+    void pasteSchemaNodesDeepCopiesEquipmentAndRewiresInternalEdges(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+
+        SchemaNode a = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.CUSTOM, "Щит", 100, 100, null);
+        SchemaNode b = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.CUSTOM, "Проходная", 400, 100, null);
+        SchemaNode outside = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.CUSTOM, "Экран", 700, 100, null);
+
+        // A — разъём питания с нетиповыми фазностью и автоматом (должны уехать в копию).
+        CardPort aPort = model.addPowerConnectorToNode(a, "CEE 32A", PortDirection.OUT, 3, 3, 40.0);
+        // B — карта с портами (второй путь комплектации, помимо powerConnectors).
+        SchemaCard bCard = model.addCardToNode(b, "Вход",
+                List.of(new CardPort("CEE 32A", PortDirection.IN, 3)));
+        CardPort bPort = bCard.getPorts().get(0);
+
+        // Связь A->B, привязанная к конкретным гнёздам обоих узлов (внутри выделения).
+        SchemaEdge inner = model.addSchemaEdge(SchemaMode.POWER, a.getId(), aPort.getId(),
+                b.getId(), bPort.getId(), "3×CEE 32A");
+        // Связь B->outside — наружу выделения, копироваться НЕ должна.
+        model.addSchemaEdge(SchemaMode.POWER, b.getId(), outside.getId(), "line");
+
+        int nodesBefore = model.schemaNodesForCurrentScene(SchemaMode.POWER).size();
+        int edgesBefore = model.schemaEdgesForCurrentScene(SchemaMode.POWER).size();
+
+        // Как это делает SchemaCanvasPanel.copySelectedNodes(): глубокие копии узлов
+        // выделения + только связи строго между ними.
+        List<SchemaNode> pasted = model.pasteSchemaNodes(SchemaMode.POWER,
+                List.of(a.copy(), b.copy()), List.of(inner.copy()), 24, 24);
+
+        assertEquals(2, pasted.size());
+        assertEquals(nodesBefore + 2, model.schemaNodesForCurrentScene(SchemaMode.POWER).size());
+        assertEquals(edgesBefore + 1, model.schemaEdgesForCurrentScene(SchemaMode.POWER).size(),
+                "копируется только внутренняя связь A->B, связь наружу выделения — нет");
+
+        SchemaNode a2 = pasted.get(0);
+        SchemaNode b2 = pasted.get(1);
+        assertNotEquals(a.getId(), a2.getId());
+        assertNotEquals(b.getId(), b2.getId());
+        assertEquals(124.0, a2.getX(), 1e-9);
+        assertEquals(124.0, a2.getY(), 1e-9);
+
+        // Комплектация A перенесена целиком, но с НОВЫМ id гнезда.
+        assertEquals(1, a2.getPowerConnectors().size());
+        CardPort a2Port = a2.getPowerConnectors().get(0);
+        assertEquals("CEE 32A", a2Port.getConnectorType());
+        assertEquals(3, a2Port.getCount());
+        assertEquals(3, a2Port.getPhaseCount(), "phaseCount должен уехать в копию");
+        assertEquals(40.0, a2Port.getBreakerAmps(), "breakerAmps должен уехать в копию");
+        assertNotEquals(aPort.getId(), a2Port.getId(), "у копии гнезда — свой id");
+
+        // Комплектация B (карта + порт) — то же самое.
+        assertEquals(1, b2.getCards().size());
+        SchemaCard b2Card = b2.getCards().get(0);
+        assertEquals("Вход", b2Card.getName());
+        assertNotEquals(bCard.getId(), b2Card.getId());
+        assertEquals(1, b2Card.getPorts().size());
+        CardPort b2Port = b2Card.getPorts().get(0);
+        assertEquals("CEE 32A", b2Port.getConnectorType());
+        assertEquals(3, b2Port.getCount());
+        assertNotEquals(bPort.getId(), b2Port.getId());
+
+        // Внутренняя связь переехала на копии узлов И на копии гнёзд.
+        SchemaEdge innerCopy = model.schemaEdgesForCurrentScene(SchemaMode.POWER).stream()
+                .filter(e -> a2.getId().equals(e.getFromNodeId()))
+                .findFirst().orElseThrow();
+        assertEquals(b2.getId(), innerCopy.getToNodeId());
+        assertEquals(a2Port.getId(), innerCopy.getFromPortId(), "fromPortId ремапнут на копию гнезда A");
+        assertEquals(b2Port.getId(), innerCopy.getToPortId(), "toPortId ремапнут на копию гнезда B");
+        assertNotEquals(inner.getId(), innerCopy.getId());
+    }
+
+    @Test
+    void pasteSchemaNodesIsOneUndoStep(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        SchemaNode a = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.CUSTOM, "A", 0, 0, null);
+        SchemaNode b = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.CUSTOM, "B", 200, 0, null);
+        SchemaEdge e = model.addSchemaEdge(SchemaMode.SIGNAL, a.getId(), b.getId(), "x");
+
+        int nodesBefore = model.schemaNodesForCurrentScene(SchemaMode.SIGNAL).size();
+        int edgesBefore = model.schemaEdgesForCurrentScene(SchemaMode.SIGNAL).size();
+
+        model.pasteSchemaNodes(SchemaMode.SIGNAL, List.of(a.copy(), b.copy()), List.of(e.copy()), 24, 24);
+        assertEquals(nodesBefore + 2, model.schemaNodesForCurrentScene(SchemaMode.SIGNAL).size());
+        assertEquals(edgesBefore + 1, model.schemaEdgesForCurrentScene(SchemaMode.SIGNAL).size());
+
+        model.undo();
+        assertEquals(nodesBefore, model.schemaNodesForCurrentScene(SchemaMode.SIGNAL).size(),
+                "одна отмена убирает всю вставленную группу разом");
+        assertEquals(edgesBefore, model.schemaEdgesForCurrentScene(SchemaMode.SIGNAL).size());
+    }
+
+    @Test
+    void pasteSchemaNodesClearsControllerAnchorButKeepsScreenRef(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        SchemaNode n = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.CONTROLLER, "C", 0, 0, null);
+        n.setControllerInstanceRefId("ctrl-123");
+        SchemaNode screen = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SCREEN, "E", 300, 0, "screen-abc");
+
+        List<SchemaNode> pasted = model.pasteSchemaNodes(SchemaMode.SIGNAL,
+                List.of(n.copy(), screen.copy()), List.of(), 24, 24);
+
+        assertNull(pasted.get(0).getControllerInstanceRefId(),
+                "controllerInstanceRefId — уникальный якорь автозаполнения, в копии сбрасывается");
+        assertEquals("screen-abc", pasted.get(1).getScreenRefId(),
+                "screenRefId сохраняется — копия узла-экрана привязана к тому же экрану");
     }
 }

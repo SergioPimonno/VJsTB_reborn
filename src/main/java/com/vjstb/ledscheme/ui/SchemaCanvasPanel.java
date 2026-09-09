@@ -18,6 +18,7 @@ import com.vjstb.ledscheme.model.SignalChain;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.ScreenLogic;
 import com.vjstb.ledscheme.settings.ConnectorDisplayMode;
+import com.vjstb.ledscheme.settings.WireHopStyle;
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Cursor;
@@ -32,8 +33,10 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -78,6 +81,21 @@ public class SchemaCanvasPanel extends JPanel {
      *  если ничего не тащат. */
     private SchemaEdge draggingWaypointEdge;
     private int draggingWaypointIndex = -1;
+    /** Отрезок маршрута ВЫДЕЛЕННОЙ связи, который тащат целиком — null, если не
+     *  тащат. Двигаются обе его точки излома ({@link #draggingSegmentWpA} и
+     *  {@link #draggingSegmentWpB}, индексы в {@code edge.getWaypoints()}) на одну
+     *  дельту; крайние отрезки, упирающиеся в гнездо/узел, за целое не тащатся —
+     *  при необходимости пользователь сам добавит точку излома. */
+    private SchemaEdge draggingSegmentEdge;
+    private int draggingSegmentWpA = -1;
+    private int draggingSegmentWpB = -1;
+    private Point draggingSegmentPressMp;
+    private double[] draggingSegmentStartA;
+    private double[] draggingSegmentStartB;
+    /** Был ли реальный сдвиг за время нажатия на отрезок — как у чипа подписи
+     *  ({@link #draggingLabelMoved}): клик без движения не должен ни писать снимок
+     *  в отмену, ни менять маршрут, просто оставляет связь выделенной. */
+    private boolean draggingSegmentMoved;
     /** Чип подписи связи, который сейчас тащат мышью (Task #3) — null, если ничего
      *  не тащат. Отличие от точки излома: короткий клик без реального сдвига должен
      *  по-прежнему открывать редактор подписи (см. draggingLabelMoved), а не просто
@@ -123,6 +141,23 @@ public class SchemaCanvasPanel extends JPanel {
      *  предсказуем при отладке. */
     private final Set<SchemaNode> selectedNodes = new LinkedHashSet<>();
     private SchemaEdge selectedEdge;
+
+    /** Внутренний буфер обмена схемы (Ctrl+C / Ctrl+V по многовыделению) — общий
+     *  для всех холстов схемы в сессии (static), поэтому скопировать можно на одной
+     *  панели, а вставить на другой (в т.ч. в другом режиме — {@code mode}
+     *  перештамповывается при вставке в {@code AppModel.pasteSchemaNodes}). Хранит
+     *  ГЛУБОКИЕ копии узлов (с полной комплектацией карт/разъёмов, см.
+     *  {@link SchemaNode#copy()}) и связей строго МЕЖДУ ними на момент Ctrl+C —
+     *  ссылок на живую модель тут нет, поэтому копия переживает удаление оригинала. */
+    private static final List<SchemaNode> clipboardNodes = new ArrayList<>();
+    private static final List<SchemaEdge> clipboardEdges = new ArrayList<>();
+    /** Сколько раз подряд вставляли текущий буфер — каждая следующая вставка
+     *  смещается чуть дальше (см. {@link #PASTE_OFFSET}), чтобы копии не ложились
+     *  ровно одна на другую (как в yEd). Сбрасывается при каждом Ctrl+C. */
+    private static int clipboardPasteSequence = 0;
+    /** Смещение вставленных копий от оригинала, модельные пиксели (на каждую
+     *  последующую вставку подряд — кратное). */
+    private static final double PASTE_OFFSET = 24;
     /** Начало/текущая точка прямоугольника-«резинки» выделения (модельные
      *  координаты) — null, если сейчас не тянется. См. {@link #selectedNodes}. */
     private Point rubberBandStart;
@@ -376,11 +411,30 @@ public class SchemaCanvasPanel extends JPanel {
                     repaint();
                     return;
                 }
-                // Пусто (не узел, не гнездо, не чип подписи) — Shift/Ctrl добавляет к
-                // текущему выделению по завершении протяжки (см. mouseReleased), иначе
-                // выделение сбрасывается сразу (клик без движения = просто снять
-                // выделение, протяжка ниже — прямоугольник-«резинка», баг-репорт про
-                // выделение нескольких блоков).
+                // Перетаскивание целого отрезка маршрута ВЫДЕЛЕННОЙ связи (после
+                // узла/гнезда/чипа — те приоритетнее). Двигаются обе точки излома
+                // отрезка на одну дельту; крайние отрезки segmentAt не отдаёт.
+                SegmentHit segHit = segmentAt(mp);
+                if (segHit != null) {
+                    selectedNodes.clear();
+                    selectedEdge = segHit.edge();
+                    draggingSegmentEdge = segHit.edge();
+                    draggingSegmentWpA = segHit.wpA();
+                    draggingSegmentWpB = segHit.wpB();
+                    var wa = draggingSegmentEdge.getWaypoints().get(draggingSegmentWpA);
+                    var wb = draggingSegmentEdge.getWaypoints().get(draggingSegmentWpB);
+                    draggingSegmentStartA = new double[]{wa.getX(), wa.getY()};
+                    draggingSegmentStartB = new double[]{wb.getX(), wb.getY()};
+                    draggingSegmentPressMp = mp;
+                    draggingSegmentMoved = false;
+                    repaint();
+                    return;
+                }
+                // Пусто (не узел, не гнездо, не чип подписи, не отрезок) — Shift/Ctrl
+                // добавляет к текущему выделению по завершении протяжки (см.
+                // mouseReleased), иначе выделение сбрасывается сразу (клик без
+                // движения = просто снять выделение, протяжка ниже — прямоугольник-
+                // «резинка», баг-репорт про выделение нескольких блоков).
                 if (!(e.isShiftDown() || e.isControlDown())) {
                     selectedNodes.clear();
                 }
@@ -414,6 +468,17 @@ public class SchemaCanvasPanel extends JPanel {
                 if (resizeNode != null) {
                     double newW = Math.max(MIN_NODE_W, mp.x - resizeNode.getX());
                     double newH = Math.max(MIN_NODE_H, mp.y - resizeNode.getY());
+                    // Shift во время растягивания — привязка ПРАВОЙ и НИЖНЕЙ граней
+                    // (хват за юго-восточный уголок) к краям/центрам других узлов, как
+                    // при перетаскивании. Без Shift — свободный размер, как раньше.
+                    if (e.isShiftDown()) {
+                        double[] snapped = snapResize(resizeNode, newW, newH);
+                        newW = snapped[0];
+                        newH = snapped[1];
+                    } else {
+                        snapGuideX = null;
+                        snapGuideY = null;
+                    }
                     // Узел-экран в режиме "схема расключения" — тянуть можно за любую
                     // ось, но обводка блока всегда пересчитывается так, чтобы миниатюра
                     // заполняла её БЕЗ пустого поля (см. AppModel.screenWiringHeightForWidth/
@@ -461,6 +526,33 @@ public class SchemaCanvasPanel extends JPanel {
                     w.setX(candidateX);
                     w.setY(candidateY);
                     repaint();
+                } else if (draggingSegmentEdge != null) {
+                    // Свободный 2D-перенос всего отрезка: дельта от точки нажатия,
+                    // обе точки излома едут на неё от своих стартовых координат.
+                    double dx = mp.x - draggingSegmentPressMp.x;
+                    double dy = mp.y - draggingSegmentPressMp.y;
+                    if (!draggingSegmentMoved && Math.hypot(dx, dy) > 3) {
+                        draggingSegmentMoved = true;
+                    }
+                    if (e.isShiftDown()) {
+                        // Привязка по «якорной» точке A (как при групповом драге
+                        // узлов), вторая точка B смещается на ту же итоговую дельту —
+                        // отрезок не искажается.
+                        double[] snapped = snapWaypointPosition(draggingSegmentEdge, draggingSegmentWpA,
+                                draggingSegmentStartA[0] + dx, draggingSegmentStartA[1] + dy);
+                        dx = snapped[0] - draggingSegmentStartA[0];
+                        dy = snapped[1] - draggingSegmentStartA[1];
+                    } else {
+                        snapGuideX = null;
+                        snapGuideY = null;
+                    }
+                    var wa = draggingSegmentEdge.getWaypoints().get(draggingSegmentWpA);
+                    var wb = draggingSegmentEdge.getWaypoints().get(draggingSegmentWpB);
+                    wa.setX(draggingSegmentStartA[0] + dx);
+                    wa.setY(draggingSegmentStartA[1] + dy);
+                    wb.setX(draggingSegmentStartB[0] + dx);
+                    wb.setY(draggingSegmentStartB[1] + dy);
+                    repaint();
                 } else if (draggingLabelEdge != null) {
                     double dx = draggingLabelStartDx + (mp.x - draggingLabelPressMp.x);
                     double dy = draggingLabelStartDy + (mp.y - draggingLabelPressMp.y);
@@ -476,9 +568,13 @@ public class SchemaCanvasPanel extends JPanel {
                     double candidateY = mp.y - dragOffY;
                     // Shift во время перетаскивания — привязка к краям/центрам других
                     // узлов (как в yEd): без Shift положение свободное, как раньше.
-                    // Только для ОДИНОЧНОГО узла — при групповом перетаскивании привязка
-                    // якоря исказила бы взаимное расположение остальных выделенных.
-                    if (e.isShiftDown() && selectedNodes.size() <= 1) {
+                    // Работает и при групповом выделении: привязка считается по
+                    // якорному узлу (dragNode), остальные выделённые двигаются на ту же
+                    // дельту (см. ниже), поэтому взаимное расположение группы не
+                    // искажается. Сами перетаскиваемые узлы исключены из целей
+                    // привязки внутри snapPosition (иначе якорь липнул бы к соседям
+                    // по группе на их старых позициях).
+                    if (e.isShiftDown()) {
                         double[] snapped = snapPosition(dragNode, candidateX, candidateY);
                         candidateX = snapped[0];
                         candidateY = snapped[1];
@@ -533,8 +629,10 @@ public class SchemaCanvasPanel extends JPanel {
                     repaint();
                 } else if (interaction == Interaction.MOVE) {
                     boolean overHandle = resizeHandleAt(mp) != null;
+                    boolean overSegment = !overHandle && waypointAt(mp) == null && segmentAt(mp) != null;
                     setCursor(Cursor.getPredefinedCursor(
-                            overHandle ? Cursor.SE_RESIZE_CURSOR : Cursor.DEFAULT_CURSOR));
+                            overHandle ? Cursor.SE_RESIZE_CURSOR
+                                    : overSegment ? Cursor.MOVE_CURSOR : Cursor.DEFAULT_CURSOR));
                 }
             }
 
@@ -555,6 +653,24 @@ public class SchemaCanvasPanel extends JPanel {
                     draggingWaypointEdge = null;
                     draggingWaypointIndex = -1;
                     onChanged.run();
+                } else if (draggingSegmentEdge != null) {
+                    if (draggingSegmentMoved) {
+                        // Одна запись в отмену на весь драг (снимок делает
+                        // setSchemaEdgeWaypoints → «Правка маршрута связи»).
+                        model.setSchemaEdgeWaypoints(draggingSegmentEdge, draggingSegmentEdge.getWaypoints());
+                        onChanged.run();
+                    }
+                    // Клик без сдвига — связь просто осталась выделенной (см. mousePressed),
+                    // маршрут не трогаем и снимок не пишем.
+                    draggingSegmentEdge = null;
+                    draggingSegmentWpA = -1;
+                    draggingSegmentWpB = -1;
+                    draggingSegmentPressMp = null;
+                    draggingSegmentStartA = null;
+                    draggingSegmentStartB = null;
+                    draggingSegmentMoved = false;
+                    snapGuideX = null;
+                    snapGuideY = null;
                 } else if (draggingLabelEdge != null) {
                     if (draggingLabelMoved) {
                         model.setSchemaEdgeLabelOffset(draggingLabelEdge,
@@ -648,6 +764,69 @@ public class SchemaCanvasPanel extends JPanel {
         addMouseListener(mouse);
         addMouseMotionListener(mouse);
         addMouseWheelListener(mouse);
+
+        // Ctrl+C / Ctrl+V (Cmd на macOS) — копирование и вставка выделенной группы
+        // блоков. WHEN_FOCUSED, как и Delete (см. UiKit.bindDeleteKey) — клавиша
+        // ловится только пока холст схемы в фокусе, не конфликтует с копированием
+        // где-либо ещё. Действия сами проверяют, есть ли что копировать/вставлять.
+        int menuMask = java.awt.Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx();
+        javax.swing.InputMap im = getInputMap(WHEN_FOCUSED);
+        javax.swing.ActionMap am = getActionMap();
+        im.put(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_C, menuMask), "schema-copy");
+        im.put(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_V, menuMask), "schema-paste");
+        am.put("schema-copy", new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                copySelectedNodes();
+            }
+        });
+        am.put("schema-paste", new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                pasteClipboardNodes();
+            }
+        });
+    }
+
+    /** Ctrl+C — глубокая копия выделенных узлов и связей строго между ними в
+     *  статический буфер обмена схемы ({@link #clipboardNodes}). Комплектация
+     *  карт/разъёмов входит в копию (см. {@link SchemaNode#copy()}). Модель не
+     *  меняется. Если выделения нет — ничего не делает (буфер сохраняется). */
+    public void copySelectedNodes() {
+        if (selectedNodes.isEmpty()) {
+            return;
+        }
+        clipboardNodes.clear();
+        clipboardEdges.clear();
+        clipboardPasteSequence = 0;
+        Set<String> ids = new java.util.HashSet<>();
+        for (SchemaNode n : selectedNodes) {
+            clipboardNodes.add(n.copy());
+            ids.add(n.getId());
+        }
+        for (SchemaEdge e : edges()) {
+            if (ids.contains(e.getFromNodeId()) && ids.contains(e.getToNodeId())) {
+                clipboardEdges.add(e.copy());
+            }
+        }
+    }
+
+    /** Ctrl+V — вставляет копии из буфера обмена схемы со смещением (см.
+     *  {@link AppModel#pasteSchemaNodes}) и делает вставленные узлы новым
+     *  выделением, чтобы их можно было сразу перетащить на место. Повторные
+     *  вставки подряд смещаются каскадом. Пустой буфер — no-op. */
+    public void pasteClipboardNodes() {
+        if (clipboardNodes.isEmpty()) {
+            return;
+        }
+        clipboardPasteSequence++;
+        double off = PASTE_OFFSET * clipboardPasteSequence;
+        List<SchemaNode> pasted = model.pasteSchemaNodes(mode, clipboardNodes, clipboardEdges, off, off);
+        selectedNodes.clear();
+        selectedNodes.addAll(pasted);
+        selectedEdge = null;
+        onChanged.run();
+        repaint();
     }
 
     public void setOnChanged(Runnable onChanged) {
@@ -779,7 +958,10 @@ public class SchemaCanvasPanel extends JPanel {
         double bestDx = threshold, bestDy = threshold;
         double snappedX = candidateX, snappedY = candidateY;
         for (SchemaNode other : nodes()) {
-            if (other == moving) {
+            // Пропускаем сам перетаскиваемый узел И остальные узлы текущего
+            // группового перетаскивания — они двигаются вместе с якорем, липнуть
+            // к ним (к их ещё не обновлённым позициям) нельзя.
+            if (other == moving || dragStartPositions.containsKey(other)) {
                 continue;
             }
             double ow = other.getWidth(), oh = other.getHeight();
@@ -809,11 +991,64 @@ public class SchemaCanvasPanel extends JPanel {
         return new double[]{snappedX, snappedY};
     }
 
+    /** Привязка размеров растягиваемого узла (Shift во время resize за юго-восточный
+     *  уголок — см. mouseDragged). Двигаются ПРАВАЯ грань (x = moving.getX()+w) и
+     *  НИЖНЯЯ (y = moving.getY()+h); они сравниваются с левым/центром/правым краем и
+     *  верхом/центром/низом остальных узлов — как в snapPosition, но кандидат по
+     *  каждой оси один (сам уголок), а не три. Побочный эффект — snapGuideX/snapGuideY
+     *  для отрисовки направляющей. Возвращает {snappedW, snappedH}. */
+    private double[] snapResize(SchemaNode moving, double candidateW, double candidateH) {
+        snapGuideX = null;
+        snapGuideY = null;
+        double threshold = settings.activeProfile().getSnapThresholdPx();
+        int strength = settings.activeProfile().getSnapStrengthPercent();
+        double rightEdge = moving.getX() + candidateW;
+        double bottomEdge = moving.getY() + candidateH;
+        double bestDx = threshold, bestDy = threshold;
+        double snappedW = candidateW, snappedH = candidateH;
+        for (SchemaNode other : nodes()) {
+            if (other == moving) {
+                continue;
+            }
+            double ow = other.getWidth(), oh = other.getHeight();
+            double[] oxs = {other.getX(), other.getX() + ow / 2, other.getX() + ow};
+            double[] oys = {other.getY(), other.getY() + oh / 2, other.getY() + oh};
+            for (double ox : oxs) {
+                double d = Math.abs(rightEdge - ox);
+                if (d < bestDx) {
+                    bestDx = d;
+                    snappedW = Math.max(MIN_NODE_W,
+                            SnapMath.blend(candidateW, ox - moving.getX(), strength));
+                    snapGuideX = ox;
+                }
+            }
+            for (double oy : oys) {
+                double d = Math.abs(bottomEdge - oy);
+                if (d < bestDy) {
+                    bestDy = d;
+                    snappedH = Math.max(MIN_NODE_H,
+                            SnapMath.blend(candidateH, oy - moving.getY(), strength));
+                    snapGuideY = oy;
+                }
+            }
+        }
+        return new double[]{snappedW, snappedH};
+    }
+
     /** Привязка перетаскиваемой точки излома провода (Shift во время перетаскивания —
-     *  см. mouseDragged) к краю/центру узла ЛИБО к другой точке излома (в т.ч. на
-     *  другом проводе) — так соседние провода можно выровнять в прямые линии, как в
-     *  yEd. В отличие от snapPosition (для блоков оборудования) сравнивается ОДНА
-     *  точка, а не три кандидата на измерение, — у точки излома нет ширины/высоты. */
+     *  см. mouseDragged). Тянет точку так, чтобы прилегающие к ней сегменты линии
+     *  вставали строго по декартовым осям:
+     *  <ul>
+     *    <li>к X/Y СОСЕДНИХ точек маршрута этой же линии (предыдущей и следующей) —
+     *        тогда сегмент до соседа становится ровно вертикальным / горизонтальным;</li>
+     *    <li>к X/Y точек ДРУГИХ линий (начал, концов, изломов) — чтобы соседние
+     *        провода выравнивались в одну прямую, как в yEd.</li>
+     *  </ul>
+     *  Раньше здесь были ещё края и ЦЕНТРЫ блоков оборудования — но центр блока
+     *  почти никогда не совпадает с гнездом разъёма, куда реально приходит линия,
+     *  и притяжка к нему уводила сегмент в наклон на пару градусов (баг-репорт).
+     *  В отличие от snapPosition (для блоков) сравнивается ОДНА точка, а не три
+     *  кандидата на измерение — у точки излома нет ширины/высоты. */
     private double[] snapWaypointPosition(SchemaEdge movingEdge, int movingIndex,
                                            double candidateX, double candidateY) {
         snapGuideX = null;
@@ -822,43 +1057,51 @@ public class SchemaCanvasPanel extends JPanel {
         int strength = settings.activeProfile().getSnapStrengthPercent();
         double bestDx = threshold, bestDy = threshold;
         double snappedX = candidateX, snappedY = candidateY;
-        for (SchemaNode other : nodes()) {
-            double ow = other.getWidth(), oh = other.getHeight();
-            for (double ox : new double[]{other.getX(), other.getX() + ow / 2, other.getX() + ow}) {
-                double d = Math.abs(candidateX - ox);
-                if (d < bestDx) {
-                    bestDx = d;
-                    snappedX = SnapMath.blend(candidateX, ox, strength);
-                    snapGuideX = ox;
+
+        // 1. Соседние точки маршрута этой же линии — выравнивание прилегающих
+        //    сегментов по осям. movingIndex — индекс в списке waypoints, в
+        //    routePoints он сдвинут на 1 (нулевой элемент — начало линии), так что
+        //    соседи это routePoints[movingIndex] и routePoints[movingIndex + 2].
+        List<double[]> route = routePoints(movingEdge);
+        if (route != null && route.size() >= 3 && movingIndex + 2 < route.size()) {
+            for (double[] nb : new double[][]{route.get(movingIndex), route.get(movingIndex + 2)}) {
+                double dx = Math.abs(candidateX - nb[0]);
+                if (dx < bestDx) {
+                    bestDx = dx;
+                    snappedX = SnapMath.blend(candidateX, nb[0], strength);
+                    snapGuideX = nb[0];
                 }
-            }
-            for (double oy : new double[]{other.getY(), other.getY() + oh / 2, other.getY() + oh}) {
-                double d = Math.abs(candidateY - oy);
-                if (d < bestDy) {
-                    bestDy = d;
-                    snappedY = SnapMath.blend(candidateY, oy, strength);
-                    snapGuideY = oy;
+                double dy = Math.abs(candidateY - nb[1]);
+                if (dy < bestDy) {
+                    bestDy = dy;
+                    snappedY = SnapMath.blend(candidateY, nb[1], strength);
+                    snapGuideY = nb[1];
                 }
             }
         }
+
+        // 2. Точки других линий (начала/концы/изломы) — чтобы соседние провода
+        //    вставали в одну прямую.
         for (SchemaEdge edge : edges()) {
-            List<com.vjstb.ledscheme.model.EdgeWaypoint> wps = edge.getWaypoints();
-            for (int i = 0; i < wps.size(); i++) {
-                if (edge == movingEdge && i == movingIndex) {
-                    continue;
-                }
-                com.vjstb.ledscheme.model.EdgeWaypoint wp = wps.get(i);
-                double dx = Math.abs(candidateX - wp.getX());
+            if (edge == movingEdge) {
+                continue;
+            }
+            List<double[]> other = routePoints(edge);
+            if (other == null) {
+                continue;
+            }
+            for (double[] p : other) {
+                double dx = Math.abs(candidateX - p[0]);
                 if (dx < bestDx) {
                     bestDx = dx;
-                    snappedX = SnapMath.blend(candidateX, wp.getX(), strength);
-                    snapGuideX = wp.getX();
+                    snappedX = SnapMath.blend(candidateX, p[0], strength);
+                    snapGuideX = p[0];
                 }
-                double dy = Math.abs(candidateY - wp.getY());
+                double dy = Math.abs(candidateY - p[1]);
                 if (dy < bestDy) {
                     bestDy = dy;
-                    snappedY = SnapMath.blend(candidateY, wp.getY(), strength);
-                    snapGuideY = wp.getY();
+                    snappedY = SnapMath.blend(candidateY, p[1], strength);
+                    snapGuideY = p[1];
                 }
             }
         }
@@ -1037,6 +1280,59 @@ public class SchemaCanvasPanel extends JPanel {
         return pts;
     }
 
+    /** Радиус полукруглого «мостика»-обхода на пересечении линий (логические px,
+     *  масштабируется зумом холста вместе со всей отрисовкой). Заметно крупнее
+     *  стрелки направления (та выступает ~5px в сторону от линии) — при близких
+     *  размерах дуга и треугольник на схеме сливаются в одно пятно. */
+    private static final int HOP_RADIUS = 9;
+
+    /** Для каждой связи — список её дуг-обходов {@code {segIndex, t}} в местах
+     *  пересечения с другими связями, где ЭТА связь лежит сверху (её сегмент в
+     *  точке пересечения длиннее; при равенстве длин — связь, которая раньше в
+     *  {@code es}, детерминированный tie-break). Пары перебираются в лоб
+     *  (сегмент×сегмент): связей на схеме десятки, это микросекунды. Считается
+     *  каждую перерисовку — геометрия связей всё равно уже пересчитана в
+     *  {@code routeCache}. */
+    private static Map<SchemaEdge, List<double[]>> computeWireHops(
+            List<SchemaEdge> es, Map<SchemaEdge, List<double[]>> routeCache) {
+        Map<SchemaEdge, List<double[]>> hopMap = new IdentityHashMap<>();
+        for (int ei = 0; ei < es.size(); ei++) {
+            List<double[]> r1 = routeCache.get(es.get(ei));
+            if (r1 == null || r1.size() < 2) {
+                continue;
+            }
+            for (int ej = ei + 1; ej < es.size(); ej++) {
+                List<double[]> r2 = routeCache.get(es.get(ej));
+                if (r2 == null || r2.size() < 2) {
+                    continue;
+                }
+                for (int s1 = 0; s1 < r1.size() - 1; s1++) {
+                    double a1x = r1.get(s1)[0], a1y = r1.get(s1)[1];
+                    double a2x = r1.get(s1 + 1)[0], a2y = r1.get(s1 + 1)[1];
+                    double len1 = WireHopGeometry.segLen(a1x, a1y, a2x, a2y);
+                    for (int s2 = 0; s2 < r2.size() - 1; s2++) {
+                        double b1x = r2.get(s2)[0], b1y = r2.get(s2)[1];
+                        double b2x = r2.get(s2 + 1)[0], b2y = r2.get(s2 + 1)[1];
+                        double[] cp = WireHopGeometry.crossParams(a1x, a1y, a2x, a2y, b1x, b1y, b2x, b2y);
+                        if (cp == null) {
+                            continue;
+                        }
+                        double len2 = WireHopGeometry.segLen(b1x, b1y, b2x, b2y);
+                        boolean firstOnTop = WireHopGeometry.aIsOnTop(len1, len2);
+                        SchemaEdge top = es.get(firstOnTop ? ei : ej);
+                        int seg = firstOnTop ? s1 : s2;
+                        double t = firstOnTop ? cp[0] : cp[1];
+                        hopMap.computeIfAbsent(top, k -> new ArrayList<>()).add(new double[]{seg, t});
+                    }
+                }
+            }
+        }
+        for (List<double[]> v : hopMap.values()) {
+            v.sort((p, q) -> p[0] != q[0] ? Double.compare(p[0], q[0]) : Double.compare(p[1], q[1]));
+        }
+        return hopMap;
+    }
+
     /** Точка на середине ОБЩЕЙ длины ломаной (по пройденному пути, а не просто
      *  геометрический центр между началом и концом) — чтобы подпись не залезала в
      *  угол излома при сильно изогнутом маршруте. */
@@ -1091,6 +1387,44 @@ public class SchemaCanvasPanel extends JPanel {
             com.vjstb.ledscheme.model.EdgeWaypoint w = wps.get(i);
             if (Math.hypot(p.x - w.getX(), p.y - w.getY()) < 8) {
                 return new WaypointHit(selectedEdge, i);
+            }
+        }
+        return null;
+    }
+
+    /** Отрезок маршрута ВЫДЕЛЕННОЙ связи под курсором, оба конца которого — точки
+     *  излома (значит, его можно тащить целиком). Крайние отрезки, упирающиеся в
+     *  гнездо/узел, сюда не попадают. Поля {@code wpA}/{@code wpB} — индексы этих
+     *  двух точек в {@code edge.getWaypoints()}. */
+    private record SegmentHit(SchemaEdge edge, int wpA, int wpB) { }
+
+    private SegmentHit segmentAt(Point p) {
+        if (selectedEdge == null) {
+            return null;
+        }
+        List<double[]> pts = routePoints(selectedEdge);
+        if (pts == null || pts.size() < 4) { // нужно минимум две точки излома
+            return null;
+        }
+        // Зона чипа подписи (с запасом) зарезервирована под клик по подписи — иначе
+        // промах мимо чипа по лежащему под ним среднему отрезку хватал бы отрезок
+        // вместо открытия редактора подписи.
+        java.awt.Rectangle chip = labelChipBounds(selectedEdge);
+        if (chip != null) {
+            java.awt.Rectangle grown = new java.awt.Rectangle(chip);
+            grown.grow(8, 8);
+            if (grown.contains(p)) {
+                return null;
+            }
+        }
+        // Индекс сегмента i соединяет точку маршрута i с i+1; точка 0 — гнездо/узел
+        // начала, последняя — конца. «Средний» сегмент (обе стороны — изломы) —
+        // i от 1 до pts.size()-3; точка маршрута i отвечает точке излома i-1.
+        for (int i = 1; i <= pts.size() - 3; i++) {
+            double d = distanceToSegment(p.x, p.y,
+                    pts.get(i)[0], pts.get(i)[1], pts.get(i + 1)[0], pts.get(i + 1)[1]);
+            if (d < 6) {
+                return new SegmentHit(selectedEdge, i - 1, i);
             }
         }
         return null;
@@ -1798,8 +2132,19 @@ public class SchemaCanvasPanel extends JPanel {
         g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         g2.setFont(EDGE_FONT);
         java.awt.FontMetrics edgeFm = g2.getFontMetrics();
+        // Маршрут каждой связи считаем один раз — и для отрисовки, и для поиска
+        // пересечений («мостики», см. ниже) нужна одна и та же ломаная.
+        Map<SchemaEdge, List<double[]>> routeCache = new IdentityHashMap<>();
         for (SchemaEdge edge : es) {
-            List<double[]> pts = routePoints(edge);
+            routeCache.put(edge, routePoints(edge));
+        }
+        WireHopStyle hopStyle = settings.activeProfile().getSchemaWireHopStyle();
+        Map<SchemaEdge, List<double[]>> hopMap = hopStyle != WireHopStyle.NONE
+                ? computeWireHops(es, routeCache) : null;
+        WireHopGeometry.ArcShape arcShape = hopStyle == WireHopStyle.TRUNCATED
+                ? WireHopGeometry.ArcShape.FLAT_TOP : WireHopGeometry.ArcShape.CUBIC;
+        for (SchemaEdge edge : es) {
+            List<double[]> pts = routeCache.get(edge);
             if (pts == null) {
                 continue;
             }
@@ -1813,15 +2158,35 @@ public class SchemaCanvasPanel extends JPanel {
                     ? new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 0, new float[]{7, 5}, 0)
                     : new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
             // Ломаная линия через точки излома (см. EdgeWaypoint) вместо одной прямой —
-            // ортогональная/произвольная маршрутизация, стрелка — только на последнем
-            // отрезке (указывает на конечный узел), не на каждом изломе.
-            for (int i = 0; i < pts.size() - 1; i++) {
-                double ax = pts.get(i)[0], ay = pts.get(i)[1];
-                double bx = pts.get(i + 1)[0], by = pts.get(i + 1)[1];
-                g2.drawLine((int) ax, (int) ay, (int) bx, (int) by);
-                if (i == pts.size() - 2) {
-                    drawArrow(g2, ax, ay, bx, by);
+            // ортогональная/произвольная маршрутизация. Если включены «мостики» и на
+            // этой связи есть пересечения, где она сверху — рисуем её единым путём с
+            // дугами-обходами (см. WireHopGeometry), иначе обычными отрезками. Форма
+            // дуги — из настройки (полукруглая / усечённая с плоской вершиной);
+            // близкие пересечения сливаются в один расширенный пролёт.
+            List<double[]> hops = hopMap == null ? null : hopMap.get(edge);
+            List<WireHopGeometry.HopSpan> hopSpans = hops == null || hops.isEmpty()
+                    ? List.of()
+                    : WireHopGeometry.hopSpans(pts, hops, HOP_RADIUS);
+            if (!hopSpans.isEmpty()) {
+                g2.draw(WireHopGeometry.hoppedPathFromSpans(pts, hopSpans, HOP_RADIUS, arcShape));
+            } else {
+                for (int i = 0; i < pts.size() - 1; i++) {
+                    g2.drawLine((int) Math.round(pts.get(i)[0]), (int) Math.round(pts.get(i)[1]),
+                            (int) Math.round(pts.get(i + 1)[0]), (int) Math.round(pts.get(i + 1)[1]));
                 }
+            }
+            // Стрелка направления — по каждому под-сегменту РАСШИРЕННОЙ ломаной, кроме
+            // тех, что лежат под дугой: границы дуги дают две неинтерактивные точки
+            // излома, и стрелки встают до и после дуги, но не на ней. Без «мостиков»
+            // расширенная ломаная совпадает с pts — по стрелке на сегмент, как раньше.
+            WireHopGeometry.RenderRoute rr = WireHopGeometry.renderPoints(pts, hopSpans);
+            List<double[]> rpts = rr.points();
+            boolean[] onArc = rr.arcSegment();
+            for (int i = 0; i < rpts.size() - 1; i++) {
+                if (onArc[i]) {
+                    continue;
+                }
+                drawArrow(g2, rpts.get(i)[0], rpts.get(i)[1], rpts.get(i + 1)[0], rpts.get(i + 1)[1]);
             }
             // Точки излома видны и хватаются мышью только у ВЫДЕЛЕННОЙ связи — иначе
             // маленькие кружки на каждом изломе каждой связи захламляли бы обычный вид.
@@ -2747,7 +3112,10 @@ public class SchemaCanvasPanel extends JPanel {
     private static void drawArrow(Graphics2D g2, double ax, double ay, double bx, double by) {
         double dx = bx - ax, dy = by - ay;
         double len = Math.hypot(dx, dy);
-        if (len < 1) {
+        // Стрелка рисуется на каждом сегменте маршрута; на совсем коротком стубе
+        // (между близким изломом и гнездом) треугольник был бы длиннее самого
+        // сегмента — такие пропускаем.
+        if (len < 14) {
             return;
         }
         double ux = dx / len, uy = dy / len;

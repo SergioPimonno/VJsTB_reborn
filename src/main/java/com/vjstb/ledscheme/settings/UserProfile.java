@@ -118,6 +118,32 @@ public class UserProfile {
      *  Применяется и к живому редактору схемы, и к экспорту пакета документации. */
     private boolean schemaScreensAsWiringDiagram = false;
 
+    /** Легаси-флаг «рисовать ли мостики» — оставлен только для чтения профилей,
+     *  сохранённых до появления {@link #schemaWireHopStyle}, и для обратной
+     *  совместимости при откате на старый клиент (тот читает лишь этот boolean).
+     *  Актуальное значение — {@link #getSchemaWireHopStyle()}; сеттеры держат оба
+     *  поля синхронно. */
+    private boolean schemaWireHops = false;
+
+    /** Форма «мостиков» — обходов в местах пересечения соединительных линий общей
+     *  схемы, как принято в ГОСТ (не рисовать / полукруглая дуга / усечённая дуга
+     *  с плоской вершиной). «Сверху» (рисует дугу) считается линия, чей сегмент в
+     *  точке пересечения длиннее, вторая проходит насквозь. Чисто визуально, на
+     *  обе схемы (сигнал/питание) сразу — отдельной копии на этап нет. {@code null}
+     *  в поле = профиль сохранён до этой настройки: тогда режим выводится из
+     *  легаси-{@link #schemaWireHops} (см. {@link #getSchemaWireHopStyle()}).
+     *  Для новых профилей по умолчанию {@link WireHopStyle#NONE}: на плотной
+     *  схеме десятки дуг скорее мешают, инженер включает по желанию. */
+    private WireHopStyle schemaWireHopStyle = null;
+
+    /** Раскладка окна «Персонализация — предпочтения»: false (по умолчанию) —
+     *  список, сгруппированный по этапу; true — таблица-матрица «настройка ×
+     *  этап» (колонки Общие/Сигнал/Питание), где зеркальные пары сигнал/питание
+     *  стоят в одной строке и «—» отмечает неприменимые этапы. Переключается
+     *  дропдауном в окне «цвета и профили» ({@code ui.PersonalizationDialog}),
+     *  само окно предпочтений своего переключателя не имеет. */
+    private boolean preferencesMatrixView = false;
+
     /** Как рисовать разъёмы на блоке узла общей схемы СИГНАЛА — группой по типу (как
      *  было, по умолчанию) или каждый физический разъём отдельным гнездом. Отдельная
      *  настройка от {@link #powerConnectorDisplayMode} — на практике у сигнала
@@ -420,6 +446,45 @@ public class UserProfile {
         this.schemaScreensAsWiringDiagram = schemaScreensAsWiringDiagram;
     }
 
+    /** {@code true}, если обходы рисуются в любой форme — тонкий обёрточный вопрос
+     *  над {@link #getSchemaWireHopStyle()} для кода, которому важен лишь факт
+     *  «мостики включены». */
+    public boolean isSchemaWireHops() {
+        return getSchemaWireHopStyle() != WireHopStyle.NONE;
+    }
+
+    /** Легаси-сеттер: {@code true} → {@link WireHopStyle#ARC}, {@code false} →
+     *  {@link WireHopStyle#NONE}. Новый код зовёт {@link #setSchemaWireHopStyle}. */
+    public void setSchemaWireHops(boolean schemaWireHops) {
+        setSchemaWireHopStyle(schemaWireHops ? WireHopStyle.ARC : WireHopStyle.NONE);
+    }
+
+    /** Актуальная форма мостиков. Профиль без явного значения (сохранён до этой
+     *  настройки) отдаёт режим по легаси-флагу: {@code schemaWireHops ? ARC : NONE}.
+     *  Никогда не {@code null}. */
+    public WireHopStyle getSchemaWireHopStyle() {
+        if (schemaWireHopStyle != null) {
+            return schemaWireHopStyle;
+        }
+        return schemaWireHops ? WireHopStyle.ARC : WireHopStyle.NONE;
+    }
+
+    /** Ставит форму мостиков и держит легаси-{@link #schemaWireHops} в синхроне
+     *  (чтобы откат на старый клиент сохранил хотя бы факт вкл/выкл). {@code null}
+     *  трактуется как {@link WireHopStyle#NONE}. */
+    public void setSchemaWireHopStyle(WireHopStyle style) {
+        this.schemaWireHopStyle = style == null ? WireHopStyle.NONE : style;
+        this.schemaWireHops = this.schemaWireHopStyle != WireHopStyle.NONE;
+    }
+
+    public boolean isPreferencesMatrixView() {
+        return preferencesMatrixView;
+    }
+
+    public void setPreferencesMatrixView(boolean preferencesMatrixView) {
+        this.preferencesMatrixView = preferencesMatrixView;
+    }
+
     public ConnectorDisplayMode getSignalConnectorDisplayMode() {
         return signalConnectorDisplayMode != null ? signalConnectorDisplayMode : ConnectorDisplayMode.GROUPED;
     }
@@ -602,6 +667,9 @@ public class UserProfile {
         p.powerSchemaAutoPopulateEnabled = powerSchemaAutoPopulateEnabled;
         p.foolProofWiringEnabled = foolProofWiringEnabled;
         p.schemaScreensAsWiringDiagram = schemaScreensAsWiringDiagram;
+        p.schemaWireHops = schemaWireHops;
+        p.schemaWireHopStyle = schemaWireHopStyle;
+        p.preferencesMatrixView = preferencesMatrixView;
         p.signalConnectorDisplayMode = signalConnectorDisplayMode;
         p.powerConnectorDisplayMode = powerConnectorDisplayMode;
         p.signalConnectorsVertical = signalConnectorsVertical;
