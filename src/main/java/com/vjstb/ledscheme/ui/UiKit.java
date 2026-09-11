@@ -116,6 +116,63 @@ public final class UiKit {
         });
     }
 
+    /** Включает перетаскивание строк {@code list} мышью для смены порядка —
+     *  урезанная версия паттерна из {@code AssembleCardsDialog.CardTransferHandler}
+     *  (там — ДВА списка, копирование ИЗ библиотеки + перемещение ВНУТРИ состава;
+     *  тут всегда один список и всегда перемещение). {@code onReorder} получает
+     *  (fromIndex, dropIndex) — dropIndex ещё БЕЗ поправки на то, что элемент
+     *  fromIndex физически покинет список (та же договорённость, что в
+     *  {@code CardTransferHandler.importData}): вызывающая сторона решает сама, что
+     *  физически переставить (обычно — делегирует в доменный метод AppModel,
+     *  который заодно пересчитывает всё, что зависит от порядка, например сквозную
+     *  нумерацию портов). Список не меняется этим методом сам по себе — модель
+     *  списка ({@code DefaultListModel}) ожидается синхронизированной снаружи
+     *  (обычно уже происходит по {@code AppModel}-слушателю, см. вызывающий код). */
+    public static void enableListReorder(javax.swing.JList<?> list,
+                                          java.util.function.BiConsumer<Integer, Integer> onReorder) {
+        list.setDragEnabled(true);
+        list.setDropMode(javax.swing.DropMode.INSERT);
+        list.setTransferHandler(new javax.swing.TransferHandler() {
+            private int dragIndex = -1;
+
+            @Override
+            public int getSourceActions(JComponent c) {
+                return MOVE;
+            }
+
+            @Override
+            protected java.awt.datatransfer.Transferable createTransferable(JComponent c) {
+                dragIndex = list.getSelectedIndex();
+                return new java.awt.datatransfer.StringSelection(String.valueOf(dragIndex));
+            }
+
+            @Override
+            public boolean canImport(TransferSupport support) {
+                return support.isDrop() && dragIndex >= 0;
+            }
+
+            @Override
+            public boolean importData(TransferSupport support) {
+                if (!(support.getDropLocation() instanceof javax.swing.JList.DropLocation dl)) {
+                    return false;
+                }
+                int dropIndex = dl.getIndex();
+                int from = dragIndex;
+                dragIndex = -1;
+                if (from >= 0 && dropIndex != from) {
+                    onReorder.accept(from, dropIndex);
+                    return true;
+                }
+                return false;
+            }
+
+            @Override
+            protected void exportDone(JComponent source, java.awt.datatransfer.Transferable data, int action) {
+                dragIndex = -1;
+            }
+        });
+    }
+
     public static JPanel vbox() {
         JPanel p = new JPanel();
         p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));

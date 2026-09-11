@@ -526,14 +526,39 @@ public class AppModel {
     /** Добавляет сцене (физически — переданному экрану, см. {@link #controllersInScene})
      *  контроллер выбранного типа. */
     public ControllerInstance addControllerToScreen(Screen screen, String controllerTypeId) {
-        if (workspace.controllerTypeById(controllerTypeId) == null) {
+        ControllerType newType = workspace.controllerTypeById(controllerTypeId);
+        if (newType == null) {
             throw new IllegalArgumentException("Тип контроллера не найден");
         }
         pushUndo("Добавление контроллера на экран");
         Scene scene = sceneContaining(screen);
-        int n = controllersInScene(scene).size() + 1;
-        ControllerInstance ci = new ControllerInstance(controllerTypeId, "Контроллер " + n);
+        // Новый контроллер встаёт в сквозной сценовой нумерации портов (см.
+        // portOffsetOf) сразу ПОСЛЕ уже существующих контроллеров ЭТОГО экрана —
+        // если у сцены есть другие экраны ПОСЛЕ текущего, их контроллеры (и уже
+        // расключенные на них цепочки) окажутся дальше по сквозной нумерации, чем
+        // были до добавления. offsetBeforeInsertion — сумма портов всех
+        // контроллеров вплоть до конца текущего экрана включительно (ДО добавления).
+        int offsetBeforeInsertion = 0;
+        for (Screen s : scene.getScreens()) {
+            for (ControllerInstance ci : s.getControllers()) {
+                ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
+                offsetBeforeInsertion += t != null ? t.effectivePortCount() : 0;
+            }
+            if (s == screen) {
+                break;
+            }
+        }
+        // Метка переприсваивается ниже в renumberControllers — здесь достаточно
+        // плейсхолдера (баг-репорт: было "Контроллер " + size()+1, что после
+        // удаления контроллера из середины списка давало дубликат номера —
+        // размер списка меньше максимального выданного номера).
+        ControllerInstance ci = new ControllerInstance(controllerTypeId, "Контроллер ?");
         screen.getControllers().add(ci);
+        // Освобождаем место под новые порты — сдвигаем уже сохранённые сквозные
+        // номера портов существующих цепочек сигнала, которые оказались ПОСЛЕ
+        // точки вставки (см. shiftSceneChainPorts).
+        shiftSceneChainPorts(scene, offsetBeforeInsertion, newType.effectivePortCount());
+        renumberControllers(scene);
         changed();
         return ci;
     }
@@ -554,11 +579,24 @@ public class AppModel {
 
     public void removeControllerFromScreen(Screen screen, String controllerInstanceId) {
         pushUndo("Удаление контроллера с экрана");
+        Scene scene = sceneContaining(screen);
+        // Сквозной сценовой offset/размер удаляемого контроллера — ДО удаления,
+        // чтобы сдвинуть номера портов контроллеров, стоящих за ним (см.
+        // shiftSceneChainPorts): портов удаляемого контроллера ЭТО не касается —
+        // их цепочки просто перестают резолвиться в конкретный контроллер, как и
+        // раньше, но не удаляются (баг-репорт: удаление контроллера из середины
+        // списка "ломало" расключение следующих контроллеров — они физически
+        // остаются на своих портах, а offset других контроллеров уменьшился).
+        ControllerInstance removed = controllerById(scene, controllerInstanceId);
+        int removedOffset = removed != null ? portOffsetOf(scene, removed) : -1;
+        ControllerType removedType = removed != null ? workspace.controllerTypeById(removed.getControllerTypeId()) : null;
+        int removedCount = removedType != null ? removedType.effectivePortCount() : 0;
+
         screen.getControllers().removeIf(c -> c.getId().equals(controllerInstanceId));
         // Не оставляем висячую ссылку — если удаляемый контроллер был чьим-то
         // резервом (или чей-то резерв удаляли), связка снимается вместе с ним.
         // Резерв мог указывать на контроллер с ДРУГОГО экрана той же сцены.
-        for (ControllerInstance ci : controllersInScene(sceneContaining(screen))) {
+        for (ControllerInstance ci : controllersInScene(scene)) {
             if (controllerInstanceId.equals(ci.getBackupControllerId())) {
                 ci.setBackupControllerId(null);
             }
@@ -568,7 +606,208 @@ public class AppModel {
             ci.getCardBackupLinks().values().removeIf(link ->
                     link != null && controllerInstanceId.equals(link.getControllerId()));
         }
+        if (removed != null && removedCount > 0) {
+            shiftSceneChainPorts(scene, removedOffset + removedCount, -removedCount);
+        }
+        renumberControllers(scene);
         changed();
+    }
+
+    /** Сдвигает сквозные (сценовые) номера портов уже сохранённых цепочек
+     *  сигнала сцены — {@link #portOffsetOf} пересчитывается на лету по
+     *  текущему порядку/составу контроллеров сцены, поэтому сохранённый
+     *  {@link SignalChain#getPortNumber()} (абсолютный сквозной номер) без
+     *  сдвига начинает указывать не на тот контроллер/порт, как только
+     *  меняется offset контроллеров, стоящих ПОСЛЕ изменённого (баг-репорт:
+     *  "после удаления контроллера из середины списка остальные контроллеры
+     *  не переопределяют номера своих портов" — расключение, сделанное на
+     *  контроллерах ПОСЛЕ удалённого, съезжало на чужие порты). Цепочки
+     *  хранятся на уровне СЦЕНЫ (см. {@link Scene#getSignalChains()} и её
+     *  javadoc, Task #78), не по отдельным экранам.
+     *
+     *  @param fromOffsetExclusive старый offset, ПОСЛЕ которого сдвигаем (порты
+     *                             самого изменённого контроллера в диапазон не
+     *                             входят — см. вызовы ниже)
+     *  @param delta               на сколько сдвинуть (отрицательное при удалении,
+     *                             положительное при вставке контроллера не в конец) */
+    private void shiftSceneChainPorts(Scene scene, int fromOffsetExclusive, int delta) {
+        if (scene == null || delta == 0) {
+            return;
+        }
+        for (SignalChain chain : scene.getSignalChains()) {
+            Integer p = chain.getPortNumber();
+            if (p != null && p > fromOffsetExclusive) {
+                chain.setPortNumber(p + delta);
+            }
+            Integer bp = chain.getBackupPortNumber();
+            if (bp != null && bp > fromOffsetExclusive) {
+                chain.setBackupPortNumber(bp + delta);
+            }
+        }
+    }
+
+    private static final java.util.regex.Pattern AUTO_CONTROLLER_LABEL =
+            java.util.regex.Pattern.compile("^Контроллер \\S+$");
+
+    /** Пересчитывает подписи "Контроллер N" по текущему порядку контроллеров
+     *  сцены (см. {@link #controllersInScene(Scene)}) — вызывается после
+     *  добавления/удаления, иначе номера не сдвигаются при удалении из
+     *  середины списка, а следующее добавление берёт номер по размеру списка
+     *  и дублирует уже существующий (баг-репорт: два "Контроллер 7" после
+     *  удаления контроллера №4 и добавления нового). Контроллеры с меткой, не
+     *  соответствующей автогенерируемому паттерну (гипотетическое ручное
+     *  переименование), не трогаем — переприсваиваем номер только тем, чья
+     *  метка выглядит как "Контроллер <что угодно>". */
+    private void renumberControllers(Scene scene) {
+        if (scene == null) {
+            return;
+        }
+        int n = 1;
+        for (ControllerInstance ci : controllersInScene(scene)) {
+            if (AUTO_CONTROLLER_LABEL.matcher(ci.getLabel()).matches()) {
+                ci.setLabel("Контроллер " + n);
+            }
+            n++;
+        }
+    }
+
+    /** Переставляет экран {@code fromIndex} на позицию {@code dropIndex} в списке
+     *  экранов сцены (перетаскивание в «Экраны на сцене», см. {@code UiKit
+     *  .enableListReorder}) — {@code dropIndex} БЕЗ поправки на то, что сам
+     *  перемещаемый экран временно покинет список (та же договорённость, что у
+     *  {@code UiKit.enableListReorder}: поправка на "-1" применяется здесь, а не на
+     *  стороне UI). Порядок экранов сцены — часть сквозной нумерации портов сигнала
+     *  (см. {@link #controllersInScene(Scene)}: контроллеры обходятся экран за
+     *  экраном), поэтому переставленным экранам вслед пересчитываются номера портов
+     *  ВСЕХ сигнальных цепочек сцены (см. {@link #remapSignalChainPorts}) — иначе
+     *  расключение осталось бы физически тем же, но сдвинулось на чужие порты. */
+    public void reorderScreens(Scene scene, int fromIndex, int dropIndex) {
+        if (scene == null) {
+            return;
+        }
+        List<Screen> screens = scene.getScreens();
+        int insertAt = fromIndex < dropIndex ? dropIndex - 1 : dropIndex;
+        if (fromIndex < 0 || fromIndex >= screens.size() || insertAt == fromIndex) {
+            return;
+        }
+        List<ControllerInstance> oldOrder = controllersInScene(scene);
+        pushUndo("Изменение порядка экранов");
+        Screen moved = screens.remove(fromIndex);
+        screens.add(Math.max(0, Math.min(insertAt, screens.size())), moved);
+        remapSignalChainPorts(scene, oldOrder);
+        changed();
+    }
+
+    /** Переставляет контроллер {@code fromIndex} (индекс в СКВОЗНОМ, по всей сцене,
+     *  списке {@link #controllersInScene(Scene)} — том же, что показывает "Контроллеры
+     *  сцены" в SignalStagePanel одним общим списком поверх экранов) на позицию
+     *  {@code dropIndex} — та же договорённость по {@code dropIndex}, что у {@link
+     *  #reorderScreens}. Контроллер физически хранится под КАКИМ-ТО одним экраном
+     *  ({@link Screen#getControllers()}), но это деталь хранения, а не смысловое
+     *  свойство (контроллер — общий пул сцены, см. {@link #controllersInScene}) —
+     *  поэтому перестановка при необходимости молча переносит контроллер и МЕЖДУ
+     *  экранами (снимается с экрана, где физически лежал, и добавляется тому, в
+     *  чьих контроллерах окажется по соседству на новой позиции), а не только внутри
+     *  списка одного экрана. Пересчитывает сквозную нумерацию портов сигнала (см.
+     *  {@link #remapSignalChainPorts}) и подписи "Контроллер N" ({@link
+     *  #renumberControllers}), т.к. и то, и другое следует за этим же порядком. */
+    public void reorderControllerInScene(Scene scene, int fromIndex, int dropIndex) {
+        if (scene == null) {
+            return;
+        }
+        List<ControllerInstance> oldOrder = controllersInScene(scene);
+        int insertAt = fromIndex < dropIndex ? dropIndex - 1 : dropIndex;
+        if (fromIndex < 0 || fromIndex >= oldOrder.size() || insertAt == fromIndex) {
+            return;
+        }
+        ControllerInstance moved = oldOrder.get(fromIndex);
+        Screen ownerScreen = screenOwningController(scene, moved);
+        if (ownerScreen == null) {
+            return;
+        }
+        pushUndo("Изменение порядка контроллеров");
+        ownerScreen.getControllers().remove(moved);
+        List<ControllerInstance> withoutMoved = controllersInScene(scene);
+        insertAt = Math.max(0, Math.min(insertAt, withoutMoved.size()));
+        Screen targetScreen;
+        int localIndex;
+        if (withoutMoved.isEmpty()) {
+            targetScreen = ownerScreen;
+            localIndex = 0;
+        } else if (insertAt >= withoutMoved.size()) {
+            Screen lastOwner = screenOwningController(scene, withoutMoved.get(withoutMoved.size() - 1));
+            targetScreen = lastOwner != null ? lastOwner : ownerScreen;
+            localIndex = targetScreen.getControllers().size();
+        } else {
+            ControllerInstance atPos = withoutMoved.get(insertAt);
+            Screen atPosOwner = screenOwningController(scene, atPos);
+            targetScreen = atPosOwner != null ? atPosOwner : ownerScreen;
+            localIndex = targetScreen.getControllers().indexOf(atPos);
+        }
+        targetScreen.getControllers().add(localIndex, moved);
+        remapSignalChainPorts(scene, oldOrder);
+        renumberControllers(scene);
+        changed();
+    }
+
+    private Screen screenOwningController(Scene scene, ControllerInstance ci) {
+        for (Screen s : scene.getScreens()) {
+            if (s.getControllers().contains(ci)) {
+                return s;
+            }
+        }
+        return null;
+    }
+
+    /** Пересчитывает {@link SignalChain#getPortNumber()}/{@link
+     *  SignalChain#getBackupPortNumber()} ВСЕЙ сцены после того, как порядок
+     *  контроллеров (сквозная нумерация портов, см. {@link #controllersInScene})
+     *  изменился — переставили экраны ({@link #reorderScreens}) или сами контроллеры
+     *  ({@link #reorderControllerInScene}). Каждый СТАРЫЙ сквозной номер порта
+     *  резолвится в (контроллер, локальный порт) по {@code oldOrder} (порядок ДО
+     *  перестановки), затем переводится в НОВЫЙ сквозной номер по ТЕКУЩЕМУ (уже
+     *  переставленному) порядку контроллеров — так расключение остаётся физически
+     *  тем же (тот же контроллер, тот же локальный порт), меняются только номера. */
+    private void remapSignalChainPorts(Scene scene, List<ControllerInstance> oldOrder) {
+        java.util.Map<ControllerInstance, Integer> oldOffsets = controllerOffsets(oldOrder);
+        java.util.Map<ControllerInstance, Integer> newOffsets = controllerOffsets(controllersInScene(scene));
+        for (SignalChain c : scene.getSignalChains()) {
+            Integer p = c.getPortNumber();
+            if (p != null) {
+                c.setPortNumber(remapSceneWidePort(p, oldOrder, oldOffsets, newOffsets));
+            }
+            Integer bp = c.getBackupPortNumber();
+            if (bp != null) {
+                c.setBackupPortNumber(remapSceneWidePort(bp, oldOrder, oldOffsets, newOffsets));
+            }
+        }
+    }
+
+    private java.util.Map<ControllerInstance, Integer> controllerOffsets(List<ControllerInstance> order) {
+        java.util.Map<ControllerInstance, Integer> offsets = new java.util.LinkedHashMap<>();
+        int offset = 0;
+        for (ControllerInstance ci : order) {
+            offsets.put(ci, offset);
+            ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
+            offset += t != null ? t.effectivePortCount() : 0;
+        }
+        return offsets;
+    }
+
+    /** {@code oldPort} не найден ни у одного контроллера {@code oldOrder} (ручной
+     *  порт без контроллеров сцены) — возвращается БЕЗ изменений. */
+    private Integer remapSceneWidePort(int oldPort, List<ControllerInstance> oldOrder,
+            java.util.Map<ControllerInstance, Integer> oldOffsets, java.util.Map<ControllerInstance, Integer> newOffsets) {
+        for (ControllerInstance ci : oldOrder) {
+            int offset = oldOffsets.get(ci);
+            ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
+            int count = t != null ? t.effectivePortCount() : 0;
+            if (oldPort > offset && oldPort <= offset + count) {
+                Integer newOffset = newOffsets.get(ci);
+                return newOffset != null ? newOffset + (oldPort - offset) : oldPort;
+            }
+        }
+        return oldPort;
     }
 
     /** Контроллер, которому принадлежит порт {@code port} (порты нумеруются подряд
@@ -684,6 +923,22 @@ public class AppModel {
             }
         }
         return null;
+    }
+
+    /** Метка (обычно "Контроллер N") реального экземпляра контроллера сцены по
+     *  {@code controllerInstanceId} — нужна узлам общей схемы (см. {@link
+     *  SchemaNode#getControllerInstanceRefId()}), чтобы подписать блок тем же
+     *  обозначением, что использует легенда портов ({@link
+     *  #signalPortLegendLines(Scene)}) — иначе визуально сопоставить блок на холсте
+     *  со строкой легенды нечем: подпись узла — отдельное, свободно редактируемое
+     *  поле ("MCTRL4k" и т.п.), не совпадающее с меткой контроллера напрямую. {@code
+     *  null} — экземпляр не найден (удалён) или {@code controllerInstanceId == null}. */
+    public String controllerInstanceLabel(Scene scene, String controllerInstanceId) {
+        if (controllerInstanceId == null) {
+            return null;
+        }
+        ControllerInstance ci = controllerById(scene, controllerInstanceId);
+        return ci != null ? ci.getLabel() : null;
     }
 
     /** Смещение первого порта {@code target} в сквозной сценовой нумерации (см.
@@ -4829,6 +5084,117 @@ public class AppModel {
             }
         }
         return result;
+    }
+
+    /** Одна строка табличной авто-легенды сигнальных портов (см. {@link
+     *  #signalPortLegendRows(Scene)}) — по экрану, main- и backup-обозначения уже
+     *  отформатированы ("—" вместо пустого), готовы для колонок таблицы как есть. */
+    public record SignalPortLegendRow(String screenName, String main, String backup) {
+    }
+
+    /** Строки табличной авто-легенды сигнальных портов (см. {@link
+     *  SchemaNode#isAutoPortLegend()}) — по каждому экрану сцены с хотя бы одной
+     *  сигнальной цепочкой: main-контроллер+порты и backup-контроллер+порты. Считает
+     *  теми же сквозными номерами портов, что и реальное расключение ({@link
+     *  #controllerForPortInScene}, {@link #portOffsetOf(Scene, ControllerInstance)}),
+     *  поэтому не расходится с фактическими цепочками сцены, даже если сама линия
+     *  backup на холсте общей схемы ещё не проведена (баг-репорт: у экрана backup-порт
+     *  прописан в цепочке, но связь Контроллер→Экран для него забыли нарисовать — эта
+     *  легенда остаётся источником правды независимо от того, что дорисовано на холсте). */
+    public List<SignalPortLegendRow> signalPortLegendRows(Scene scene) {
+        List<SignalPortLegendRow> rows = new ArrayList<>();
+        if (scene == null) {
+            return rows;
+        }
+        for (Screen scr : scene.getScreens()) {
+            List<SignalChain> touching = signalChainsTouchingScreen(scr);
+            if (touching.isEmpty()) {
+                continue;
+            }
+            String main = formatSignalPortGroups(scene, touching, false);
+            String backup = formatSignalPortGroups(scene, touching, true);
+            rows.add(new SignalPortLegendRow(scr.getName(), main.isEmpty() ? "—" : main,
+                    backup.isEmpty() ? "—" : backup));
+        }
+        return rows;
+    }
+
+    /** Группирует порты (основные или резервные, по {@code backup}) цепочек {@code
+     *  chains}, касающихся одного экрана, по владеющему контроллеру — несколько
+     *  экранов нередко делят один контроллер (например, соседние маленькие экраны на
+     *  свободных портах контроллера более крупного соседа), поэтому группировка именно
+     *  по контроллеру, а не предположение "один экран — один контроллер". */
+    private String formatSignalPortGroups(Scene scene, List<SignalChain> chains, boolean backup) {
+        java.util.Map<ControllerInstance, List<Integer>> byController = new java.util.LinkedHashMap<>();
+        for (SignalChain c : chains) {
+            Integer port = backup ? c.getBackupPortNumber() : c.getPortNumber();
+            if (port == null) {
+                continue;
+            }
+            ControllerInstance ci = controllerForPortInScene(scene, port);
+            if (ci == null) {
+                continue;
+            }
+            byController.computeIfAbsent(ci, k -> new ArrayList<>()).add(port - portOffsetOf(scene, ci));
+        }
+        List<String> parts = new ArrayList<>();
+        for (var e : byController.entrySet()) {
+            parts.add(e.getKey().getLabel() + " P" + formatPortRanges(e.getValue()));
+        }
+        return String.join(", ", parts);
+    }
+
+    /** "1,3-5,9" из {1,3,4,5,9} — компактная запись номеров локальных портов. */
+    private static String formatPortRanges(List<Integer> localPorts) {
+        List<Integer> sorted = new ArrayList<>(new java.util.TreeSet<>(localPorts));
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        while (i < sorted.size()) {
+            int start = sorted.get(i);
+            int end = start;
+            while (i + 1 < sorted.size() && sorted.get(i + 1) == end + 1) {
+                end = sorted.get(++i);
+            }
+            if (sb.length() > 0) {
+                sb.append(',');
+            }
+            sb.append(start);
+            if (end != start) {
+                sb.append('-').append(end);
+            }
+            i++;
+        }
+        return sb.toString();
+    }
+
+    /** Добавляет авто-блок легенды сигнальных портов на холст общей схемы (см. {@link
+     *  SchemaNode#isAutoPortLegend()}) — заменяет собой построчный текст про
+     *  контроллеры, который раньше рисовался под каждым ОТДЕЛЬНЫМ блоком экрана в
+     *  режиме «схема расключения» (см. Preferences «Экраны как схема расключения»,
+     *  показывался только у экранов, владеющих контроллером напрямую — баг-репорт:
+     *  "для некоторых экранов текст есть, для некоторых нет"). Один общий блок на
+     *  всю сцену вместо этого, перетаскиваемый и масштабируемый как любой узел схемы. */
+    public SchemaNode addSignalPortLegendNode(double x, double y) {
+        SchemaNode node = addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.CUSTOM, "Легенда портов", x, y, null);
+        node.setAutoPortLegend(true);
+        node.setWidth(340);
+        node.setHeight(200);
+        changed();
+        return node;
+    }
+
+    /** Вручную привязывает узел общей схемы (обычно type == CONTROLLER) к реальному
+     *  экземпляру контроллера сцены — {@code controllerInstanceId == null} снимает
+     *  связь. Тот же эффект, что даёт автозаполнение ({@link #autoPopulateSchema} →
+     *  {@link #addSchemaNodeForController}), но для блока, заведённого руками: после
+     *  привязки его подпись на холсте получает то же обозначение "(Контроллер N)",
+     *  что видно в легенде портов ({@link #signalPortLegendRows}, см.
+     *  {@code SchemaCanvasPanel.withControllerLegendTag}) — не заставлять пользоваться
+     *  автозаполнением только ради этой подписи. */
+    public void linkSchemaNodeToController(SchemaNode node, String controllerInstanceId) {
+        pushUndo("Связь узла схемы с контроллером");
+        node.setControllerInstanceRefId(controllerInstanceId);
+        changed();
     }
 
     // ---- undo ----

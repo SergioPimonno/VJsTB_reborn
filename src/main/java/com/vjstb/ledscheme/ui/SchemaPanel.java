@@ -6,8 +6,10 @@ import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.SchemaNodeType;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.ui.stage.CurrentSchemeExporter;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
+import java.util.List;
 import java.util.function.Consumer;
 import javax.swing.BorderFactory;
 import javax.swing.ButtonGroup;
@@ -37,6 +39,7 @@ public class SchemaPanel extends JPanel {
     private final AppModel model;
     private final SchemaMode mode;
     private final SchemaCanvasPanel canvas;
+    private final com.vjstb.ledscheme.settings.SettingsManager settings;
 
     private final JComboBox<SchemaNodeType> typeCombo = new JComboBox<>(SchemaNodeType.values());
     /** Для не-SCREEN типов: сначала пресеты библиотеки этой категории, затем OTHER_SENTINEL. */
@@ -51,6 +54,7 @@ public class SchemaPanel extends JPanel {
     public SchemaPanel(AppModel model, SchemaMode mode, com.vjstb.ledscheme.settings.SettingsManager settings) {
         this.model = model;
         this.mode = mode;
+        this.settings = settings;
         this.canvas = new SchemaCanvasPanel(model, mode, settings);
         canvas.setOnChanged(this::refresh);
 
@@ -156,6 +160,22 @@ public class SchemaPanel extends JPanel {
         addBody.add(addBtn);
         body.add(UiKit.dynamicSection("Добавить узел", addBody));
         body.add(UiKit.vgap());
+
+        if (mode == SchemaMode.SIGNAL) {
+            JButton legendBtn = new JButton("+ Легенда портов");
+            legendBtn.setToolTipText("Автоблок: по каждому экрану — основной и резервный контроллер/порты."
+                    + " Содержимое пересчитывается само, перетаскивается и масштабируется как любой узел.");
+            legendBtn.addActionListener(e -> addPortLegendNode());
+            body.add(legendBtn);
+            body.add(UiKit.vgap());
+
+            JButton exportLegendBtn = new JButton("Экспорт легенды портов…");
+            exportLegendBtn.setToolTipText("Сохранить ту же таблицу (экран / main / backup) отдельным PNG-файлом"
+                    + " — для передачи заказчику/монтажникам без открытия программы");
+            exportLegendBtn.addActionListener(e -> exportPortLegend());
+            body.add(exportLegendBtn);
+            body.add(UiKit.vgap());
+        }
 
         ButtonGroup g = new ButtonGroup();
         g.add(moveBtn);
@@ -269,6 +289,40 @@ public class SchemaPanel extends JPanel {
         }
         model.addSchemaNode(mode, type, label, x, y, null);
         labelField.setText("");
+    }
+
+    private void addPortLegendNode() {
+        Scene scene = model.getCurrentScene();
+        if (scene == null) {
+            JOptionPane.showMessageDialog(this, "Сначала выберите сцену", "Нет сцены", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        int count = model.schemaNodesForCurrentScene(mode).size();
+        model.addSignalPortLegendNode(40 + (count % 6) * 170, 40 + (count / 6) * 100);
+    }
+
+    /** Сохраняет ТУ ЖЕ таблицу, что рисует авто-блок «Легенда портов» на холсте (см.
+     *  {@link AppModel#signalPortLegendRows(Scene)}), отдельным PNG-файлом — не
+     *  привязано к тому, добавлен ли сам блок на схему. По аналогии с «Экспорт
+     *  схемы…» ({@link CurrentSchemeExporter#export}): та же стартовая папка и
+     *  настройка качества (DPI), тот же диалог «готово/открыть папку», только PNG
+     *  вместо JPEG ({@link CurrentSchemeExporter#exportPng}) — без потерь на резких
+     *  границах текста/линий таблицы, которых на фотографичной схеме расключения не
+     *  так заметно, а тут были бы. */
+    private void exportPortLegend() {
+        Scene scene = model.getCurrentScene();
+        if (scene == null) {
+            JOptionPane.showMessageDialog(this, "Сначала выберите сцену", "Нет сцены", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        List<AppModel.SignalPortLegendRow> rows = model.signalPortLegendRows(scene);
+        if (rows.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "На сцене нет расключённых экранов — нечего экспортировать",
+                    "Легенда пуста", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        CurrentSchemeExporter.exportPng(this, model, settings, scene.getName() + " — легенда портов",
+                dpiScale -> SchemeRenderer.renderPortLegendImage(scene.getName(), rows, dpiScale));
     }
 
     /** Сохраняет введённую подпись как новый пресет библиотеки этой категории

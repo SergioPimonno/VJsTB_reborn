@@ -1076,6 +1076,200 @@ class AppModelTest {
     }
 
     @Test
+    void removingMiddleControllerRenumbersLabelsWithoutDuplicatesAndKeepsLaterChainsOnTheSameController(
+            @TempDir Path dir) {
+        // Баг-репорт: "если удалить контроллер в середине списка, то остальные
+        // контроллеры не переопределяют свои номера и номера своих портов; если
+        // после этого добавить новые контроллеры, то нумерация ломается" —
+        // скриншот с двумя "Контроллер 7" после удаления среднего и добавления
+        // нового. Две отдельные проблемы: (1) метка "Контроллер N" выдавалась по
+        // РАЗМЕРУ списка на момент добавления и никогда не пересчитывалась при
+        // удалении — после удаления среднего размер списка меньше уже выданных
+        // номеров, следующее добавление дублирует один из них; (2) SignalChain
+        // хранит СКВОЗНОЙ (по всей сцене) номер порта, который на лету
+        // раскладывается в контроллер/локальный порт через offset —
+        // portOffsetOf пересчитывается по ТЕКУЩЕМУ составу контроллеров, так что
+        // без сдвига уже сохранённых portNumber цепочки контроллеров ПОСЛЕ
+        // удалённого начинали резолвиться в чужой/несуществующий порт.
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+        model.selectScreen(screen);
+
+        ControllerType ct = new ControllerType();
+        ct.setName("VX1000");
+        ct.setPortCount(4);
+        model.addControllerType(ct);
+
+        ControllerInstance c1 = model.addControllerToScreen(screen, ct.getId());
+        ControllerInstance c2 = model.addControllerToScreen(screen, ct.getId());
+        ControllerInstance c3 = model.addControllerToScreen(screen, ct.getId());
+        assertEquals("Контроллер 1", c1.getLabel());
+        assertEquals("Контроллер 2", c2.getLabel());
+        assertEquals("Контроллер 3", c3.getLabel());
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).limit(1).toList();
+        model.addSignalChain(9, false, ids); // локальный порт 1 третьего контроллера (offset 8)
+        assertEquals(c3, model.controllerForPort(screen, 9));
+
+        model.removeControllerFromScreen(screen, c2.getId()); // удаляем средний
+
+        // (1) Метки сдвинулись вниз без дублей — третий контроллер стал вторым.
+        assertEquals("Контроллер 1", c1.getLabel());
+        assertEquals("Контроллер 2", c3.getLabel());
+
+        // (2) Цепочка третьего контроллера сдвинулась вместе с его новым offset'ом
+        // (был 8, стал 4) — 9 → 5, и по-прежнему резолвится в ТОТ ЖЕ контроллер,
+        // а не теряется/не переезжает на чужой.
+        assertNull(model.signalChainByPort(screen, 9, false), "старый сквозной номер порта больше не должен существовать");
+        SignalChain chain = model.signalChainByPort(screen, 5, false);
+        assertNotNull(chain, "цепочка третьего контроллера должна была сдвинуться на новый сквозной номер (9→5)");
+        assertEquals(c3, model.controllerForPort(screen, 5));
+
+        // Последующее добавление не должно повторно дублировать номер.
+        ControllerInstance c4 = model.addControllerToScreen(screen, ct.getId());
+        assertEquals("Контроллер 3", c4.getLabel());
+    }
+
+    @Test
+    void addingControllerToEarlierScreenOfMultiScreenSceneShiftsLaterScreensStoredChainPorts(@TempDir Path dir) {
+        // Контроллеры общие для сцены (Task #58, см. controllersAreSharedAcrossAllScreensOfSameScene)
+        // и нумеруются сквозным по сцене offset'ом в порядке scene.getScreens() —
+        // контроллер, добавленный на экран A, встаёт ПЕРЕД контроллерами экрана B,
+        // если B идёт в сцене после A, даже когда B уже расключен. Без сдвига уже
+        // сохранённых portNumber цепочка экрана B "съезжала" бы на чужой контроллер.
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen a = model.addScreen("A", type.getId(), 2, 2, 0, 0);
+        Screen b = model.addScreen("B", type.getId(), 2, 2, 1000, 0);
+
+        ControllerType ct = new ControllerType();
+        ct.setName("VX1000");
+        ct.setPortCount(4);
+        model.addControllerType(ct);
+
+        model.addControllerToScreen(a, ct.getId()); // контроллер 1: сквозные порты 1-4
+        ControllerInstance cb = model.addControllerToScreen(b, ct.getId()); // контроллер 2: 5-8
+
+        model.selectScreen(b);
+        List<String> ids = b.getCabinets().stream().map(CabinetInstance::getId).limit(1).toList();
+        model.addSignalChain(5, false, ids); // локальный порт 1 контроллера b
+        assertEquals(cb, model.controllerForPort(b, 5));
+
+        // Второй контроллер экрана A встаёт МЕЖДУ первым контроллером A и
+        // контроллером b — offset контроллера b сдвигается с 4 на 8.
+        model.addControllerToScreen(a, ct.getId());
+
+        assertNull(model.signalChainByPort(b, 5, false), "старый сквозной номер порта контроллера b больше не должен существовать");
+        SignalChain chain = model.signalChainByPort(b, 9, false);
+        assertNotNull(chain, "цепочка контроллера b должна была сдвинуться вместе с его новым offset'ом (5→9)");
+        assertEquals(cb, model.controllerForPort(b, 9));
+    }
+
+    @Test
+    void reorderingScreensRemapsSignalChainPortsToFollowNewControllerOrder(@TempDir Path dir) {
+        // Порядок экранов сцены — часть сквозной нумерации портов (см. controllersInScene:
+        // контроллеры обходятся экран за экраном), поэтому перетаскивание экрана в списке
+        // "Экраны на сцене" (UiKit.enableListReorder, SetupStagePanel) должно не только
+        // менять порядок, но и пересчитывать уже сохранённые SignalChain.portNumber —
+        // иначе расключение осталось бы физически тем же кабинетам, но "съехало" бы на
+        // чужой контроллер после смены порядка.
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen a = model.addScreen("A", type.getId(), 2, 2, 0, 0);
+        Screen b = model.addScreen("B", type.getId(), 2, 2, 1000, 0);
+
+        ControllerType ct = new ControllerType();
+        ct.setName("VX1000");
+        ct.setPortCount(4);
+        model.addControllerType(ct);
+
+        model.addControllerToScreen(a, ct.getId()); // контроллер A: сквозные порты 1-4
+        ControllerInstance cb = model.addControllerToScreen(b, ct.getId()); // контроллер B: 5-8
+
+        model.selectScreen(b);
+        List<String> idsB = b.getCabinets().stream().map(CabinetInstance::getId).limit(1).toList();
+        model.addSignalChain(5, false, idsB); // локальный порт 1 контроллера b
+
+        // Перетаскиваем B перед A (dropIndex=0, договорённость — как у JList.DropLocation).
+        model.reorderScreens(scene, 1, 0);
+
+        assertEquals(List.of(b, a), scene.getScreens(), "экран B должен встать первым");
+        assertNull(model.signalChainByPort(b, 5, false), "старый сквозной номер порта больше не должен существовать");
+        SignalChain chain = model.signalChainByPort(b, 1, false);
+        assertNotNull(chain, "цепочка контроллера b должна была переехать на его новый offset (5→1)");
+        assertEquals(cb, model.controllerForPort(b, 1));
+    }
+
+    @Test
+    void reorderingControllerAcrossScreensMovesOwnershipAndRemapsPorts(@TempDir Path dir) {
+        // Список "Контроллеры сцены" в SignalStagePanel показывает контроллеры ВСЕХ
+        // экранов одним плоским списком (Task #58) — перетаскивание строки там должно
+        // работать по этому плоскому порядку, даже если это физически переносит
+        // ControllerInstance с одного экрана на другой (владение экраном — деталь
+        // хранения, см. AppModel.reorderControllerInScene, не смысловое свойство).
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen a = model.addScreen("A", type.getId(), 2, 2, 0, 0);
+        Screen b = model.addScreen("B", type.getId(), 2, 2, 1000, 0);
+
+        ControllerType ct = new ControllerType();
+        ct.setName("VX1000");
+        ct.setPortCount(4);
+        model.addControllerType(ct);
+
+        ControllerInstance ca = model.addControllerToScreen(a, ct.getId()); // сквозные порты 1-4
+        ControllerInstance cb = model.addControllerToScreen(b, ct.getId()); // сквозные порты 5-8
+
+        model.selectScreen(b);
+        List<String> idsB = b.getCabinets().stream().map(CabinetInstance::getId).limit(1).toList();
+        model.addSignalChain(5, false, idsB); // локальный порт 1 контроллера b
+
+        // cb сейчас на индексе 1 плоского списка controllersInScene — тащим его на 0.
+        model.reorderControllerInScene(scene, 1, 0);
+
+        assertEquals(List.of(cb, ca), model.controllersInScene(scene), "cb должен встать первым в сквозном списке");
+        assertTrue(b.getControllers().isEmpty(), "cb должен физически переехать с экрана B на экран A");
+        assertEquals(List.of(cb, ca), a.getControllers(), "cb должен встать первым и в списке экрана A");
+        assertNull(model.signalChainByPort(b, 5, false), "старый сквозной номер порта больше не должен существовать");
+        SignalChain chain = model.signalChainByPort(b, 1, false);
+        assertNotNull(chain, "цепочка контроллера cb должна была переехать на его новый offset (5→1)");
+        assertEquals(cb, model.controllerForPort(b, 1));
+        assertEquals("Контроллер 1", cb.getLabel(), "автоподпись должна переномероваться под новую позицию");
+        assertEquals("Контроллер 2", ca.getLabel());
+    }
+
+    @Test
+    void linkSchemaNodeToControllerSetsAndClearsControllerInstanceRefId(@TempDir Path dir) {
+        // Ручная альтернатива автозаполнению (AppModel.autoPopulateSchema) для тех,
+        // кто им не пользуется — та же связь узел-схемы↔реальный контроллер, что даёт
+        // addSchemaNodeForController, только проставляется явно через UI (см.
+        // SchemaCanvasPanel "Связать с…").
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        SchemaNode node = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.CONTROLLER, "MCTRL4k", 0, 0, null);
+        assertNull(node.getControllerInstanceRefId());
+
+        model.linkSchemaNodeToController(node, "controller-instance-id-1");
+        assertEquals("controller-instance-id-1", node.getControllerInstanceRefId());
+
+        model.linkSchemaNodeToController(node, null);
+        assertNull(node.getControllerInstanceRefId());
+    }
+
+    @Test
     void controllerLevelBackupReservesAllItsPorts(@TempDir Path dir) {
         AppModel model = freshModel(dir);
         CabinetType type = model.addCabinetType(sampleType());

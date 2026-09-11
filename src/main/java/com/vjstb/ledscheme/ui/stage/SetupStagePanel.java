@@ -342,6 +342,12 @@ public class SetupStagePanel extends JPanel {
             Screen s = screenList.getSelectedValue();
             if (s != null && s != model.getCurrentScreen()) model.selectScreen(s);
         });
+        UiKit.enableListReorder(screenList, (from, drop) -> {
+            Scene scene = model.getCurrentScene();
+            if (scene != null) {
+                model.reorderScreens(scene, from, drop);
+            }
+        });
         screenScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
         body.add(screenScroll);
 

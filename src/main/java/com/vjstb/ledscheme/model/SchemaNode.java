@@ -43,6 +43,14 @@ public class SchemaNode {
      *  без собственного запаса, в отличие от вводного щита). null — берётся значение
      *  по умолчанию. */
     private Double loadDeratingPercent;
+    /** true — узел не оборудование, а АВТО-блок легенды сигнальных портов (см.
+     *  AppModel#signalPortLegendLines): вместо обычного содержимого рисуется таблица
+     *  "экран — основной контроллер/порты / резервный", пересчитываемая на каждой
+     *  отрисовке по факту текущих сигнальных цепочек сцены, а не хранимая в узле.
+     *  Только для type == CUSTOM — отдельный SchemaNodeType под это заводить не стали,
+     *  это чисто клиентская фишка холста общей схемы, незачем тянуть правку в
+     *  ledscheme-model (SchemaNode, в отличие от SchemaNodeType, туда не вынесен). */
+    private boolean autoPortLegend = false;
 
     public SchemaNode() {
     }
@@ -160,6 +168,14 @@ public class SchemaNode {
         this.loadDeratingPercent = loadDeratingPercent;
     }
 
+    public boolean isAutoPortLegend() {
+        return autoPortLegend;
+    }
+
+    public void setAutoPortLegend(boolean autoPortLegend) {
+        this.autoPortLegend = autoPortLegend;
+    }
+
     public SchemaNode copy() {
         SchemaNode n = new SchemaNode();
         n.id = id;
@@ -181,6 +197,7 @@ public class SchemaNode {
             n.powerConnectors.add(p.copy());
         }
         n.loadDeratingPercent = loadDeratingPercent;
+        n.autoPortLegend = autoPortLegend;
         return n;
     }
 }
