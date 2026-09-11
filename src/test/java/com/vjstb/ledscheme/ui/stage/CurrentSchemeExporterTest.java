@@ -50,4 +50,33 @@ class CurrentSchemeExporterTest {
         assertEquals(jpg, CurrentSchemeExporter.withJpegExtension(jpg));
         assertEquals(jpeg, CurrentSchemeExporter.withJpegExtension(jpeg));
     }
+
+    // Экспорт легенды портов (SchemaPanel "Экспорт легенды портов…") переиспользует
+    // ТЕ ЖЕ вспомогательные методы с расширением "png" вместо "jpg" (см.
+    // CurrentSchemeExporter#exportPng) — нужны те же гарантии по папке/расширению.
+    @Test
+    void suggestedFile_withExplicitExtension_sitsInProjectExportRootWithSanitizedName(@TempDir Path dir) {
+        SettingsManager settings = freshSettings(dir);
+        File customRoot = new File(dir.toFile(), "MyExports");
+        settings.setExportRootFolder(customRoot.getAbsolutePath());
+        Project project = new Project("Проект: тест");
+
+        File suggested = CurrentSchemeExporter.suggestedFile(project, settings, "Сцена — легенда портов", "png");
+
+        assertEquals(new File(new File(customRoot, "Проект_ тест"), "Сцена — легенда портов.png"), suggested);
+    }
+
+    @Test
+    void withExtension_appendsGivenExtensionWhenMissing(@TempDir Path dir) {
+        File chosen = new File(dir.toFile(), "легенда");
+
+        assertEquals(new File(dir.toFile(), "легенда.png"), CurrentSchemeExporter.withExtension(chosen, "png"));
+    }
+
+    @Test
+    void withExtension_keepsExistingMatchingExtension(@TempDir Path dir) {
+        File png = new File(dir.toFile(), "легенда.png");
+
+        assertEquals(png, CurrentSchemeExporter.withExtension(png, "png"));
+    }
 }

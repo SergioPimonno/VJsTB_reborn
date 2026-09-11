@@ -1843,13 +1843,49 @@ public class SchemaCanvasPanel extends JPanel {
             }
             menu.add(typeMenu);
         }
+        // Ручная привязка блока-контроллера к реальному экземпляру контроллера сцены
+        // (см. AppModel.linkSchemaNodeToController) — тот же эффект, что и у блока,
+        // заведённого автозаполнением (AppModel.autoPopulateSchema): подпись узла
+        // получает "(Контроллер N)" в скобках (см. withControllerLegendTag), а
+        // сопоставить блок со строкой легенды портов становится можно. Нужна тем, кто
+        // автозаполнением не пользуется и заводит блоки контроллеров вручную.
+        if (node.getType() == SchemaNodeType.CONTROLLER) {
+            Scene scene = model.getCurrentScene();
+            List<com.vjstb.ledscheme.model.ControllerInstance> controllers =
+                    scene != null ? model.controllersInScene(scene) : List.of();
+            javax.swing.JMenu linkMenu = new javax.swing.JMenu("Связать с…");
+            linkMenu.setEnabled(!controllers.isEmpty());
+            for (com.vjstb.ledscheme.model.ControllerInstance ci : controllers) {
+                boolean current = ci.getId().equals(node.getControllerInstanceRefId());
+                javax.swing.JMenuItem item = new javax.swing.JMenuItem((current ? "✓ " : "") + ci.getLabel());
+                item.addActionListener(ev -> {
+                    model.linkSchemaNodeToController(node, ci.getId());
+                    onChanged.run();
+                    repaint();
+                });
+                linkMenu.add(item);
+            }
+            if (node.getControllerInstanceRefId() != null) {
+                if (!controllers.isEmpty()) {
+                    linkMenu.addSeparator();
+                }
+                javax.swing.JMenuItem unlink = new javax.swing.JMenuItem("Отвязать");
+                unlink.addActionListener(ev -> {
+                    model.linkSchemaNodeToController(node, null);
+                    onChanged.run();
+                    repaint();
+                });
+                linkMenu.add(unlink);
+            }
+            menu.add(linkMenu);
+        }
         // Карты (сигнальные гнёзда) доступны любому не-экранному узлу СИГНАЛЬНОЙ
         // схемы — симметрично тому, как "Разъёмы питания…" ниже доступны любому
         // не-экранному узлу схемы ПИТАНИЯ. Раньше это было ограничено только типами
         // "Медиасервер"/"Контроллер", из-за чего для остальных типов (конвертер,
         // прочее оборудование) не было способа добавить/отредактировать карты
         // вручную — хотя они могли УЖЕ иметь карты (например, из пресета).
-        if (node.getMode() == SchemaMode.SIGNAL && node.getType() != SchemaNodeType.SCREEN) {
+        if (node.getMode() == SchemaMode.SIGNAL && node.getType() != SchemaNodeType.SCREEN && !node.isAutoPortLegend()) {
             javax.swing.JMenuItem cards = new javax.swing.JMenuItem("Комплектация карт…");
             cards.addActionListener(ev -> {
                 CardsConfigDialog dlg = new CardsConfigDialog(SwingUtilities.getWindowAncestor(this), model, node);
@@ -2280,6 +2316,7 @@ public class SchemaCanvasPanel extends JPanel {
             if (title == null || title.isEmpty()) {
                 title = model.categoryLabel(n.getType());
             }
+            title = withControllerLegendTag(n, title);
             g2.setColor(Color.BLACK);
             g2.setFont(titleFont);
             // В вертикальной ориентации разъёмов (Task #2/v1.6) гнёзда занимают ВСЮ
@@ -2306,6 +2343,8 @@ public class SchemaCanvasPanel extends JPanel {
                 } else {
                     drawClipped(g2, screenMeta(n), (int) n.getX() + 8, (int) n.getY() + 38, nw - 16);
                 }
+            } else if (n.isAutoPortLegend()) {
+                drawPortLegendContent(g2, n, nw, nh);
             } else if (!portsOf(n).isEmpty()) {
                 drawConnectorRows(g2, n, portsOf(n), (int) n.getX(), (int) n.getY(), nw, nh);
             } else {
@@ -2340,6 +2379,26 @@ public class SchemaCanvasPanel extends JPanel {
     private String resolveScreenLabel(SchemaNode n) {
         Screen scr = screenById(n.getScreenRefId());
         return scr != null ? scr.getName() : "(экран удалён)";
+    }
+
+    /** Дописывает к подписи узла-контроллера, автозаполненного из реального
+     *  экземпляра (см. {@link SchemaNode#getControllerInstanceRefId()}), в скобках то
+     *  же обозначение ("Контроллер N"), которым его называет легенда портов (см. {@link
+     *  AppModel#signalPortLegendRows(Scene)}) — подпись узла ("MCTRL4k" и т.п.) редактируется
+     *  свободно и от метки контроллера не зависит, без этого сопоставить блок на холсте
+     *  со строкой легенды было нечем. Ничего не делает для узлов без связи с реальным
+     *  контроллером или если метка уже совпадает с подписью (не дублировать "N (N)"). */
+    private String withControllerLegendTag(SchemaNode n, String title) {
+        if (n.getType() != SchemaNodeType.CONTROLLER || n.getControllerInstanceRefId() == null) {
+            return title;
+        }
+        Scene scene = model.getCurrentScene();
+        String legendLabel = scene != null
+                ? model.controllerInstanceLabel(scene, n.getControllerInstanceRefId()) : null;
+        if (legendLabel == null || legendLabel.isEmpty() || legendLabel.equals(title)) {
+            return title;
+        }
+        return title + " (" + legendLabel + ")";
     }
 
     private String screenMeta(SchemaNode n) {
@@ -2425,15 +2484,8 @@ public class SchemaCanvasPanel extends JPanel {
         int top = (int) n.getY() + 34;
         int left = (int) n.getX() + pad;
         int availW = nw - pad * 2;
-        // Полоса контроллеров (см. SchemeRenderer.drawControllerSummaryBar) — только
-        // для сигнала, отнимает фиксированную полосу СНИЗУ у сетки кабинетов, если
-        // вообще помещается хоть с какой-то разумной высотой сетки.
-        int barH = mode == SchemaMode.POWER ? 0 : SchemeRenderer.controllerSummaryBarHeight(scr);
         int gridBottom = (int) (n.getY() + nh) - pad;
-        int availH = gridBottom - top - barH;
-        if (availH < 20) {
-            availH = gridBottom - top;
-        }
+        int availH = gridBottom - top;
         if (availW < 10 || availH < 10) {
             return null;
         }
@@ -2466,14 +2518,6 @@ public class SchemaCanvasPanel extends JPanel {
         if (g == null) {
             return;
         }
-        int pad = 4;
-        int availW = nw - pad * 2;
-        int barH = mode == SchemaMode.POWER ? 0 : SchemeRenderer.controllerSummaryBarHeight(g.screen());
-        int gridBottom = (int) (n.getY() + nh) - pad;
-        int availH = gridBottom - ((int) n.getY() + 34) - barH;
-        if (availH < 20) {
-            barH = 0;
-        }
         Scene scene = model.getCurrentScene();
         List<PowerChain> powerChains = scene != null ? scene.getPowerChains() : List.of();
         List<SignalChain> signalChains = scene != null ? scene.getSignalChains() : List.of();
@@ -2482,11 +2526,75 @@ public class SchemaCanvasPanel extends JPanel {
         SchemeRenderer.paintWiringDiagram(clipped, g.screen(), g.type(), mode == SchemaMode.POWER,
                 g.cellW(), g.cellH(), g.left(), g.top(), model.getWorkspace(), powerChains, signalChains,
                 model.controllersInScene(scene), settings.activeProfile().isPowerUnitKw());
-        if (barH > 0) {
-            SchemeRenderer.drawControllerSummaryBar(clipped, g.screen(), model.getWorkspace(),
-                    g.left(), g.top() + g.screen().getRows() * g.cellH() + 2, availW);
-        }
         drawChainEndpointSockets(clipped, n, g);
+        clipped.dispose();
+    }
+
+    /** Содержимое авто-блока «Легенда портов» (см. {@link SchemaNode#isAutoPortLegend()},
+     *  {@link AppModel#signalPortLegendRows(Scene)}) — таблица "Экран/Main/Backup".
+     *  Колонка "Экран" — по ширине самого длинного имени экрана (+ отступ), чтобы не
+     *  тратить на неё больше места, чем реально нужно; оставшаяся ширина делится
+     *  ПОРОВНУ между Main и Backup. Строки, не поместившиеся по высоте узла, просто
+     *  обрезаются (растянуть блок ниже — уголком, как у любого другого узла). Ничего
+     *  не показывает в режиме ПИТАНИЯ — деление на main/backup имеет смысл только для
+     *  сигнала. */
+    private void drawPortLegendContent(Graphics2D g2, SchemaNode n, int nw, int nh) {
+        int left = (int) n.getX() + 8;
+        int top = (int) n.getY() + 38;
+        int maxY = (int) n.getY() + nh - 4;
+        int tableW = nw - 16;
+        if (mode == SchemaMode.POWER) {
+            drawClipped(g2, "легенда портов доступна в режиме «Сигнал»", left, top, tableW);
+            return;
+        }
+        Scene scene = model.getCurrentScene();
+        List<AppModel.SignalPortLegendRow> rows = scene != null ? model.signalPortLegendRows(scene) : List.of();
+        if (rows.isEmpty()) {
+            drawClipped(g2, "нет расключённых экранов", left, top, tableW);
+            return;
+        }
+        Graphics2D clipped = (Graphics2D) g2.create();
+        clipped.clipRect((int) n.getX(), (int) n.getY(), nw, nh);
+        Font base = clipped.getFont();
+        Font boldFont = base.deriveFont(Font.BOLD);
+
+        clipped.setFont(boldFont);
+        int col1W = clipped.getFontMetrics().stringWidth("Экран");
+        clipped.setFont(base);
+        java.awt.FontMetrics regularFm = clipped.getFontMetrics();
+        for (AppModel.SignalPortLegendRow row : rows) {
+            col1W = Math.max(col1W, regularFm.stringWidth(row.screenName()));
+        }
+        col1W += 14;
+        int gap = 6;
+        int portColsW = Math.max(60, tableW - col1W - 2 * gap);
+        col1W = tableW - portColsW - 2 * gap;
+        int col2W = portColsW / 2;
+        int col3W = portColsW - col2W;
+        int col1 = left;
+        int col2 = col1 + col1W + gap;
+        int col3 = col2 + col2W + gap;
+
+        int y = top;
+        int lineH = clipped.getFontMetrics().getHeight() + 4;
+        clipped.setFont(boldFont);
+        drawClipped(clipped, "Экран", col1, y, col1W);
+        drawClipped(clipped, "Main", col2, y, col2W);
+        drawClipped(clipped, "Backup", col3, y, col3W);
+        clipped.setColor(new Color(0, 0, 0, 100));
+        clipped.drawLine((int) n.getX() + 6, y + 4, (int) n.getX() + nw - 6, y + 4);
+        y += lineH;
+        clipped.setFont(base);
+        clipped.setColor(new Color(0, 0, 0, 170));
+        for (AppModel.SignalPortLegendRow row : rows) {
+            if (y > maxY) {
+                break;
+            }
+            drawClipped(clipped, row.screenName(), col1, y, col1W);
+            drawClipped(clipped, row.main(), col2, y, col2W);
+            drawClipped(clipped, row.backup(), col3, y, col3W);
+            y += lineH;
+        }
         clipped.dispose();
     }
 

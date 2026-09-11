@@ -7,6 +7,7 @@ import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SignalChain;
 import com.vjstb.ledscheme.model.Workspace;
+import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.ScreenLogic;
 import com.vjstb.ledscheme.service.ScreenStats;
 import java.awt.BasicStroke;
@@ -552,40 +553,11 @@ public final class SchemeRenderer {
         g2.setStroke(new BasicStroke(1f));
     }
 
-    /** Компактная сводная полоса контроллеров экрана под сеткой расключения сигнала —
-     *  как строка "MCTRL4K-1" с портами и цветом резерва в исходной схеме-образце:
-     *  по одному контроллеру на строку, с меткой резервной связки, если она есть. */
-    public static int controllerSummaryBarHeight(Screen scr) {
-        return scr.getControllers().isEmpty() ? 0 : 14 * scr.getControllers().size() + 4;
-    }
-
-    public static void drawControllerSummaryBar(Graphics2D g2, Screen scr, Workspace workspace,
-                                                 int x, int y, int width) {
-        List<com.vjstb.ledscheme.model.ControllerInstance> controllers = scr.getControllers();
-        if (controllers.isEmpty() || workspace == null) {
-            return;
-        }
-        Font f = g2.getFont().deriveFont(Font.PLAIN, 9f);
-        g2.setFont(f);
-        java.awt.FontMetrics fm = g2.getFontMetrics();
-        int offset = 0;
-        int rowY = y + fm.getAscent();
-        for (int i = 0; i < controllers.size(); i++) {
-            com.vjstb.ledscheme.model.ControllerInstance ci = controllers.get(i);
-            com.vjstb.ledscheme.model.ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
-            int count = t != null ? t.effectivePortCount() : 0;
-            boolean isBackupOfAnother = controllers.stream().anyMatch(o -> ci.getId().equals(o.getBackupControllerId()));
-            String name = t != null ? t.getName() : "?";
-            String text = "C" + (i + 1) + " " + name + " · P" + (offset + 1) + "-" + (offset + count)
-                    + (ci.getBackupControllerId() != null ? " (резерв: следующий)" : "");
-            g2.setColor(isBackupOfAnother ? Palette.MUTED : Color.WHITE);
-            g2.drawString(clipToWidth(g2, text, width - 14), x + 12, rowY);
-            g2.setColor(isBackupOfAnother ? Color.RED : new Color(0x3f, 0xb9, 0x50));
-            g2.fillOval(x + 2, rowY - fm.getAscent() + 2, 8, 8);
-            rowY += 14;
-            offset += count;
-        }
-    }
+    // Прежняя построчная полоса контроллеров под сеткой расключения сигнала (видна
+    // только у экранов, владеющих контроллером напрямую — баг-репорт "для некоторых
+    // экранов текст есть, для некоторых нет") убрана: вместо неё — общий перетаскиваемый
+    // авто-блок «Легенда портов» на холсте (см. AppModel.addSignalPortLegendNode,
+    // SchemaNode#isAutoPortLegend, SchemaCanvasPanel.drawPortLegendContent).
 
     /** Контроллер, которому принадлежит порт, ВМЕСТЕ с его смещением (порты
      *  нумеруются подряд по назначенным экрану контроллерам: 1..N1 — первый,
@@ -1068,6 +1040,98 @@ public final class SchemeRenderer {
         } finally {
             writer.dispose();
         }
+    }
+
+    /** Отдельная картинка (PNG, см. {@code CurrentSchemeExporter#exportPng}) с той же
+     *  таблицей "Экран/Main/Backup", что рисует авто-блок «Легенда портов» на холсте
+     *  (см. {@code SchemaCanvasPanel#drawPortLegendContent}, {@link
+     *  AppModel#signalPortLegendRows}) — но БЕЗ клипа по размеру блока (картинка ровно
+     *  по размеру содержимого) и БЕЗ равного деления Main/Backup: тут место не
+     *  ограничено, поэтому каждая колонка — по своему самому длинному значению, а не
+     *  поровну между двумя, как в компактном блоке на холсте. {@code dpiScale} —
+     *  тот же множитель качества, что у {@link #renderImage(Screen, CabinetType,
+     *  boolean, int, Workspace, List, List, boolean, double)}. */
+    public static BufferedImage renderPortLegendImage(String sceneName,
+            List<AppModel.SignalPortLegendRow> rows, double dpiScale) {
+        Font titleFont = new Font(Font.SANS_SERIF, Font.BOLD, 20);
+        Font headerFont = new Font(Font.SANS_SERIF, Font.BOLD, 15);
+        Font rowFont = new Font(Font.SANS_SERIF, Font.PLAIN, 15);
+
+        BufferedImage probe = new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB);
+        Graphics2D pg = probe.createGraphics();
+        pg.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+
+        String title = "Легенда портов" + (sceneName != null && !sceneName.isEmpty() ? " — " + sceneName : "");
+        pg.setFont(titleFont);
+        int titleW = pg.getFontMetrics().stringWidth(title);
+        int titleH = pg.getFontMetrics().getHeight();
+
+        pg.setFont(headerFont);
+        java.awt.FontMetrics headerFm = pg.getFontMetrics();
+        int col1W = headerFm.stringWidth("Экран");
+        int col2W = headerFm.stringWidth("Main");
+        int col3W = headerFm.stringWidth("Backup");
+        int headerH = headerFm.getHeight();
+
+        pg.setFont(rowFont);
+        java.awt.FontMetrics rowFm = pg.getFontMetrics();
+        for (AppModel.SignalPortLegendRow row : rows) {
+            col1W = Math.max(col1W, rowFm.stringWidth(row.screenName()));
+            col2W = Math.max(col2W, rowFm.stringWidth(row.main()));
+            col3W = Math.max(col3W, rowFm.stringWidth(row.backup()));
+        }
+        int rowH = rowFm.getHeight() + 10;
+        pg.dispose();
+
+        int pad = 24;
+        int colGap = 32;
+        col1W += 6;
+        col2W += 6;
+        col3W += 6;
+        int tableW = col1W + colGap + col2W + colGap + col3W;
+        int w = Math.max(titleW, tableW) + pad * 2;
+        int col1X = pad;
+        int col2X = col1X + col1W + colGap;
+        int col3X = col2X + col2W + colGap;
+
+        int titleY = pad + titleH - 6;
+        int headerY = titleY + 24 + headerH;
+        int firstRowY = headerY + 16;
+        int h = rows.isEmpty() ? headerY + pad
+                : firstRowY + (rows.size() - 1) * rowH + rowFm.getDescent() + pad;
+
+        BufferedImage img = new BufferedImage(Math.max(1, (int) Math.round(w * dpiScale)),
+                Math.max(1, (int) Math.round(h * dpiScale)), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g2 = img.createGraphics();
+        g2.scale(dpiScale, dpiScale);
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        g2.setColor(Palette.BG);
+        g2.fillRect(0, 0, w, h);
+
+        g2.setColor(Palette.TEXT);
+        g2.setFont(titleFont);
+        g2.drawString(title, pad, titleY);
+
+        g2.setFont(headerFont);
+        g2.drawString("Экран", col1X, headerY);
+        g2.drawString("Main", col2X, headerY);
+        g2.drawString("Backup", col3X, headerY);
+        g2.setColor(new Color(0, 0, 0, 120));
+        g2.drawLine(pad, headerY + 6, w - pad, headerY + 6);
+
+        g2.setFont(rowFont);
+        g2.setColor(Palette.TEXT);
+        int y = firstRowY;
+        for (AppModel.SignalPortLegendRow row : rows) {
+            g2.drawString(row.screenName(), col1X, y);
+            g2.drawString(row.main(), col2X, y);
+            g2.drawString(row.backup(), col3X, y);
+            y += rowH;
+        }
+
+        g2.dispose();
+        return img;
     }
 
     /** Известный рецепт для javax.imageio (нет прямого API "setDpi") — JFIF-узел

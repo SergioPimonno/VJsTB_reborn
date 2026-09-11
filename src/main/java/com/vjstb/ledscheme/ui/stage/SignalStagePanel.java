@@ -866,7 +866,8 @@ public class SignalStagePanel extends JPanel {
             if (sceneControllers.isEmpty()) {
                 controllerListPanel.add(UiKit.muted("Контроллеры не назначены"));
             }
-            for (ControllerInstance ci : sceneControllers) {
+            for (int i = 0; i < sceneControllers.size(); i++) {
+                ControllerInstance ci = sceneControllers.get(i);
                 ControllerType t = model.getWorkspace().controllerTypeById(ci.getControllerTypeId());
                 String label;
                 if (t != null) {
@@ -877,7 +878,7 @@ public class SignalStagePanel extends JPanel {
                 } else {
                     label = ci.getLabel() + " — ?";
                 }
-                controllerListPanel.add(controllerRow(scr, ci, label));
+                controllerListPanel.add(controllerRow(scr, ci, label, i));
             }
         }
         UiKit.recapHeight(controllersSection);
@@ -1031,7 +1032,7 @@ public class SignalStagePanel extends JPanel {
      *  контроллеру, пока метка ждёт, создаёт связку основной→резерв между ними —
      *  весь контроллер целиком дублирует порты другого (см. AppModel.setControllerBackupLink),
      *  в отличие от резерва отдельного порта (2×клик по кнопке порта). */
-    private javax.swing.JComponent controllerRow(Screen scr, ControllerInstance ci, String baseLabel) {
+    private javax.swing.JComponent controllerRow(Screen scr, ControllerInstance ci, String baseLabel, int index) {
         List<ControllerInstance> sceneControllers = model.controllersInScene(model.getCurrentScene());
         String suffix = "";
         if (ci.getBackupControllerId() != null) {
@@ -1066,7 +1067,35 @@ public class SignalStagePanel extends JPanel {
         JButton del = new JButton("✕");
         del.setMargin(new java.awt.Insets(0, 4, 0, 4));
         del.addActionListener(e -> model.removeControllerFromScene(model.getCurrentScene(), ci.getId()));
-        row.add(dotLabel, BorderLayout.WEST);
+
+        // Перетаскивание строки мышью за этот значок — меняет порядок контроллеров
+        // сцены (влияет на сквозную нумерацию портов, см. AppModel
+        // .reorderControllerInScene, который сам пересчитывает уже расключённые
+        // цепочки). Отдельный компонент, а не жест на всей строке — у строки уже
+        // занят mousePressed (ЛКМ выбирает контроллер для сетки портов, ПКМ метит
+        // резерв, см. ниже), конфликтовать с перетаскиванием было бы нечем различить.
+        JLabel dragHandle = new JLabel("⠿");
+        dragHandle.setForeground(Palette.MUTED);
+        dragHandle.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.MOVE_CURSOR));
+        dragHandle.setToolTipText("Перетащите, чтобы изменить порядок контроллеров"
+                + " (меняет нумерацию их портов)");
+        dragHandle.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseReleased(java.awt.event.MouseEvent e) {
+                java.awt.Point dropPoint = javax.swing.SwingUtilities.convertPoint(
+                        dragHandle, e.getPoint(), controllerListPanel);
+                int dropIndex = controllerDropIndexForY(dropPoint.y);
+                if (dropIndex != index) {
+                    model.reorderControllerInScene(model.getCurrentScene(), index, dropIndex);
+                }
+            }
+        });
+        JPanel west = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        west.setOpaque(false);
+        west.add(dragHandle);
+        west.add(dotLabel);
+
+        row.add(west, BorderLayout.WEST);
         row.add(text, BorderLayout.CENTER);
         row.add(del, BorderLayout.EAST);
         row.setToolTipText("ЛКМ — показать/расключать порты этого контроллера в сетке справа"
@@ -1100,6 +1129,23 @@ public class SignalStagePanel extends JPanel {
             }
         });
         return row;
+    }
+
+    /** Индекс вставки для {@link AppModel#reorderControllerInScene} по Y-координате
+     *  отпускания мыши В КООРДИНАТАХ {@code controllerListPanel} — тот же приём, что
+     *  {@code JList.DropLocation.getIndex()} даёт даром для настоящего JList (тут
+     *  список — ряд самодельных панелей на BoxLayout, не JList, поэтому считаем
+     *  вручную): первая строка, чей вертикальный центр НИЖЕ точки отпускания —
+     *  вставить перед ней; ни одной такой — вставить в конец. */
+    private int controllerDropIndexForY(int panelY) {
+        int count = controllerListPanel.getComponentCount();
+        for (int i = 0; i < count; i++) {
+            java.awt.Component c = controllerListPanel.getComponent(i);
+            if (panelY < c.getY() + c.getHeight() / 2) {
+                return i;
+            }
+        }
+        return count;
     }
 
     private static ControllerInstance findController(List<ControllerInstance> controllers, String id) {
