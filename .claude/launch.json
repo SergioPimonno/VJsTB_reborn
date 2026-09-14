@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ledscheme-static-preview",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "18081", "--directory", "C:\\Development\\ledscheme-server\\src\\main\\resources\\static"],
+      "port": 18081
+    }
+  ]
+}
