@@ -24,10 +24,11 @@ import java.util.Map;
  * попадут в workspace.json прямо через геттеры, в обход поля.
  */
 @JsonIgnoreProperties({"cabinetTypes", "controllerTypes", "equipmentPresets", "cableTypes", "interfaceTypes",
-        "cableLengthProfiles", "hoistTypes", "structureFrameTypes", "caseTypes", "vehicleTypes",
+        "cableLengthProfiles", "hoistTypes", "trussProfiles", "structureFrameTypes", "caseTypes", "vehicleTypes",
         "networkDeviceTypes",
         "sharedCabinetTypes", "sharedControllerTypes", "sharedEquipmentPresets", "sharedCableTypes",
-        "sharedInterfaceTypes", "sharedCableLengthProfiles", "sharedHoistTypes", "sharedStructureFrameTypes",
+        "sharedInterfaceTypes", "sharedCableLengthProfiles", "sharedHoistTypes", "sharedTrussProfiles",
+        "sharedStructureFrameTypes",
         "sharedCaseTypes", "sharedVehicleTypes", "sharedNetworkDeviceTypes",
         "customEquipmentCategories", "equipmentCategoryLabelOverrides"})
 public class Workspace {
@@ -98,6 +99,14 @@ public class Workspace {
 
     public void setHoistTypes(List<HoistType> hoistTypes) {
         library.setHoistTypes(hoistTypes);
+    }
+
+    public List<TrussProfile> getTrussProfiles() {
+        return library.getTrussProfiles();
+    }
+
+    public void setTrussProfiles(List<TrussProfile> trussProfiles) {
+        library.setTrussProfiles(trussProfiles);
     }
 
     public List<StructureFrameType> getStructureFrameTypes() {
@@ -188,6 +197,14 @@ public class Workspace {
         library.setSharedHoistTypes(sharedHoistTypes);
     }
 
+    public List<TrussProfile> getSharedTrussProfiles() {
+        return library.getSharedTrussProfiles();
+    }
+
+    public void setSharedTrussProfiles(List<TrussProfile> sharedTrussProfiles) {
+        library.setSharedTrussProfiles(sharedTrussProfiles);
+    }
+
     public List<StructureFrameType> getSharedStructureFrameTypes() {
         return library.getSharedStructureFrameTypes();
     }
@@ -254,6 +271,10 @@ public class Workspace {
 
     public HoistType hoistTypeById(String id) {
         return library.hoistTypeById(id);
+    }
+
+    public TrussProfile trussProfileById(String id) {
+        return library.trussProfileById(id);
     }
 
     public StructureFrameType structureFrameTypeById(String id) {

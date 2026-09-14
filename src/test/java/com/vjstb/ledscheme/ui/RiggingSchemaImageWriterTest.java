@@ -7,6 +7,7 @@ import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.RiggingCalc;
+import com.vjstb.ledscheme.service.TrussCalc;
 import com.vjstb.ledscheme.store.WorkspaceStore;
 import java.awt.image.BufferedImage;
 import java.io.File;
@@ -47,7 +48,8 @@ class RiggingSchemaImageWriterTest {
         Screen screen = model.addScreen("E", t.getId(), 2, 6, 0, 0);
 
         RiggingCalc.Result result = RiggingCalc.compute(screen, t, model.getWorkspace(), 3);
-        BufferedImage img = RiggingSchemaImageWriter.render(screen, t, result);
+        TrussCalc.Result truss = TrussCalc.compute(screen, t, model.getWorkspace());
+        BufferedImage img = RiggingSchemaImageWriter.render(screen, t, result, truss);
 
         assertTrue(img.getWidth() >= screen.getCols() * 22, "картинка обязана вмещать всю ширину сетки экрана");
         assertTrue(img.getHeight() > screen.getRows() * 22, "картинка обязана включать не только сетку, но и таблицу под ней");
@@ -65,10 +67,11 @@ class RiggingSchemaImageWriterTest {
         model.selectScene(scene);
         Screen screen = model.addScreen("E", t.getId(), 1, 4, 0, 0);
 
+        TrussCalc.Result truss = TrussCalc.compute(screen, t, model.getWorkspace());
         BufferedImage fewPoints = RiggingSchemaImageWriter.render(
-                screen, t, RiggingCalc.compute(screen, t, model.getWorkspace(), 2));
+                screen, t, RiggingCalc.compute(screen, t, model.getWorkspace(), 2), truss);
         BufferedImage manyPoints = RiggingSchemaImageWriter.render(
-                screen, t, RiggingCalc.compute(screen, t, model.getWorkspace(), 8));
+                screen, t, RiggingCalc.compute(screen, t, model.getWorkspace(), 8), truss);
 
         assertTrue(manyPoints.getWidth() > fewPoints.getWidth(),
                 "больше колонок в транспонированной таблице -- картинка должна быть шире");
@@ -87,8 +90,10 @@ class RiggingSchemaImageWriterTest {
         screen.cabinetAt(0, 3).setHidden(true);
 
         RiggingCalc.Result result = RiggingCalc.compute(screen, t, model.getWorkspace(), 2);
-        BufferedImage withType = RiggingSchemaImageWriter.render(screen, t, result);
-        BufferedImage withoutType = RiggingSchemaImageWriter.render(screen, null, result);
+        TrussCalc.Result trussWithType = TrussCalc.compute(screen, t, model.getWorkspace());
+        TrussCalc.Result trussWithoutType = TrussCalc.compute(screen, null, model.getWorkspace());
+        BufferedImage withType = RiggingSchemaImageWriter.render(screen, t, result, trussWithType);
+        BufferedImage withoutType = RiggingSchemaImageWriter.render(screen, null, result, trussWithoutType);
 
         assertTrue(withType.getWidth() > 0 && withoutType.getWidth() > 0);
     }

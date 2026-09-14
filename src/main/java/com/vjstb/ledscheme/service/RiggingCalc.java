@@ -79,6 +79,18 @@ import java.util.TreeMap;
  * (геометрический минимум по пролёту, минимум по грузоподъёмности) — то есть
  * калькулятор теперь активно СТАРАЕТСЯ МИНИМИЗИРОВАТЬ число лебёдок, беря ровно
  * столько, сколько требуют оба ограничения, а не число модулей в сетке.
+ *
+ * <p><b>Точки расставляются от краёв ФЕРМЫ, не экрана (см. {@link TrussCalc})</b> —
+ * ширина экрана {@code widthMm}, использовавшаяся выше и в {@link #EDGE_MARGIN_MM},
+ * заменена на {@link TrussCalc#effectiveTrussLengthMm} (по умолчанию равна ширине
+ * экрана — обратная совместимость сохраняется КОНСТРУКТИВНО, пока пользователь не
+ * задал нестандартную длину фермы). Точки сначала расставляются в координатах,
+ * локальных для ФЕРМЫ (0 — левый край фермы), затем переводятся в координаты ЭКРАНА
+ * вычитанием {@link TrussCalc#leftOffsetMm} — так распределение нагрузки по ближайшей
+ * колонке ({@link #nearestPointIndex}, координаты колонок всегда экранные) остаётся
+ * корректным независимо от того, нависает ли ферма за края экрана или короче него.
+ * {@link PointLoad#xMm()} после этого — координата ЭКРАНА и может стать отрицательной
+ * или больше ширины экрана при свесе фермы — это ожидаемо, не ошибка.
  */
 public final class RiggingCalc {
 
@@ -182,20 +194,21 @@ public final class RiggingCalc {
                           double requiredWllPerPointKg, List<PointLoad> points) {
     }
 
-    /** Минимум точек подвеса по РЕАЛЬНОЙ ширине экрана в мм (не по числу
-     *  модулей — см. class-javadoc, баг-репорт 2026-08-19), исходя из
-     *  {@link #MAX_SPAN_MM} — независимо от веса/грузоподъёмности, это
-     *  ГЕОМЕТРИЧЕСКИЙ минимум (равномерность провеса фермы), а не то, что
-     *  вообще ограничивает нагрузку на точку. {@code defaultType == null}
-     *  (ширина модуля неизвестна) откатывается на абсолютный минимум 2 —
-     *  без размера модуля посчитать физическую ширину нечем. */
+    /** Минимум точек подвеса по РЕАЛЬНОЙ длине ФЕРМЫ в мм (не по числу
+     *  модулей экрана — см. class-javadoc, баг-репорт 2026-08-19; не по ширине
+     *  экрана — см. class-javadoc, «Точки расставляются от краёв ФЕРМЫ»),
+     *  исходя из {@link #MAX_SPAN_MM} — независимо от веса/грузоподъёмности,
+     *  это ГЕОМЕТРИЧЕСКИЙ минимум (равномерность провеса фермы), а не то, что
+     *  вообще ограничивает нагрузку на точку. {@code trussLengthMm <= 0}
+     *  (ширина модуля неизвестна и длина фермы не переопределена) откатывается
+     *  на абсолютный минимум 2 — без размера модуля посчитать физическую длину
+     *  нечем. */
     private static int baseColumnPointCount(Screen screen, CabinetType defaultType) {
-        double cellW = defaultType != null ? defaultType.getWidthMm() : 0;
-        double widthMm = screen.getCols() * cellW;
-        if (widthMm <= 0) {
+        double trussLengthMm = TrussCalc.effectiveTrussLengthMm(screen, defaultType);
+        if (trussLengthMm <= 0) {
             return 2;
         }
-        int spans = (int) Math.ceil(usableWidthMm(widthMm) / MAX_SPAN_MM);
+        int spans = (int) Math.ceil(usableWidthMm(trussLengthMm) / MAX_SPAN_MM);
         return Math.max(2, spans + 1);
     }
 
@@ -274,13 +287,15 @@ public final class RiggingCalc {
 
     /** Распределяет суммарный вес занятых колонок (+ наценка на крепёж, см.
      *  {@link #HARDWARE_ALLOWANCE}) по {@code pointCount} точкам, расставленным
-     *  равномерно вдоль ширины экрана — методом грузовых площадей (каждая
-     *  колонка отдаёт вес ближайшей по X точке, см. {@link #nearestPointIndex}
-     *  за симметричным правилом на случай точной ничьей). Крайние точки
-     *  отступают от краёв экрана на {@link #EDGE_MARGIN_MM} (не 0 — см. её
-     *  javadoc), между крайними точками остальные распределены равномерно;
-     *  при {@code n == 1} единственная точка по-прежнему ставится строго в
-     *  центр (отступ для одной точки не имеет смысла). */
+     *  равномерно вдоль ДЛИНЫ ФЕРМЫ ({@link TrussCalc#effectiveTrussLengthMm}) —
+     *  методом грузовых площадей (каждая колонка отдаёт вес ближайшей по X точке,
+     *  см. {@link #nearestPointIndex} за симметричным правилом на случай точной
+     *  ничьей). Крайние точки отступают от краёв ФЕРМЫ на {@link #EDGE_MARGIN_MM}
+     *  (не 0 — см. её javadoc), между крайними точками остальные распределены
+     *  равномерно; при {@code n == 1} единственная точка по-прежнему ставится
+     *  строго в центр (отступ для одной точки не имеет смысла). Точки считаются
+     *  сначала в координатах, локальных для фермы, затем сдвигаются на {@link
+     *  TrussCalc#leftOffsetMm} в координаты экрана (см. class-javadoc). */
     public static Result compute(Screen screen, CabinetType defaultType, Workspace workspace, int pointCount) {
         List<ColumnWeight> columns = columnWeights(screen, defaultType, workspace);
         double totalCabinetWeight = 0;
@@ -290,16 +305,17 @@ public final class RiggingCalc {
         double hardwareFactor = 1 + HARDWARE_ALLOWANCE;
         double totalWithHardware = totalCabinetWeight * hardwareFactor;
 
-        double cellW = defaultType != null ? defaultType.getWidthMm() : 0;
-        double widthMm = screen.getCols() * cellW;
+        double trussLengthMm = TrussCalc.effectiveTrussLengthMm(screen, defaultType);
+        double leftOffsetMm = TrussCalc.leftOffsetMm(screen, defaultType);
         int n = Math.max(1, pointCount);
-        double margin = edgeMarginMm(widthMm);
-        double usable = usableWidthMm(widthMm);
+        double margin = edgeMarginMm(trussLengthMm);
+        double usable = usableWidthMm(trussLengthMm);
         double[] pointX = new double[n];
         for (int i = 0; i < n; i++) {
-            pointX[i] = n == 1 ? widthMm / 2.0 : margin + usable * i / (n - 1.0);
+            double trussLocalX = n == 1 ? trussLengthMm / 2.0 : margin + usable * i / (n - 1.0);
+            pointX[i] = trussLocalX - leftOffsetMm;
         }
-        double centerMm = widthMm / 2.0;
+        double centerMm = (pointX[0] + pointX[n - 1]) / 2.0;
         double[] pointWeight = new double[n];
         for (ColumnWeight c : columns) {
             int nearest = nearestPointIndex(c.xMm(), pointX, centerMm);

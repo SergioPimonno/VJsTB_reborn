@@ -100,6 +100,21 @@ public class SetupStagePanel extends JPanel {
     /** Библиотечная модель лебёдки (см. HoistType/Screen#getRiggingHoistTypeId) —
      *  {@code null} = «Ввести вручную», тогда действует {@link #pRiggingHoistCapacity}. */
     private final JComboBox<com.vjstb.ledscheme.model.HoistType> pRiggingHoistType = new JComboBox<>();
+
+    // ---- ферма подвеса (см. service.TrussCalc, RIGGING_CALC_NOTES.md) ----
+    /** {@code null} = профиль фермы не выбран — BOM не считается, но геометрия
+     *  (длина/отступы) всё равно влияет на расстановку точек подвеса. */
+    private final JComboBox<com.vjstb.ledscheme.model.TrussProfile> pRiggingTrussProfile = new JComboBox<>();
+    /** Пусто — длина фермы не переопределена, действует авто (см. TrussCalc#suggestTrussLengthMm). */
+    private final JTextField pRiggingTrussLength = new JTextField(10);
+    private final javax.swing.JCheckBox pRiggingTrussSymmetric =
+            new javax.swing.JCheckBox("Равномерный отступ от краёв экрана", true);
+    /** Действует только когда {@link #pRiggingTrussSymmetric} снят. */
+    private final JTextField pRiggingTrussManualOffset = new JTextField(10);
+    private final JTextField pRiggingTrussNotes = new JTextField(10);
+    private final JButton calcTrussBtn = new JButton("Рассчитать фермы");
+    private final JButton buildTrussSpecBtn = new JButton("Собрать спецификацию");
+
     private final JComboBox<Integer> pRefreshHz = new JComboBox<>(new Integer[]{50, 60, 120, 144, 240});
     private final JComboBox<Integer> pBitDepth = new JComboBox<>(new Integer[]{8, 10, 12});
 
@@ -141,6 +156,7 @@ public class SetupStagePanel extends JPanel {
      *  расчёта уезжали за пределы окна без прокрутки, а сам способ монтажа экрана делает
      *  осмысленным ровно ОДИН из двух блоков за раз. */
     private JPanel riggingFieldsPanel;
+    private JPanel trussFieldsPanel;
     private JPanel structureFieldsPanel;
 
     private final JPanel shapeSection;
@@ -571,10 +587,62 @@ public class SetupStagePanel extends JPanel {
         riggingFieldsPanel.add(UiKit.formRow("Грузоподъёмность лебёдки, кг (вручную)", pRiggingHoistCapacity));
         riggingFieldsPanel.add(UiKit.vgap());
 
-        calcRiggingBtn.setToolTipText("Способ монтажа задаётся в «Параметры экрана».");
+        calcRiggingBtn.setToolTipText("Способ монтажа задаётся в «Параметры экрана». Точки подвеса считаются от"
+                + " краёв РЕАЛЬНОЙ фермы (см. блок «Ферма подвеса» ниже), не от ширины экрана.");
         calcRiggingBtn.addActionListener(e -> calculateRiggingPoints());
         riggingFieldsPanel.add(calcRiggingBtn);
         riggingArea.add(riggingFieldsPanel);
+        riggingArea.add(UiKit.vgap(10));
+
+        // ---- ферма подвеса ----
+        trussFieldsPanel = UiKit.vbox();
+        trussFieldsPanel.add(new JLabel("Ферма подвеса"));
+        trussFieldsPanel.add(UiKit.vgap());
+        pRiggingTrussProfile.setRenderer(new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public java.awt.Component getListCellRendererComponent(JList<?> list, Object value, int index,
+                    boolean isSelected, boolean cellHasFocus) {
+                java.awt.Component c = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                if (value == null) {
+                    setText("Не выбрано");
+                } else if (value instanceof com.vjstb.ledscheme.model.TrussProfile t) {
+                    setText(t.getName() + " — " + t.getAvailableLengthsM().size() + " длин");
+                }
+                return c;
+            }
+        });
+        pRiggingTrussProfile.setToolTipText("Типоразмерный ряд фермы из общей библиотеки (список доступных длин"
+                + " сегментов) — комплект под целевую длину подбирается минимальным числом кусков.");
+        trussFieldsPanel.add(UiKit.formRow("Тип фермы (библиотека)", pRiggingTrussProfile));
+        trussFieldsPanel.add(UiKit.vgap());
+        pRiggingTrussLength.setToolTipText("Целевая длина фермы, мм — пусто означает авто (равна физической"
+                + " ширине экрана). Определяет и комплект сегментов, и расстановку точек подвеса.");
+        trussFieldsPanel.add(UiKit.formRow("Длина фермы, мм (переопределение)", pRiggingTrussLength));
+        trussFieldsPanel.add(UiKit.vgap());
+        pRiggingTrussSymmetric.setToolTipText("Свес фермы за края экрана (или недостача, если ферма короче)"
+                + " делится поровну между левым и правым краем.");
+        pRiggingTrussSymmetric.addActionListener(e ->
+                pRiggingTrussManualOffset.setEnabled(!pRiggingTrussSymmetric.isSelected()));
+        trussFieldsPanel.add(pRiggingTrussSymmetric);
+        trussFieldsPanel.add(UiKit.vgap());
+        pRiggingTrussManualOffset.setToolTipText("Ручной отступ левого края фермы от левого края экрана, мм —"
+                + " положительное значение = ферма нависает левее края экрана. Действует, только если снят"
+                + " флажок «Равномерный отступ» выше.");
+        trussFieldsPanel.add(UiKit.formRow("Отступ фермы слева, мм (вручную)", pRiggingTrussManualOffset));
+        trussFieldsPanel.add(UiKit.vgap());
+        trussFieldsPanel.add(UiKit.formRow("Заметки по ферме", pRiggingTrussNotes));
+        trussFieldsPanel.add(UiKit.vgap());
+        calcTrussBtn.setToolTipText("Считает и сохраняет целевую длину/отступы фермы + комплект сегментов."
+                + " Точки подвеса пересчитываются от неё при следующем нажатии «" + calcRiggingBtn.getText() + "».");
+        calcTrussBtn.addActionListener(e -> calculateTruss());
+        trussFieldsPanel.add(calcTrussBtn);
+        trussFieldsPanel.add(UiKit.vgap());
+        buildTrussSpecBtn.setToolTipText("Считает спецификацию (комплект сегментов + соединители) фермы по"
+                + " текущим сохранённым параметрам. Тот же список автоматически попадает в общую спецификацию"
+                + " проекта (лист «Фермы», этап «Вывод»).");
+        buildTrussSpecBtn.addActionListener(e -> buildTrussSpec());
+        trussFieldsPanel.add(buildTrussSpecBtn);
+        riggingArea.add(trussFieldsPanel);
         riggingArea.add(UiKit.vgap(10));
 
         structureFieldsPanel = UiKit.vbox();
@@ -702,8 +770,10 @@ public class SetupStagePanel extends JPanel {
      *  расчёта уезжали за пределы окна прерига без прокрутки. */
     private void applyMountTypeVisibility(com.vjstb.ledscheme.model.ScreenMountType mountType) {
         riggingFieldsPanel.setVisible(mountType == com.vjstb.ledscheme.model.ScreenMountType.RIGGED);
+        trussFieldsPanel.setVisible(mountType == com.vjstb.ledscheme.model.ScreenMountType.RIGGED);
         structureFieldsPanel.setVisible(mountType == com.vjstb.ledscheme.model.ScreenMountType.STRUCTURE);
         riggingFieldsPanel.revalidate();
+        trussFieldsPanel.revalidate();
         structureFieldsPanel.revalidate();
         if (prerigSplit != null) {
             prerigSplit.revalidate();
@@ -737,13 +807,19 @@ public class SetupStagePanel extends JPanel {
         Double hoistCapacity = parseHoistCapacity();
         String hoistTypeId = selectedHoistTypeId();
         // suggestRiggingPoints должен видеть ИМЕННО то, что выбрано на форме сейчас
-        // (лебёдку/грузоподъёмность пользователь мог только что поменять и ещё не
+        // (лебёдку/грузоподъёмность/ферму пользователь мог только что поменять и ещё не
         // сохранить) -- считаем на ЧЕРНОВОЙ копии экрана, не трогая сохранённый scr,
         // иначе первое нажатие «Рассчитать» после смены лебёдки использовало бы
         // старое значение (баг-репорт: «при перерасчёте количество лебёдок не меняется»).
+        // Поля фермы (длина/отступ) добавлены сюда же (не только лебёдка) -- точки теперь
+        // считаются от РЕАЛЬНОЙ фермы (см. RiggingCalc class-javadoc), поэтому кнопка должна
+        // реагировать и на них, даже если пользователь ещё не нажимал «Рассчитать фермы».
         Screen preview = scr.copy();
         preview.setRiggingHoistCapacityKg(hoistCapacity);
         preview.setRiggingHoistTypeId(hoistTypeId);
+        preview.setRiggingTrussLengthMm(parseTrussLengthOverride());
+        preview.setRiggingTrussSymmetricOffset(pRiggingTrussSymmetric.isSelected());
+        preview.setRiggingTrussManualLeftOffsetMm(parseTrussManualOffset());
         int suggested = com.vjstb.ledscheme.service.ScreenLogic.suggestRiggingPoints(
                 preview, model.typeOf(scr), model.getWorkspace());
         model.updateScreenMount(scr, scr.getMountType(), suggested, scr.getRiggingNotes(), safetyFactor, hoistCapacity,
@@ -752,10 +828,21 @@ public class SetupStagePanel extends JPanel {
         prerigPreview.revalidate();
         prerigPreview.repaint();
 
+        // RiggingCalc.compute/PNG используют preview (не scr) -- точки подвеса должны
+        // отражать ТЕКУЩИЕ (возможно ещё не сохранённые кнопкой «Рассчитать фермы») поля
+        // фермы формы, а не то, что последний раз было персистировано в scr.
         com.vjstb.ledscheme.service.RiggingCalc.Result result = com.vjstb.ledscheme.service.RiggingCalc.compute(
-                scr, model.typeOf(scr), model.getWorkspace(), suggested);
+                preview, model.typeOf(scr), model.getWorkspace(), suggested);
+        com.vjstb.ledscheme.service.TrussCalc.Result trussGeom = com.vjstb.ledscheme.service.TrussCalc.compute(
+                preview, model.typeOf(scr), model.getWorkspace());
         StringBuilder loadMsg = new StringBuilder();
         loadMsg.append(String.format("Точек подвеса: %d%n", suggested));
+        loadMsg.append(String.format("Ферма: длина %.0f мм, отступы слева/справа %.0f/%.0f мм%n",
+                trussGeom.targetLengthMm(), trussGeom.leftOffsetMm(), trussGeom.rightOffsetMm()));
+        boolean trussWarn = trussGeom.shorterThanScreenWarning();
+        if (trussWarn) {
+            loadMsg.append("ВНИМАНИЕ: ферма короче ширины экрана — не перекрывает его целиком!\n");
+        }
         loadMsg.append(String.format("Вес кабинетов: %.1f кг, с наценкой на крепёж (+%d%%): %.1f кг%n",
                 result.totalCabinetWeightKg(), (int) Math.round(com.vjstb.ledscheme.service.RiggingCalc.HARDWARE_ALLOWANCE * 100),
                 result.totalWeightWithHardwareKg()));
@@ -774,13 +861,134 @@ public class SetupStagePanel extends JPanel {
             java.io.File out = new java.io.File(folder,
                     "rigging_" + com.vjstb.ledscheme.ui.OutputPaths.sanitize(scr.getName()) + ".png");
             java.awt.image.BufferedImage img = com.vjstb.ledscheme.ui.RiggingSchemaImageWriter.render(
-                    scr, model.typeOf(scr), result);
+                    scr, model.typeOf(scr), result, trussGeom);
             javax.imageio.ImageIO.write(img, "png", out);
             loadMsg.append("\nСхема сохранена: ").append(out.getAbsolutePath());
             JOptionPane.showMessageDialog(this, loadMsg.toString(), "Готово",
-                    anyOver ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE);
+                    (anyOver || trussWarn) ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE);
         } catch (java.io.IOException ex) {
             JOptionPane.showMessageDialog(this, ex.getMessage(), "Ошибка сохранения", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    /** Сохраняет параметры фермы формы ({@link AppModel#updateScreenTruss}) и показывает
+     *  сводку (целевая длина/отступы/предупреждение о короткой ферме + комплект сегментов
+     *  из библиотеки/число соединителей на стыках, см. {@code TrussCalc}) — по образцу
+     *  {@link #calculateRiggingPoints()}. Точки подвеса НЕ пересчитываются автоматически
+     *  этой кнопкой (они читают ферму напрямую из {@code Screen} при следующем нажатии «"
+     *  + calcRiggingBtn.getText() + "») — тот же принцип разделения, что у {@link
+     *  #calculateStructure()}/{@link #calculateRiggingPoints()} (два независимых расчёта,
+     *  каждый сохраняется своей кнопкой). */
+    private void calculateTruss() {
+        Screen scr = model.getCurrentScreen();
+        if (scr == null) {
+            return;
+        }
+        String trussProfileId = selectedTrussProfileId();
+        Double lengthOverride = parseTrussLengthOverride();
+        boolean symmetric = pRiggingTrussSymmetric.isSelected();
+        Double manualOffset = parseTrussManualOffset();
+        model.updateScreenTruss(scr, trussProfileId, lengthOverride, symmetric, manualOffset,
+                pRiggingTrussNotes.getText());
+        prerigPreview.revalidate();
+        prerigPreview.repaint();
+
+        com.vjstb.ledscheme.service.TrussCalc.Result result = com.vjstb.ledscheme.service.TrussCalc.compute(
+                scr, model.typeOf(scr), model.getWorkspace());
+        boolean warn = result.shorterThanScreenWarning();
+        StringBuilder msg = new StringBuilder();
+        msg.append(String.format("Целевая длина фермы: %.0f мм%n", result.targetLengthMm()));
+        msg.append(String.format("Отступы слева/справа: %.0f/%.0f мм%n", result.leftOffsetMm(), result.rightOffsetMm()));
+        if (warn) {
+            msg.append("ВНИМАНИЕ: ферма короче ширины экрана — не перекрывает его целиком!\n");
+        }
+        if (result.profileMissing()) {
+            msg.append("Тип фермы не выбран — комплект сегментов не посчитан.");
+        } else if (result.catalogEmpty()) {
+            msg.append("В библиотечном профиле фермы нет ни одной длины — комплект сегментов не посчитан.");
+            warn = true;
+        } else {
+            msg.append(String.format("%nСегментов: %d, соединителей на стыках: %d%n",
+                    result.totalPieceCount(), result.connectorCount()));
+            for (com.vjstb.ledscheme.service.CableSpecCalc.Piece p : result.pieces()) {
+                msg.append(String.format("  %.2f м × %d%n", p.lengthM(), p.count()));
+            }
+            msg.append("\nТочки подвеса теперь пересчитываются от этой фермы — нажмите «")
+                    .append(calcRiggingBtn.getText()).append("», чтобы обновить их расстановку.");
+        }
+        JOptionPane.showMessageDialog(this, msg.toString(), "Ферма подвеса",
+                warn ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    /** Ведомость материалов фермы по ТЕКУЩИМ сохранённым параметрам ({@code Screen}, не по
+     *  форме, если она ещё не сохранена кнопкой «{@code Рассчитать фермы}») — тот же {@code
+     *  TrussCalc.compute}, что и общая спецификация проекта на этапе «Вывод» считает для
+     *  листа «Фермы»; кнопка здесь просто даёт свериться по текущему экрану сразу на месте,
+     *  без выгрузки всего проекта — по образцу {@link #buildStructureSpec()}. */
+    private void buildTrussSpec() {
+        Screen scr = model.getCurrentScreen();
+        if (scr == null) {
+            return;
+        }
+        com.vjstb.ledscheme.service.TrussCalc.Result result = com.vjstb.ledscheme.service.TrussCalc.compute(
+                scr, model.typeOf(scr), model.getWorkspace());
+        StringBuilder msg = new StringBuilder();
+        msg.append("Спецификация фермы — экран «").append(scr.getName()).append("»\n\n");
+        msg.append(String.format("Целевая длина: %.0f мм, отступы слева/справа: %.0f/%.0f мм%n",
+                result.targetLengthMm(), result.leftOffsetMm(), result.rightOffsetMm()));
+        if (result.shorterThanScreenWarning()) {
+            msg.append("ВНИМАНИЕ: ферма короче ширины экрана.\n");
+        }
+        if (result.profileMissing()) {
+            msg.append("\nТип фермы не выбран.");
+        } else if (result.catalogEmpty()) {
+            msg.append("\nВ библиотечном профиле фермы нет ни одной длины.");
+        } else {
+            msg.append(String.format("%nСегментов: %d%n", result.totalPieceCount()));
+            for (com.vjstb.ledscheme.service.CableSpecCalc.Piece p : result.pieces()) {
+                msg.append(String.format("  %.2f м × %d%n", p.lengthM(), p.count()));
+            }
+            msg.append(String.format("Соединителей: %d%n", result.connectorCount()));
+            msg.append("\nЭтот же список войдёт в общую спецификацию проекта (лист «Фермы») на этапе «Вывод».");
+        }
+        msg.append("\nТребует независимой инженерной перепроверки перед монтажом — см. RIGGING_CALC_NOTES.md.");
+        JOptionPane.showMessageDialog(this, msg.toString(), "Спецификация фермы", JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    /** {@code null} -- выбрано «Не выбрано» (см. {@link #pRiggingTrussProfile}), тогда BOM
+     *  фермы не считается ({@code TrussCalc.Result#profileMissing()}). */
+    private String selectedTrussProfileId() {
+        Object sel = pRiggingTrussProfile.getSelectedItem();
+        return sel instanceof com.vjstb.ledscheme.model.TrussProfile t ? t.getId() : null;
+    }
+
+    /** Пусто/некорректно/неположительно -- {@code null} (авто, см.
+     *  Screen#getRiggingTrussLengthMm), тот же паттерн, что {@link #parseHoistCapacity()}. */
+    private Double parseTrussLengthOverride() {
+        String text = pRiggingTrussLength.getText();
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        try {
+            double v = Double.parseDouble(text.trim().replace(',', '.'));
+            return v > 0 ? v : null;
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    /** Пусто/некорректно -- {@code null}. В отличие от {@link #parseTrussLengthOverride()}
+     *  ОТРИЦАТЕЛЬНЫЕ значения допустимы (несимметричный ручной отступ может законно тянуть
+     *  ферму вправо, см. TrussCalc#leftOffsetMm). */
+    private Double parseTrussManualOffset() {
+        String text = pRiggingTrussManualOffset.getText();
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        try {
+            return Double.parseDouble(text.trim().replace(',', '.'));
+        } catch (NumberFormatException ex) {
+            return null;
         }
     }
 
@@ -836,6 +1044,15 @@ public class SetupStagePanel extends JPanel {
         });
     }
 
+    /** «Подходящий шаблон» библиотеки вместо «Не выбрано»/«Ввести вручную» — когда у
+     *  экрана ЕЩЁ НЕТ сохранённого выбора ({@code selectId == null}), начальный выбор в
+     *  комбобоксе — первая запись библиотеки по списку, а не пустой сентинел. Висячий/
+     *  устаревший FK (запись удалена) НЕ подменяется этим — тот случай остаётся на
+     *  сентинеле (пользователь увидит несовпадение и решит сам), см. вызывающие места. */
+    private static <T> T pickDefault(List<T> candidates) {
+        return candidates.isEmpty() ? null : candidates.get(0);
+    }
+
     /** Заполняет комбобокс элементами библиотеки конструктива указанного вида (одна
      *  библиотека {@code StructureFrameType} на все 4 вида, см. class-javadoc модели) —
      *  {@code null} в начале списка означает «не выбрано». */
@@ -843,11 +1060,10 @@ public class SetupStagePanel extends JPanel {
             com.vjstb.ledscheme.model.StructureFrameType.Kind kind, String selectId) {
         DefaultComboBoxModel<com.vjstb.ledscheme.model.StructureFrameType> m = new DefaultComboBoxModel<>();
         m.addElement(null);
-        com.vjstb.ledscheme.model.StructureFrameType toSelect = null;
-        for (com.vjstb.ledscheme.model.StructureFrameType t : model.getStructureFrameTypes()) {
-            if (t.getKind() != kind) {
-                continue;
-            }
+        List<com.vjstb.ledscheme.model.StructureFrameType> candidates = model.getStructureFrameTypes().stream()
+                .filter(t -> t.getKind() == kind).toList();
+        com.vjstb.ledscheme.model.StructureFrameType toSelect = selectId == null ? pickDefault(candidates) : null;
+        for (com.vjstb.ledscheme.model.StructureFrameType t : candidates) {
             m.addElement(t);
             if (selectId != null && selectId.equals(t.getId())) {
                 toSelect = t;
@@ -1227,6 +1443,17 @@ public class SetupStagePanel extends JPanel {
                         ? UiKit.fmt(scr.getRiggingHoistCapacityKg()) : "");
                 populateHoistTypeCombo(scr.getRiggingHoistTypeId());
                 pRiggingHoistCapacity.setEnabled(pRiggingHoistType.getSelectedItem() == null);
+                populateTrussProfileCombo(scr.getRiggingTrussProfileId());
+                pRiggingTrussLength.setText(scr.getRiggingTrussLengthMm() != null
+                        ? UiKit.fmt(scr.getRiggingTrussLengthMm()) : "");
+                pRiggingTrussLength.setToolTipText(String.format("Целевая длина фермы, мм — пусто означает авто"
+                        + " (сейчас %.0f мм, физическая ширина экрана).",
+                        com.vjstb.ledscheme.service.TrussCalc.suggestTrussLengthMm(scr, model.typeOf(scr))));
+                pRiggingTrussSymmetric.setSelected(scr.isRiggingTrussSymmetricOffset());
+                pRiggingTrussManualOffset.setEnabled(!scr.isRiggingTrussSymmetricOffset());
+                pRiggingTrussManualOffset.setText(scr.getRiggingTrussManualLeftOffsetMm() != null
+                        ? UiKit.fmt(scr.getRiggingTrussManualLeftOffsetMm()) : "");
+                pRiggingTrussNotes.setText(scr.getRiggingTrussNotes() != null ? scr.getRiggingTrussNotes() : "");
                 pRefreshHz.setSelectedItem(scr.getRefreshRateHz());
                 pBitDepth.setSelectedItem(scr.getColorBitDepth());
 
@@ -1341,8 +1568,9 @@ public class SetupStagePanel extends JPanel {
     private void populateHoistTypeCombo(String selectId) {
         DefaultComboBoxModel<com.vjstb.ledscheme.model.HoistType> m = new DefaultComboBoxModel<>();
         m.addElement(null);
-        com.vjstb.ledscheme.model.HoistType toSelect = null;
-        for (com.vjstb.ledscheme.model.HoistType h : model.getHoistTypes()) {
+        List<com.vjstb.ledscheme.model.HoistType> candidates = model.getHoistTypes();
+        com.vjstb.ledscheme.model.HoistType toSelect = selectId == null ? pickDefault(candidates) : null;
+        for (com.vjstb.ledscheme.model.HoistType h : candidates) {
             m.addElement(h);
             if (selectId != null && selectId.equals(h.getId())) {
                 toSelect = h;
@@ -1350,6 +1578,24 @@ public class SetupStagePanel extends JPanel {
         }
         pRiggingHoistType.setModel(m);
         pRiggingHoistType.setSelectedItem(toSelect);
+    }
+
+    /** {@code null} в начале списка -- «не выбрано», см. javadoc {@link #pRiggingTrussProfile}.
+     *  {@code selectId} не найден в текущей библиотеке (запись удалена) -- остаёмся на «не
+     *  выбрано», та же логика, что {@link #populateHoistTypeCombo}. */
+    private void populateTrussProfileCombo(String selectId) {
+        DefaultComboBoxModel<com.vjstb.ledscheme.model.TrussProfile> m = new DefaultComboBoxModel<>();
+        m.addElement(null);
+        List<com.vjstb.ledscheme.model.TrussProfile> candidates = model.getTrussProfiles();
+        com.vjstb.ledscheme.model.TrussProfile toSelect = selectId == null ? pickDefault(candidates) : null;
+        for (com.vjstb.ledscheme.model.TrussProfile t : candidates) {
+            m.addElement(t);
+            if (selectId != null && selectId.equals(t.getId())) {
+                toSelect = t;
+            }
+        }
+        pRiggingTrussProfile.setModel(m);
+        pRiggingTrussProfile.setSelectedItem(toSelect);
     }
 
     private static <T> void syncList(DefaultListModel<T> lm, List<T> items) {

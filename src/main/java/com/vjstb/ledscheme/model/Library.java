@@ -32,6 +32,9 @@ public class Library {
      *  грузоподъёмностью (WLL) — см. HoistType, RIGGING_CALC_NOTES.md и
      *  {@code Screen#riggingHoistTypeId}. */
     private List<HoistType> hoistTypes = new ArrayList<>();
+    /** Библиотека типоразмерных рядов ферм подвеса (список доступных длин сегментов) —
+     *  см. TrussProfile, RIGGING_CALC_NOTES.md и {@code Screen#riggingTrussProfileId}. */
+    private List<TrussProfile> trussProfiles = new ArrayList<>();
     /** Библиотека элементов наземного конструктива (рамы/короткие рамы/стаканы/
      *  контейнеры балласта) — см. StructureFrameType, STRUCTURE_CALC_NOTES.md и
      *  {@code Screen#structureFrameTypeId} и соседние FK-поля. */
@@ -91,6 +94,7 @@ public class Library {
     private List<InterfaceType> sharedInterfaceTypes = new ArrayList<>();
     private List<CableLengthProfile> sharedCableLengthProfiles = new ArrayList<>();
     private List<HoistType> sharedHoistTypes = new ArrayList<>();
+    private List<TrussProfile> sharedTrussProfiles = new ArrayList<>();
     private List<StructureFrameType> sharedStructureFrameTypes = new ArrayList<>();
     private List<CaseType> sharedCaseTypes = new ArrayList<>();
     private List<VehicleType> sharedVehicleTypes = new ArrayList<>();
@@ -150,6 +154,14 @@ public class Library {
 
     public void setHoistTypes(List<HoistType> hoistTypes) {
         this.hoistTypes = hoistTypes;
+    }
+
+    public List<TrussProfile> getTrussProfiles() {
+        return trussProfiles;
+    }
+
+    public void setTrussProfiles(List<TrussProfile> trussProfiles) {
+        this.trussProfiles = trussProfiles;
     }
 
     public List<StructureFrameType> getStructureFrameTypes() {
@@ -280,6 +292,14 @@ public class Library {
         this.sharedHoistTypes = sharedHoistTypes;
     }
 
+    public List<TrussProfile> getSharedTrussProfiles() {
+        return sharedTrussProfiles;
+    }
+
+    public void setSharedTrussProfiles(List<TrussProfile> sharedTrussProfiles) {
+        this.sharedTrussProfiles = sharedTrussProfiles;
+    }
+
     public List<StructureFrameType> getSharedStructureFrameTypes() {
         return sharedStructureFrameTypes;
     }
@@ -360,6 +380,24 @@ public class Library {
         for (HoistType h : hoistTypes) {
             if (h.getId().equals(id)) {
                 return h;
+            }
+        }
+        return null;
+    }
+
+    /** Общее, затем личное — см. class-javadoc про общую/личную библиотеку. */
+    public TrussProfile trussProfileById(String id) {
+        if (id == null) {
+            return null;
+        }
+        for (TrussProfile t : sharedTrussProfiles) {
+            if (t.getId().equals(id)) {
+                return t;
+            }
+        }
+        for (TrussProfile t : trussProfiles) {
+            if (t.getId().equals(id)) {
+                return t;
             }
         }
         return null;

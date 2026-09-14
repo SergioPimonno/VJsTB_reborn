@@ -9,6 +9,7 @@ import com.vjstb.ledscheme.model.CableLengthProfile;
 import com.vjstb.ledscheme.model.CaseType;
 import com.vjstb.ledscheme.model.HoistType;
 import com.vjstb.ledscheme.model.StructureFrameType;
+import com.vjstb.ledscheme.model.TrussProfile;
 import com.vjstb.ledscheme.model.VehicleType;
 import com.vjstb.ledscheme.model.CableType;
 import com.vjstb.ledscheme.model.CanvasPlacement;
@@ -1170,6 +1171,25 @@ public class AppModel {
         screen.setRiggingSafetyFactorMin(riggingSafetyFactorMin);
         screen.setRiggingHoistCapacityKg(riggingHoistCapacityKg);
         screen.setRiggingHoistTypeId(riggingHoistTypeId);
+        changed();
+    }
+
+    /** Параметры фермы подвеса (см. {@link TrussCalc}, RIGGING_CALC_NOTES.md) — отдельный
+     *  метод-сосед {@link #updateScreenMount}, тем же принципом, что и {@link
+     *  #updateScreenStructure} для полей конструктива. {@code trussLengthMmOverride <= 0}
+     *  трактуется как "авто" (сбрасывается в {@code null} — см. {@link
+     *  TrussCalc#effectiveTrussLengthMm}). {@code manualLeftOffsetMm} персистится только
+     *  при {@code symmetricOffset == false} — иначе устаревшее ручное число не должно
+     *  молча "проснуться", если пользователь позже снова снимет галочку симметрии. */
+    public void updateScreenTruss(Screen screen, String trussProfileId, Double trussLengthMmOverride,
+                                   boolean symmetricOffset, Double manualLeftOffsetMm, String trussNotes) {
+        pushUndo("Правка фермы подвеса экрана");
+        screen.setRiggingTrussProfileId(trussProfileId);
+        screen.setRiggingTrussLengthMm(trussLengthMmOverride != null && trussLengthMmOverride > 0
+                ? trussLengthMmOverride : null);
+        screen.setRiggingTrussSymmetricOffset(symmetricOffset);
+        screen.setRiggingTrussManualLeftOffsetMm(symmetricOffset ? null : manualLeftOffsetMm);
+        screen.setRiggingTrussNotes(trussNotes);
         changed();
     }
 
@@ -2383,6 +2403,47 @@ public class AppModel {
 
     /** Общая библиотека ("GTO") ++ личная — см. javadoc {@link #getCabinetTypes()}
      *  про то же разделение. */
+    public List<TrussProfile> getTrussProfiles() {
+        List<TrussProfile> union = new ArrayList<>(workspace.getSharedTrussProfiles());
+        union.addAll(workspace.getTrussProfiles());
+        return union;
+    }
+
+    public boolean isSharedTrussProfile(String id) {
+        return id != null && workspace.getSharedTrussProfiles().stream().anyMatch(t -> t.getId().equals(id));
+    }
+
+    private void requireUniqueTrussProfileName(String name, String ignoreId) {
+        for (TrussProfile t : getTrussProfiles()) {
+            if (t.getName().equalsIgnoreCase(name) && !t.getId().equals(ignoreId)) {
+                throw new IllegalStateException("Профиль фермы «" + name + "» уже есть в библиотеке");
+            }
+        }
+    }
+
+    public TrussProfile addTrussProfile(TrussProfile profile) {
+        requireUniqueTrussProfileName(profile.getName(), null);
+        workspace.getTrussProfiles().add(profile);
+        changed();
+        return profile;
+    }
+
+    public void updateTrussProfile(TrussProfile edited) {
+        requireUniqueTrussProfileName(edited.getName(), edited.getId());
+        TrussProfile existing = getTrussProfiles().stream()
+                .filter(t -> t.getId().equals(edited.getId())).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Профиль фермы не найден в библиотеке"));
+        existing.applyEditedValues(edited);
+        changed();
+    }
+
+    public void deleteTrussProfile(String id) {
+        workspace.getTrussProfiles().removeIf(t -> t.getId().equals(id));
+        changed();
+    }
+
+    /** Общая библиотека ("GTO") ++ личная — см. javadoc {@link #getCabinetTypes()}
+     *  про то же разделение. */
     public List<StructureFrameType> getStructureFrameTypes() {
         List<StructureFrameType> union = new ArrayList<>(workspace.getSharedStructureFrameTypes());
         union.addAll(workspace.getStructureFrameTypes());
@@ -2614,6 +2675,9 @@ public class AppModel {
                     case "HOIST" -> applyOne(workspace.getSharedHoistTypes(), workspace.getHoistTypes(), dto,
                             HoistType.class, HoistType::getId, HoistType::setId, HoistType::getName,
                             this::migrateHoistTypeReferences);
+                    case "TRUSS_PROFILE" -> applyOne(workspace.getSharedTrussProfiles(), workspace.getTrussProfiles(),
+                            dto, TrussProfile.class, TrussProfile::getId, TrussProfile::setId, TrussProfile::getName,
+                            this::migrateTrussProfileReferences);
                     case "STRUCTURE_FRAME" -> applyOne(workspace.getSharedStructureFrameTypes(),
                             workspace.getStructureFrameTypes(), dto, StructureFrameType.class,
                             StructureFrameType::getId, StructureFrameType::setId, StructureFrameType::getName,
@@ -2677,6 +2741,8 @@ public class AppModel {
                     workspace.getSharedCableLengthProfiles().removeIf(p -> p.getId().equals(dto.id()));
             case "HOIST" -> removeSharedIfUnreferenced(workspace.getSharedHoistTypes(), dto.id(),
                     HoistType::getId, this::isHoistTypeReferenced);
+            case "TRUSS_PROFILE" -> removeSharedIfUnreferenced(workspace.getSharedTrussProfiles(), dto.id(),
+                    TrussProfile::getId, this::isTrussProfileReferenced);
             case "STRUCTURE_FRAME" -> removeSharedIfUnreferenced(workspace.getSharedStructureFrameTypes(), dto.id(),
                     StructureFrameType::getId, this::isStructureFrameTypeReferenced);
             case "CASE" -> workspace.getSharedCaseTypes().removeIf(c -> c.getId().equals(dto.id()));
@@ -2742,6 +2808,19 @@ public class AppModel {
             for (Scene scene : project.getScenes()) {
                 for (Screen screen : scene.getScreens()) {
                     if (id.equals(screen.getRiggingHoistTypeId())) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean isTrussProfileReferenced(String id) {
+        for (Project project : workspace.getProjects()) {
+            for (Scene scene : project.getScenes()) {
+                for (Screen screen : scene.getScreens()) {
+                    if (id.equals(screen.getRiggingTrussProfileId())) {
                         return true;
                     }
                 }
@@ -2896,6 +2975,18 @@ public class AppModel {
                 for (Screen screen : scene.getScreens()) {
                     if (oldId.equals(screen.getRiggingHoistTypeId())) {
                         screen.setRiggingHoistTypeId(newId);
+                    }
+                }
+            }
+        }
+    }
+
+    private void migrateTrussProfileReferences(String oldId, String newId) {
+        for (Project project : workspace.getProjects()) {
+            for (Scene scene : project.getScenes()) {
+                for (Screen screen : scene.getScreens()) {
+                    if (oldId.equals(screen.getRiggingTrussProfileId())) {
+                        screen.setRiggingTrussProfileId(newId);
                     }
                 }
             }

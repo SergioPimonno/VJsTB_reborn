@@ -505,6 +505,7 @@ public class OutputStagePanel extends JPanel {
 
         addWiringSheets(wb, project);
         addStructureSheet(wb, project);
+        addTrussSheet(wb, project);
         addOverallEquipmentSheet(wb, project, cabinets, equipmentNodes);
         // Лист "Общий список" физически создаётся последним (нужны уже посчитанные
         // выше карты/агрегаты остальных листов), но по прямому запросу пользователя
@@ -545,6 +546,38 @@ public class OutputStagePanel extends JPanel {
             }
         }
         com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(sheet, 7);
+    }
+
+    /** Спецификация фермы подвеса (см. {@code service.TrussCalc}, RIGGING_CALC_NOTES.md) —
+     *  по одной строке на каждый экран с {@code mountType == RIGGED} и выбранным {@code
+     *  riggingTrussProfileId} (по образцу {@link #addStructureSheet} — экраны без выбранного
+     *  профиля просто отсутствуют в списке, лист может остаться пустым). Тот же {@code
+     *  TrussCalc.compute}, что и {@code SetupStagePanel#buildTrussSpec} — единственный
+     *  источник правды. */
+    private void addTrussSheet(Workbook wb, Project project) {
+        Sheet sheet = com.vjstb.ledscheme.service.SpecXlsxWriter.addSheet(wb, "Фермы",
+                "Сцена", "Экран", "Тип фермы", "Целевая длина, мм", "Отступ слева, мм", "Отступ справа, мм",
+                "Комплект", "Сегментов, шт", "Соединителей, шт");
+        for (Scene scene : project.getScenes()) {
+            for (Screen scr : scene.getScreens()) {
+                if (scr.getMountType() != com.vjstb.ledscheme.model.ScreenMountType.RIGGED
+                        || scr.getRiggingTrussProfileId() == null) {
+                    continue;
+                }
+                com.vjstb.ledscheme.model.TrussProfile profile =
+                        model.getWorkspace().trussProfileById(scr.getRiggingTrussProfileId());
+                com.vjstb.ledscheme.service.TrussCalc.Result r = com.vjstb.ledscheme.service.TrussCalc.compute(
+                        scr, model.typeOf(scr), model.getWorkspace());
+                String kitText = r.pieces() == null ? "каталог пуст"
+                        : r.pieces().stream()
+                                .map(p -> UiKit.fmt(p.lengthM()) + "м × " + p.count())
+                                .collect(java.util.stream.Collectors.joining(", "));
+                com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, scene.getName(), scr.getName(),
+                        profile != null ? profile.getName() : "(запись удалена)", r.targetLengthMm(),
+                        r.leftOffsetMm(), r.rightOffsetMm(), kitText, r.totalPieceCount(), r.connectorCount());
+            }
+        }
+        com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(sheet, 9);
     }
 
     /** Лист «Общий список» — по прямому запросу пользователя, ОДНА сводная таблица
@@ -599,6 +632,36 @@ public class OutputStagePanel extends JPanel {
         for (var entry : hoists.entrySet()) {
             com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Такелаж", entry.getKey(), entry.getValue(),
                     "шт");
+        }
+
+        // Фермы -- сегменты/соединители, просуммированные по каждому профилю библиотеки
+        // (см. addTrussSheet за детализацией по экранам).
+        java.util.LinkedHashMap<String, int[]> trusses = new java.util.LinkedHashMap<>();
+        for (Scene scene : project.getScenes()) {
+            for (Screen scr : scene.getScreens()) {
+                if (scr.getMountType() != com.vjstb.ledscheme.model.ScreenMountType.RIGGED
+                        || scr.getRiggingTrussProfileId() == null) {
+                    continue;
+                }
+                com.vjstb.ledscheme.model.TrussProfile profile =
+                        model.getWorkspace().trussProfileById(scr.getRiggingTrussProfileId());
+                if (profile == null) {
+                    continue;
+                }
+                com.vjstb.ledscheme.service.TrussCalc.Result r = com.vjstb.ledscheme.service.TrussCalc.compute(
+                        scr, model.typeOf(scr), model.getWorkspace());
+                if (r.pieces() == null) {
+                    continue;
+                }
+                trusses.merge(profile.getName(), new int[]{r.totalPieceCount(), r.connectorCount()},
+                        (a, bb) -> new int[]{a[0] + bb[0], a[1] + bb[1]});
+            }
+        }
+        for (var entry : trusses.entrySet()) {
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Фермы", entry.getKey() + " — сегментов",
+                    entry.getValue()[0], "шт");
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Фермы", entry.getKey() + " — соединителей",
+                    entry.getValue()[1], "шт");
         }
 
         // Рамы -- ОДНО общее число (вертикальные + перемычки + секции базы), не три строки, по
