@@ -73,7 +73,6 @@ public class PreferencesDialog extends JDialog {
     // Переключатели создаются один раз в createControls() и живут в обеих раскладках.
     private JCheckBox previewWidgetCheck;
     private JCheckBox canvasSnapToCenterCheck;
-    private JCheckBox shapeEditorFloatingCheck;
     private JSpinner snapThresholdSpinner;
     private JSpinner snapStrengthSpinner;
     private JCheckBox foolProofWiringCheck;
@@ -212,14 +211,6 @@ public class PreferencesDialog extends JDialog {
             }
         });
         wireHopRow.add(wireHopStyleCombo);
-
-        shapeEditorFloatingCheck = check("«Форма экрана»: открывать отдельным всплывающим окном,"
-                        + " а не областью в «Сетапе»",
-                settings.activeProfile().isShapeEditorFloating(),
-                "Окно живое — показывает ТЕКУЩИЙ выбранный экран и обновляется при смене выбора, не фиксированный"
-                        + " снимок на момент открытия. Кнопка «Изменить форму экрана» в «Сетапе» тогда открывает/"
-                        + "поднимает это окно вместо показа встроенной секции на месте.",
-                settings::setShapeEditorFloating);
 
         exportRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         exportRow.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -422,7 +413,7 @@ public class PreferencesDialog extends JDialog {
 
         allChecks = new JCheckBox[] {
                 previewWidgetCheck, canvasSnapToCenterCheck, foolProofWiringCheck, schemaScreensAsWiringCheck,
-                shapeEditorFloatingCheck, signalSocketWiringCheck,
+                signalSocketWiringCheck,
                 signalConnectorDisplayModeCheck, signalConnectorsVerticalCheck, signalChainEndpointSocketsCheck,
                 signalSchemaAutoPopulateCheck, signalSceneStatsCheck, powerSocketWiringCheck,
                 powerConnectorDisplayModeCheck, powerConnectorsVerticalCheck, powerChainEndpointSocketsCheck,
@@ -486,7 +477,7 @@ public class PreferencesDialog extends JDialog {
         content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
 
         content.add(UiKit.section("Общие", stack(previewWidgetCheck, canvasSnapToCenterCheck, snapRow,
-                foolProofWiringCheck, schemaScreensAsWiringCheck, wireHopRow, shapeEditorFloatingCheck,
+                foolProofWiringCheck, schemaScreensAsWiringCheck, wireHopRow,
                 exportRow)));
         content.add(Box.createVerticalStrut(8));
         content.add(UiKit.section("Сигнал", stack(signalSocketWiringCheck, signalConnectorDisplayModeCheck,
@@ -544,7 +535,6 @@ public class PreferencesDialog extends JDialog {
         span(g, row, "«Защита от дурака»: нельзя вход↔вход и выход↔выход", foolProofWiringCheck);
         span(g, row, "Узел экрана = мини-схема расключения его кабинетов", schemaScreensAsWiringCheck);
         span(g, row, "«Мостики» на пересечениях линий связи (обход, как в ГОСТ)", wireHopRow);
-        span(g, row, "«Форма экрана» — отдельным плавающим окном", shapeEditorFloatingCheck);
 
         category(g, row, "Коммутация через гнёзда разъёмов");
         triple(g, row, "Линия цепляется за конкретный разъём, а не за блок", "мастер-переключатель для строк ниже",
@@ -727,7 +717,6 @@ public class PreferencesDialog extends JDialog {
     private void refresh() {
         previewWidgetCheck.setSelected(settings.activeProfile().isPreviewWidgetEnabled());
         canvasSnapToCenterCheck.setSelected(settings.activeProfile().isCanvasSnapToCenter());
-        shapeEditorFloatingCheck.setSelected(settings.activeProfile().isShapeEditorFloating());
         snapThresholdSpinner.setValue(settings.activeProfile().getSnapThresholdPx());
         snapStrengthSpinner.setValue(settings.activeProfile().getSnapStrengthPercent());
         foolProofWiringCheck.setSelected(settings.activeProfile().isFoolProofWiringEnabled());

@@ -219,17 +219,6 @@ public class UserProfile {
      *  значение, когда пользователь ещё ничего не выбрал в текущей сессии. */
     private String exportRootFolder;
 
-    /** «Форма экрана» (см. {@code ui.ShapeEditorPanel}) открывается ОТДЕЛЬНЫМ
-     *  всплывающим окном вместо встроенной секции в «Сетапе» — запрос
-     *  пользователя, тот же паттерн, что уже применялся к 3D-превью конструктива
-     *  (см. {@code ui.Structure3DDialog}: "вынеси в отдельное окно, как
-     *  калькулятор видеотаймингов"). Окно живое — показывает ТЕКУЩИЙ выбранный
-     *  экран приложения и обновляется при смене выбора, а не фиксированный
-     *  снимок на момент открытия (см. {@code ui.ShapeEditorDialog}). По
-     *  умолчанию выключено — прежнее встроенное поведение (кнопка «Изменить
-     *  форму экрана» показывает/прячет секцию на месте) не меняется, пока не
-     *  включат явно в «Предпочтения → Форма экрана». */
-    private boolean shapeEditorFloating;
 
     /** Показывать ли блок «Статистика сцены» (под «Статистика экрана») на этапах
      *  Питание/Сигнал — раздельно, т.к. пользователю может быть нужна сводка по
@@ -567,14 +556,6 @@ public class UserProfile {
         this.exportRootFolder = exportRootFolder;
     }
 
-    public boolean isShapeEditorFloating() {
-        return shapeEditorFloating;
-    }
-
-    public void setShapeEditorFloating(boolean shapeEditorFloating) {
-        this.shapeEditorFloating = shapeEditorFloating;
-    }
-
     public boolean isPowerSceneStatsEnabled() {
         return powerSceneStatsEnabled;
     }
@@ -678,7 +659,6 @@ public class UserProfile {
         p.powerUnitKw = powerUnitKw;
         p.maskLogoImagePath = maskLogoImagePath;
         p.exportRootFolder = exportRootFolder;
-        p.shapeEditorFloating = shapeEditorFloating;
         p.powerSceneStatsEnabled = powerSceneStatsEnabled;
         p.signalSceneStatsEnabled = signalSceneStatsEnabled;
         p.lafStyle = lafStyle;

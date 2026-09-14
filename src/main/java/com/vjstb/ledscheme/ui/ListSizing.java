@@ -38,6 +38,15 @@ public final class ListSizing {
         int w = Math.max(scroll.getPreferredSize().width, 100);
         scroll.setPreferredSize(new Dimension(w, h));
         scroll.setMaximumSize(new Dimension(capWidth ? w : Integer.MAX_VALUE, h));
+        // Баг-репорт 2026-09-14: preferred/maximum сами по себе НЕ мешают ранее
+        // перетянутому (и запомненному, см. UiKit.persistentDivider) разделителю
+        // JSplitPane оставлять секцию МЕНЬШЕ, чем нужно для показа всех текущих
+        // позиций (напр. пользователь один раз сжал "Проекты" руками, когда
+        // проектов было мало, потом их стало больше — новые проекты просто не
+        // помещались, хотя formально прокрутка работала). minimumSize — жёсткий
+        // пол именно для JSplitPane: разделитель физически не пустит секцию ниже
+        // него ни ручным перетаскиванием, ни восстановлением сохранённой доли.
+        scroll.setMinimumSize(new Dimension(Math.min(w, 100), h));
         // Как и в перегрузке с явной шириной ниже — одного scroll.revalidate()
         // недостаточно, когда список лежит в JSplitPane (см. LibrariesStagePanel,
         // дерево категорий): родитель может остаться "valid" со старой высотой
@@ -68,6 +77,8 @@ public final class ListSizing {
         int h = rowsHeight(list, rows);
         scroll.setPreferredSize(new Dimension(width, h));
         scroll.setMaximumSize(new Dimension(width, h));
+        // См. комментарий в перегрузке выше про minimumSize и persistentDivider.
+        scroll.setMinimumSize(new Dimension(Math.min(width, 100), h));
         // scroll.revalidate() САМО ПО СЕБЕ не всегда заставляет BoxLayout
         // непосредственного родителя (vbox секции) реально пересчитать позицию/
         // ширину этого списка заново — на практике родитель иногда остаётся

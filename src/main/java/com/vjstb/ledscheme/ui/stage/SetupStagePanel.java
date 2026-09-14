@@ -11,7 +11,6 @@ import com.vjstb.ledscheme.ui.ListSizing;
 import com.vjstb.ledscheme.ui.MathFields;
 import com.vjstb.ledscheme.ui.NamedRenderer;
 import com.vjstb.ledscheme.ui.Palette;
-import com.vjstb.ledscheme.ui.ShapeEditorPanel;
 import com.vjstb.ledscheme.ui.UiKit;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
@@ -68,16 +67,7 @@ public class SetupStagePanel extends JPanel {
     private final JLabel prerigWeight = new JLabel();
     private final com.vjstb.ledscheme.ui.SceneCanvasPanel prerigPreview;
     private final JButton calcRiggingBtn = new JButton("Рассчитать точки подвеса");
-    private final JButton toggleShapeBtn = new JButton("Изменить форму экрана");
     private final JButton alignCabinetsBtn = new JButton("Выровнять кабинеты по сетке");
-    /** «Форма экрана» раньше показывалась ВСЕГДА, пока выбран экран — редактор нужен
-     *  редко (только вырезание/переформовка ячеек), а место в правой колонке отнимал
-     *  постоянно (баг-репорт: "мешается"). Теперь секция скрыта по умолчанию и
-     *  появляется только по кнопке {@link #toggleShapeBtn} — см. {@code refresh()}
-     *  (условие {@code scr != null && shapeEditorRequested}). НЕ персистентно
-     *  (сбрасывается на скрыто при каждом запуске) — сознательно, это разовое
-     *  действие "хочу поправить форму", а не постоянный режим работы. */
-    private boolean shapeEditorRequested = false;
 
     private final JPanel paramsSection;
     // Явное число колонок (а не пустой конструктор) — предпочтительная ширина поля
@@ -92,6 +82,8 @@ public class SetupStagePanel extends JPanel {
     private final JTextField pY = new JTextField(8);
     private final JComboBox<com.vjstb.ledscheme.model.ScreenMountType> pMountType =
             new JComboBox<>(com.vjstb.ledscheme.model.ScreenMountType.values());
+    private final JComboBox<com.vjstb.ledscheme.model.ScreenTagColor> pTagColor =
+            new JComboBox<>(com.vjstb.ledscheme.model.ScreenTagColor.values());
     private final JSpinner pRiggingPoints = new JSpinner(new SpinnerNumberModel(0, 0, 500, 1));
     private final JTextField pRiggingNotes = new JTextField(10);
     private final JSpinner pRiggingSafetyFactor = new JSpinner(new SpinnerNumberModel(5.0, 1.0, 20.0, 0.5));
@@ -114,6 +106,7 @@ public class SetupStagePanel extends JPanel {
     private final JTextField pRiggingTrussNotes = new JTextField(10);
     private final JButton calcTrussBtn = new JButton("Рассчитать фермы");
     private final JButton buildTrussSpecBtn = new JButton("Собрать спецификацию");
+    private final JButton buildTrussSpecSceneBtn = new JButton("Собрать спецификацию для сцены");
 
     private final JComboBox<Integer> pRefreshHz = new JComboBox<>(new Integer[]{50, 60, 120, 144, 240});
     private final JComboBox<Integer> pBitDepth = new JComboBox<>(new Integer[]{8, 10, 12});
@@ -159,19 +152,6 @@ public class SetupStagePanel extends JPanel {
     private JPanel trussFieldsPanel;
     private JPanel structureFieldsPanel;
 
-    private final JPanel shapeSection;
-    private JPanel shapeBody;
-    private final ShapeEditorPanel shapeEditor;
-    private final JScrollPane shapeScroll;
-    private final JLabel shapeHint = new JLabel();
-    /** Всплывающее окно «Форма экрана» (см. {@link UserProfile#isShapeEditorFloating}) —
-     *  ленивое, {@code null}, пока ни разу не открывалось в этой сессии редактора.
-     *  Держит {@link #shapeScroll} (тот же ЕДИНСТВЕННЫЙ экземпляр, что и у встроенной
-     *  секции — {@link #syncShapeEditorMode} переставляет его между секцией и этим
-     *  диалогом, не создаёт копию) — так масштаб/состояние {@link #shapeEditor} не
-     *  сбрасывается при переключении встроенный/всплывающий. */
-    private com.vjstb.ledscheme.ui.ShapeEditorDialog shapeEditorDialog;
-
     // Поля (не локальные переменные), чтобы rebuild() мог явно дёрнуть revalidate/repaint
     // именно на тех разделителях, чьи дети меняют видимость — иначе секции иногда не
     // перерисовываются сразу после выбора проекта/сцены, а только после следующего
@@ -179,8 +159,34 @@ public class SetupStagePanel extends JPanel {
     private final JSplitPane leftSplit3;
     private final JSplitPane leftSplit2;
     private final JSplitPane leftSplitNav;
-    private final JSplitPane rightSplit;
-    private JSplitPane prerigSplit;
+
+    /** v3.0: «Прериг сцены» больше не делит высоту с постоянно видимым блоком полей —
+     *  холст ({@link #prerigLayered}) занимает всю секцию целиком, а {@link
+     *  #riggingFieldsPanel}/{@link #trussFieldsPanel}/{@link #structureFieldsPanel}
+     *  (построены как раньше, без изменений) показываются ПО ЗАПРОСУ — либо плавающей
+     *  карточкой поверх холста ({@link #floatingCard}, слой {@code PALETTE_LAYER} в
+     *  {@link #prerigLayered}), либо, если пользователь перетащил карточку к правому
+     *  краю ({@link #inspectorDocked}), закреплённой колонкой ({@link #dockPanel},
+     *  {@code BorderLayout.EAST} в {@link #prerigCanvasHost}). Открывается кликом по
+     *  экрану на холсте ({@link com.vjstb.ledscheme.ui.SceneCanvasPanel.RigLevelListener})
+     *  или кнопкой в верхней панели ({@link #riggingQuickBtn}/{@link
+     *  #structureQuickBtn}) — см. {@link #showInspector}/{@link #closeInspector}/
+     *  {@link #dockCurrentInspector}. <b>Одна карточка "Подвес" на лебёдки+ферму
+     *  вместе</b> (не две отдельных, как в первой версии v3.0) — баг-репорт
+     *  2026-09-14: экран должен быть единственным помеченным элементом сцены,
+     *  лебёдки/ферма — его зависимые атрибуты, не самостоятельные "метки" со своими
+     *  отдельными карточками. */
+    private javax.swing.JLayeredPane prerigLayered;
+    private JPanel prerigCanvasHost;
+    private JPanel dockPanel;
+    private JPanel dockZoneIndicator;
+    private JPanel floatingCard;
+    private JPanel riggingCard;
+    private JPanel structureCard;
+    private String openInspectorLevel;
+    private boolean inspectorDocked;
+    private JButton riggingQuickBtn;
+    private JButton structureQuickBtn;
 
     public SetupStagePanel(AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings) {
         this.model = model;
@@ -206,43 +212,24 @@ public class SetupStagePanel extends JPanel {
         JPanel left = new JPanel(new BorderLayout());
         left.add(leftSplitNav, BorderLayout.CENTER);
 
-        // Правая колонка — сводка (прериг) и предпросмотр/редактор формы экрана,
-        // между ними перетаскиваемый разделитель (тот же приём, что и у левой
-        // колонки, см. leftSplit2/leftSplit3/leftSplitNav) — раньше это была просто
-        // жёстко сложенная колонка (vbox), из-за чего при небольшой высоте окна
-        // «Форма экрана» уезжала за нижний край окна без возможности отдать ей
-        // больше места за счёт «Прериг сцены» (баг-репорт).
+        // v3.0: правая колонка — теперь только "Прериг сцены" целиком, без соседней
+        // «Формы экрана» (та функция переехала в сам холст — ПКМ по кабинету в
+        // режиме «Кабинеты по отдельности» открывает то же радиальное меню, что
+        // раньше показывал отдельный редактор, см. SceneCanvasPanel — баг-репорт
+        // 2026-09-14 "избавляемся от отдельного окна"). Разделитель между "Прериг
+        // сцены" и чем-то ещё больше не нужен — секция одна.
         prerigPreview = new com.vjstb.ledscheme.ui.SceneCanvasPanel(model, settings);
         prerigPreview.setShowRiggingPoints(true);
         prerigSection = buildPrerig();
-        shapeEditor = new ShapeEditorPanel(model, settings);
-        shapeScroll = new JScrollPane(shapeEditor);
-        shapeSection = buildShapeEditor();
-        // Одноразовая миграция: до фикса UiKit.stretchToViewport «Форма экрана» была
-        // жёстко зажата потолком 220px, поэтому у части пользователей могла осесть
-        // сильно перекошенная доля разделителя (например, 0.8 — руками растягивали
-        // «Прериг сцены», т.к. отдавать место «Форме экрана» сверх 220px всё равно
-        // было бессмысленно из-за потолка). Теперь потолка нет — сбрасываем один раз,
-        // дальше ручной выбор пользователя не трогаем (см. флаг ниже). Дефолт 0.58,
-        // не 0.5 — «Прериг сцены» (мини-схема раскладки) обычно нужнее просторнее,
-        // чем «Форма экрана» (баг-репорт: окно визуализации прерига слишком мелкое).
-        if (settings.getLayoutProportion("setup.prerigShape.migratedV2", 0) == 0) {
-            settings.setLayoutProportion("setup.prerigShape", 0.58);
-            settings.setLayoutProportion("setup.prerigShape.migratedV2", 1);
-        }
-        rightSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, prerigSection, shapeSection);
-        rightSplit.setContinuousLayout(true);
-        rightSplit.setResizeWeight(0.5);
-        UiKit.persistentDivider(settings, "setup.prerigShape", rightSplit, 0.58);
 
         JScrollPane leftScroll = new JScrollPane(left);
         leftScroll.setBorder(null);
         leftScroll.getVerticalScrollBar().setUnitIncrement(16);
-        // stretchToViewport(rightSplit) -- см. javadoc метода: без этой обёртки JSplitPane
-        // не растягивается на высоту окна внутри JScrollPane (сам не Scrollable), из-за
-        // чего «Прериг сцены»/«Форма экрана» вычисляли начальную долю разделителя от
-        // заниженной высоты и «Форма экрана» пропадала/появлялась крошечной (баг-репорт).
-        JScrollPane rightScroll = new JScrollPane(UiKit.stretchToViewport(rightSplit));
+        // stretchToViewport(prerigSection) -- см. javadoc метода: без этой обёртки
+        // JPanel не растягивается на высоту окна внутри JScrollPane (сам не
+        // Scrollable), из-за чего «Прериг сцены» вычисляла начальную высоту от
+        // заниженного значения и появлялась крошечной (баг-репорт).
+        JScrollPane rightScroll = new JScrollPane(UiKit.stretchToViewport(prerigSection));
         rightScroll.setBorder(null);
         rightScroll.getVerticalScrollBar().setUnitIncrement(16);
 
@@ -432,19 +419,53 @@ public class SetupStagePanel extends JPanel {
         stats.add(statRow("Вес сцены", prerigWeight));
         stats.add(UiKit.vgap());
 
+        // v3.0: быстрый доступ к панелям уровней подвеса/конструктива — раньше это
+        // были постоянно видимые блоки полей ПОД холстом (см. class-javadoc {@link
+        // #prerigLayered}), теперь холст растягивается на всю секцию, а панели
+        // открываются по запросу — этой кнопкой или кликом по соответствующему
+        // уровню прямо на холсте (см. setRigLevelListener ниже). Кнопка «Форма
+        // экрана» отсюда убрана — та же правка ячеек (вырезание/переформовка)
+        // теперь прямо на холсте, ПКМ по кабинету в режиме «Кабинеты по отдельности»
+        // (см. SceneCanvasPanel, баг-репорт 2026-09-14 "избавляемся от отдельного
+        // окна").
+        riggingQuickBtn = new JButton("Подвес…");
+        riggingQuickBtn.setToolTipText("Лебёдки (модель/WLL, точки, запас прочности) и ферма (тип/длина/отступы)"
+                + " одного экрана вместе — то же самое открывается кликом по ферме/точкам над экраном на холсте.");
+        riggingQuickBtn.addActionListener(e -> showInspector("rigging"));
+        structureQuickBtn = new JButton("Конструктив…");
+        structureQuickBtn.setToolTipText("Наземный конструктив (башня/рама/балласт) выбранного экрана.");
+        structureQuickBtn.addActionListener(e -> showInspector("structure"));
+        JPanel quickButtonsRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        quickButtonsRow.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        quickButtonsRow.add(riggingQuickBtn);
+        quickButtonsRow.add(structureQuickBtn);
+        stats.add(quickButtonsRow);
+        stats.add(UiKit.vgap());
+
         // Мини-превью раскладки сцены: показывает все экраны сцены сразу, но
         // активным (выделенным) становится только выбранный в списке слева —
-        // остальные притушены (setCompact(true)), без подписей и метража. Точки
-        // подвеса (жёлтые треугольники по верхнему краю) рисуются здесь же — сама
-        // SceneCanvasPanel решает это по mountType/riggingPointsCount экрана.
-        // Обёрнут в свой JScrollPane (Task #7/v1.6, доработка после баг-репорта) —
-        // нужен для панорамирования, когда включён детальный режим с масштабом
-        // (см. ниже), и позволяет холсту растягиваться по всей высоте, которую
-        // выделит ему разделитель prerigSplit, а не быть жёстко зафиксированным
-        // на 220px — тесно для точной расстановки отдельных кабинетов.
+        // остальные притушены (setCompact(true)), без подписей и метража. Ферма и
+        // точки подвеса рисуются здесь же — сама SceneCanvasPanel решает это по
+        // mountType/riggingPointsCount экрана. Обёрнут в свой JScrollPane (Task
+        // #7/v1.6, доработка после баг-репорта) — нужен для панорамирования, когда
+        // включён детальный режим с масштабом (см. ниже), и позволяет холсту
+        // растягиваться на всю высоту секции (с v3.0 холст больше ни с чем эту
+        // высоту не делит, см. class-javadoc {@link #prerigLayered}) — тесно
+        // фиксированных 220px было мало для точной расстановки отдельных кабинетов.
         prerigPreview.setCompact(true);
         prerigPreview.setPreferredSize(new Dimension(10, 220));
         prerigPreview.setBorder(BorderFactory.createLineBorder(Palette.BORDER));
+        prerigPreview.setToolTipText("Перетаскивание экрана — переместить; Shift во время перетаскивания —"
+                + " прилипание к краям соседних экранов. Средняя кнопка мыши — панорамирование."
+                + " Ctrl+колесо — масштаб.");
+        // Клик по ферме/точкам над экраном на холсте — та же точка входа, что и
+        // кнопка «Подвес…» выше; клик выбирает ещё и сам экран (см.
+        // SceneCanvasPanel#rigLevelAt — отдельный экран сцены может быть не текущим),
+        // иначе открытая панель молча относилась бы не к тому экрану.
+        prerigPreview.setRigLevelListener(screen -> {
+            model.selectScreen(screen);
+            showInspector("rigging");
+        });
         javax.swing.JScrollPane prerigScroll = new javax.swing.JScrollPane(prerigPreview);
         prerigScroll.getVerticalScrollBar().setUnitIncrement(16);
         prerigScroll.getHorizontalScrollBar().setUnitIncrement(16);
@@ -486,9 +507,38 @@ public class SetupStagePanel extends JPanel {
             prerigPreview.repaint();
         });
 
+        // v3.0: холст живёт в JLayeredPane — базовый слой (DEFAULT_LAYER, prerigScroll)
+        // растягивается на весь размер через переопределённый doLayout (JLayeredPane
+        // сам ничего не раскладывает), панель уровня добавляется поверх (PALETTE_LAYER)
+        // с произвольными координатами (setBounds), не участвует в layout базового
+        // слоя — см. showInspector/dockCurrentInspector/wireCardDrag ниже.
+        prerigLayered = new javax.swing.JLayeredPane() {
+            @Override
+            public void doLayout() {
+                synchronized (getTreeLock()) {
+                    prerigScroll.setBounds(0, 0, getWidth(), getHeight());
+                }
+            }
+        };
+        prerigLayered.add(prerigScroll, javax.swing.JLayeredPane.DEFAULT_LAYER);
+
+        dockZoneIndicator = new JPanel();
+        dockZoneIndicator.setOpaque(true);
+        dockZoneIndicator.setBackground(new java.awt.Color(Palette.ACCENT.getRed(), Palette.ACCENT.getGreen(),
+                Palette.ACCENT.getBlue(), 70));
+        dockZoneIndicator.setBorder(BorderFactory.createMatteBorder(0, 2, 0, 0, Palette.ACCENT));
+        dockZoneIndicator.setVisible(false);
+        prerigLayered.add(dockZoneIndicator, javax.swing.JLayeredPane.DEFAULT_LAYER + 1);
+
+        dockPanel = new JPanel(new BorderLayout());
+        dockPanel.setBorder(BorderFactory.createMatteBorder(0, 1, 0, 0, Palette.BORDER));
+
+        prerigCanvasHost = new JPanel(new BorderLayout());
+        prerigCanvasHost.add(prerigLayered, BorderLayout.CENTER);
+
         JPanel canvasArea = new JPanel(new BorderLayout());
         canvasArea.add(stats, BorderLayout.NORTH);
-        canvasArea.add(prerigScroll, BorderLayout.CENTER);
+        canvasArea.add(prerigCanvasHost, BorderLayout.CENTER);
         // BoxLayout (не FlowLayout) — каждый компонент на СВОЕЙ строке. FlowLayout
         // раньше ставил чекбокс и кнопку в один ряд, но при недостаточной ширине
         // панели переносил кнопку на вторую строку ТОЛЬКО визуально: FlowLayout#
@@ -511,46 +561,17 @@ public class SetupStagePanel extends JPanel {
             // точной расстановки отдельных кабинетов (баг-репорт: без масштаба
             // порог привязки к соседям физически недостижим мышью при мелком виде).
             prerigPreview.setDetailMode(detail, true, !detail);
-            // Кнопка появляется/исчезает вместе с режимом — footer меняет высоту,
-            // поэтому потолок ("Прериг сцены", см. javadoc dynamicSection в конце
-            // этого метода) нужно пересчитать явно, тем же приёмом, что и у
-            // applyMountTypeVisibility() ниже для riggingFieldsPanel/structureFieldsPanel
-            // — иначе выделенное разделителем место осталось бы прежним и кнопка
-            // всё равно не поместилась бы на экран.
             alignCabinetsBtn.setVisible(detail);
             canvasFooter.revalidate();
             canvasFooter.repaint();
             if (prerigSection != null) {
                 UiKit.recapHeight(prerigSection);
             }
-            if (prerigSplit != null) {
-                prerigSplit.revalidate();
-                prerigSplit.repaint();
-            }
+            canvasArea.revalidate();
+            canvasArea.repaint();
             prerigPreview.revalidate();
             prerigPreview.repaint();
         });
-
-        JPanel riggingArea = UiKit.vbox();
-
-        // Кнопка формы экрана -- не привязана к способу монтажа, видна всегда (в отличие
-        // от rigging/structure блоков ниже, каждый из которых имеет смысл только для
-        // СВОЕГО mountType).
-        toggleShapeBtn.setToolTipText("Показать/скрыть редактор формы экрана (вырезание ячеек, арки и т.п.) —"
-                + " по умолчанию скрыт, чтобы не занимать место, когда форма не редактируется.");
-        toggleShapeBtn.addActionListener(e -> {
-            if (settings.activeProfile().isShapeEditorFloating()) {
-                openShapeEditorWindow();
-            } else {
-                shapeEditorRequested = !shapeEditorRequested;
-                rebuild();
-            }
-        });
-        JPanel alwaysVisibleButtonsRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        alwaysVisibleButtonsRow.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
-        alwaysVisibleButtonsRow.add(toggleShapeBtn);
-        riggingArea.add(alwaysVisibleButtonsRow);
-        riggingArea.add(UiKit.vgap(10));
 
         riggingFieldsPanel = UiKit.vbox();
         riggingFieldsPanel.add(UiKit.formRow("Точек подвеса", pRiggingPoints));
@@ -591,13 +612,8 @@ public class SetupStagePanel extends JPanel {
                 + " краёв РЕАЛЬНОЙ фермы (см. блок «Ферма подвеса» ниже), не от ширины экрана.");
         calcRiggingBtn.addActionListener(e -> calculateRiggingPoints());
         riggingFieldsPanel.add(calcRiggingBtn);
-        riggingArea.add(riggingFieldsPanel);
-        riggingArea.add(UiKit.vgap(10));
 
-        // ---- ферма подвеса ----
         trussFieldsPanel = UiKit.vbox();
-        trussFieldsPanel.add(new JLabel("Ферма подвеса"));
-        trussFieldsPanel.add(UiKit.vgap());
         pRiggingTrussProfile.setRenderer(new javax.swing.DefaultListCellRenderer() {
             @Override
             public java.awt.Component getListCellRendererComponent(JList<?> list, Object value, int index,
@@ -642,8 +658,11 @@ public class SetupStagePanel extends JPanel {
                 + " проекта (лист «Фермы», этап «Вывод»).");
         buildTrussSpecBtn.addActionListener(e -> buildTrussSpec());
         trussFieldsPanel.add(buildTrussSpecBtn);
-        riggingArea.add(trussFieldsPanel);
-        riggingArea.add(UiKit.vgap(10));
+        buildTrussSpecSceneBtn.setToolTipText("Считает спецификацию фермы сразу по ВСЕМ экранам текущей сцены"
+                + " (не только по выбранному) и суммирует комплект сегментов — тот же расчёт, что лист «Фермы»"
+                + " на этапе «Вывод», но только для этой сцены и прямо здесь.");
+        buildTrussSpecSceneBtn.addActionListener(e -> buildTrussSpecForScene());
+        trussFieldsPanel.add(buildTrussSpecSceneBtn);
 
         structureFieldsPanel = UiKit.vbox();
         pStructureTowerHeight.setToolTipText("Автоматически подставляется равной собственной высоте экрана при"
@@ -720,71 +739,233 @@ public class SetupStagePanel extends JPanel {
             toggle3DBtn.setText("Скрыть 3D");
         });
         structureFieldsPanel.add(toggle3DBtn);
-        riggingArea.add(structureFieldsPanel);
-        riggingArea.add(UiKit.vgap());
 
-        // Собственный JScrollPane для riggingArea (тот же приём, что у canvasArea/
-        // prerigScroll и shapeSection/shapeScroll выше) -- riggingArea НЕ Scrollable и
-        // ничем не ограничена по высоте (поля подвеса/конструктива), а prerigSplit может
-        // выделить ей меньше места, чем нужно для показа всего сразу. Без своего скролла
-        // содержимое, не поместившееся в отведённую разделителем высоту, было бы просто
-        // обрезано без какого-либо способа до него докрутить -- баг-репорт «окно 3D
-        // появляется где-то за рамками, не могу открыть» (актуально ДО того, как 3D
-        // переехало в отдельное окно, см. Structure3DDialog, но остальным полям блока
-        // конструктива этот скролл всё ещё нужен), см. также javadoc dynamicSection выше.
-        JScrollPane riggingScroll = new JScrollPane(riggingArea);
-        riggingScroll.setBorder(null);
-        riggingScroll.getVerticalScrollBar().setUnitIncrement(16);
-        riggingScroll.setMinimumSize(new Dimension(120, 90));
+        // Одна карточка "Подвес" на лебёдки+ферму вместе (не две отдельных) — см.
+        // class-javadoc prerigLayered про баг-репорт 2026-09-14.
+        JPanel riggingCombined = UiKit.vbox();
+        riggingCombined.add(riggingFieldsPanel);
+        riggingCombined.add(UiKit.vgap(14));
+        riggingCombined.add(new JLabel("Ферма подвеса"));
+        riggingCombined.add(UiKit.vgap());
+        riggingCombined.add(trussFieldsPanel);
+        riggingCard = wrapAsInspectorCard("Подвес", riggingCombined);
+        structureCard = wrapAsInspectorCard("Конструктив", structureFieldsPanel);
 
-        // Разделитель, а не фиксированная высота (Task #7/v1.6, доработка) — тянуть
-        // можно мышью за границу, «растягивая» окно прерига под текущую задачу
-        // (обзор всей сцены сразу или точная расстановка одного экрана). Поле (не
-        // локальная переменная) — doRebuild() явно перевосстанавливает его долю
-        // ПОСЛЕ rightSplit (см. там же) — иначе он вычисляет начальную позицию от
-        // ещё маленькой высоты prerigSection (тот же класс гонки, что и у самого
-        // rightSplit) и "запекает" сплюснутый холст навсегда (баг-репорт: окно
-        // визуализации прерига не растягивается по высоте, хотя место есть).
-        prerigSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, canvasArea, riggingScroll);
-        prerigSplit.setContinuousLayout(true);
-        prerigSplit.setResizeWeight(1.0);
-        UiKit.persistentDivider(settings, "setup.prerigCanvas", prerigSplit, 0.68);
-
-        // dynamicSection, НЕ section -- содержимое riggingArea меняется уже ПОСЛЕ
-        // первой сборки (видимость riggingFieldsPanel/structureFieldsPanel по способу
-        // монтажа, лениво добавляемый structure3DContainer при первом «Показать 3D»).
-        // section() фиксирует maximumSize ОДИН раз при конструировании -- если бы мы
-        // использовали её тут, эта высота навсегда осталась бы такой, какой была ДО
-        // появления 3D-панели, а BasicSplitPaneUI ограничивает перетаскивание
-        // разделителя ИМЕННО этим maximumSize (см. getMaximumDividerLocation) -- ни
-        // прокрутка, ни ручное перетаскивание разделителя не могли бы после этого
-        // показать вновь появившееся содержимое (баг-репорт: «окно 3D появляется где-то
-        // за рамками, не могу открыть»). Вместо этого пересчитываем потолок явно в
-        // applyMountTypeVisibility() и в обработчике toggle3DBtn -- см. там же.
-        return (JPanel) UiKit.dynamicSection("Прериг сцены", prerigSplit);
+        return (JPanel) UiKit.dynamicSection("Прериг сцены", canvasArea);
     }
 
-    /** Показывает ТОЛЬКО блок полей, осмысленный для {@code mountType} (rigging для
-     *  RIGGED, конструктив для STRUCTURE, ни один — для LAYER/FLOOR/{@code null}) —
-     *  баг-репорт: оба блока видимыми одновременно разрастались настолько, что кнопки
-     *  расчёта уезжали за пределы окна прерига без прокрутки. */
-    private void applyMountTypeVisibility(com.vjstb.ledscheme.model.ScreenMountType mountType) {
-        riggingFieldsPanel.setVisible(mountType == com.vjstb.ledscheme.model.ScreenMountType.RIGGED);
-        trussFieldsPanel.setVisible(mountType == com.vjstb.ledscheme.model.ScreenMountType.RIGGED);
-        structureFieldsPanel.setVisible(mountType == com.vjstb.ledscheme.model.ScreenMountType.STRUCTURE);
-        riggingFieldsPanel.revalidate();
-        trussFieldsPanel.revalidate();
-        structureFieldsPanel.revalidate();
-        if (prerigSplit != null) {
-            prerigSplit.revalidate();
-            prerigSplit.repaint();
+    private static final int DOCK_ZONE_PX = 64;
+
+    /** Оборачивает уже построенную (см. {@link #buildPrerig}) панель полей в карточку
+     *  с заголовком — перетаскиваемым (см. {@link #wireCardDrag}) для закрепления
+     *  вправо и кнопкой закрытия. Содержимое строится ОДИН раз, как и раньше, просто
+     *  без постоянного места в layout — {@link #showInspector} только перевешивает
+     *  готовую карточку между плавающим слоем ({@link #prerigLayered}) и закреплённой
+     *  колонкой ({@link #dockPanel}). */
+    private JPanel wrapAsInspectorCard(String title, JPanel content) {
+        JPanel card = new JPanel(new BorderLayout());
+        card.setBorder(BorderFactory.createLineBorder(Palette.BORDER));
+        card.setBackground(Palette.PANEL);
+        JPanel head = new JPanel(new BorderLayout());
+        head.setBackground(Palette.PANEL);
+        head.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, Palette.BORDER),
+                BorderFactory.createEmptyBorder(4, 8, 4, 4)));
+        head.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.MOVE_CURSOR));
+        head.setToolTipText("Перетащите к правому краю холста, чтобы закрепить панель колонкой.");
+        JLabel titleLbl = new JLabel(title);
+        titleLbl.setFont(titleLbl.getFont().deriveFont(java.awt.Font.BOLD));
+        JButton closeBtn = new JButton("✕");
+        closeBtn.setMargin(new java.awt.Insets(0, 4, 0, 4));
+        closeBtn.setToolTipText("Закрыть панель");
+        closeBtn.addActionListener(e -> closeInspector());
+        head.add(titleLbl, BorderLayout.WEST);
+        head.add(closeBtn, BorderLayout.EAST);
+        card.add(head, BorderLayout.NORTH);
+        JScrollPane contentScroll = new JScrollPane(content);
+        contentScroll.setBorder(null);
+        contentScroll.getVerticalScrollBar().setUnitIncrement(16);
+        card.add(contentScroll, BorderLayout.CENTER);
+        wireCardDrag(head, card);
+        return card;
+    }
+
+    /** Перетаскивание за шапку карточки — свободное перемещение, пока карточка
+     *  плавающая ({@link #floatingCard}); отпускание правее {@link #DOCK_ZONE_PX} от
+     *  правого края холста переключает её в закреплённую колонку ({@link
+     *  #dockCurrentInspector}). Закреплённая карточка этим слушателем не
+     *  перетаскивается — открепление только кнопкой «✕» в {@link
+     *  #wrapAsInspectorCard} (полное закрытие, не просто возврат к плаванию —
+     *  сознательное упрощение первой версии). */
+    private void wireCardDrag(javax.swing.JComponent head, JPanel card) {
+        java.awt.event.MouseAdapter drag = new java.awt.event.MouseAdapter() {
+            int pressScreenX, pressScreenY, cardOrigX, cardOrigY;
+
+            @Override
+            public void mousePressed(java.awt.event.MouseEvent e) {
+                if (inspectorDocked || card != floatingCard) {
+                    return;
+                }
+                pressScreenX = e.getXOnScreen();
+                pressScreenY = e.getYOnScreen();
+                cardOrigX = card.getX();
+                cardOrigY = card.getY();
+            }
+
+            @Override
+            public void mouseDragged(java.awt.event.MouseEvent e) {
+                if (inspectorDocked || card != floatingCard) {
+                    return;
+                }
+                int nx = cardOrigX + (e.getXOnScreen() - pressScreenX);
+                int ny = Math.max(0, cardOrigY + (e.getYOnScreen() - pressScreenY));
+                card.setLocation(nx, ny);
+                setDockZoneHighlighted(nx + card.getWidth() > prerigLayered.getWidth() - DOCK_ZONE_PX);
+            }
+
+            @Override
+            public void mouseReleased(java.awt.event.MouseEvent e) {
+                setDockZoneHighlighted(false);
+                if (inspectorDocked || card != floatingCard) {
+                    return;
+                }
+                if (card.getX() + card.getWidth() > prerigLayered.getWidth() - DOCK_ZONE_PX) {
+                    dockCurrentInspector();
+                }
+            }
+        };
+        head.addMouseListener(drag);
+        head.addMouseMotionListener(drag);
+    }
+
+    /** Небольшая подсветка правого края холста, пока перетаскиваемая карточка над
+     *  зоной докинга ({@link #DOCK_ZONE_PX} от края) — по фидбэку, иначе непонятно
+     *  без пробы отпустить, что карточка вообще закрепится. Полоса, не отдельное
+     *  окно — просто ещё один компонент {@link #prerigLayered} на слое НИЖЕ
+     *  плавающей карточки ({@code DEFAULT_LAYER+1} < {@code PALETTE_LAYER}), видима
+     *  только пока действительно "горячо" (не всё время перетаскивания). */
+    private void setDockZoneHighlighted(boolean hot) {
+        if (dockZoneIndicator == null) {
+            return;
         }
-        // См. javadoc dynamicSection в buildPrerig() -- потолок высоты «Прериг сцены»
-        // должен пересчитываться при каждой смене видимого блока полей, иначе он
-        // останется таким, каким был ДО переключения (слишком маленьким или слишком
-        // большим), и разделитель rightSplit физически не даст показать содержимое.
+        if (hot) {
+            dockZoneIndicator.setBounds(Math.max(0, prerigLayered.getWidth() - DOCK_ZONE_PX), 0,
+                    DOCK_ZONE_PX, prerigLayered.getHeight());
+        }
+        dockZoneIndicator.setVisible(hot);
+    }
+
+    private JPanel cardFor(String level) {
+        if ("rigging".equals(level)) {
+            return riggingCard;
+        }
+        if ("structure".equals(level)) {
+            return structureCard;
+        }
+        return null;
+    }
+
+    /** Открывает карточку уровня {@code level} ("hoist"/"truss"/"structure") — либо
+     *  плавающей поверх холста (по умолчанию), либо, если пользователь уже закрепил
+     *  панель вправо ({@link #inspectorDocked}), сразу в закреплённой колонке. Общая
+     *  точка входа и для клика по уровню на холсте ({@link
+     *  com.vjstb.ledscheme.ui.SceneCanvasPanel.RigLevelListener}), и для кнопок
+     *  «Лебёдки…»/«Ферма…»/«Конструктив…» в шапке. */
+    private void showInspector(String level) {
+        JPanel card = cardFor(level);
+        if (card == null) {
+            return;
+        }
+        openInspectorLevel = level;
+        if (inspectorDocked) {
+            dockPanel.removeAll();
+            dockPanel.add(card, BorderLayout.CENTER);
+            dockPanel.revalidate();
+            dockPanel.repaint();
+            return;
+        }
+        if (floatingCard != null && floatingCard != card) {
+            prerigLayered.remove(floatingCard);
+        }
+        floatingCard = card;
+        if (card.getParent() != prerigLayered) {
+            prerigLayered.add(card, javax.swing.JLayeredPane.PALETTE_LAYER);
+            int cw = 280;
+            int ch = Math.max(160, Math.min(360, prerigLayered.getHeight() - 24));
+            card.setBounds(16, 16, cw, ch);
+        }
+        prerigLayered.moveToFront(card);
+        prerigLayered.revalidate();
+        prerigLayered.repaint();
+    }
+
+    /** Закрывает текущую панель уровня целиком — и плавающую карточку, и закреплённую
+     *  колонку, если она была раскрыта. */
+    private void closeInspector() {
+        if (inspectorDocked) {
+            dockPanel.removeAll();
+            prerigCanvasHost.remove(dockPanel);
+            inspectorDocked = false;
+            prerigCanvasHost.revalidate();
+            prerigCanvasHost.repaint();
+        }
+        if (floatingCard != null) {
+            prerigLayered.remove(floatingCard);
+            floatingCard = null;
+            prerigLayered.revalidate();
+            prerigLayered.repaint();
+        }
+        openInspectorLevel = null;
+    }
+
+    /** Перетаскивание карточки к правому краю холста (см. {@link #wireCardDrag})
+     *  закрепляет её колонкой вместо плавающего окна — переиспользует ТУ ЖЕ карточку
+     *  (не строит копию), просто меняет родителя. */
+    private void dockCurrentInspector() {
+        if (openInspectorLevel == null) {
+            return;
+        }
+        JPanel card = cardFor(openInspectorLevel);
+        if (card == null) {
+            return;
+        }
+        if (floatingCard == card) {
+            prerigLayered.remove(floatingCard);
+            floatingCard = null;
+        }
+        inspectorDocked = true;
+        dockPanel.removeAll();
+        dockPanel.add(card, BorderLayout.CENTER);
+        dockPanel.setPreferredSize(new Dimension(280, 10));
+        prerigCanvasHost.add(dockPanel, BorderLayout.EAST);
+        prerigCanvasHost.revalidate();
+        prerigCanvasHost.repaint();
+        prerigLayered.revalidate();
+        prerigLayered.repaint();
+    }
+
+    /** Показывает/скрывает быстрые кнопки уровней (rigging для RIGGED, конструктив
+     *  для STRUCTURE, ни одной — для LAYER/FLOOR/{@code null}) и закрывает открытую
+     *  панель уровня, если она перестала быть осмысленной для нового способа монтажа
+     *  (например, экран переключили с RIGGED на STRUCTURE при открытой «Ферма…»). */
+    private void applyMountTypeVisibility(com.vjstb.ledscheme.model.ScreenMountType mountType) {
+        boolean rigged = mountType == com.vjstb.ledscheme.model.ScreenMountType.RIGGED;
+        boolean structure = mountType == com.vjstb.ledscheme.model.ScreenMountType.STRUCTURE;
+        if (riggingQuickBtn != null) {
+            riggingQuickBtn.setVisible(rigged);
+            structureQuickBtn.setVisible(structure);
+        }
+        if (openInspectorLevel != null) {
+            boolean stillValid = (rigged && "rigging".equals(openInspectorLevel))
+                    || (structure && "structure".equals(openInspectorLevel));
+            if (!stillValid) {
+                closeInspector();
+            }
+        }
         if (prerigSection != null) {
             UiKit.recapHeight(prerigSection);
+            prerigSection.revalidate();
+            prerigSection.repaint();
         }
     }
 
@@ -953,6 +1134,84 @@ public class SetupStagePanel extends JPanel {
         }
         msg.append("\nТребует независимой инженерной перепроверки перед монтажом — см. RIGGING_CALC_NOTES.md.");
         JOptionPane.showMessageDialog(this, msg.toString(), "Спецификация фермы", JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    /** Та же спецификация фермы, что {@link #buildTrussSpec()}, но по ВСЕМ экранам ТЕКУЩЕЙ
+     *  сцены сразу, а не только по выбранному — читает {@code Screen} напрямую (текущие
+     *  сохранённые параметры каждого экрана, форма влияет только на выбранный), пропускает
+     *  экраны без {@code mountType == RIGGED} или без выбранного профиля фермы (тот же
+     *  фильтр, что {@code OutputStagePanel#addTrussSheet} — единственный источник правды
+     *  для листа «Фермы» на этапе «Вывод», здесь та же логика просто агрегирована по сцене
+     *  и показана сразу на месте, без выгрузки всего проекта). Комплекты сегментов
+     *  суммируются по длине, но СНАЧАЛА группируются по типу фермы (библиотечному профилю)
+     *  — разные типы физически несовместимы (разные соединители/сечение), смешивать их в
+     *  один плоский список по одной длине нельзя, даже если длины совпадают числом. */
+    private void buildTrussSpecForScene() {
+        Scene scene = model.getCurrentScene();
+        if (scene == null) {
+            return;
+        }
+        java.util.TreeMap<String, java.util.TreeMap<Double, Integer>> kitTotals = new java.util.TreeMap<>();
+        int screensCounted = 0;
+        int totalConnectors = 0;
+        StringBuilder warnings = new StringBuilder();
+        for (Screen scr : scene.getScreens()) {
+            if (scr.getMountType() != com.vjstb.ledscheme.model.ScreenMountType.RIGGED
+                    || scr.getRiggingTrussProfileId() == null) {
+                continue;
+            }
+            com.vjstb.ledscheme.service.TrussCalc.Result result = com.vjstb.ledscheme.service.TrussCalc.compute(
+                    scr, model.typeOf(scr), model.getWorkspace());
+            screensCounted++;
+            if (result.shorterThanScreenWarning()) {
+                warnings.append("  «").append(scr.getName()).append("» — ферма короче ширины экрана\n");
+            }
+            if (result.catalogEmpty()) {
+                warnings.append("  «").append(scr.getName())
+                        .append("» — в библиотечном профиле нет ни одной длины, комплект не учтён\n");
+                continue;
+            }
+            totalConnectors += result.connectorCount();
+            com.vjstb.ledscheme.model.TrussProfile profile =
+                    model.getWorkspace().trussProfileById(scr.getRiggingTrussProfileId());
+            String profileName = profile != null ? profile.getName() : "(запись удалена)";
+            java.util.TreeMap<Double, Integer> byLength =
+                    kitTotals.computeIfAbsent(profileName, k -> new java.util.TreeMap<>());
+            for (com.vjstb.ledscheme.service.CableSpecCalc.Piece p : result.pieces()) {
+                byLength.merge(p.lengthM(), p.count(), Integer::sum);
+            }
+        }
+
+        StringBuilder msg = new StringBuilder();
+        msg.append("Спецификация фермы — сцена «").append(scene.getName()).append("»\n\n");
+        if (screensCounted == 0) {
+            msg.append("Нет экранов с фермой подвеса (mountType = RIGGED + выбранный тип фермы).");
+            JOptionPane.showMessageDialog(this, msg.toString(), "Спецификация фермы (сцена)",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        msg.append(String.format("Экранов с фермой: %d%n", screensCounted));
+        if (kitTotals.isEmpty()) {
+            msg.append("Комплект сегментов не посчитан ни для одного экрана.\n");
+        } else {
+            int totalPieces = kitTotals.values().stream()
+                    .flatMap(m -> m.values().stream()).mapToInt(Integer::intValue).sum();
+            msg.append(String.format("Сегментов всего: %d, соединителей на стыках всего: %d%n",
+                    totalPieces, totalConnectors));
+            for (var typeEntry : kitTotals.entrySet()) {
+                msg.append("  ").append(typeEntry.getKey()).append(":\n");
+                for (var entry : typeEntry.getValue().entrySet()) {
+                    msg.append(String.format("    %.2f м × %d%n", entry.getKey(), entry.getValue()));
+                }
+            }
+        }
+        if (warnings.length() > 0) {
+            msg.append("\nВНИМАНИЕ:\n").append(warnings);
+        }
+        msg.append("\nТот же набор войдёт в общую спецификацию проекта (лист «Фермы») на этапе «Вывод».");
+        msg.append("\nТребует независимой инженерной перепроверки перед монтажом — см. RIGGING_CALC_NOTES.md.");
+        JOptionPane.showMessageDialog(this, msg.toString(), "Спецификация фермы (сцена)",
+                warnings.length() > 0 ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE);
     }
 
     /** {@code null} -- выбрано «Не выбрано» (см. {@link #pRiggingTrussProfile}), тогда BOM
@@ -1230,6 +1489,52 @@ public class SetupStagePanel extends JPanel {
         });
 
         body.add(UiKit.vgap(10));
+        // Цветная метка зоны/площадки (v3.0) — чисто визуальная тонировка заливки на
+        // схеме прерига, не связана с расчётами; применяется сразу по выбору (как
+        // pMountType выше), не через общую кнопку «Применить» ниже.
+        pTagColor.setRenderer(new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public java.awt.Component getListCellRendererComponent(JList<?> list, Object value, int index,
+                    boolean isSelected, boolean cellHasFocus) {
+                java.awt.Component c = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                if (value instanceof com.vjstb.ledscheme.model.ScreenTagColor tag && c instanceof JLabel lbl) {
+                    java.awt.Color swatch = tag.color();
+                    lbl.setIcon(new javax.swing.Icon() {
+                        @Override
+                        public void paintIcon(java.awt.Component comp, java.awt.Graphics g, int x, int y) {
+                            if (swatch != null) {
+                                g.setColor(swatch);
+                                g.fillRect(x, y + 2, 12, 12);
+                                g.setColor(java.awt.Color.BLACK);
+                                g.drawRect(x, y + 2, 12, 12);
+                            }
+                        }
+
+                        @Override
+                        public int getIconWidth() {
+                            return 16;
+                        }
+
+                        @Override
+                        public int getIconHeight() {
+                            return 16;
+                        }
+                    });
+                }
+                return c;
+            }
+        });
+        pTagColor.setToolTipText("Чисто визуальная тонировка заливки экрана на схеме прерига — для группировки"
+                + " по зоне/площадке на глаз, ни на что не влияет.");
+        pTagColor.addActionListener(e -> {
+            if (refreshing) return;
+            Screen scr = model.getCurrentScreen();
+            if (scr == null) return;
+            model.setScreenTagColor(scr, (com.vjstb.ledscheme.model.ScreenTagColor) pTagColor.getSelectedItem());
+        });
+        body.add(UiKit.formRow("Метка (цвет зоны)", pTagColor));
+
+        body.add(UiKit.vgap(10));
         body.add(UiKit.formRow("Герцовка контента", pRefreshHz));
         body.add(UiKit.vgap());
         body.add(UiKit.formRow("Глубина цвета, бит", pBitDepth));
@@ -1268,76 +1573,6 @@ public class SetupStagePanel extends JPanel {
         body.add(UiKit.vgap());
         body.add(del);
         return (JPanel) UiKit.section("Параметры экрана", body);
-    }
-
-    // ---- форма экрана и типы по ячейкам ----
-
-    private JPanel buildShapeEditor() {
-        JPanel body = UiKit.vbox();
-        shapeBody = body;
-
-        shapeHint.setForeground(Palette.MUTED);
-        shapeHint.setText(UiKit.wrapHtml("<html>Клик (или протяжка ЛКМ) по ячейке — исключить/включить (так задаётся не"
-                + " прямоугольная форма экрана). ПКМ (зажать и повести к пункту) — скрыть/восстановить,"
-                + " изменить форму или тип конкретной ячейки. Ctrl+колесо — масштаб.</html>"));
-        body.add(shapeHint);
-
-        body.add(UiKit.vgap());
-        shapeScroll.setBorder(javax.swing.BorderFactory.createLineBorder(Palette.BORDER));
-        shapeScroll.setPreferredSize(new Dimension(200, 220));
-        // БЕЗ жёсткого максимума высоты (раньше был захардкожен потолок 220px) --
-        // тот потолок и был основной причиной бага «Форма экрана» не растёт даже
-        // когда rightSplit явно выделяет ей больше места, см. javadoc
-        // UiKit.stretchToViewport и комментарий у rightSplit в конструкторе.
-        shapeScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
-        body.add(shapeScroll);
-
-        return (JPanel) UiKit.section("Форма экрана", body);
-    }
-
-    /** Переставляет {@link #shapeScroll} между встроенной секцией и всплывающим
-     *  окном (см. {@link #shapeEditorDialog} javadoc) — ОДИН и тот же компонент,
-     *  {@code Container.add} сам открепляет его от прежнего родителя, копия не
-     *  заводится. Вызывается на КАЖДЫЙ {@link #doRebuild()} (в т.ч. когда настройка
-     *  меняется, пока диалог уже открыт, — {@link #settings} тоже в списке подписки
-     *  на {@code rebuild}, см. конструктор), поэтому переключение в «Предпочтения»
-     *  подхватывается сразу, без необходимости заново нажимать {@link #toggleShapeBtn}. */
-    private void syncShapeEditorMode(boolean floating) {
-        if (floating) {
-            if (shapeScroll.getParent() == shapeBody) {
-                shapeBody.remove(shapeScroll);
-            }
-            if (shapeEditorDialog != null) {
-                shapeEditorDialog.attach(shapeScroll);
-                if (shapeEditorDialog.isVisible()) {
-                    shapeEditorDialog.refresh();
-                }
-            }
-        } else {
-            if (shapeEditorDialog != null) {
-                shapeEditorDialog.setVisible(false);
-            }
-            if (shapeScroll.getParent() != shapeBody) {
-                shapeBody.add(shapeScroll);
-                shapeBody.revalidate();
-            }
-        }
-    }
-
-    /** Кнопка «Форма экрана…» в режиме всплывающего окна — создаёт диалог лениво
-     *  (один раз за сессию редактора, как {@link #structure3DDialog}) и поднимает
-     *  его на передний план; повторное нажатие, пока окно уже открыто, просто
-     *  фокусирует его заново — отдельного "скрыть" через эту же кнопку в этом
-     *  режиме нет (закрывается своей кнопкой «Закрыть»/крестиком окна). */
-    private void openShapeEditorWindow() {
-        if (shapeEditorDialog == null) {
-            shapeEditorDialog = new com.vjstb.ledscheme.ui.ShapeEditorDialog(
-                    SwingUtilities.getWindowAncestor(this), model);
-        }
-        shapeEditorDialog.attach(shapeScroll);
-        shapeEditorDialog.setVisible(true);
-        shapeEditorDialog.toFront();
-        shapeEditorDialog.refresh();
     }
 
     // ---- rebuild ----
@@ -1392,41 +1627,15 @@ public class SetupStagePanel extends JPanel {
             if ((hasScene && !screensWasVisible) || (scr != null && !paramsWasVisible)) {
                 UiKit.restoreDividerProportion(leftSplit3, settings, "setup.screensParams", 0.32);
             }
-            // prerigSection и shapeSection — тот же класс бага, что screensSection/
-            // paramsSection выше (оба потомки ОДНОГО rightSplit, оба могут стать видимы
-            // в этом же проходе — например, у нового проекта первый добавленный экран
-            // сразу делает истинными и hasScene, и scr != null): один вызов
-            // restoreDividerProportion на общий разделитель, не по одному на секцию
-            // (баг-репорт: «Форма экрана» не появляется, пока не потянуть разделитель
-            // руками, и «Прериг сцены» из-за того же не получает причитающуюся долю
-            // высоты автоматически).
-            boolean prerigWasVisible = prerigSection.isVisible();
-            boolean shapeWasVisible = shapeSection.isVisible();
+            // v3.0: "Прериг сцены" больше не делит правую колонку с "Формой экрана"
+            // (той больше нет — см. class-javadoc про SceneCanvasPanel/ПКМ) — просто
+            // видимость, без общего JSplitPane-разделителя и restoreDividerProportion.
             prerigSection.setVisible(hasScene);
             if (hasScene) {
                 syncList(screenModel, model.getCurrentScene().getScreens());
                 screenList.setSelectedValue(model.getCurrentScreen(), true);
                 ListSizing.fit(screenList, screenScroll, 2, 8);
                 rebuildPrerig();
-            }
-
-            boolean shapeFloating = settings.activeProfile().isShapeEditorFloating();
-            syncShapeEditorMode(shapeFloating);
-            shapeSection.setVisible(!shapeFloating && scr != null && shapeEditorRequested);
-            toggleShapeBtn.setEnabled(scr != null);
-            toggleShapeBtn.setText(shapeFloating ? "Форма экрана…"
-                    : (shapeEditorRequested ? "Скрыть форму экрана" : "Изменить форму экрана"));
-            if ((hasScene && !prerigWasVisible)
-                    || (!shapeFloating && scr != null && shapeEditorRequested && !shapeWasVisible)) {
-                UiKit.restoreDividerProportion(rightSplit, settings, "setup.prerigShape", 0.58);
-                // prerigSplit (холст vs точки подвеса ВНУТРИ "Прериг сцены") зависит от
-                // высоты prerigSection, которую только что поменял вызов выше — если
-                // восстановить его в ТОМ ЖЕ цикле EDT, он схватит ещё старую (маленькую)
-                // высоту и навсегда запомнит сплюснутый холст. Дополнительный
-                // invokeLater даёт restoreDividerProportion(rightSplit, ...) выше реально
-                // применить новую высоту первым.
-                SwingUtilities.invokeLater(() ->
-                        UiKit.restoreDividerProportion(prerigSplit, settings, "setup.prerigCanvas", 0.68));
             }
             if (scr != null) {
                 pName.setText(scr.getName());
@@ -1436,6 +1645,7 @@ public class SetupStagePanel extends JPanel {
                 pX.setText(UiKit.fmt(scr.getPosXMm()));
                 pY.setText(UiKit.fmt(scr.getPosYMm()));
                 pMountType.setSelectedItem(scr.getMountType());
+                pTagColor.setSelectedItem(scr.getTagColor());
                 pRiggingPoints.setValue(scr.getRiggingPointsCount());
                 pRiggingNotes.setText(scr.getRiggingNotes() != null ? scr.getRiggingNotes() : "");
                 pRiggingSafetyFactor.setValue(scr.getRiggingSafetyFactorMin());
@@ -1503,13 +1713,10 @@ public class SetupStagePanel extends JPanel {
         } finally {
             refreshing = false;
         }
-        shapeEditor.revalidate();
-        shapeEditor.repaint();
-        // Явно на каждом разделителе, чьи дети (Сцены/Экраны/Параметры/Прериг/Форма
-        // экрана) только что поменяли видимость — иначе место под них не
-        // пересчитывается немедленно (revalidate() на верхнем this не всегда
-        // достаточен).
-        for (JSplitPane sp : new JSplitPane[]{leftSplit3, leftSplit2, leftSplitNav, rightSplit, prerigSplit}) {
+        // Явно на каждом разделителе, чьи дети (Сцены/Экраны/Параметры) только что
+        // поменяли видимость — иначе место под них не пересчитывается немедленно
+        // (revalidate() на верхнем this не всегда достаточен).
+        for (JSplitPane sp : new JSplitPane[]{leftSplit3, leftSplit2, leftSplitNav}) {
             sp.revalidate();
             sp.repaint();
         }
