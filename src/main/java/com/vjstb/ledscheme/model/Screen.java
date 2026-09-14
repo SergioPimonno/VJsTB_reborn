@@ -35,6 +35,12 @@ public class Screen {
      *  {@code AppModel#setMaskColor}, не напрямую сеттером. */
     private MaskColorPreset background = MaskColorPreset.NORMAL;
 
+    /** Цветная метка зоны/площадки (v3.0, баг-репорт 2026-09-14) — только визуальная
+     *  тонировка заливки на схеме сцены прерига, никак не влияет на расчёты; см.
+     *  {@link ScreenTagColor}. {@code NONE} — метка не назначена (значение по
+     *  умолчанию, старые проекты десериализуются с этим значением). */
+    private ScreenTagColor tagColor = ScreenTagColor.NONE;
+
     /** Способ монтажа — влияет на применимость расчёта точек подвеса. */
     private ScreenMountType mountType = ScreenMountType.RIGGED;
     /** Количество точек подвеса — авторасчёт см. {@code service.RiggingCalc}/
@@ -247,6 +253,14 @@ public class Screen {
 
     public void setBackground(MaskColorPreset background) {
         this.background = background != null ? background : MaskColorPreset.NORMAL;
+    }
+
+    public ScreenTagColor getTagColor() {
+        return tagColor != null ? tagColor : ScreenTagColor.NONE;
+    }
+
+    public void setTagColor(ScreenTagColor tagColor) {
+        this.tagColor = tagColor != null ? tagColor : ScreenTagColor.NONE;
     }
 
     public ScreenMountType getMountType() {
@@ -532,6 +546,7 @@ public class Screen {
         s.refreshRateHz = refreshRateHz;
         s.colorBitDepth = colorBitDepth;
         s.background = background;
+        s.tagColor = tagColor;
         s.mountType = mountType;
         s.riggingPointsCount = riggingPointsCount;
         s.riggingNotes = riggingNotes;
