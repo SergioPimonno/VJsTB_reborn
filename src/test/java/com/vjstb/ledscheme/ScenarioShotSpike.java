@@ -4,6 +4,7 @@ import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.ContentCanvas;
 import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.Network;
+import com.vjstb.ledscheme.model.NetworkAttachment;
 import com.vjstb.ledscheme.model.NetworkDeviceCategory;
 import com.vjstb.ledscheme.model.NetworkDevicePlacement;
 import com.vjstb.ledscheme.model.NetworkDeviceType;
@@ -223,24 +224,33 @@ class ScenarioShotSpike {
         NetworkDeviceType sw = new NetworkDeviceType();
         sw.setName("Cisco SG350-28");
         sw.setCategory(NetworkDeviceCategory.SWITCH);
-        sw.setPortCount(28);
+        sw.setEthernetPortCount(28);
         model.addNetworkDeviceType(sw);
         NetworkDeviceType rt = new NetworkDeviceType();
         rt.setName("MikroTik hEX S");
         rt.setCategory(NetworkDeviceCategory.ROUTER);
-        rt.setPortCount(5);
+        rt.setEthernetPortCount(5);
         model.addNetworkDeviceType(rt);
 
         NetworkManagerPlan plan = new NetworkManagerPlan();
         Network prod = new Network();
         prod.setName("Продакшн LAN");
         prod.setColor(0x33aa55);
-        NetworkDevicePlacement d1 = dev("Свитч сцены", sw.getId(), "192.168.10.2", 40, 60, 28, true, "http://192.168.10.2");
-        NetworkDevicePlacement d2 = dev("Медиасервер", null, "192.168.10.10", 260, 60, 4, false, null);
-        NetworkDevicePlacement d3 = dev("Контроллер MCTRL4K", null, "192.168.10.10", 260, 240, 2, false, null); // конфликт IP с d2
-        prod.getDevices().add(d1);
-        prod.getDevices().add(d2);
-        prod.getDevices().add(d3);
+        Network mgmt = new Network();
+        mgmt.setName("Управление");
+        mgmt.setColor(0x3576d8);
+        plan.getNetworks().add(prod);
+        plan.getNetworks().add(mgmt);
+
+        NetworkDevicePlacement d1 = dev("Свитч сцены", sw.getId(), prod.getId(), "192.168.10.2", 40, 60, 28, true,
+                "http://192.168.10.2");
+        NetworkDevicePlacement d2 = dev("Медиасервер", null, prod.getId(), "192.168.10.10", 260, 60, 4, false, null);
+        // конфликт IP с d2 -- специально для скриншота подсветки конфликтов
+        NetworkDevicePlacement d3 = dev("Контроллер MCTRL4K", null, prod.getId(), "192.168.10.10", 260, 240, 2,
+                false, null);
+        plan.getDevices().add(d1);
+        plan.getDevices().add(d2);
+        plan.getDevices().add(d3);
         NetworkLink l1 = new NetworkLink();
         l1.setFromDeviceId(d1.getId());
         l1.setFromPort(1);
@@ -252,25 +262,21 @@ class ScenarioShotSpike {
         l2.setFromPort(2);
         l2.setToDeviceId(d3.getId());
         l2.setToPort(1);
-        prod.getLinks().add(l1);
-        prod.getLinks().add(l2);
+        plan.getLinks().add(l1);
+        plan.getLinks().add(l2);
 
-        Network mgmt = new Network();
-        mgmt.setName("Управление");
-        mgmt.setColor(0x3576d8);
-        NetworkDevicePlacement m1 = dev("Роутер MikroTik", rt.getId(), "10.0.0.1", 40, 60, 5, true, "http://10.0.0.1");
-        NetworkDevicePlacement m2 = dev("Ноутбук инженера", null, "10.0.0.50", 260, 60, 1, false, null);
-        mgmt.getDevices().add(m1);
-        mgmt.getDevices().add(m2);
+        NetworkDevicePlacement m1 = dev("Роутер MikroTik", rt.getId(), mgmt.getId(), "10.0.0.1", 40, 60, 5, true,
+                "http://10.0.0.1");
+        NetworkDevicePlacement m2 = dev("Ноутбук инженера", null, mgmt.getId(), "10.0.0.50", 260, 60, 1, false, null);
+        plan.getDevices().add(m1);
+        plan.getDevices().add(m2);
         NetworkLink l3 = new NetworkLink();
         l3.setFromDeviceId(m1.getId());
         l3.setFromPort(1);
         l3.setToDeviceId(m2.getId());
         l3.setToPort(1);
-        mgmt.getLinks().add(l3);
+        plan.getLinks().add(l3);
 
-        plan.getNetworks().add(prod);
-        plan.getNetworks().add(mgmt);
         safe(() -> model.saveNetworkManagerPlan(model.getCurrentScene(), plan));
 
         // канвас масок
@@ -280,18 +286,20 @@ class ScenarioShotSpike {
         });
     }
 
-    private static NetworkDevicePlacement dev(String label, String typeId, String ip, double x, double y,
-                                              int ports, boolean web, String url) {
+    private static NetworkDevicePlacement dev(String label, String typeId, String networkId, String ip, double x,
+                                               double y, int ports, boolean web, String url) {
         NetworkDevicePlacement d = new NetworkDevicePlacement();
         d.setCustomLabel(label);
         d.setDeviceTypeId(typeId);
-        d.setIpAddress(ip);
-        d.setSubnetMask("255.255.255.0");
         d.setXMm(x);
         d.setYMm(y);
-        d.setPortCount(ports);
+        d.setEthernetPortCount(ports);
         d.setHasWebInterface(web);
         d.setWebInterfaceUrl(url);
+        NetworkAttachment attachment = new NetworkAttachment(networkId);
+        attachment.setIpAddress(ip);
+        attachment.setSubnetMask("255.255.255.0");
+        d.getAttachments().add(attachment);
         return d;
     }
 

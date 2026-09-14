@@ -1,5 +1,7 @@
 package com.vjstb.ledscheme.ui;
 
+import com.vjstb.ledscheme.model.ControllerInstance;
+import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.Network;
 import com.vjstb.ledscheme.model.NetworkDeviceType;
 import com.vjstb.ledscheme.model.NetworkManagerPlan;
@@ -7,6 +9,9 @@ import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.SchemaNode;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.service.NetworkScanService;
+import com.vjstb.ledscheme.service.NetworkTopology;
+import com.vjstb.ledscheme.service.novastar.NovastarPortStatusService;
 import com.vjstb.ledscheme.model.NetworkDevicePlacement;
 import com.vjstb.ledscheme.model.SchemaNodeType;
 import com.vjstb.ledscheme.settings.SettingsManager;
@@ -50,7 +55,14 @@ import javax.swing.TransferHandler;
  * рамках одной сцены их может быть несколько; справа — палитра источников
  * устройств (существующие узлы общей схемы сигнала ЭТОЙ сцены, кроме экранов
  * — см. {@link #refreshSchemaPalette} — + каталог {@link NetworkDeviceType})
- * и {@link NetworkCanvasPanel} выбранной сети. Добавление — кнопкой «Добавить
+ * и {@link NetworkCanvasPanel} — ОДИН общий канвас для ВСЕХ сетей сцены
+ * одновременно (запрос пользователя: "разные сети должны быть в одном экране,
+ * но визуально отличаться, типа как отдельные цветные подложки" — правит более
+ * раннее решение "список слева + один активный канвас на выбранную сеть", см.
+ * NETWORK_MANAGER_NOTES.md Round 7). Выбор сети в списке слева не переключает,
+ * ЧТО показано на канвасе — там уже видно всё; выбор задаёт, КУДА попадёт
+ * новое устройство ({@link #canvas}{@code .setPlan}), и какая сеть
+ * рисуется как визуально "активная" подложка. Добавление — кнопкой «Добавить
  * в сеть» ИЛИ перетаскиванием элемента палитры прямо на нужное место канваса
  * (см. {@link SchemaNodeTransferable}/{@link DeviceTypeTransferable}, приём —
  * {@code TransferHandler} на самом {@link #canvas} в конструкторе).
@@ -84,6 +96,18 @@ public class NetworkManagerPanel extends JPanel {
      *  повторные открытия иначе плодили бы висящие листенеры). */
     private NetworkAddressTableDialog addressTableDialog;
 
+    /** Период фонового опроса доступности (запрос пользователя: "фоновый
+     *  автоопрос", см. {@link #pollAvailability}) — компромисс между
+     *  свежестью данных и нагрузкой (короткий пинг на каждый адрес плана,
+     *  параллельно, через {@link NetworkScanService#scanRange}). */
+    private static final int AVAILABILITY_POLL_MS = 15_000;
+    private final javax.swing.Timer availabilityTimer;
+    /** Незавершённый предыдущий раунд опроса — новый тик таймера ЕГО
+     *  отменяет, а не запускает параллельно ещё один (адресов может быть
+     *  немного больше, чем укладывается в {@link #AVAILABILITY_POLL_MS}, на
+     *  медленной/загруженной сети). */
+    private NetworkScanService.ScanHandle activeAvailabilityScan;
+
     public NetworkManagerPanel(AppModel model, SettingsManager settings) {
         this.model = model;
         this.settings = settings;
@@ -113,19 +137,27 @@ public class NetworkManagerPanel extends JPanel {
                 if (!canImport(support)) {
                     return false;
                 }
+                if (networkList.getSelectedValue() == null) {
+                    // Все сети теперь на одном канвасе (см. NETWORK_MANAGER_NOTES.md Round 7) --
+                    // без выбранной слева сети непонятно, в какую из них добавлять перетащенное.
+                    JOptionPane.showMessageDialog(NetworkManagerPanel.this,
+                            "Сначала выберите сеть слева — устройство добавляется в неё.",
+                            "Нет выбранной сети", JOptionPane.WARNING_MESSAGE);
+                    return false;
+                }
                 Point dropPoint = support.getDropLocation().getDropPoint();
                 double[] c = canvas.pxToCanvas(dropPoint);
                 try {
                     if (support.isDataFlavorSupported(NetworkCanvasPanel.SCHEMA_NODE_FLAVOR)) {
                         SchemaNode node = (SchemaNode) support.getTransferable()
                                 .getTransferData(NetworkCanvasPanel.SCHEMA_NODE_FLAVOR);
-                        canvas.addLinkedDeviceAt(node, c[0] - NetworkCanvasPanel.DEVICE_W / 2.0,
-                                c[1] - NetworkCanvasPanel.DEVICE_H / 2.0);
+                        canvas.addLinkedDeviceAt(node, c[0] - NetworkCanvasPanel.MIN_DEVICE_W / 2.0,
+                                c[1] - NetworkCanvasPanel.MIN_DEVICE_H / 2.0);
                     } else {
                         NetworkDeviceType type = (NetworkDeviceType) support.getTransferable()
                                 .getTransferData(NetworkCanvasPanel.DEVICE_TYPE_FLAVOR);
-                        canvas.addCatalogDeviceAt(type, c[0] - NetworkCanvasPanel.DEVICE_W / 2.0,
-                                c[1] - NetworkCanvasPanel.DEVICE_H / 2.0);
+                        canvas.addCatalogDeviceAt(type, c[0] - NetworkCanvasPanel.MIN_DEVICE_W / 2.0,
+                                c[1] - NetworkCanvasPanel.MIN_DEVICE_H / 2.0);
                     }
                     return true;
                 } catch (UnsupportedFlavorException | IOException ex) {
@@ -136,6 +168,134 @@ public class NetworkManagerPanel extends JPanel {
 
         model.addListener(this::refresh);
         refresh();
+
+        availabilityTimer = new javax.swing.Timer(AVAILABILITY_POLL_MS, e -> pollAvailability());
+        availabilityTimer.setInitialDelay(2000);
+        availabilityTimer.start();
+    }
+
+    /** Один раунд фонового опроса доступности (Round 9, запрос пользователя:
+     *  "фоновый автоопрос") — собирает ВСЕ непустые IP всех подключений плана
+     *  (устройство с несколькими сетями даёт несколько адресов, дубликаты
+     *  между сетями опрашиваются один раз через {@code Set}) и пингует их
+     *  ОДНОКРАТНО и ПАРАЛЛЕЛЬНО тем же примитивом, что уже использует скан
+     *  диапазона ({@link NetworkScanService#scanRange} — короткий пинг по
+     *  коду возврата, без чтения вывода, без shell-обёртки). Результат
+     *  целиком (не по одному адресу) отдаётся канвасу по завершении раунда
+     *  ({@link NetworkCanvasPanel#setAvailability}) — не отражает
+     *  дискретные "приход результата", чтобы линии на экране не перекрашивались
+     *  по одной за кадром, а обновлялись разом. */
+    private void pollAvailability() {
+        if (currentPlan == null) {
+            return;
+        }
+        Set<String> ips = new java.util.LinkedHashSet<>();
+        for (NetworkDevicePlacement d : currentPlan.getDevices()) {
+            for (com.vjstb.ledscheme.model.NetworkAttachment a : d.getAttachments()) {
+                String ip = a.getIpAddress();
+                if (ip != null && !ip.isBlank()) {
+                    ips.add(ip.trim());
+                }
+            }
+        }
+        if (activeAvailabilityScan != null) {
+            activeAvailabilityScan.cancel();
+            activeAvailabilityScan = null;
+        }
+        if (ips.isEmpty()) {
+            canvas.setAvailability(java.util.Map.of());
+            return;
+        }
+        java.util.Map<String, Boolean> result = new java.util.HashMap<>();
+        activeAvailabilityScan = NetworkScanService.scanRange(new ArrayList<>(ips),
+                r -> result.put(r.ip(), r.reachable()),
+                () -> canvas.setAvailability(new java.util.HashMap<>(result)));
+
+        pollNovastarStatuses();
+    }
+
+    /** Опрос статуса видео-портов контроллеров с включённой галочкой (см. {@code
+     *  NetworkDeviceParamsDialog#novastarStatusCheck}) — в ОТДЕЛЬНОМ фоновом
+     *  потоке (не в пуле {@link NetworkScanService}, у того своя семантика
+     *  ограниченного пула на короткие пинги; здесь на каждый порт КАЖДОГО
+     *  такого контроллера — минимум два TCP round-trip'а, суммарно может
+     *  занять заметное время — ни в коем случае не на EDT, тот же тик
+     *  таймера иначе подвесил бы весь интерфейс приложения). Результат
+     *  передаётся канвасу целиком через {@code SwingUtilities.invokeLater} —
+     *  тот же принцип, что {@link #pollAvailability}. Экспериментально, см.
+     *  {@code service.novastar.NovastarPacket} class-javadoc. */
+    private void pollNovastarStatuses() {
+        if (currentPlan == null) {
+            canvas.setNovastarStatuses(java.util.Map.of());
+            return;
+        }
+        java.util.Map<String, String> hostByDeviceId = new java.util.LinkedHashMap<>();
+        java.util.Map<String, Integer> portCountByDeviceId = new java.util.LinkedHashMap<>();
+        for (NetworkDevicePlacement d : currentPlan.getDevices()) {
+            if (!d.isNovastarStatusEnabled()) {
+                continue;
+            }
+            String ip = firstNonBlankIp(d);
+            ControllerType type = controllerTypeForDevice(d);
+            if (ip == null || type == null) {
+                continue;
+            }
+            hostByDeviceId.put(d.getId(), ip);
+            portCountByDeviceId.put(d.getId(), type.effectivePortCount());
+        }
+        if (hostByDeviceId.isEmpty()) {
+            canvas.setNovastarStatuses(java.util.Map.of());
+            return;
+        }
+        new Thread(() -> {
+            java.util.Map<String, java.util.Map<Integer, NovastarPortStatusService.PortStatus>> statuses =
+                    new java.util.HashMap<>();
+            for (var entry : hostByDeviceId.entrySet()) {
+                int portCount = portCountByDeviceId.get(entry.getKey());
+                statuses.put(entry.getKey(), NovastarPortStatusService.readAll(entry.getValue(), portCount, 800));
+            }
+            javax.swing.SwingUtilities.invokeLater(() -> canvas.setNovastarStatuses(statuses));
+        }, "novastar-port-status-poll").start();
+    }
+
+    private String firstNonBlankIp(NetworkDevicePlacement device) {
+        for (com.vjstb.ledscheme.model.NetworkAttachment a : device.getAttachments()) {
+            if (a.getIpAddress() != null && !a.getIpAddress().isBlank()) {
+                return a.getIpAddress().trim();
+            }
+        }
+        return null;
+    }
+
+    /** Резолвит {@link ControllerType} КОНТРОЛЛЕРА, с которым связан {@code
+     *  device} (через узел общей схемы → {@code ControllerInstance} →
+     *  {@code ControllerType}) — источник числа ВИДЕО-портов для {@link
+     *  NovastarPortStatusService#readAll}, независимый от {@code
+     *  device.getEthernetPortCount()} (тот — порт управления, см. javadoc
+     *  {@code NetworkDevicePlacement#isNovastarStatusEnabled}). {@code null},
+     *  если устройство не связано с узлом схемы, узел не связан с
+     *  контроллером, или тип контроллера не найден в библиотеке. */
+    private ControllerType controllerTypeForDevice(NetworkDevicePlacement device) {
+        Scene scene = model.getCurrentScene();
+        if (scene == null || device.getLinkedSchemaNodeId() == null) {
+            return null;
+        }
+        SchemaNode node = null;
+        for (SchemaNode n : scene.getSchemaNodes()) {
+            if (n.getId().equals(device.getLinkedSchemaNodeId())) {
+                node = n;
+                break;
+            }
+        }
+        if (node == null || node.getControllerInstanceRefId() == null) {
+            return null;
+        }
+        for (ControllerInstance ci : model.controllersInScene(scene)) {
+            if (ci.getId().equals(node.getControllerInstanceRefId())) {
+                return model.getWorkspace().controllerTypeById(ci.getControllerTypeId());
+            }
+        }
+        return null;
     }
 
     // ---- глобальный тулбар (не привязан к конкретной сети) ----
@@ -153,7 +313,67 @@ public class NetworkManagerPanel extends JPanel {
                 + " с неизвестным/забытым адресом. Найденное можно сразу добавить в выбранную слева сеть.");
         scan.addActionListener(e -> openScanDialog());
         row.add(scan);
+
+        JButton adminLaptop = new JButton("+ Мой компьютер");
+        adminLaptop.setToolTipText("Добавляет блок, представляющий эту машину (имя и текущий IP — живьём"
+                + " с неё) — пинг и так всегда идёт отсюда, блок просто показывает это место в топологии.");
+        adminLaptop.addActionListener(e -> addAdminLaptop());
+        row.add(adminLaptop);
+
+        JButton exportScheme = new JButton("Экспорт карты сети…");
+        exportScheme.setToolTipText("Сохранить карту ВСЕХ сетей текущей сцены (как сейчас на канвасе) в JPEG —"
+                + " папка спрашивается каждый раз, стартовая папка и качество берутся из настроек пакета"
+                + " документации (этап «Вывод»).");
+        exportScheme.addActionListener(e -> exportSchemeToJpeg());
+        row.add(exportScheme);
         return row;
+    }
+
+    /** «Экспорт карты сети…» (одобрено пользователем) — та же схема, что
+     *  {@code SignalStagePanel#exportCurrentScheme}/{@code
+     *  PowerStagePanel}: свежий ОДНОРАЗОВЫЙ {@link NetworkCanvasPanel} (не
+     *  {@link #canvas}, а именно новый экземпляр — тот же приём, что у
+     *  {@code SchemaCanvasPanel}/{@code SceneCanvasPanel}, экспорт всегда в
+     *  логическом масштабе 1:1, независимо от текущего интерактивного zoom),
+     *  заполненный ТЕМ ЖЕ {@link #currentPlan} через {@link
+     *  NetworkCanvasPanel#setPlan} (без "текущей" сети — на статическом
+     *  экспорте нет смысла подсвечивать активную подложку ярче), без {@code
+     *  setAvailability} (статус доступности — для живого вида, не для
+     *  сохранённого снимка). */
+    private void exportSchemeToJpeg() {
+        if (currentPlan == null) {
+            JOptionPane.showMessageDialog(this, "Сначала выберите сцену", "Нет сцены",
+                    JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        Scene scene = model.getCurrentScene();
+        String name = (scene != null ? scene.getName() : "Сцена") + " Сетевой менеджер";
+        com.vjstb.ledscheme.ui.stage.CurrentSchemeExporter.export(this, model, settings, name, dpiScale -> {
+            NetworkCanvasPanel export = new NetworkCanvasPanel(model, settings);
+            export.setPlan(currentPlan, null);
+            Dimension size = export.getPreferredSize();
+            return export.renderImage(size.width, size.height, dpiScale);
+        });
+    }
+
+    /** «+ Мой компьютер» — см. {@link NetworkCanvasPanel#addAdminLaptop}
+     *  class-javadoc (Round 9). Один блок на план — повторный клик просто
+     *  сообщает, что он уже есть, вместо того чтобы завести второй. */
+    private void addAdminLaptop() {
+        if (currentPlan == null) {
+            return;
+        }
+        if (canvas.hasAdminLaptop()) {
+            JOptionPane.showMessageDialog(this, "Блок «Мой компьютер» уже есть на поле.",
+                    "Мой компьютер", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        if (networkList.getSelectedValue() == null) {
+            JOptionPane.showMessageDialog(this, "Сначала выберите сеть слева — устройство добавляется в неё.",
+                    "Нет выбранной сети", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        canvas.addAdminLaptop();
     }
 
     private void openAddressTable() {
@@ -217,14 +437,27 @@ public class NetworkManagerPanel extends JPanel {
         rename.addActionListener(e -> renameSelectedNetwork());
         JButton color = new JButton("Цвет…");
         color.addActionListener(e -> pickNetworkColor());
+        JButton arrange = new JButton("Выровнять сеть");
+        arrange.setToolTipText("Расставляет устройства ЭТОЙ сети аккуратной сеткой — другие сети на канвасе"
+                + " не трогает.");
+        arrange.addActionListener(e -> arrangeSelectedNetwork());
         JButton remove = new JButton("Удалить сеть");
         remove.addActionListener(e -> removeSelectedNetwork());
         buttons.add(add);
         buttons.add(rename);
         buttons.add(color);
+        buttons.add(arrange);
         buttons.add(remove);
         panel.add(buttons, BorderLayout.SOUTH);
         return panel;
+    }
+
+    private void arrangeSelectedNetwork() {
+        Network selected = networkList.getSelectedValue();
+        if (selected == null) {
+            return;
+        }
+        canvas.autoArrangeNetwork(selected.getId());
     }
 
     private void addNetwork() {
@@ -237,23 +470,24 @@ public class NetworkManagerPanel extends JPanel {
         }
         Network network = new Network();
         network.setName(name.trim());
-        network.setColor(defaultColorForIndex(currentPlan.getNetworks().size()).getRGB());
+        network.setColor(NetworkCanvasPanel.defaultColorForIndex(currentPlan.getNetworks().size()).getRGB());
         currentPlan.getNetworks().add(network);
         networkListModel.addElement(network);
         networkList.setSelectedValue(network, true);
         persistPlan();
     }
 
-    /** Цвет по умолчанию для новой сети — по золотому углу от её порядкового индекса
-     *  (см. {@link Network#getColor()} javadoc), соседние по порядку сети получают
-     *  заметно разные оттенки без ручного выбора. */
-    private static Color defaultColorForIndex(int index) {
-        float hue = (float) ((index * 0.618033988749895) % 1.0);
-        return Color.getHSBColor(hue, 0.62f, 0.92f);
-    }
-
+    /** Цвет подложки/линий сети в списке слева — тот же резолв (явный цвет ИЛИ
+     *  золотой угол от индекса для старых сетей без сохранённого цвета), что
+     *  канвас использует для своей подложки ({@code NetworkCanvasPanel
+     *  #resolveNetworkColor}), чтобы значок в списке и подложка на канвасе
+     *  всегда совпадали. */
     private Color networkColor(Network network) {
-        return network.getColor() != null ? new Color(network.getColor()) : NetworkCanvasPanel.DEFAULT_LINK_COLOR;
+        if (network.getColor() != null) {
+            return new Color(network.getColor());
+        }
+        int idx = currentPlan != null ? currentPlan.getNetworks().indexOf(network) : 0;
+        return NetworkCanvasPanel.defaultColorForIndex(idx);
     }
 
     private void pickNetworkColor() {
@@ -268,7 +502,7 @@ public class NetworkManagerPanel extends JPanel {
         }
         selected.setColor(chosen.getRGB());
         networkList.repaint();
-        canvas.setLinkColor(chosen);
+        canvas.repaint();
         persistPlan();
     }
 
@@ -283,15 +517,25 @@ public class NetworkManagerPanel extends JPanel {
         }
         selected.setName(name.trim());
         networkList.repaint();
+        canvas.repaint();
         persistPlan();
     }
 
+    /** Удаляет сеть — если в ней есть устройства, спрашивает подтверждение (та
+     *  же формулировка, что раньше). Round 8: устройство больше не "живёт"
+     *  внутри сети физически, поэтому удаление сети — это СНЯТИЕ подключения
+     *  ({@code NetworkAttachment}) у каждого её устройства (+ чистка связей,
+     *  чья сеть — именно эта), а не удаление списка; устройство пропадает с
+     *  канваса совсем, только если это подключение было у него ЕДИНСТВЕННЫМ
+     *  (тот же принцип, что {@code NetworkCanvasPanel#detachFromNetwork}). */
     private void removeSelectedNetwork() {
         Network selected = networkList.getSelectedValue();
-        if (selected == null) {
+        if (selected == null || currentPlan == null) {
             return;
         }
-        if (!selected.getDevices().isEmpty()) {
+        String networkId = selected.getId();
+        List<NetworkDevicePlacement> devicesInNetwork = NetworkTopology.devicesInNetwork(currentPlan, networkId);
+        if (!devicesInNetwork.isEmpty()) {
             int result = JOptionPane.showConfirmDialog(this,
                     "В сети «" + selected.getName() + "» есть устройства — удалить её вместе с ними?",
                     "Удалить сеть", JOptionPane.YES_NO_OPTION);
@@ -299,6 +543,21 @@ public class NetworkManagerPanel extends JPanel {
                 return;
             }
         }
+
+        currentPlan.getLinks().removeAll(NetworkTopology.linksInNetwork(currentPlan, networkId));
+        List<NetworkDevicePlacement> toFullyRemove = new ArrayList<>();
+        for (NetworkDevicePlacement device : devicesInNetwork) {
+            device.getAttachments().removeIf(a -> networkId.equals(a.getNetworkId()));
+            if (device.getAttachments().isEmpty()) {
+                toFullyRemove.add(device);
+            }
+        }
+        currentPlan.getDevices().removeAll(toFullyRemove);
+        for (NetworkDevicePlacement device : toFullyRemove) {
+            currentPlan.getLinks().removeIf(l -> device.getId().equals(l.getFromDeviceId())
+                    || device.getId().equals(l.getToDeviceId()));
+        }
+
         currentPlan.getNetworks().remove(selected);
         networkListModel.removeElement(selected);
         persistPlan();
@@ -306,9 +565,7 @@ public class NetworkManagerPanel extends JPanel {
 
     private void onNetworkSelected() {
         Network selected = networkList.getSelectedValue();
-        canvas.setDevices(selected != null ? selected.getDevices() : new ArrayList<>());
-        canvas.setLinks(selected != null ? selected.getLinks() : new ArrayList<>());
-        canvas.setLinkColor(selected != null ? networkColor(selected) : null);
+        canvas.setPlan(currentPlan, selected);
         refreshPaletteAvailability();
     }
 
@@ -436,11 +693,8 @@ public class NetworkManagerPanel extends JPanel {
         }
         model.saveNetworkManagerPlan(scene, currentPlan);
         refreshPaletteAvailability();
-        int total = 0;
-        for (Network n : currentPlan.getNetworks()) {
-            total += n.getDevices().size();
-        }
-        statusLabel.setText(" Сетей: " + currentPlan.getNetworks().size() + ", устройств всего: " + total);
+        statusLabel.setText(" Сетей: " + currentPlan.getNetworks().size()
+                + ", устройств всего: " + currentPlan.getDevices().size());
     }
 
     /** Единая точка обновления — вызывается из {@code model.addListener}, то есть
@@ -458,13 +712,19 @@ public class NetworkManagerPanel extends JPanel {
         }
         refreshDevicePalette();
         refreshSchemaPalette();
+        // Живой IP блока "Admin Laptop" (Round 9) -- персистим, только если он реально
+        // изменился, иначе КАЖДОЕ изменение модели где угодно в приложении (этот метод
+        // вызывается из model.addListener, см. class-javadoc) сохраняло бы план заново.
+        if (canvas.refreshAdminLaptopAddresses()) {
+            persistPlan();
+        }
     }
 
     private void loadPlanForCurrentScene(Scene scene) {
         networkListModel.clear();
         if (scene == null) {
             currentPlan = null;
-            canvas.setDevices(new ArrayList<>());
+            canvas.setPlan(null, null);
             statusLabel.setText(" Сцена не выбрана.");
             return;
         }
@@ -476,7 +736,7 @@ public class NetworkManagerPanel extends JPanel {
         if (!networkListModel.isEmpty()) {
             networkList.setSelectedIndex(0);
         } else {
-            canvas.setDevices(new ArrayList<>());
+            canvas.setPlan(currentPlan, null);
         }
         statusLabel.setText(" Сетей: " + currentPlan.getNetworks().size());
     }
@@ -497,20 +757,26 @@ public class NetworkManagerPanel extends JPanel {
      *  добавлять не нужно в этом менеджере" — {@code SchemaNodeType.SCREEN}
      *  единственный тип, у которого в принципе нет сетевого адреса, остальные
      *  категории — контроллеры/медиасерверы/конвертеры/... — вполне могут быть
-     *  сетевыми устройствами) и уже добавленных В ТЕКУЩУЮ ВЫБРАННУЮ сеть (не во ВСЕ
-     *  сети разом — одно физическое устройство может осмысленно входить в
-     *  несколько логических сетей, например при двух сетевых интерфейсах). */
+     *  сетевыми устройствами) и уже добавленных НА ПОЛЕ ГДЕ УГОДНО (Round 8, баг-
+     *  репорт: "я добавил мктрлки в сеть админ, но в контенте в списке доступных
+     *  они таже видны... один блок может добавляться в поле 1 раз, но может
+     *  принадлежать разным сеткам" — раньше фильтр смотрел только на ТЕКУЩУЮ
+     *  выбранную сеть, из-за чего один и тот же узел схемы можно было перетащить
+     *  из палитры ПОВТОРНО в другую сеть и получить ВТОРОЙ физический блок для
+     *  того же устройства; теперь узел исчезает из палитры после ПЕРВОГО
+     *  добавления НЕЗАВИСИМО от сети — если устройство должно входить ещё в одну
+     *  сеть, это ПКМ → «Подключить к сети…» на уже стоящем блоке, см. {@code
+     *  NetworkCanvasPanel#attachToNetwork}, а не повторное перетаскивание). */
     private void refreshSchemaPalette() {
         SchemaNode selected = schemaPaletteList.getSelectedValue();
         schemaPaletteModel.clear();
-        Network current = networkList.getSelectedValue();
-        Set<String> usedInCurrent = current == null ? Set.of()
-                : current.getDevices().stream()
+        Set<String> usedAnywhere = currentPlan == null ? Set.of()
+                : currentPlan.getDevices().stream()
                         .map(NetworkDevicePlacement::getLinkedSchemaNodeId)
                         .filter(Objects::nonNull)
                         .collect(Collectors.toSet());
         for (SchemaNode node : model.schemaNodesForCurrentScene(SchemaMode.SIGNAL)) {
-            if (node.getType() != SchemaNodeType.SCREEN && !usedInCurrent.contains(node.getId())) {
+            if (node.getType() != SchemaNodeType.SCREEN && !usedAnywhere.contains(node.getId())) {
                 schemaPaletteModel.addElement(node);
             }
         }

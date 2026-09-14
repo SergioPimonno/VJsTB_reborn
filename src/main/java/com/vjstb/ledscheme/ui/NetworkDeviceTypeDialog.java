@@ -31,7 +31,8 @@ public class NetworkDeviceTypeDialog extends JDialog {
             new JComboBox<>(NetworkDeviceCategory.values());
     private final JTextField descriptionField = new JTextField();
     private final JTextField companyField = new JTextField();
-    private final JSpinner portCountSpinner = new JSpinner(new SpinnerNumberModel(4, 1, 128, 1));
+    private final JSpinner ethernetPortCountSpinner = new JSpinner(new SpinnerNumberModel(4, 1, 128, 1));
+    private final JSpinner opticalPortCountSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 128, 1));
     private final String existingId;
     private NetworkDeviceType result;
 
@@ -44,7 +45,8 @@ public class NetworkDeviceTypeDialog extends JDialog {
             categoryCombo.setSelectedItem(existing.getCategory());
             descriptionField.setText(existing.getDescription());
             companyField.setText(existing.getCompany());
-            portCountSpinner.setValue(Math.max(1, existing.getPortCount()));
+            ethernetPortCountSpinner.setValue(Math.max(1, existing.getEthernetPortCount()));
+            opticalPortCountSpinner.setValue(Math.max(0, existing.getOpticalPortCount()));
         }
 
         JPanel content = new JPanel(new BorderLayout(8, 8));
@@ -54,7 +56,8 @@ public class NetworkDeviceTypeDialog extends JDialog {
         top.setLayout(new BoxLayout(top, BoxLayout.Y_AXIS));
         top.add(row("Название", nameField));
         top.add(row("Категория", categoryCombo));
-        top.add(row("Число портов Ethernet", portCountSpinner));
+        top.add(row("Число сетевых портов (Ethernet)", ethernetPortCountSpinner));
+        top.add(row("Число оптических портов", opticalPortCountSpinner));
         top.add(row("Описание", descriptionField));
         top.add(row("Производитель", companyField));
         content.add(top, BorderLayout.NORTH);
@@ -112,7 +115,8 @@ public class NetworkDeviceTypeDialog extends JDialog {
         result.setCategory((NetworkDeviceCategory) categoryCombo.getSelectedItem());
         result.setDescription(descriptionField.getText().trim());
         result.setCompany(companyField.getText().trim());
-        result.setPortCount((Integer) portCountSpinner.getValue());
+        result.setEthernetPortCount((Integer) ethernetPortCountSpinner.getValue());
+        result.setOpticalPortCount((Integer) opticalPortCountSpinner.getValue());
         dispose();
     }
 
