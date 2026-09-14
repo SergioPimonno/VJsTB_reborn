@@ -114,6 +114,7 @@ public class SetupStagePanel extends JPanel {
     private final JTextField pRiggingTrussNotes = new JTextField(10);
     private final JButton calcTrussBtn = new JButton("Рассчитать фермы");
     private final JButton buildTrussSpecBtn = new JButton("Собрать спецификацию");
+    private final JButton buildTrussSpecSceneBtn = new JButton("Собрать спецификацию для сцены");
 
     private final JComboBox<Integer> pRefreshHz = new JComboBox<>(new Integer[]{50, 60, 120, 144, 240});
     private final JComboBox<Integer> pBitDepth = new JComboBox<>(new Integer[]{8, 10, 12});
@@ -642,6 +643,11 @@ public class SetupStagePanel extends JPanel {
                 + " проекта (лист «Фермы», этап «Вывод»).");
         buildTrussSpecBtn.addActionListener(e -> buildTrussSpec());
         trussFieldsPanel.add(buildTrussSpecBtn);
+        buildTrussSpecSceneBtn.setToolTipText("Считает спецификацию фермы сразу по ВСЕМ экранам текущей сцены"
+                + " (не только по выбранному) и суммирует комплект сегментов — тот же расчёт, что лист «Фермы»"
+                + " на этапе «Вывод», но только для этой сцены и прямо здесь.");
+        buildTrussSpecSceneBtn.addActionListener(e -> buildTrussSpecForScene());
+        trussFieldsPanel.add(buildTrussSpecSceneBtn);
         riggingArea.add(trussFieldsPanel);
         riggingArea.add(UiKit.vgap(10));
 
@@ -953,6 +959,84 @@ public class SetupStagePanel extends JPanel {
         }
         msg.append("\nТребует независимой инженерной перепроверки перед монтажом — см. RIGGING_CALC_NOTES.md.");
         JOptionPane.showMessageDialog(this, msg.toString(), "Спецификация фермы", JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    /** Та же спецификация фермы, что {@link #buildTrussSpec()}, но по ВСЕМ экранам ТЕКУЩЕЙ
+     *  сцены сразу, а не только по выбранному — читает {@code Screen} напрямую (текущие
+     *  сохранённые параметры каждого экрана, форма влияет только на выбранный), пропускает
+     *  экраны без {@code mountType == RIGGED} или без выбранного профиля фермы (тот же
+     *  фильтр, что {@code OutputStagePanel#addTrussSheet} — единственный источник правды
+     *  для листа «Фермы» на этапе «Вывод», здесь та же логика просто агрегирована по сцене
+     *  и показана сразу на месте, без выгрузки всего проекта). Комплекты сегментов
+     *  суммируются по длине, но СНАЧАЛА группируются по типу фермы (библиотечному профилю)
+     *  — разные типы физически несовместимы (разные соединители/сечение), смешивать их в
+     *  один плоский список по одной длине нельзя, даже если длины совпадают числом. */
+    private void buildTrussSpecForScene() {
+        Scene scene = model.getCurrentScene();
+        if (scene == null) {
+            return;
+        }
+        java.util.TreeMap<String, java.util.TreeMap<Double, Integer>> kitTotals = new java.util.TreeMap<>();
+        int screensCounted = 0;
+        int totalConnectors = 0;
+        StringBuilder warnings = new StringBuilder();
+        for (Screen scr : scene.getScreens()) {
+            if (scr.getMountType() != com.vjstb.ledscheme.model.ScreenMountType.RIGGED
+                    || scr.getRiggingTrussProfileId() == null) {
+                continue;
+            }
+            com.vjstb.ledscheme.service.TrussCalc.Result result = com.vjstb.ledscheme.service.TrussCalc.compute(
+                    scr, model.typeOf(scr), model.getWorkspace());
+            screensCounted++;
+            if (result.shorterThanScreenWarning()) {
+                warnings.append("  «").append(scr.getName()).append("» — ферма короче ширины экрана\n");
+            }
+            if (result.catalogEmpty()) {
+                warnings.append("  «").append(scr.getName())
+                        .append("» — в библиотечном профиле нет ни одной длины, комплект не учтён\n");
+                continue;
+            }
+            totalConnectors += result.connectorCount();
+            com.vjstb.ledscheme.model.TrussProfile profile =
+                    model.getWorkspace().trussProfileById(scr.getRiggingTrussProfileId());
+            String profileName = profile != null ? profile.getName() : "(запись удалена)";
+            java.util.TreeMap<Double, Integer> byLength =
+                    kitTotals.computeIfAbsent(profileName, k -> new java.util.TreeMap<>());
+            for (com.vjstb.ledscheme.service.CableSpecCalc.Piece p : result.pieces()) {
+                byLength.merge(p.lengthM(), p.count(), Integer::sum);
+            }
+        }
+
+        StringBuilder msg = new StringBuilder();
+        msg.append("Спецификация фермы — сцена «").append(scene.getName()).append("»\n\n");
+        if (screensCounted == 0) {
+            msg.append("Нет экранов с фермой подвеса (mountType = RIGGED + выбранный тип фермы).");
+            JOptionPane.showMessageDialog(this, msg.toString(), "Спецификация фермы (сцена)",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        msg.append(String.format("Экранов с фермой: %d%n", screensCounted));
+        if (kitTotals.isEmpty()) {
+            msg.append("Комплект сегментов не посчитан ни для одного экрана.\n");
+        } else {
+            int totalPieces = kitTotals.values().stream()
+                    .flatMap(m -> m.values().stream()).mapToInt(Integer::intValue).sum();
+            msg.append(String.format("Сегментов всего: %d, соединителей на стыках всего: %d%n",
+                    totalPieces, totalConnectors));
+            for (var typeEntry : kitTotals.entrySet()) {
+                msg.append("  ").append(typeEntry.getKey()).append(":\n");
+                for (var entry : typeEntry.getValue().entrySet()) {
+                    msg.append(String.format("    %.2f м × %d%n", entry.getKey(), entry.getValue()));
+                }
+            }
+        }
+        if (warnings.length() > 0) {
+            msg.append("\nВНИМАНИЕ:\n").append(warnings);
+        }
+        msg.append("\nТот же набор войдёт в общую спецификацию проекта (лист «Фермы») на этапе «Вывод».");
+        msg.append("\nТребует независимой инженерной перепроверки перед монтажом — см. RIGGING_CALC_NOTES.md.");
+        JOptionPane.showMessageDialog(this, msg.toString(), "Спецификация фермы (сцена)",
+                warnings.length() > 0 ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE);
     }
 
     /** {@code null} -- выбрано «Не выбрано» (см. {@link #pRiggingTrussProfile}), тогда BOM
