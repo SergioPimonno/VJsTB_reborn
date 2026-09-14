@@ -12,34 +12,31 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManagerFactory;
 
 /**
- * {@link HttpClient} для запросов к своему серверу (см. {@link LibrarySyncClient
- * #DEFAULT_BASE_URL}) — сервер сейчас за самоподписанным сертификатом (см.
- * CLAUDE.md, секция 2: Caddy на dxv, доверенного домена/CA пока нет). Обычный
- * {@code HttpClient.newBuilder().build()} такой сертификат бы отверг —
- * настраиваем доверие ИМЕННО к этому одному сертификату (pinning), НЕ отключаем
- * проверку целиком ("trust all") — это была бы дыра, а не решение задачи "сервер
- * за открытым портом без шифрования". Сертификат — src/main/resources/certs/
- * dxv-server.crt, публичный, коммитить можно (это не секрет, приватный ключ
- * остаётся только на сервере).
+ * {@link HttpClient} для запросов к своему серверу. С 2026-09-11 адрес по
+ * умолчанию ({@link LibrarySyncClient#DEFAULT_BASE_URL}) — домен
+ * {@code ledschemedesigner.ru} с настоящим сертификатом от Let's Encrypt
+ * (DNS-01 через Cloudflare API, DNS-запись переведена в режим "DNS only" —
+ * Cloudflare-edge больше не участвует в передаче трафика). Для него подходит
+ * обычный {@code HttpClient.newBuilder().build()} с системным доверием.
  *
- * <p>Если/когда у сервера появится домен и настоящий сертификат от публичного CA
- * (см. обсуждение в этой же сессии) — этот класс и ресурс можно будет убрать,
- * вернувшись к обычному {@code HttpClient.newBuilder().build()}.</p>
+ * <p>Pinning остался только ради обратной совместимости со старыми клиентами:
+ * когда-то это был единственный способ довериться самоподписанному сертификату
+ * сервера на голом IP. Тот self-signed сертификат сервер всё ещё раздаёт на
+ * {@link LibrarySyncClient#LEGACY_PINNED_IP_URL} (старые установленные клиенты
+ * собраны с этим URL как {@code DEFAULT_BASE_URL} и не могут быть пересобраны
+ * задним числом) — сертификат в src/main/resources/certs/dxv-server.crt,
+ * публичный, коммитить можно (это не секрет, приватный ключ остаётся только на
+ * сервере). Новый код на IP-адрес полагаться не должен.</p>
  *
- * <p><b>Баг-репорт (2026-08-19)</b>: "мост синхронизации" через Cloudflare
- * (домен {@code ledschemedesigner.ru}, см. CLAUDE.md §7) ломает синхронизацию с
- * ошибкой {@code unable to find valid certification path} при ручном
- * переопределении адреса сервера — TLS этого пути терминируется на Cloudflare,
- * клиент видит СЕРТИФИКАТ CLOUDFLARE (настоящий, от публичного CA), а не наш
- * pinned self-signed для IP. Ошибочно предполагалось (см. старую версию
- * комментария в CLAUDE.md §7), что ручной ввод адреса этой проблемы не имеет —
- * на деле все sync-клиенты жёстко использовали {@link #client()} (pinned)
- * независимо от того, какой адрес реально резолвится, поэтому не имело значения,
- * ЧТО пользователь вписал в override — TLS-политика была одна на все случаи.
- * {@link #clientFor(String)} — исправление: pinned-клиент ТОЛЬКО для
- * {@link LibrarySyncClient#DEFAULT_BASE_URL} (наш самоподписанный IP-сертификат),
- * обычное системное доверие для любого другого адреса (override — предполагается
- * настоящий CA-сертификат, как у Cloudflare). */
+ * <p><b>Баг-репорт (2026-08-19, устарел после перехода на прямой домен)</b>:
+ * "мост синхронизации" через Cloudflare ломал синхронизацию ошибкой
+ * {@code unable to find valid certification path} при ручном переопределении
+ * адреса сервера — TLS терминировался на Cloudflare, клиент видел СЕРТИФИКАТ
+ * CLOUDFLARE, а не pinned self-signed для IP, потому что все sync-клиенты
+ * жёстко использовали {@link #client()} (pinned) независимо от реально
+ * резолвящегося адреса. {@link #clientFor(String)} тогда исправил это, сделав
+ * pinned-клиент условным. Актуальный смысл условия изменился (см. ниже), сам
+ * баг больше не воспроизводим — Cloudflare не в пути трафика по умолчанию. */
 public final class TrustedHttp {
 
     private static final String CERT_RESOURCE = "/certs/dxv-server.crt";
@@ -50,9 +47,8 @@ public final class TrustedHttp {
     }
 
     /** Клиент с пиннингом на самоподписанный сертификат dxv — используй только для
-     *  запросов, где адрес заведомо равен {@link LibrarySyncClient#DEFAULT_BASE_URL}.
-     *  Для адреса, который мог быть переопределён пользователем, используй
-     *  {@link #clientFor(String)}. */
+     *  запросов, где адрес заведомо равен {@link LibrarySyncClient#LEGACY_PINNED_IP_URL}.
+     *  Для любого другого адреса используй {@link #clientFor(String)}. */
     public static HttpClient client() {
         return HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
@@ -61,12 +57,12 @@ public final class TrustedHttp {
     }
 
     /** Выбирает клиент по фактическому адресу запроса: {@code baseUrl}, равный
-     *  {@link LibrarySyncClient#DEFAULT_BASE_URL} (или null/пусто, тот же смысл,
-     *  что и у {@link LibrarySyncClient#resolveBaseUrl}), — pinned self-signed
-     *  клиент как раньше; любой ДРУГОЙ адрес — обычный клиент с системным доверием
-     *  (подходит для настоящего CA-сертификата за прокси вроде Cloudflare). */
+     *  {@link LibrarySyncClient#LEGACY_PINNED_IP_URL} (старый self-signed
+     *  IP-адрес) — pinned-клиент; любой другой адрес, включая пустой/null
+     *  (= {@link LibrarySyncClient#DEFAULT_BASE_URL}, домен с настоящим CA-
+     *  сертификатом) и любой override — обычный клиент с системным доверием. */
     public static HttpClient clientFor(String baseUrl) {
-        if (baseUrl == null || baseUrl.isBlank() || baseUrl.equals(LibrarySyncClient.DEFAULT_BASE_URL)) {
+        if (baseUrl != null && baseUrl.equals(LibrarySyncClient.LEGACY_PINNED_IP_URL)) {
             return client();
         }
         HttpClient c = cachedSystemTrustClient;

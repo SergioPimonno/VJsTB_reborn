@@ -217,10 +217,19 @@ NovaLCT, что подтверждено реальной загрузкой, ч
 
 ---
 
-## 5. Инфраструктура сервера — TLS / reverse-proxy / сетевой мост
+## 5. Инфраструктура сервера — TLS / reverse-proxy / DNS
 
 Рутинный деплой — скилл `deploy-server`. Здесь — как устроено и почему; менять
 что-либо из этого только по явному запросу.
+
+**Переход на домен как основной адрес — 2026-09-11.** Раньше адресация шла по
+голому IP с самоподписанным сертификатом и client-side pinning; Cloudflare был
+опциональным "мостом" для сетей, блокирующих порт 8443. Теперь домен —
+**основной** адрес, а Cloudflare полностью убран из пути трафика (был источником
+двух проблем: блокировки Cloudflare-edge в РФ и периодические ошибки
+синхронизации при поднятом VPN — Cloudflare детектит VPN-exit-ноды как
+подозрительные). IP с self-signed остаётся только ради уже установленных старых
+клиентов.
 
 ### Caddy перед сервером
 
@@ -232,67 +241,205 @@ NovaLCT, что подтверждено реальной загрузкой, ч
 
 ```
 {
-    auto_https off
+    auto_https disable_redirects
     admin localhost:2019
+    acme_dns cloudflare {env.CF_API_TOKEN}
 }
 
-https://138.16.177.176:8443, https://ledschemedesigner.ru {
+https://138.16.177.176:8443 {
     tls /etc/caddy/certs/server.crt /etc/caddy/certs/server.key
     reverse_proxy 127.0.0.1:8081
 }
+
+https://ledschemedesigner.ru:8443 {
+    reverse_proxy 127.0.0.1:8081
+}
+
+https://ledschemedesigner.ru {
+    bind 83.217.212.64
+    reverse_proxy 127.0.0.1:8081
+}
+
+http://ledschemedesigner.ru {
+    bind 83.217.212.64
+    redir https://{host}{uri} permanent
+}
 ```
 
-- Сертификат самоподписанный (`/etc/caddy/certs/server.{crt,key}`, EC
-  prime256v1, CN/SAN=`138.16.177.176`, 10 лет, `openssl req -x509 -newkey ec
-  ...`). Встроенный `tls internal` НЕ используется (его CA упирается в то, что
-  пользователь `caddy` не в sudoers, issuance зависает без ошибки).
-- `ufw` открывает только `8443/tcp` (v4+v6); `8081/tcp` закрыт.
+- **ACME-политика — глобальная (`acme_dns` в верхнем блоке), не per-site `tls
+  {dns cloudflare ...}`.** Если один и тот же hostname (`ledschemedesigner.ru`)
+  фигурирует в нескольких site-блоках (у нас их два — `:8443` и `:443`/`bind`),
+  Caddyfile-адаптер отказывается собирать конфиг с ошибкой `hostname appears in
+  more than one automation policy` — даже если оба блока описывают ОДИНАКОВЫЙ
+  DNS-01 issuer. Единственный рабочий вариант — вынести issuer в глобальные
+  опции ОДИН раз (`acme_dns cloudflare ...`), а сами site-блоки для этого
+  хоста вообще не декларируют `tls` — оба подхватывают единую политику и делят
+  один и тот же управляемый сертификат.
+- **`bind 83.217.212.64`** — явно привязывает слушатель к конкретному IP.
+  Без этого Caddy попытался бы `0.0.0.0:443`/`0.0.0.0:80` — а это уже занято
+  nginx "dxvfi" (см. ниже, «Порт 443/80 для домена»).
 
-### Certificate pinning на клиенте и в админке
+- **`auto_https disable_redirects`, НЕ `off`** — это принципиально: `off`
+  полностью выключает автоматическое управление сертификатами (в т.ч. explicit
+  ACME DNS-01), не только implicit-редиректы. `disable_redirects` оставляет
+  автоматизацию сертификатов включённой, но НЕ трогает порт 80 (он занят
+  "dxvfi" — Caddy не должен даже пытаться его слушать).
+- **IP-блок** — как раньше, self-signed сертификат (`/etc/caddy/certs/
+  server.{crt,key}`, EC prime256v1, CN/SAN=`138.16.177.176`, 10 лет). Держим
+  ради уже установленных клиентов со старым `DEFAULT_BASE_URL`.
+- **Домен-блок** — настоящий сертификат от Let's Encrypt через DNS-01 challenge
+  (плагин `github.com/caddy-dns/cloudflare`, токен в `CF_API_TOKEN`). DNS-01, а
+  не HTTP-01, ИМЕННО потому что порт 80 занят "dxvfi" — HTTP-01 в принципе не
+  вариант на этом хосте. Caddy сам продлевает сертификат (Let's Encrypt, ~90
+  дней), руками ничего делать не нужно.
+- Бинарник `/usr/bin/caddy` — **кастомная сборка через `xcaddy`** (стандартный
+  apt-пакет не несёт DNS-плагинов), собран прямо на VPS: `xcaddy build v2.11.4
+  --with github.com/caddy-dns/cloudflare`. **Важно**: `apt upgrade` перезатрёт
+  его обратно на ванильную сборку без плагина — при обновлении Caddy через apt
+  нужно пересобирать заново тем же способом (Go + xcaddy уже стоят на сервере).
+  Бэкапы прежних бинарников — `/usr/bin/caddy.bak-<timestamp>`.
+- `CF_API_TOKEN` — в `/etc/caddy/caddy.env` (права 600, `caddy:caddy`),
+  подключается в systemd-юнит через drop-in
+  `/etc/systemd/system/caddy.service.d/override.conf`
+  (`EnvironmentFile=...`). Токен scoped только на `Zone:DNS:Edit` для зоны
+  `ledschemedesigner.ru`.
+- **Тот же drop-in убирает флаг `--environ` из `ExecStart`** — ванильный юнит
+  Caddy его использует, а он печатает ВСЕ переменные окружения процесса в
+  journal, включая `CF_API_TOKEN` открытым текстом. Если пересобираешь юнит с
+  нуля — не верни этот флаг.
+- `ufw` открывает только `8443/tcp` (v4+v6); `8081/tcp` и `80/443` (кроме
+  "dxvfi") закрыты.
 
-Т.к. сертификат самоподписанный, обычный `HttpClient.newBuilder().build()` его
-отверг бы. Класс `TrustedHttp` (`sync.TrustedHttp` в клиенте,
-`admin.sync.TrustedHttp` в админке — независимые копии по конвенции проекта)
-грузит встроенный публичный сертификат
-(`src/main/resources/certs/dxv-server.crt`, коммитится — не секрет, приватный
-ключ только на сервере) в `TrustManagerFactory` и строит `SSLContext`,
-доверяющий именно ему.
+### DNS и путь трафика
+
+- Домен `ledschemedesigner.ru` (регистратор reg.ru), NS — Cloudflare, A-запись
+  **DNS only** (не proxied — серое, не оранжевое облако) → `83.217.212.64`
+  (см. ниже — не основной IP сервера, отдельный доп. IPv4 именно под 443/80).
+  Cloudflare участвует ТОЛЬКО в DNS-резолвинге и как DNS-провайдер для ACME
+  DNS-01 (API-вызов с самого сервера, не подвержен блокировкам Cloudflare-edge
+  у конечных пользователей в РФ) — HTTPS-трафик идёт напрямую клиент→сервер,
+  Cloudflare не видит и не проксирует ни байта.
+- Если DNS у Cloudflare когда-нибудь тоже станет проблемой в РФ (пока не
+  наблюдалось — блокируют обычно именно edge/proxy IP, не NS) — можно увести
+  NS-делегацию на другого провайдера; переиздание сертификата тогда потребует
+  Caddy DNS-плагин под нового провайдера вместо `caddy-dns/cloudflare`.
+
+### Порт 443/80 для домена — второй IPv4 + точечная правка nginx (2026-09-11)
+
+Голый `https://ledschemedesigner.ru` (без `:8443`) теперь работает по-настоящему
+— не просто задокументирован как "не работает", а реально отвечает на
+стандартном порту. Потребовало два шага, оба сделаны с явного разрешения
+пользователя (второй — исключение из golden rule 2, см. ниже):
+
+**1. Доп. IPv4 на сервере** — VPS изначально имел один публичный IP
+(`138.16.177.176`). У хостера (vdsina.ru, панель → Мои серверы → хостнейм →
+вкладка «IP») заказаны ещё два адреса:
+- `138.16.179.82` (шлюз `138.16.179.1`) — **не заработал**: локальная
+  маршрутизация корректна (ICMP и трафик до своего же сервера проходят), но
+  TCP наружу/снаружи не ходит вообще (SYN уходит, ответа нет — подтверждено
+  `tcpdump`) ни до, ни после ребута сервера. Поддержка vdsina подтвердила
+  проблему на их стороне, предложила заказать другой IP. Оставлен
+  сконфигурированным (не мешает), реально не используется.
+- `83.217.212.64` (шлюз `83.217.212.1`) — **рабочий**, используется.
+
+Оба прописаны в `/etc/netplan/01-netcfg.yaml` (Ubuntu 24.04, `renderer:
+networkd`, NetworkManager не установлен) как доп. адреса на `ens3` с
+**policy-based routing**: у каждого доп. IP свой шлюз, отличный от основного,
+поэтому недостаточно просто добавить адрес — нужна отдельная таблица
+маршрутизации на каждый шлюз + `routing-policy` правило "трафик С этого IP —
+через его же таблицу", иначе обратные пакеты уходят не через тот шлюз и
+теряются (ISP режет ответы с несовпадающим source/gateway). Пример на рабочем
+IP:
+```yaml
+routes:
+  - to: default
+    via: 83.217.212.1
+    on-link: true
+    table: 212
+routing-policy:
+  - from: 83.217.212.64
+    table: 212
+```
+(основной IP как был в главной таблице маршрутизации без изменений).
+
+**2. Правка nginx "dxvfi" — единственное исключение из golden rule 2, с явным
+разрешением пользователя, при условии сохранности функционала dxvfi и
+привязок его текущих клиентов.** Причина, по которой доп. IP сам по себе НЕ
+решал задачу: у "dxvfi" nginx `listen 443 ssl;` / `listen 80 default_server;`
+— **wildcard-бинд** (`0.0.0.0`), который на Linux блокирует ЛЮБОЙ другой
+процесс от бинда порта 443/80 на ЛЮБОМ IP этой машины, сколько бы адресов ни
+добавили (проверено на практике: Caddy падал с `bind: address already in use`
+при попытке слушать `:443` на новом IP, пока wildcard-бинд nginx оставался
+активным). Единственный чистый выход без второй физической машины — сделать
+бинд nginx явным на его же собственный, уже используемый IP.
+
+Правка (ровно 3 строки, `nginx -t` перед применением, backup сохранён в
+`/root/nginx-backup-<timestamp>/`):
+- `sites-available/default`: `listen 80 default_server;` →
+  `listen 138.16.177.176:80 default_server;`
+- `sites-available/dxvfix1`: `listen 443 ssl;` → `listen 138.16.177.176:443
+  ssl;`, `listen 80;` → `listen 138.16.177.176:80;`
+
+`dxv-frame-doctor.ru`/`www.dxv-frame-doctor.ru` и так резолвятся именно на
+`138.16.177.176` (проверено перед правкой) — для их пользователей ничего не
+изменилось, IP тот же. **Важно**: `reload` (SIGHUP) НЕ пересоздаёт слушающие
+сокеты при смене адреса в `listen` — старый wildcard-сокет остаётся открытым
+и блокирует новый bind (nginx логирует `emerg`, но остаётся жить на старом
+конфиге, сайт не падает). Нужен именно `restart` (секундный разрыв, дальше
+сразу проверять живой ответ, не только `systemctl is-active`).
+
+После этой правки `0.0.0.0:443`/`0.0.0.0:80` свободны на всех IP, КРОМЕ
+`138.16.177.176` (там по-прежнему nginx) — Caddy получил `83.217.212.64:443`
+и `83.217.212.64:80` без конфликта, IP:8443 и домен:8443 (wildcard-слушатель,
+без правок) продолжили работать всё это время без единой секунды простоя.
+
+### Certificate pinning на клиенте и в админке — только для legacy IP
+
+Класс `TrustedHttp` (`sync.TrustedHttp` в клиенте, `admin.sync.TrustedHttp` в
+админке — независимые копии по конвенции проекта) по-прежнему грузит встроенный
+публичный сертификат (`src/main/resources/certs/dxv-server.crt`, коммитится —
+не секрет, приватный ключ только на сервере) в `TrustManagerFactory`, но
+**pinned-клиент теперь используется только для легаси IP-адреса**, не для
+дефолтного.
 
 - **`TrustedHttp.clientFor(String baseUrl)`** — pinned-клиент ТОЛЬКО когда
-  `baseUrl` равен `LibrarySyncClient.DEFAULT_BASE_URL` (наш self-signed
-  IP-сертификат), иначе обычный клиент с системным доверием (для настоящего
-  CA-сертификата за Cloudflare). Все sync-клиенты (`LibrarySyncClient`,
-  `AuthClient`, `ProposalClient`, `ProjectArchiveClient`, `CabinetConfigClient`)
-  + `update.VersionManifest`/`UpdateManager`/`UpdateDialog` обязаны брать
-  `HttpClient` через `clientFor(baseUrl)`, не собирать сами.
+  `baseUrl` равен `LibrarySyncClient.LEGACY_PINNED_IP_URL`
+  (`https://138.16.177.176:8443`, старый self-signed); любой другой адрес,
+  включая новый `DEFAULT_BASE_URL` (домен, настоящий CA-сертификат) и любой
+  override — обычный клиент с системным доверием. Та же логика зеркалом в
+  `admin.sync.TrustedHttp` (`AdminSettings.serverUrl` по умолчанию — тоже
+  домен). Все sync-клиенты обязаны брать `HttpClient` через `clientFor(baseUrl)`,
+  не собирать сами.
 - Единственное осознанное исключение — `update.UpdateManager` в части похода на
   GitHub (не на ledscheme-server), там обычный `HttpClient` корректен.
-- Баг-репорт 2026-08-19: после включения override на
-  `https://ledschemedesigner.ru` синхронизация падала с `unable to find valid
-  certification path` — sync-клиенты жёстко звали `TrustedHttp.client()`
-  (pinning на IP-сертификат) независимо от адреса; мост через Cloudflare
-  терминирует TLS на Cloudflare (настоящий CA-сертификат). Фикс — переход на
-  `clientFor(baseUrl)`. Попутно в `ProposalClient` (`pending()`/`decide()`)
-  нашлись два места с голым `HttpClient.newBuilder().build()` — были сломаны и
-  для pinned-адреса ещё раньше.
-- Если/когда у сервера появится домен с сертификатом от публичного CA — весь
-  pinning-механизм (`TrustedHttp` в обоих репо + встроенный `.crt`) можно
-  убрать.
+- Баг-репорт 2026-08-19 (устарел после перехода на прямой домен, но контекст
+  сохранён в javadoc `TrustedHttp`): `unable to find valid certification path`
+  при override на Cloudflare-домен — sync-клиенты жёстко звали pinned-клиент
+  независимо от адреса. `clientFor(baseUrl)` тогда исправил это, сделав pinned
+  условным; сам баг больше не воспроизводим, т.к. Cloudflare не в пути трафика
+  по умолчанию.
+- Если/когда все установленные клиенты перейдут на новые версии (домен) — весь
+  pinning-механизм (`TrustedHttp` в обоих репо + встроенный `.crt` + IP-блок в
+  Caddyfile) можно будет убрать. Не раньше.
 
-### Сетевой мост (для сетей, блокирующих порт 8443)
+### SSH-хардening VPS (2026-09-11)
+
+Аудит выявил: `PermitRootLogin yes` + `PasswordAuthentication yes` +
+неактивный `fail2ban`, при десятках тысяч попыток брутфорса в `/var/log/
+auth.log`. Исправлено: `/etc/ssh/sshd_config.d/50-cloud-init.conf` →
+`PasswordAuthentication no`, `PermitRootLogin prohibit-password` (ключ
+по-прежнему работает); `fail2ban` установлен и активен (`jail.d/sshd.local`,
+`maxretry=5 bantime=3600`). Не относится к led-scheme напрямую, но затрагивает
+тот же VPS — учитывать при следующем аудите.
+
+### Ручной override адреса (для сетей, блокирующих порт 8443)
 
 - У клиента есть поле «Адрес сервера (переопределение)» в Настройки →
   Предпочтения → Синхронизация (`ui.PreferencesDialog.buildSyncGroup`,
   `AppSettings.syncServerUrlOverride`, роутер
   `SettingsManager.get/setSyncServerUrlOverride`). Все sync-клиенты резолвят
   адрес через `LibrarySyncClient.resolveBaseUrl(SettingsManager)`. Пусто/`null`
-  — адрес по умолчанию.
-- Домен `ledschemedesigner.ru` (reg.ru, NS на Cloudflare), Cloudflare DNS
-  A-запись (proxied) → `138.16.177.176`, **Origin Rule** переписывает порт
-  назначения на `8443` (без неё Cloudflare шёл бы на 443/80), SSL/TLS режим
-  **Full** (не Full Strict — ориджин отдаёт self-signed на IP). Проверено
-  сквозным curl: `via: 1.1 Caddy` в ответе подтверждает, что трафик доходит до
-  нашего Caddy, а не оседает на nginx/"dxvfi".
+  — адрес по умолчанию (теперь домен, не IP).
 - **Известный пробел**: `CabinetConfigPickerDialog` подключён к override только
   на тех call site, где `SettingsManager` был доступен по цепочке без широкого
   рефакторинга («Скачать конфиг приёмной карты…» и постэкспортный проброс из

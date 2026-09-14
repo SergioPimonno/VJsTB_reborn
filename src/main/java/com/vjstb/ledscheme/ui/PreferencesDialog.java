@@ -403,8 +403,8 @@ public class PreferencesDialog extends JDialog {
         syncRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         syncRow.setAlignmentX(Component.LEFT_ALIGNMENT);
         syncRow.setToolTipText("Альтернативный адрес сервера — используйте, если обычное подключение к"
-                + " https://138.16.177.176:8443 не проходит (сеть блокирует нестандартный порт, см."
-                + " раздел «Мост синхронизации» на сайте сервера). Пусто — адрес по умолчанию.");
+                + " https://ledschemedesigner.ru:8443 не проходит (сеть блокирует нестандартный порт)."
+                + " Пусто — адрес по умолчанию.");
         syncRow.add(new JLabel("Адрес сервера (переопределение):"));
         syncServerUrlField = new JTextField(24);
         Runnable commit = () -> {

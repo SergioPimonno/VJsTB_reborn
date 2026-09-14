@@ -21,14 +21,28 @@ import java.util.List;
  */
 public class LibrarySyncClient {
 
-    /** Адрес по умолчанию — прямое подключение к Caddy на dxv (см. CLAUDE.md секция 2) —
+    /** Адрес по умолчанию — домен `ledschemedesigner.ru`, DNS указывает напрямую на
+     *  Caddy на dxv (запись переведена в Cloudflare на "DNS only" 2026-09-11 —
+     *  Cloudflare-edge больше не в пути трафика, только DNS; это же убрало
+     *  зависимость от блокировок Cloudflare в РФ и странную нестабильность
+     *  синхронизации при поднятом VPN, которую вызывал именно Cloudflare-edge).
      *  8081 больше не открыт наружу, сервер слушает только 127.0.0.1:8081,
-     *  публично доступен только через reverse-proxy на 8443. Сертификат
-     *  самоподписанный (домена пока нет) — доверие настраивается точечно,
-     *  см. {@link TrustedHttp}. На сетях, блокирующих исходящие соединения на
-     *  нестандартные порты (вроде 8443), пользователь может переопределить адрес
-     *  вручную в Настройках — см. {@link #resolveBaseUrl}. */
-    public static final String DEFAULT_BASE_URL = "https://138.16.177.176:8443";
+     *  публично доступен только через reverse-proxy на 8443. Сертификат —
+     *  настоящий, от Let's Encrypt (DNS-01 через Cloudflare API, автопродление
+     *  в Caddy) — системное доверие, без pinning. Старый IP-адрес
+     *  {@link #LEGACY_PINNED_IP_URL} по-прежнему обслуживается на сервере
+     *  (self-signed, для уже установленных клиентов старых версий) — не убирать.
+     *  На сетях, блокирующих исходящие соединения на нестандартные порты (вроде
+     *  8443), пользователь может переопределить адрес вручную в Настройках —
+     *  см. {@link #resolveBaseUrl}. */
+    public static final String DEFAULT_BASE_URL = "https://ledschemedesigner.ru:8443";
+
+    /** Старый адрес по умолчанию (до перехода на домен, см. {@link #DEFAULT_BASE_URL}) —
+     *  self-signed сертификат на Caddy, всё ещё раздаётся сервером ради уже
+     *  установленных клиентов, которые собраны с прежним значением
+     *  {@code DEFAULT_BASE_URL}. Используется только в {@link TrustedHttp} для
+     *  выбора pinned-клиента — новый код на это значение полагаться не должен. */
+    public static final String LEGACY_PINNED_IP_URL = "https://138.16.177.176:8443";
 
     /** Все sync-клиенты (см. {@code AuthClient}, {@code ProposalClient},
      *  {@code ProjectArchiveClient}, {@code CabinetConfigClient}) резолвят базовый
