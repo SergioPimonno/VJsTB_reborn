@@ -225,11 +225,6 @@ public class SettingsManager {
         persist();
     }
 
-    public void setShapeEditorFloating(boolean floating) {
-        activeProfile().setShapeEditorFloating(floating);
-        persist();
-    }
-
     public void setPowerSceneStatsEnabled(boolean enabled) {
         activeProfile().setPowerSceneStatsEnabled(enabled);
         persist();
