@@ -1,8 +1,11 @@
 package com.vjstb.ledscheme.store;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.vjstb.ledscheme.model.LibraryBundle;
 import com.vjstb.ledscheme.model.Project;
 import com.vjstb.ledscheme.model.Scene;
@@ -48,12 +51,105 @@ public class WorkspaceStore {
             return new Workspace();
         }
         try {
-            Workspace workspace = mapper.readValue(workspaceFile, Workspace.class);
+            JsonNode root = mapper.readTree(workspaceFile);
+            migrateLegacyNetworkManagerPlans(root);
+            Workspace workspace = mapper.convertValue(root, Workspace.class);
             migrateLegacyChains(workspace);
             return workspace;
         } catch (IOException e) {
             throw new RuntimeException("Не удалось загрузить данные из " + workspaceFile + ": " + e.getMessage(), e);
         }
+    }
+
+    /** Одноразовая миграция: до Round 8 Сетевого менеджера {@code
+     *  NetworkDevicePlacement}/{@code NetworkLink} физически лежали ВНУТРИ
+     *  каждой {@code networks[i]} (поля "devices"/"links" узла сети), а
+     *  адрес/маска/шлюз были полями самого устройства — одно физическое
+     *  устройство, входящее в несколько сетей, приходилось заводить на поле
+     *  ДВАЖДЫ. Теперь оба списка общие для всего {@code networkManagerPlan}
+     *  (см. {@code model.NetworkManagerPlan} javadoc), а адрес переехал в
+     *  {@code model.NetworkAttachment}.
+     *
+     * <p>Работает на СЫРОМ дереве JSON, ДО типизированной привязки к {@link
+     * Workspace} — в отличие от {@link #migrateLegacyChains} (там поля
+     * назначения всё ещё существуют в модели, просто на другом уровне
+     * вложенности того же объекта, и миграция может пройти ПОСЛЕ обычной
+     * десериализации). Здесь наоборот: {@code model.Network} больше не
+     * объявляет полей "devices"/"links" вообще — обычная типизированная
+     * десериализация в {@code Workspace.class} эти вложенные массивы просто
+     * молча отбросила бы (в {@code ObjectMapper} выключен {@code
+     * FAIL_ON_UNKNOWN_PROPERTIES}), и переносить было бы уже нечего. */
+    private static void migrateLegacyNetworkManagerPlans(JsonNode root) {
+        if (root == null || !root.isObject()) {
+            return;
+        }
+        JsonNode projects = root.get("projects");
+        if (projects == null || !projects.isArray()) {
+            return;
+        }
+        for (JsonNode project : projects) {
+            JsonNode scenes = project.get("scenes");
+            if (scenes == null || !scenes.isArray()) {
+                continue;
+            }
+            for (JsonNode scene : scenes) {
+                JsonNode planNode = scene.get("networkManagerPlan");
+                if (planNode instanceof ObjectNode plan) {
+                    migrateOneNetworkManagerPlan(plan);
+                }
+            }
+        }
+    }
+
+    private static void migrateOneNetworkManagerPlan(ObjectNode plan) {
+        JsonNode networks = plan.get("networks");
+        if (networks == null || !networks.isArray()) {
+            return;
+        }
+        ArrayNode hoistedDevices = plan.has("devices") && plan.get("devices").isArray()
+                ? (ArrayNode) plan.get("devices") : plan.putArray("devices");
+        ArrayNode hoistedLinks = plan.has("links") && plan.get("links").isArray()
+                ? (ArrayNode) plan.get("links") : plan.putArray("links");
+
+        for (JsonNode networkNode : networks) {
+            if (!(networkNode instanceof ObjectNode network)) {
+                continue;
+            }
+            JsonNode legacyDevices = network.remove("devices");
+            if (legacyDevices != null && legacyDevices.isArray()) {
+                String networkId = network.path("id").asText(null);
+                for (JsonNode deviceNode : legacyDevices) {
+                    if (deviceNode instanceof ObjectNode device) {
+                        attachLegacyAddress(device, networkId);
+                        hoistedDevices.add(device);
+                    }
+                }
+            }
+            JsonNode legacyLinks = network.remove("links");
+            if (legacyLinks != null && legacyLinks.isArray()) {
+                hoistedLinks.addAll((ArrayNode) legacyLinks);
+            }
+        }
+    }
+
+    /** Заворачивает легаси ip/mask/gateway устройства в ОДНО {@code
+     *  NetworkAttachment} на сеть, из которой оно мигрирует — сами ключи
+     *  ipAddress/subnetMask/gateway на устройстве не трогает (типизированная
+     *  привязка их всё равно свяжет с {@code @Deprecated}-полями {@code
+     *  model.NetworkDevicePlacement}, существующими только ради обратной
+     *  совместимости, см. её javadoc). */
+    private static void attachLegacyAddress(ObjectNode device, String networkId) {
+        if (device.has("attachments")) {
+            return; // уже мигрировано -- не дублировать при повторном заходе
+        }
+        ObjectNode attachment = device.objectNode();
+        if (networkId != null) {
+            attachment.put("networkId", networkId);
+        }
+        attachment.put("ipAddress", device.path("ipAddress").asText(""));
+        attachment.put("subnetMask", device.path("subnetMask").asText(""));
+        attachment.put("gateway", device.path("gateway").asText(""));
+        device.putArray("attachments").add(attachment);
     }
 
     /** Одноразовая миграция: в файлах проектов, сохранённых до Task #78, цепочки

@@ -1,13 +1,18 @@
 package com.vjstb.ledscheme.ui;
 
+import com.vjstb.ledscheme.model.Network;
+import com.vjstb.ledscheme.model.NetworkAttachment;
 import com.vjstb.ledscheme.model.NetworkDevicePlacement;
 import com.vjstb.ledscheme.model.NetworkDeviceType;
 import com.vjstb.ledscheme.model.NetworkLink;
 import com.vjstb.ledscheme.model.NetworkLinkWaypoint;
+import com.vjstb.ledscheme.model.NetworkManagerPlan;
 import com.vjstb.ledscheme.model.SchemaNode;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.service.LocalNetworkInterfaces;
 import com.vjstb.ledscheme.service.NetworkDeviceLabels;
 import com.vjstb.ledscheme.service.NetworkIpConflicts;
+import com.vjstb.ledscheme.service.NetworkTopology;
 import com.vjstb.ledscheme.settings.SettingsManager;
 import java.awt.BasicStroke;
 import java.awt.Color;
@@ -25,7 +30,9 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.ArrayList;
 import java.util.List;
+import javax.swing.JMenu;
 import javax.swing.JMenuItem;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.JScrollBar;
@@ -33,7 +40,7 @@ import javax.swing.JScrollPane;
 import javax.swing.SwingUtilities;
 
 /**
- * Холст одной сети Сетевого менеджера (см. {@code NetworkManagerPanel},
+ * Холст Сетевого менеджера (см. {@code NetworkManagerPanel},
  * NETWORK_MANAGER_NOTES.md) — вид сверху, свободное размещение блоков
  * устройств (стиль Cisco Packet Tracer, по прямому указанию пользователя),
  * без штабелирования/коллизий/запаса, в отличие от {@link
@@ -47,27 +54,35 @@ import javax.swing.SwingUtilities;
  * по {@link NetworkDevicePlacement#getLinkedSchemaNodeId()} (существующий
  * узел общей схемы сигнала) или {@link NetworkDevicePlacement#getDeviceTypeId()}
  * (новый блок из каталога {@link NetworkDeviceType}), см. {@link
- * #resolveLabel}/{@link #resolveColor}/{@link #effectivePortCount} —
+ * #resolveLabel}/{@link #resolveColor}/{@link #effectiveEthernetPortCount} —
  * переименование узла в схеме, смена цвета/числа портов типа в библиотеке
- * сразу видно здесь, копия не хранится. Число портов у КАТАЛОЖНЫХ устройств
- * — паспортная величина ТИПА ({@link NetworkDeviceType#getPortCount()}), у
- * СВЯЗАННЫХ (нет типа) — {@link NetworkDevicePlacement#getPortCount()}
- * per-instance (редактируется в {@code NetworkDeviceParamsDialog}).
+ * сразу видно здесь, копия не хранится.
  *
  * <p><b>Порты и связи</b> (запрос пользователя: "нужно уметь рисовать линки и
  * подключать по портам... для подробных схем и сложной маршрутизации") —
- * порты рисуются мелкими квадратами вдоль НИЖНЕГО края блока ({@link
- * #portCenterCanvasUnits}). Клик по порту НАЧИНАЕТ связь (см. {@link
+ * порты нумеруются СКВОЗНЫМ номером 1..N: сначала Ethernet-порты (см. {@link
+ * #effectiveEthernetPortCount}), затем оптические (см. {@link
+ * #effectiveOpticalPortCount}) — Ethernet КАТАЛОЖНЫХ устройств (свитчи/
+ * роутеры из библиотеки) рисуются вдоль ВЕРХНЕГО края блока, СВЯЗАННЫХ со
+ * схемой — вдоль НИЖНЕГО (запрос пользователя: "для сетевого оборудования
+ * давай рисовать порты сверху", уточнение после первой версии: "у узлов
+ * схемы порты рисуются снизу"); оптические — вдоль ПРАВОГО в обоих случаях
+ * (см. {@link #portCenterCanvasUnits}). Клик по порту НАЧИНАЕТ связь (см. {@link
  * #linkingFrom}), клик по порту ДРУГОГО устройства ЗАВЕРШАЕТ её (создаёт
- * {@link NetworkLink}), клик по пустому месту или {@code Esc} отменяет —
- * модель "клик-клик", не перетаскивание (перетаскивание уже занято
- * перемещением блока). Пока связь строится — курсор становится crosshair,
- * начальный порт подсвечивается увеличенным кольцом, порт под курсором (если
- * это валидная цель — другое устройство) подсвечивается тоже, пунктирная
- * линия тянется до курсора (баг-репорт: "непонятно строится ли связь или
- * нет" — раньше подсказывающая линия рисовалась ПОЛНОСТЬЮ ПРОЗРАЧНОЙ из-за
- * бага в конструкторе {@link Color} с альфа-каналом, см. {@link
- * #COLOR_LINK_PENDING}).
+ * {@link NetworkLink} — только между устройствами ОДНОЙ сети, см. {@link
+ * #createLink}), клик по пустому месту или {@code Esc} отменяет — модель
+ * "клик-клик", не перетаскивание (перетаскивание уже занято перемещением
+ * блока). Пока связь строится — курсор становится crosshair, начальный порт
+ * подсвечивается увеличенным кольцом, порт под курсором (если это валидная
+ * цель — другое устройство) подсвечивается тоже, пунктирная линия тянется до
+ * курсора.
+ *
+ * <p><b>Занятые порты — попарно раскрашены по связи</b> (запрос
+ * пользователя: "занятые порты должны попарно краситься в цвета") — оба
+ * конца одной {@link NetworkLink} красятся ОДНИМ цветом (золотой угол по
+ * индексу связи в {@code plan.getLinks()}, см. {@link #linkPairColor}),
+ * чтобы на плотном свитче с десятком связей сразу было видно, какой порт с
+ * каким физически спарен — не нужно прослеживать линию через весь канвас.
  *
  * <p><b>Излом линии связи</b> (баг-репорт: "как в блоксхемах добавить
  * возможность ломать линию") — двойной клик по линии добавляет точку излома
@@ -77,40 +92,72 @@ import javax.swing.SwingUtilities;
  * SchemaCanvasPanel} для {@code SchemaEdge#getWaypoints()}. ПКМ по точке —
  * «Убрать точку», ПКМ по линии — «Выпрямить»/«Удалить связь».
  *
- * <p><b>Shift-снаппинг точки излома</b> (запрос пользователя: "для точек
- * излома линий надо добавить снаппинг при shift") — точная копия механики
- * {@code SchemaCanvasPanel#snapWaypointPosition} для {@code
- * SchemaEdge#getWaypoints()}: пока {@code Shift} зажат во время
- * перетаскивания точки, она притягивается к БЛИЖАЙШЕМУ порту любого
- * устройства этой сети (см. {@link #portCenterCanvasUnits}) или к другой
- * точке излома любой связи (не только текущей) — так соседние связи можно
- * выстроить в прямые линии, как в блок-схемах. Сила притяжения и радиус
- * поиска берутся из ТЕХ ЖЕ настроек профиля, что и снаппинг блок-схем
- * ({@link SettingsManager#activeProfile()}{@code
- * .getSnapThresholdPx()/getSnapStrengthPercent()}) — единая настройка на всё
- * приложение, не своя копия для Сетевого менеджера. Без {@code Shift} —
- * перетаскивание свободное, как раньше.
+ * <p><b>Shift-снаппинг</b> (запрос пользователя: "снаппинг к блокам и
+ * существующим узлам излома") — блок и точка излома притягиваются к другим
+ * блокам/точкам излома ЛЮБОЙ сети (см. {@link #snapDevicePosition}/{@link
+ * #snapWaypointPosition}), те же настройки профиля, что снаппинг общей схемы.
  *
- * <p><b>Shift-снаппинг БЛОКА устройства</b> (запрос пользователя: "для блоков
- * в менеджере сетевом тоже должен работать снаппинг к блокам и существующим
- * узлам излома") — та же механика на перетаскивание самого блока (не только
- * точки излома выше): {@link #snapDevicePosition} — точная копия {@code
- * SchemaCanvasPanel#snapPosition} (три кандидата на измерение — левый край/
- * центр/правый край по X, верх/центр/низ по Y, сравниваются с такими же
- * координатами ДРУГИХ блоков), плюс, по тому же запросу, ЕЩЁ один источник
- * кандидатов — точки излома ЛЮБОЙ связи (без ширины/высоты, единственная
- * точка, а не тройка). Те же настройки профиля, та же магентовая
- * направляющая линия, тот же {@code Esc}-независимый сброс на отпускание
- * кнопки мыши.
+ * <p><b>Растягивание блока</b> (запрос пользователя: "блоки должны мочь
+ * растягиваться (как в общей схеме)") — хват за юго-восточный уголок, точная
+ * копия UX {@code SchemaCanvasPanel} (см. {@link #resizeHandleAt}/{@link
+ * #resizeNode} — тут же используется и как Shift-снаппинг размера, {@link
+ * #snapResize}). Размер хранится на {@link NetworkDevicePlacement#getWidth()}/
+ * {@code #getHeight()}, по умолчанию совпадает со старыми константами {@link
+ * #MIN_DEVICE_W}/{@link #MIN_DEVICE_H} (минимум одновременно) — у проектов,
+ * сохранённых раньше, раскладка не меняется, пока пользователь сам не
+ * потянет за уголок.
  *
- * <p><b>Цвет связи — по сети</b> (баг-репорт: "цвет линии должен зависеть от
- * цвета выбранного для сети") — см. {@link #setLinkColor}, вызывается из
- * {@code NetworkManagerPanel} при выборе сети в списке; сама панель не знает
- * о {@code Network}, только получает готовый цвет.
+ * <p><b>Round 8 — членство в сети, не владение</b> (запрос пользователя:
+ * "один блок может добавляться в поле 1 раз, но может принадлежать разным
+ * сеткам при условии, что у него больше 1 порта и соответственно адреса") —
+ * устройства/связи теперь общий список {@link NetworkManagerPlan#getDevices()}/
+ * {@code #getLinks()}, а не собственность одной {@link Network} (см. её
+ * class-javadoc). Принадлежность сетям — список {@link NetworkAttachment} на
+ * самом устройстве ({@link NetworkDevicePlacement#getAttachments()}), IP/
+ * маска/шлюз — тоже там, РАЗНЫЕ для разных сетей одного устройства. Все
+ * резолвы "чья это сеть" идут через {@link NetworkTopology} — устройство/
+ * связь сами по себе не хранят такой ссылки, она вычисляется живьём. Каждая
+ * сеть рисуется как полупрозрачная цветная подложка вокруг СВОИХ устройств
+ * ({@link #drawNetworkBackground}/{@link #networkBoundsCanvasUnits}); "текущая"
+ * (выбранная слева в {@code NetworkManagerPanel}) сеть — визуально ярче
+ * (сплошная обводка) — она же единственная цель для НОВЫХ устройств (см.
+ * {@link #placeAndAdd}). Устройство, уже стоящее на поле, подключается к
+ * ДОПОЛНИТЕЛЬНОЙ сети через ПКМ → «Подключить к сети…» (см. {@link
+ * #attachToNetwork}), а не повторным перетаскиванием из палитры — палитра
+ * ({@code NetworkManagerPanel.refreshSchemaPalette}) исключает узел, уже
+ * присутствующий на поле ГДЕ УГОДНО, а не только в текущей сети.
  *
- * <p>ПКМ по блоку — {@link JPopupMenu} (Пинг/Открыть веб-интерфейс/Параметры
- * сети/Убрать из сети). «Пинг…» открывает {@link NetworkPingDialog} — живой,
- * непрерывный (не разовые 4 пакета), см. её class-javadoc.
+ * <p><b>Round 9 — «Admin Laptop» и цвет по статусу связи.</b> {@link
+ * #addAdminLaptop} заводит блок, представляющий машину пользователя (запрос:
+ * "в поле должен автоматически формироваться блок Admin Laptop... с которого
+ * и будет осуществляться пинг" — пинг и так ВСЕГДА идёт с этой машины, блок
+ * только визуализирует это в топологии), кнопка «+ Мой компьютер» в {@code
+ * NetworkManagerPanel}; IP синхронизируется на каждое обновление панели (см.
+ * {@link #refreshAdminLaptopAddresses}), во всём остальном — обычный блок.
+ * {@link #linkStatusColor} красит связь по статусу фонового пинга (см. {@link
+ * #setAvailability}, опрос ведёт {@code NetworkManagerPanel} — канвас только
+ * рисует готовый результат), а не по цвету сети, ЕСЛИ статус известен для
+ * ОБОИХ концов (запрос: "если есть информация" — нет данных не рисуется как
+ * отдельное "неизвестное" состояние, просто остаётся цвет сети); тот же
+ * статус — маленькой точкой перед строкой адреса на самом блоке.
+ *
+ * <p><b>Статус видео-портов Novastar (экспериментально)</b> — по запросу
+ * "было бы славно, если бы контроллеры в сетевом менеджере могли показывать
+ * текущий статус по портам экрана". {@link #setNovastarStatuses} передаёт
+ * готовый результат опроса (ведёт {@code NetworkManagerPanel}, тот же
+ * принцип, что доступность выше — канвас только рисует); на блоке с
+ * включённой галочкой (см. {@code NetworkDeviceParamsDialog
+ * .novastarStatusCheck}) — одна сводная строка "NovaLCT: N/M портов с
+ * картами". Протокол NovaStar на TCP:5200 официально не задокументирован —
+ * см. {@code service.novastar.NovastarPacket} class-javadoc за честной
+ * оценкой того, что в нём подтверждено (формат кадра — байт в байт, по
+ * тестовому вектору исходного проекта), а что — нет (семантика ИМЕННО этих
+ * двух регистров на реальном железе).
+ *
+ * <p>ПКМ по блоку — {@link JPopupMenu} (Пинг/Веб-интерфейс/Параметры
+ * устройства/Подключить-Параметры-Отключить по сетям/Удалить устройство).
+ * «Пинг…» открывает {@link NetworkPingDialog} — живой, непрерывный, см. её
+ * class-javadoc.
  *
  * <p><b>Добавление устройств</b> — кнопками ИЛИ drag-n-drop из палитры
  * ({@code NetworkManagerPanel}, два {@link DataFlavor}: {@link
@@ -121,8 +168,12 @@ import javax.swing.SwingUtilities;
 public class NetworkCanvasPanel extends JPanel {
 
     private static final int PADDING = 24;
-    static final double DEVICE_W = 130;
-    static final double DEVICE_H = 56;
+    /** Размер НОВОГО блока и минимум при растягивании — прежние фиксированные
+     *  константы канваса, теперь только дефолт/пол (см. class-javadoc
+     *  "Растягивание блока"). */
+    static final double MIN_DEVICE_W = 130;
+    static final double MIN_DEVICE_H = 56;
+    private static final int RESIZE_HANDLE_PX = 14;
     private static final int PORT_HIT_RADIUS_PX = 7;
     private static final int PORT_SIZE_PX = 8;
     private static final int PORT_HIGHLIGHT_SIZE_PX = 14;
@@ -135,13 +186,19 @@ public class NetworkCanvasPanel extends JPanel {
     private static final Color COLOR_SERVER = new Color(0x57606a);
     private static final Color COLOR_OTHER = new Color(0x3d444d);
     private static final Color COLOR_LINKED = new Color(0x1f6feb);
+    /** Блок «Admin Laptop» (см. {@link #addAdminLaptop}) — отдельный от всех
+     *  категорий каталога и от обычных связанных устройств цвет, чтобы
+     *  собственная машина пользователя визуально не путалась с медиасервером/
+     *  контроллером на той же схеме. */
+    private static final Color COLOR_ADMIN_LAPTOP = new Color(0x39c5cf);
     private static final Color COLOR_PORT = new Color(0xe6edf3);
-    /** Цвет линии связи по умолчанию — используется, пока {@link
-     *  Network#getColor()} не задан (сети старых проектов, ещё не выбравшие
-     *  цвет) — см. {@link #setLinkColor}. Package-visible: {@code
-     *  NetworkManagerPanel} использует его же как fallback для значка-образца
-     *  цвета в списке сетей. */
-    static final Color DEFAULT_LINK_COLOR = new Color(0xf0b429);
+    /** Отступ вокруг фактических устройств/точек излома сети при построении её
+     *  цветной фоновой подложки (см. {@link #networkBoundsCanvasUnits}) — в
+     *  координатах канваса, не px. */
+    private static final double NETWORK_BG_PADDING = 20;
+    /** Цвет связи, чья сеть не резолвится (защитно — не должно происходить в
+     *  норме, см. {@link NetworkTopology#networkOfLink}). */
+    private static final Color COLOR_LINK_ORPHAN = new Color(0x8b949e);
     /** Цвет связи, которая ЕЩЁ СТРОИТСЯ (тянется за курсором) — сознательно НЕ
      *  зависит от цвета сети (в отличие от уже созданных связей), чтобы
      *  "процесс построения" визуально всегда читался одинаково независимо от
@@ -159,6 +216,14 @@ public class NetworkCanvasPanel extends JPanel {
      *  предупреждение) и от {@link #COLOR_LINK_PENDING} (жёлтый — процесс, а не
      *  ошибка). */
     private static final Color COLOR_IP_CONFLICT = new Color(0xff5c5c);
+    /** Точка-индикатор статуса доступности (фоновый пинг, см. {@link
+     *  #setAvailability}) — рисуется перед строкой адреса подключения, ТОЛЬКО
+     *  если для этого IP есть данные (запрос пользователя: "цвета линий
+     *  должны обозначать текущий статус соединения, ЕСЛИ ЕСТЬ ИНФОРМАЦИЯ") —
+     *  нет данных = точка вообще не рисуется, а не рисуется серой "неизвестно"
+     *  версией, той же логике следует {@link #linkStatusColor}. */
+    private static final Color COLOR_STATUS_UP = new Color(0x3fb950);
+    private static final Color COLOR_STATUS_DOWN = new Color(0xf85149);
 
     private static final double SCALE = 1.0;
     private static final int REF_VIEWPORT_W = 640;
@@ -193,13 +258,40 @@ public class NetworkCanvasPanel extends JPanel {
 
     private final AppModel model;
     private final SettingsManager settings;
-    private List<NetworkDevicePlacement> devices = new ArrayList<>();
-    private List<NetworkLink> links = new ArrayList<>();
-    private Color linkColor = DEFAULT_LINK_COLOR;
+    /** Живая ссылка на {@code Scene#getNetworkManagerPlan()} — устройства/связи
+     *  ВСЕХ сетей сцены (см. class-javadoc Round 8). */
+    private NetworkManagerPlan plan = new NetworkManagerPlan();
+    /** Сеть, выбранная слева в {@code NetworkManagerPanel} — единственная цель
+     *  для НОВЫХ устройств ({@link #placeAndAdd}) и визуально выделенная
+     *  подложка (см. {@link #drawNetworkBackground}). {@code null}, если сеть
+     *  не выбрана. */
+    private Network currentNetwork;
+    /** Результат последнего фонового опроса доступности (запрос пользователя:
+     *  "цвета линий должны обозначать текущий статус соединения, если есть
+     *  информация") — ip → доступен/недоступен, {@code null}/отсутствие ключа
+     *  значит "нет данных" (адрес ещё не опрашивался, или опрос выключен).
+     *  Опрашивает и передаёт сюда {@code NetworkManagerPanel} (владеет
+     *  таймером — канвас сам никакие процессы не запускает, только рисует
+     *  готовый результат), см. {@link #setAvailability}. */
+    private java.util.Map<String, Boolean> availability = java.util.Map.of();
+    /** Результат последнего опроса статуса видео-портов Novastar (см. {@code
+     *  NetworkManagerPanel#pollNovastarStatuses}) — id устройства → (номер
+     *  порта 1-based → статус); отсутствие ключа устройства значит "не
+     *  опрашивалось/выключено/недоступно", тот же принцип "нет данных = не
+     *  рисуем", что {@link #availability}. Экспериментально, см. {@code
+     *  service.novastar.NovastarPacket} class-javadoc. */
+    private java.util.Map<String, java.util.Map<Integer,
+            com.vjstb.ledscheme.service.novastar.NovastarPortStatusService.PortStatus>> novastarStatuses =
+            java.util.Map.of();
     private NetworkDevicePlacement selected;
     private NetworkLink selectedLink;
     private NetworkDevicePlacement dragging;
     private double dragOffXpx, dragOffYpx;
+    /** Устройство, которое сейчас растягивают за юго-восточный уголок (см.
+     *  class-javadoc "Растягивание блока") — {@code null}, если растягивание
+     *  не идёт. Отдельно от {@link #dragging} (перемещение и растягивание —
+     *  разные жесты, как у {@code SchemaCanvasPanel}). */
+    private NetworkDevicePlacement resizing;
     private NetworkLink draggingWaypointLink;
     private int draggingWaypointIndex = -1;
     private PortHit linkingFrom;
@@ -207,9 +299,9 @@ public class NetworkCanvasPanel extends JPanel {
     private PortHit hoveredPort;
     private Runnable onChanged = () -> { };
     private double zoom = 1.0;
-    /** Направляющие линии Shift-снаппинга точки излома (см. class-javadoc) — в
-     *  КООРДИНАТАХ КАНВАСА (не px), {@code null} = сейчас ни к чему не привязано,
-     *  тот же приём, что {@code SchemaCanvasPanel#snapGuideX/snapGuideY}. */
+    /** Направляющие линии Shift-снаппинга (точки излома И размера блока) — в
+     *  КООРДИНАТАХ КАНВАСА (не px), {@code null} = сейчас ни к чему не
+     *  привязано, тот же приём, что {@code SchemaCanvasPanel#snapGuideX/snapGuideY}. */
     private Double snapGuideX;
     private Double snapGuideY;
 
@@ -278,6 +370,15 @@ public class NetworkCanvasPanel extends JPanel {
                     return;
                 }
 
+                NetworkDevicePlacement resizeHit = resizeHandleAt(e.getPoint());
+                if (resizeHit != null) {
+                    selected = resizeHit;
+                    selectedLink = null;
+                    resizing = resizeHit;
+                    repaint();
+                    return;
+                }
+
                 NetworkDevicePlacement hit = deviceAt(e.getPoint());
                 if (hit != null) {
                     selected = hit;
@@ -327,6 +428,23 @@ public class NetworkCanvasPanel extends JPanel {
                     repaint();
                     return;
                 }
+                if (resizing != null) {
+                    double s = scale();
+                    double candidateW = Math.max(MIN_DEVICE_W, (e.getX() - PADDING) / s - resizing.getXMm());
+                    double candidateH = Math.max(MIN_DEVICE_H, (e.getY() - PADDING) / s - resizing.getYMm());
+                    if (e.isShiftDown()) {
+                        double[] snapped = snapResize(resizing, candidateW, candidateH);
+                        candidateW = snapped[0];
+                        candidateH = snapped[1];
+                    } else {
+                        snapGuideX = null;
+                        snapGuideY = null;
+                    }
+                    resizing.setWidth(candidateW);
+                    resizing.setHeight(candidateH);
+                    repaint();
+                    return;
+                }
                 if (draggingWaypointLink != null) {
                     double[] c = pxToCanvas(e.getPoint());
                     double candidateX = c[0];
@@ -355,9 +473,16 @@ public class NetworkCanvasPanel extends JPanel {
                     hoveredPort = hover != null && hover.device() != linkingFrom.device() ? hover : null;
                     repaint();
                 } else if (hover != null) {
-                    setToolTipText("Порт " + hover.port());
+                    setToolTipText(portTooltip(hover));
+                } else if (resizeHandleAt(e.getPoint()) != null) {
+                    setToolTipText(null);
+                    setCursor(Cursor.getPredefinedCursor(Cursor.SE_RESIZE_CURSOR));
+                    return;
                 } else {
                     setToolTipText(null);
+                }
+                if (linkingFrom == null) {
+                    setCursor(Cursor.getDefaultCursor());
                 }
             }
 
@@ -365,6 +490,13 @@ public class NetworkCanvasPanel extends JPanel {
             public void mouseReleased(MouseEvent e) {
                 if (dragging != null) {
                     dragging = null;
+                    snapGuideX = null;
+                    snapGuideY = null;
+                    onChanged.run();
+                    repaint();
+                }
+                if (resizing != null) {
+                    resizing = null;
                     snapGuideX = null;
                     snapGuideY = null;
                     onChanged.run();
@@ -412,38 +544,167 @@ public class NetworkCanvasPanel extends JPanel {
         this.onChanged = onChanged != null ? onChanged : () -> { };
     }
 
-    /** Переключает канвас на другую сеть (см. {@code NetworkManagerPanel}) — списки
-     *  устройств/связей берутся напрямую из {@code network.getDevices()}/{@code
-     *  getLinks()} (та же ссылка, не копия — мутации канваса сразу отражаются в
-     *  модели, персист по {@link #onChanged}). */
-    public void setDevices(List<NetworkDevicePlacement> devices) {
-        this.devices = devices != null ? devices : new ArrayList<>();
+    /** Передаёт канвасу план ЦЕЛИКОМ (живая ссылка на {@code
+     *  Scene#getNetworkManagerPlan()} — мутации канваса сразу отражаются в
+     *  модели, персист по {@link #onChanged}) плюс "текущую" (выбранную слева
+     *  в {@code NetworkManagerPanel}) сеть — см. {@link #currentNetwork}.
+     *  Вызывается и при смене сцены, и при смене выбора в списке сетей. */
+    public void setPlan(NetworkManagerPlan plan, Network current) {
+        this.plan = plan != null ? plan : new NetworkManagerPlan();
+        this.currentNetwork = current;
         selected = null;
         selectedLink = null;
         dragging = null;
+        resizing = null;
         linkingFrom = null;
         revalidate();
         repaint();
     }
 
-    public void setLinks(List<NetworkLink> links) {
-        this.links = links != null ? links : new ArrayList<>();
+    /** Передаёт результат фонового опроса доступности (см. {@link
+     *  #availability}) — вызывается снаружи ({@code NetworkManagerPanel}) по
+     *  готовности каждого раунда опроса. */
+    public void setAvailability(java.util.Map<String, Boolean> availability) {
+        this.availability = availability != null ? availability : java.util.Map.of();
         repaint();
     }
 
-    /** Цвет линий связи ТЕКУЩЕЙ сети (см. class-javadoc) — {@code null} сбрасывает
-     *  на {@link #DEFAULT_LINK_COLOR}. */
-    public void setLinkColor(Color color) {
-        this.linkColor = color != null ? color : DEFAULT_LINK_COLOR;
+    /** Передаёт результат опроса статуса видео-портов Novastar (см. {@link
+     *  #novastarStatuses}) — вызывается снаружи ({@code NetworkManagerPanel})
+     *  по готовности каждого раунда опроса. */
+    public void setNovastarStatuses(java.util.Map<String, java.util.Map<Integer,
+            com.vjstb.ledscheme.service.novastar.NovastarPortStatusService.PortStatus>> novastarStatuses) {
+        this.novastarStatuses = novastarStatuses != null ? novastarStatuses : java.util.Map.of();
         repaint();
     }
 
-    public List<NetworkDevicePlacement> getDevices() {
-        return devices;
+    /** {@code true}, если на поле уже есть блок «Admin Laptop» — используется
+     *  вызывающей стороной, чтобы не плодить второй (кнопка «+ Мой
+     *  компьютер» тогда просто выделяет существующий). */
+    public boolean hasAdminLaptop() {
+        for (NetworkDevicePlacement p : plan.getDevices()) {
+            if (p.isAdminLaptop()) {
+                return true;
+            }
+        }
+        return false;
     }
 
-    public List<NetworkLink> getLinks() {
-        return links;
+    /** Заводит на поле блок «Admin Laptop» (запрос пользователя: "в поле
+     *  должен автоматически формироваться блок Admin Laptop, представляющий
+     *  текущее устройство") — имя из {@link LocalNetworkInterfaces#hostname()},
+     *  IP текущего активного интерфейса сразу в подключение к {@link
+     *  #currentNetwork} (тот же {@link #placeAndAdd}, что и у любого другого
+     *  нового устройства — дальше блок ничем не отличается от обычного,
+     *  включая возможность вручную подключить его ЕЩЁ к одной сети, если на
+     *  машине несколько интерфейсов, см. {@link LocalNetworkInterfaces}
+     *  class-javadoc). */
+    public void addAdminLaptop() {
+        NetworkDevicePlacement p = new NetworkDevicePlacement();
+        p.setAdminLaptop(true);
+        p.setCustomLabel(LocalNetworkInterfaces.hostname());
+        p.setEthernetPortCount(1);
+        placeAndAdd(p, nextSpotX(), 0);
+        NetworkAttachment attachment = p.attachmentFor(currentNetwork != null ? currentNetwork.getId() : null);
+        if (attachment != null) {
+            attachment.setIpAddress(LocalNetworkInterfaces.primaryIp());
+        }
+    }
+
+    /** Синхронизирует IP блока «Admin Laptop» (если он есть на поле) с
+     *  фактическим текущим адресом машины — вызывается из {@code
+     *  NetworkManagerPanel#refresh()} на каждое изменение модели (не из
+     *  {@link #paintComponent}: опрос сетевых интерфейсов ОС не бесплатен,
+     *  дёргать его на каждый repaint при перетаскивании было бы расточительно).
+     *  Возвращает {@code true}, если что-то реально изменилось — вызывающая
+     *  сторона персистит план только тогда, а не на каждый вызов. */
+    public boolean refreshAdminLaptopAddresses() {
+        String ip = LocalNetworkInterfaces.primaryIp();
+        boolean changed = false;
+        for (NetworkDevicePlacement p : plan.getDevices()) {
+            if (!p.isAdminLaptop()) {
+                continue;
+            }
+            for (NetworkAttachment a : p.getAttachments()) {
+                if (!ip.equals(a.getIpAddress())) {
+                    a.setIpAddress(ip);
+                    changed = true;
+                }
+            }
+        }
+        if (changed) {
+            repaint();
+        }
+        return changed;
+    }
+
+    /** Цвет подложки/линий связи ЭТОЙ сети — см. class-javadoc Round 3/7/8.
+     *  {@code null} ({@link Network#getColor()} ещё не задан) резолвится по
+     *  тому же золотому углу от порядкового индекса сети, что {@code
+     *  NetworkManagerPanel} использует при создании новой сети — так цвет
+     *  подложки на канвасе и значок-образец в списке сетей слева всегда
+     *  совпадают, даже для старых проектов без явно сохранённого цвета. */
+    private Color resolveNetworkColor(Network network) {
+        return network.getColor() != null ? new Color(network.getColor())
+                : defaultColorForIndex(plan.getNetworks().indexOf(network));
+    }
+
+    /** Цвет по умолчанию для сети по её порядковому индексу — золотой угол,
+     *  соседние по порядку сети получают заметно разные оттенки без ручного
+     *  выбора. Package-visible: {@code NetworkManagerPanel} использует тот же
+     *  метод при создании новой сети, чтобы не дублировать формулу. */
+    static Color defaultColorForIndex(int index) {
+        float hue = (float) (Math.max(0, index) * 0.618033988749895 % 1.0);
+        return Color.getHSBColor(hue, 0.62f, 0.92f);
+    }
+
+    /** Цвет связи ПО СТАТУСУ (запрос пользователя: "цвета линий должны
+     *  обозначать текущий статус соединения, если есть информация") — зелёный,
+     *  если оба конца связи ({@code fromDevice}/{@code toDevice}, их IP В
+     *  ЭТОЙ КОНКРЕТНОЙ сети {@code owner}) отвечают на пинг, красный — если
+     *  ХОТЯ БЫ один точно не отвечает, {@code null} — данных недостаточно
+     *  (адрес не задан, ещё не опрашивался, или сеть связи не резолвится) —
+     *  вызывающая сторона тогда падает обратно на цвет сети (см. {@link
+     *  #paintComponent}), а не рисует "серый — неизвестно": пользователь
+     *  явно оговорил "если есть информация", отсутствие данных не должно
+     *  выглядеть как отдельное состояние. */
+    private Color linkStatusColor(NetworkLink link, Network owner) {
+        if (owner == null || availability.isEmpty()) {
+            return null;
+        }
+        Boolean fromOk = attachmentReachable(NetworkTopology.deviceById(plan, link.getFromDeviceId()), owner.getId());
+        Boolean toOk = attachmentReachable(NetworkTopology.deviceById(plan, link.getToDeviceId()), owner.getId());
+        if (Boolean.FALSE.equals(fromOk) || Boolean.FALSE.equals(toOk)) {
+            return COLOR_STATUS_DOWN;
+        }
+        if (Boolean.TRUE.equals(fromOk) && Boolean.TRUE.equals(toOk)) {
+            return COLOR_STATUS_UP;
+        }
+        return null;
+    }
+
+    /** {@code null} — нет данных (устройство не найдено, нет подключения к
+     *  этой сети, адрес пуст, или сам адрес ещё не встречался в опросе). */
+    private Boolean attachmentReachable(NetworkDevicePlacement device, String networkId) {
+        if (device == null) {
+            return null;
+        }
+        NetworkAttachment a = device.attachmentFor(networkId);
+        if (a == null || a.getIpAddress() == null || a.getIpAddress().isBlank()) {
+            return null;
+        }
+        return availability.get(a.getIpAddress().trim());
+    }
+
+    /** Цвет ПАРЫ портов конкретной связи (запрос пользователя: "занятые порты
+     *  должны попарно краситься в цвета") — золотой угол по индексу связи в
+     *  {@code plan.getLinks()}, независимая палитра от цвета сети (та уже
+     *  занята подложкой/линией — этот цвет только про "какие два порта
+     *  физически спарены", не про принадлежность сети). */
+    private Color linkPairColor(NetworkLink link) {
+        int index = plan.getLinks().indexOf(link);
+        float hue = (float) ((index * 0.618033988749895 + 0.15) % 1.0);
+        return Color.getHSBColor(hue, 0.55f, 0.95f);
     }
 
     private double scale() {
@@ -488,12 +749,7 @@ public class NetworkCanvasPanel extends JPanel {
     }
 
     /** Добавляет НОВОЕ устройство из каталога {@link NetworkDeviceType} — не связано
-     *  ни с чем на общей схеме. Число портов сразу берётся из типа (см. {@link
-     *  #effectivePortCount}, паспортная величина — но само поле {@code
-     *  NetworkDevicePlacement.portCount} для каталожных устройств не используется
-     *  при отрисовке, инициализация тут — просто разумное стартовое значение на
-     *  случай, если тип потом удалят из библиотеки). Для drag-n-drop — см. {@link
-     *  #addCatalogDeviceAt}. */
+     *  ни с чем на общей схеме. Для drag-n-drop — см. {@link #addCatalogDeviceAt}. */
     public void addCatalogDevice(NetworkDeviceType type) {
         addCatalogDeviceAt(type, nextSpotX(), 0);
     }
@@ -501,7 +757,6 @@ public class NetworkCanvasPanel extends JPanel {
     public void addCatalogDeviceAt(NetworkDeviceType type, double x, double y) {
         NetworkDevicePlacement p = new NetworkDevicePlacement();
         p.setDeviceTypeId(type.getId());
-        p.setPortCount(Math.max(1, type.getPortCount()));
         placeAndAdd(p, x, y);
     }
 
@@ -518,64 +773,256 @@ public class NetworkCanvasPanel extends JPanel {
 
     /** {@code customLabel} остаётся пустым — {@link #resolveLabel} покажет
      *  заглушку "(устройство)", пользователь переименовывает и/или задаёт тип
-     *  позже через ПКМ → «Параметры сети…» (число портов там останется 4 по
-     *  умолчанию — источник для него такой же, как у любого связанного
-     *  устройства без каталожного типа, см. {@code
-     *  NetworkDevicePlacement#portCount} javadoc). */
+     *  позже через ПКМ. IP сразу попадает в подключение к {@link
+     *  #currentNetwork} (см. {@link #placeAndAdd}). */
     public void addDiscoveredDeviceAt(String ipAddress, double x, double y) {
         NetworkDevicePlacement p = new NetworkDevicePlacement();
-        p.setIpAddress(ipAddress);
         placeAndAdd(p, x, y);
+        NetworkAttachment attachment = p.attachmentFor(currentNetwork != null ? currentNetwork.getId() : null);
+        if (attachment != null) {
+            attachment.setIpAddress(ipAddress);
+        }
     }
 
+    /** Добавляет устройство на поле И сразу подключает к {@link
+     *  #currentNetwork} (единственная цель для новых устройств — см.
+     *  class-javadoc Round 8). Без выбранной сети добавлять некуда —
+     *  вызывающая сторона ({@code NetworkManagerPanel}) уже проверяет выбор,
+     *  здесь просто защитная страховка. */
     private void placeAndAdd(NetworkDevicePlacement p, double x, double y) {
+        if (currentNetwork == null) {
+            return;
+        }
         p.setXMm(Math.max(0, x));
         p.setYMm(Math.max(0, y));
-        devices.add(p);
+        p.getAttachments().add(new NetworkAttachment(currentNetwork.getId()));
+        plan.getDevices().add(p);
         selected = p;
         selectedLink = null;
         onChanged.run();
         repaint();
     }
 
+    /** Следующее свободное место по X — считается по ВСЕМ устройствам плана
+     *  (все сети на одном общем канвасе, см. class-javadoc Round 7/8), иначе
+     *  первое устройство новой/пустой сети стартовало бы в (0,0) и оказалось
+     *  бы под уже существующими блоками другой сети. */
     private double nextSpotX() {
-        return devices.size() * (DEVICE_W + 30);
+        return plan.getDevices().size() * (MIN_DEVICE_W + 30);
+    }
+
+    /** «Выровнять сеть» (одобрено пользователем при обсуждении доработок
+     *  менеджера) — переставляет устройства ОДНОЙ сети в аккуратную сетку
+     *  (примерно квадратную по числу колонок, {@code ceil(sqrt(n))}), не
+     *  трогая устройства ДРУГИХ сетей — тот же принцип, что {@code
+     *  AppModel#autoArrangeScreensInScene} (массовая перестановка, без
+     *  undo — слишком крупное изменение позиций для отменяемой истории
+     *  канваса). Якорь — текущий левый верхний угол СВОЕЙ же сети (минимум
+     *  X/Y её устройств ДО перестановки), чтобы сеть осталась примерно там
+     *  же на канвасе, а не прыгала в (0,0) — намеренно НЕ пытается объехать
+     *  другие сети, если они физически перекрываются (см. NETWORK_MANAGER
+     *  _NOTES.md, "явно отложено" — автоматическое разрешение коллизий
+     *  МЕЖДУ сетями сознательно не реализовывалось). Ячейка сетки — по
+     *  максимальной ширине/высоте СРЕДИ устройств этой сети (после Round 8
+     *  они разного размера, растягиваются), с отступом {@code gap}. */
+    public void autoArrangeNetwork(String networkId) {
+        List<NetworkDevicePlacement> devices = NetworkTopology.devicesInNetwork(plan, networkId);
+        if (devices.isEmpty()) {
+            return;
+        }
+        double gap = 30;
+        double anchorX = Double.MAX_VALUE, anchorY = Double.MAX_VALUE;
+        double maxW = 0, maxH = 0;
+        for (NetworkDevicePlacement d : devices) {
+            anchorX = Math.min(anchorX, d.getXMm());
+            anchorY = Math.min(anchorY, d.getYMm());
+            maxW = Math.max(maxW, d.getWidth());
+            maxH = Math.max(maxH, d.getHeight());
+        }
+        int cols = Math.max(1, (int) Math.ceil(Math.sqrt(devices.size())));
+        for (int i = 0; i < devices.size(); i++) {
+            NetworkDevicePlacement d = devices.get(i);
+            int row = i / cols;
+            int col = i % cols;
+            d.setXMm(anchorX + col * (maxW + gap));
+            d.setYMm(anchorY + row * (maxH + gap));
+        }
+        selected = null;
+        onChanged.run();
+        repaint();
     }
 
     // ---- ПКМ меню устройства/связи/точки излома ----
 
     private void showDeviceMenu(NetworkDevicePlacement device, int x, int y) {
         JPopupMenu menu = new JPopupMenu();
+        List<NetworkAttachment> attachments = device.getAttachments();
 
-        JMenuItem ping = new JMenuItem("Пинг…");
-        ping.setEnabled(!device.getIpAddress().isBlank());
-        ping.addActionListener(e -> pingDevice(device));
-        menu.add(ping);
+        if (attachments.size() <= 1) {
+            JMenuItem ping = new JMenuItem("Пинг…");
+            String ip = attachments.isEmpty() ? "" : attachments.get(0).getIpAddress();
+            ping.setEnabled(ip != null && !ip.isBlank());
+            ping.addActionListener(e -> pingDevice(ip));
+            menu.add(ping);
+        } else {
+            JMenu pingMenu = new JMenu("Пинг");
+            for (NetworkAttachment a : attachments) {
+                String label = networkNameOrPlaceholder(a.getNetworkId()) + ": "
+                        + (a.getIpAddress().isBlank() ? "(нет адреса)" : a.getIpAddress());
+                JMenuItem item = new JMenuItem(label);
+                item.setEnabled(!a.getIpAddress().isBlank());
+                item.addActionListener(e -> pingDevice(a.getIpAddress()));
+                pingMenu.add(item);
+            }
+            menu.add(pingMenu);
+        }
 
         JMenuItem openWeb = new JMenuItem("Открыть веб-интерфейс");
-        // Баг-репорт: "добавь галочку есть ли веб интерфейс, если стоит галочка --
-        // можно управлять через него" -- непустой URL сам по себе НЕ означает
-        // управляемость (см. NetworkDevicePlacement#hasWebInterface javadoc), пункт
-        // активен только при обоих условиях сразу.
         openWeb.setEnabled(device.isHasWebInterface() && !device.getWebInterfaceUrl().isBlank());
         openWeb.addActionListener(e -> UiKit.openUrl(this, device.getWebInterfaceUrl()));
         menu.add(openWeb);
 
-        JMenuItem params = new JMenuItem("Параметры сети…");
+        menu.addSeparator();
+
+        JMenuItem params = new JMenuItem("Параметры устройства…");
         params.addActionListener(e -> editParams(device));
         menu.add(params);
 
+        List<Network> attachedNetworks = new ArrayList<>();
+        List<Network> freeNetworks = new ArrayList<>();
+        for (Network n : plan.getNetworks()) {
+            if (device.attachmentFor(n.getId()) != null) {
+                attachedNetworks.add(n);
+            } else {
+                freeNetworks.add(n);
+            }
+        }
+
+        JMenu connectMenu = new JMenu("Подключить к сети");
+        boolean hasFreePorts = hasFreePorts(device);
+        connectMenu.setEnabled(!freeNetworks.isEmpty() && hasFreePorts);
+        if (!freeNetworks.isEmpty() && !hasFreePorts) {
+            connectMenu.setToolTipText("У устройства нет свободных портов — ограничьте порты существующего"
+                    + " подключения в его параметрах (\"Параметры подключения…\")");
+        }
+        for (Network n : freeNetworks) {
+            JMenuItem item = new JMenuItem(networkDisplayName(n));
+            item.addActionListener(e -> attachToNetwork(device, n));
+            connectMenu.add(item);
+        }
+        menu.add(connectMenu);
+
+        JMenu attachmentParamsMenu = new JMenu("Параметры подключения");
+        attachmentParamsMenu.setEnabled(!attachedNetworks.isEmpty());
+        for (Network n : attachedNetworks) {
+            JMenuItem item = new JMenuItem(networkDisplayName(n));
+            item.addActionListener(e -> editAttachment(device, n));
+            attachmentParamsMenu.add(item);
+        }
+        menu.add(attachmentParamsMenu);
+
+        JMenu disconnectMenu = new JMenu("Отключить от сети");
+        disconnectMenu.setEnabled(!attachedNetworks.isEmpty());
+        for (Network n : attachedNetworks) {
+            JMenuItem item = new JMenuItem(networkDisplayName(n));
+            item.addActionListener(e -> detachFromNetwork(device, n.getId()));
+            disconnectMenu.add(item);
+        }
+        menu.add(disconnectMenu);
+
         menu.addSeparator();
-        JMenuItem remove = new JMenuItem("Убрать из сети");
-        remove.addActionListener(e -> removeDevice(device));
+        JMenuItem remove = new JMenuItem("Удалить устройство");
+        remove.addActionListener(e -> deleteDeviceEntirely(device));
         menu.add(remove);
 
         menu.show(this, x, y);
     }
 
-    private void removeDevice(NetworkDevicePlacement device) {
-        devices.remove(device);
-        links.removeIf(l -> l.getFromDeviceId().equals(device.getId()) || l.getToDeviceId().equals(device.getId()));
+    private static String networkDisplayName(Network n) {
+        return n.getName() == null || n.getName().isBlank() ? "(без названия)" : n.getName();
+    }
+
+    private String networkNameOrPlaceholder(String networkId) {
+        Network n = NetworkTopology.networkById(plan, networkId);
+        return n != null ? networkDisplayName(n) : "?";
+    }
+
+    /** Число портов, ещё НЕ отданных ни одному подключению устройства — "все
+     *  порты" (пустой {@link NetworkAttachment#getPorts()}) считается как
+     *  занявшее их ВСЕ. Используется только для включения/отключения пункта
+     *  «Подключить к сети» — не строгая валидация (см. её же javadoc). */
+    private boolean hasFreePorts(NetworkDevicePlacement device) {
+        int total = effectiveTotalPortCount(device);
+        int claimed = 0;
+        for (NetworkAttachment a : device.getAttachments()) {
+            claimed += a.getPorts().isEmpty() ? total : a.getPorts().size();
+        }
+        return claimed < total;
+    }
+
+    private void attachToNetwork(NetworkDevicePlacement device, Network network) {
+        NetworkAttachment attachment = new NetworkAttachment(network.getId());
+        NetworkAttachmentDialog dlg = new NetworkAttachmentDialog(
+                (java.awt.Window) SwingUtilities.getWindowAncestor(this), network.getName(), device, attachment);
+        if (dlg.showDialog()) {
+            device.getAttachments().add(attachment);
+            onChanged.run();
+            repaint();
+        }
+    }
+
+    private void editAttachment(NetworkDevicePlacement device, Network network) {
+        NetworkAttachment attachment = device.attachmentFor(network.getId());
+        if (attachment == null) {
+            return;
+        }
+        NetworkAttachmentDialog dlg = new NetworkAttachmentDialog(
+                (java.awt.Window) SwingUtilities.getWindowAncestor(this), network.getName(), device, attachment);
+        if (dlg.showDialog()) {
+            onChanged.run();
+            repaint();
+        }
+    }
+
+    /** Отключает {@code device} от сети {@code networkId} — снимает ТОЛЬКО это
+     *  подключение (и связи, чья сеть резолвится именно в эту, см. {@link
+     *  NetworkTopology#networkOfLink}), устройство остаётся на поле, если у
+     *  него есть ДРУГИЕ подключения. Если это было последнее — удаляет
+     *  устройство целиком (см. {@link #deleteDeviceEntirely}), т.к. блок без
+     *  единой сети на канвасе бессмыслен (то же поведение, что было раньше
+     *  единственным — "Убрать из сети" всегда снимало устройство целиком,
+     *  пока сеть была ровно одна на устройство). */
+    private void detachFromNetwork(NetworkDevicePlacement device, String networkId) {
+        List<NetworkLink> toRemove = new ArrayList<>();
+        for (NetworkLink l : plan.getLinks()) {
+            boolean touches = device.getId().equals(l.getFromDeviceId()) || device.getId().equals(l.getToDeviceId());
+            if (!touches) {
+                continue;
+            }
+            Network owner = NetworkTopology.networkOfLink(plan, l);
+            if (owner != null && networkId.equals(owner.getId())) {
+                toRemove.add(l);
+            }
+        }
+        plan.getLinks().removeAll(toRemove);
+        if (selectedLink != null && toRemove.contains(selectedLink)) {
+            selectedLink = null;
+        }
+        device.getAttachments().removeIf(a -> networkId.equals(a.getNetworkId()));
+        if (device.getAttachments().isEmpty()) {
+            deleteDeviceEntirely(device);
+            return;
+        }
+        onChanged.run();
+        repaint();
+    }
+
+    /** Удаляет устройство целиком, из ВСЕХ сетей разом, вместе со всеми его
+     *  связями — «Удалить устройство» в ПКМ-меню. */
+    private void deleteDeviceEntirely(NetworkDevicePlacement device) {
+        plan.getDevices().remove(device);
+        plan.getLinks().removeIf(l -> device.getId().equals(l.getFromDeviceId())
+                || device.getId().equals(l.getToDeviceId()));
         if (selected == device) {
             selected = null;
         }
@@ -595,7 +1042,7 @@ public class NetworkCanvasPanel extends JPanel {
         menu.add(straighten);
         JMenuItem remove = new JMenuItem("Удалить связь");
         remove.addActionListener(e -> {
-            links.remove(link);
+            plan.getLinks().remove(link);
             if (selectedLink == link) {
                 selectedLink = null;
             }
@@ -618,13 +1065,26 @@ public class NetworkCanvasPanel extends JPanel {
         menu.show(this, x, y);
     }
 
+    /** Создаёт связь порт-в-порт — ТОЛЬКО между устройствами ОДНОЙ и той же
+     *  сети (резолвится по сети, покрывающей КАЖДЫЙ порт, см. {@link
+     *  NetworkTopology#networkOfPort} — не по устройству целиком, у
+     *  многосетевых устройств разные порты могут принадлежать разным сетям).
+     *  Попытка соединить порты разных сетей отклоняется с предупреждением. */
     private void createLink(PortHit from, PortHit to) {
+        Network ownerFrom = NetworkTopology.networkOfPort(plan, from.device(), from.port());
+        Network ownerTo = NetworkTopology.networkOfPort(plan, to.device(), to.port());
+        if (ownerFrom == null || ownerTo == null || !ownerFrom.getId().equals(ownerTo.getId())) {
+            JOptionPane.showMessageDialog(this,
+                    "Нельзя соединить порты из разных сетей — только в пределах одной сети.",
+                    "Разные сети", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
         NetworkLink link = new NetworkLink();
         link.setFromDeviceId(from.device().getId());
         link.setFromPort(from.port());
         link.setToDeviceId(to.device().getId());
         link.setToPort(to.port());
-        links.add(link);
+        plan.getLinks().add(link);
         selectedLink = link;
         onChanged.run();
         repaint();
@@ -658,31 +1118,30 @@ public class NetworkCanvasPanel extends JPanel {
         repaint();
     }
 
-    /** Shift-снаппинг перетаскиваемого БЛОКА устройства (см. class-javadoc) — точная
-     *  копия {@code SchemaCanvasPanel#snapPosition} (та же тройка кандидатов на
-     *  измерение: левый край/центр/правый край по X, верх/центр/низ по Y,
-     *  сравниваются с такими же координатами ДРУГИХ блоков) плюс, по прямому
-     *  запросу пользователя ("снаппинг... к блокам и существующим узлам
-     *  излома"), ЕЩЁ один источник кандидатов — точки излома ЛЮБОЙ связи (без
-     *  ширины/высоты, single-point, как в {@link #snapWaypointPosition}, только
-     *  тут они выступают целью, а не перетаскиваемой точкой). Побочный эффект —
-     *  выставляет {@link #snapGuideX}/{@link #snapGuideY}. */
+    /** Shift-снаппинг перетаскиваемого БЛОКА устройства — точная копия {@code
+     *  SchemaCanvasPanel#snapPosition} (три кандидата на измерение: левый
+     *  край/центр/правый край по X, верх/центр/низ по Y, сравниваются с
+     *  такими же координатами ДРУГИХ блоков любой сети) плюс точки излома
+     *  ЛЮБОЙ связи. Побочный эффект — выставляет {@link #snapGuideX}/{@link
+     *  #snapGuideY}. */
     private double[] snapDevicePosition(NetworkDevicePlacement moving, double candidateX, double candidateY) {
         snapGuideX = null;
         snapGuideY = null;
         double threshold = settings.activeProfile().getSnapThresholdPx();
         int strength = settings.activeProfile().getSnapStrengthPercent();
-        double[] xCandidates = {candidateX, candidateX + DEVICE_W / 2, candidateX + DEVICE_W};
-        double[] yCandidates = {candidateY, candidateY + DEVICE_H / 2, candidateY + DEVICE_H};
+        double w = moving.getWidth(), h = moving.getHeight();
+        double[] xCandidates = {candidateX, candidateX + w / 2, candidateX + w};
+        double[] yCandidates = {candidateY, candidateY + h / 2, candidateY + h};
         double bestDx = threshold, bestDy = threshold;
         double snappedX = candidateX, snappedY = candidateY;
 
-        for (NetworkDevicePlacement other : devices) {
+        for (NetworkDevicePlacement other : plan.getDevices()) {
             if (other == moving) {
                 continue;
             }
-            double[] oxs = {other.getXMm(), other.getXMm() + DEVICE_W / 2, other.getXMm() + DEVICE_W};
-            double[] oys = {other.getYMm(), other.getYMm() + DEVICE_H / 2, other.getYMm() + DEVICE_H};
+            double ow = other.getWidth(), oh = other.getHeight();
+            double[] oxs = {other.getXMm(), other.getXMm() + ow / 2, other.getXMm() + ow};
+            double[] oys = {other.getYMm(), other.getYMm() + oh / 2, other.getYMm() + oh};
             for (double ox : oxs) {
                 for (double xc : xCandidates) {
                     double d = Math.abs(xc - ox);
@@ -704,7 +1163,7 @@ public class NetworkCanvasPanel extends JPanel {
                 }
             }
         }
-        for (NetworkLink link : links) {
+        for (NetworkLink link : plan.getLinks()) {
             for (NetworkLinkWaypoint wp : link.getWaypoints()) {
                 for (double xc : xCandidates) {
                     double d = Math.abs(xc - wp.getX());
@@ -727,13 +1186,9 @@ public class NetworkCanvasPanel extends JPanel {
         return new double[]{snappedX, snappedY};
     }
 
-    /** Shift-снаппинг перетаскиваемой точки излома (см. class-javadoc) — точная
-     *  копия {@code SchemaCanvasPanel#snapWaypointPosition}, только кандидаты
-     *  свои: центры портов устройств этой сети (вместо краёв/центров узлов
-     *  схемы — у портов нет ширины/высоты, только точка) и точки излома ЛЮБОЙ
-     *  связи, включая другие связи (кроме самой перетаскиваемой точки). Побочный
-     *  эффект — выставляет {@link #snapGuideX}/{@link #snapGuideY} (координаты
-     *  ЦЕЛИ, не смешанные) для {@link #paintComponent}. */
+    /** Shift-снаппинг перетаскиваемой точки излома — точная копия {@code
+     *  SchemaCanvasPanel#snapWaypointPosition}, кандидаты — центры портов
+     *  устройств ЛЮБОЙ сети и точки излома ЛЮБОЙ связи. */
     private double[] snapWaypointPosition(NetworkLink movingLink, int movingIndex,
                                            double candidateX, double candidateY) {
         snapGuideX = null;
@@ -743,8 +1198,8 @@ public class NetworkCanvasPanel extends JPanel {
         double bestDx = threshold, bestDy = threshold;
         double snappedX = candidateX, snappedY = candidateY;
 
-        for (NetworkDevicePlacement device : devices) {
-            int n = effectivePortCount(device);
+        for (NetworkDevicePlacement device : plan.getDevices()) {
+            int n = effectiveTotalPortCount(device);
             for (int port = 1; port <= n; port++) {
                 double[] c = portCenterCanvasUnits(device, port);
                 double dx = Math.abs(candidateX - c[0]);
@@ -761,7 +1216,7 @@ public class NetworkCanvasPanel extends JPanel {
                 }
             }
         }
-        for (NetworkLink link : links) {
+        for (NetworkLink link : plan.getLinks()) {
             List<NetworkLinkWaypoint> wps = link.getWaypoints();
             for (int i = 0; i < wps.size(); i++) {
                 if (link == movingLink && i == movingIndex) {
@@ -785,8 +1240,41 @@ public class NetworkCanvasPanel extends JPanel {
         return new double[]{snappedX, snappedY};
     }
 
-    private void pingDevice(NetworkDevicePlacement device) {
-        String host = device.getIpAddress().trim();
+    /** Shift-снаппинг размера при растягивании — точная копия {@code
+     *  SchemaCanvasPanel#snapResize}: ширина/высота притягиваются к таким же
+     *  ширинам/высотам ДРУГИХ блоков любой сети (не к позициям — размер
+     *  меряется независимо от X/Y). */
+    private double[] snapResize(NetworkDevicePlacement moving, double candidateW, double candidateH) {
+        snapGuideX = null;
+        snapGuideY = null;
+        double threshold = settings.activeProfile().getSnapThresholdPx();
+        int strength = settings.activeProfile().getSnapStrengthPercent();
+        double bestDw = threshold, bestDh = threshold;
+        double snappedW = candidateW, snappedH = candidateH;
+        double s = scale();
+
+        for (NetworkDevicePlacement other : plan.getDevices()) {
+            if (other == moving) {
+                continue;
+            }
+            double dw = Math.abs(candidateW - other.getWidth());
+            if (dw < bestDw) {
+                bestDw = dw;
+                snappedW = SnapMath.blend(candidateW, other.getWidth(), strength);
+                snapGuideX = moving.getXMm() + snappedW;
+            }
+            double dh = Math.abs(candidateH - other.getHeight());
+            if (dh < bestDh) {
+                bestDh = dh;
+                snappedH = SnapMath.blend(candidateH, other.getHeight(), strength);
+                snapGuideY = moving.getYMm() + snappedH;
+            }
+        }
+        return new double[]{snappedW, snappedH};
+    }
+
+    private void pingDevice(String ip) {
+        String host = ip == null ? "" : ip.trim();
         if (host.isEmpty()) {
             return;
         }
@@ -794,15 +1282,18 @@ public class NetworkCanvasPanel extends JPanel {
     }
 
     private void editParams(NetworkDevicePlacement device) {
-        Integer typePortCount = null;
+        Integer typeEthernet = null;
+        Integer typeOptical = null;
         if (device.getDeviceTypeId() != null) {
             NetworkDeviceType type = model.getWorkspace().networkDeviceTypeById(device.getDeviceTypeId());
             if (type != null) {
-                typePortCount = Math.max(1, type.getPortCount());
+                typeEthernet = Math.max(0, type.getEthernetPortCount());
+                typeOptical = Math.max(0, type.getOpticalPortCount());
             }
         }
         NetworkDeviceParamsDialog dlg = new NetworkDeviceParamsDialog(
-                (java.awt.Window) SwingUtilities.getWindowAncestor(this), device, resolveLabel(device), typePortCount);
+                (java.awt.Window) SwingUtilities.getWindowAncestor(this), device, resolveLabel(device),
+                typeEthernet, typeOptical);
         if (dlg.showDialog()) {
             onChanged.run();
             repaint();
@@ -817,16 +1308,10 @@ public class NetworkCanvasPanel extends JPanel {
         return NetworkDeviceLabels.resolveLabel(p, model);
     }
 
-    private NetworkDevicePlacement findDeviceById(String id) {
-        for (NetworkDevicePlacement p : devices) {
-            if (p.getId().equals(id)) {
-                return p;
-            }
-        }
-        return null;
-    }
-
     private Color resolveColor(NetworkDevicePlacement p) {
+        if (p.isAdminLaptop()) {
+            return COLOR_ADMIN_LAPTOP;
+        }
         if (p.getDeviceTypeId() != null) {
             NetworkDeviceType type = model.getWorkspace().networkDeviceTypeById(p.getDeviceTypeId());
             if (type != null && type.getCategory() != null) {
@@ -843,34 +1328,61 @@ public class NetworkCanvasPanel extends JPanel {
         return COLOR_LINKED;
     }
 
-    /** Действующее число портов — из каталожного типа для устройств оттуда,
-     *  иначе из собственного поля размещения (см. class-javadoc). */
-    private int effectivePortCount(NetworkDevicePlacement p) {
+    /** Действующее число Ethernet-портов — из каталожного типа для устройств
+     *  оттуда, иначе из собственного поля размещения (см. class-javadoc про
+     *  различие с портами вывода видео контроллера). */
+    private int effectiveEthernetPortCount(NetworkDevicePlacement p) {
         if (p.getDeviceTypeId() != null) {
             NetworkDeviceType type = model.getWorkspace().networkDeviceTypeById(p.getDeviceTypeId());
-            if (type != null) {
-                return Math.max(1, type.getPortCount());
-            }
+            return type != null ? Math.max(0, type.getEthernetPortCount()) : 0;
         }
-        return Math.max(1, p.getPortCount());
+        return Math.max(0, p.getEthernetPortCount());
+    }
+
+    private int effectiveOpticalPortCount(NetworkDevicePlacement p) {
+        if (p.getDeviceTypeId() != null) {
+            NetworkDeviceType type = model.getWorkspace().networkDeviceTypeById(p.getDeviceTypeId());
+            return type != null ? Math.max(0, type.getOpticalPortCount()) : 0;
+        }
+        return Math.max(0, p.getOpticalPortCount());
+    }
+
+    private int effectiveTotalPortCount(NetworkDevicePlacement p) {
+        return effectiveEthernetPortCount(p) + effectiveOpticalPortCount(p);
     }
 
     // ---- геометрия/хит-тесты ----
 
-    /** Центр порта {@code portIndex1Based} (1..effectivePortCount) в КООРДИНАТАХ
-     *  КАНВАСА (до масштаба/PADDING) — вдоль нижнего края блока, равномерно
-     *  распределены. */
+    /** Центр порта {@code portIndex1Based} (нумерация сквозная: 1..ethernet,
+     *  дальше — оптические) в КООРДИНАТАХ КАНВАСА (до масштаба/PADDING).
+     *  Сторона ethernet-группы зависит от происхождения блока (запрос
+     *  пользователя, уточнение после первой версии: "порты сверху рисуем у
+     *  сетевого оборудования, у узлов схемы порты рисуются снизу") —
+     *  КАТАЛОЖНЫЕ устройства ({@link NetworkDevicePlacement#getDeviceTypeId()}
+     *  задан — свитчи/роутеры из библиотеки) вдоль ВЕРХНЕГО края, СВЯЗАННЫЕ со
+     *  схемой (и bare-устройства без каталожного типа) — вдоль НИЖНЕГО, как
+     *  было до появления оптики. Оптические порты — вдоль ПРАВОГО края в
+     *  обоих случаях, см. class-javadoc. */
     private double[] portCenterCanvasUnits(NetworkDevicePlacement p, int portIndex1Based) {
-        int n = effectivePortCount(p);
-        double spacing = DEVICE_W / (n + 1);
-        return new double[]{p.getXMm() + spacing * portIndex1Based, p.getYMm() + DEVICE_H};
+        int ethCount = effectiveEthernetPortCount(p);
+        double w = p.getWidth(), h = p.getHeight();
+        if (portIndex1Based <= ethCount) {
+            double spacing = w / (ethCount + 1);
+            double yEdge = p.getDeviceTypeId() != null ? p.getYMm() : p.getYMm() + h;
+            return new double[]{p.getXMm() + spacing * portIndex1Based, yEdge};
+        }
+        int opticalIndex = portIndex1Based - ethCount;
+        int optCount = effectiveOpticalPortCount(p);
+        double spacing = h / (optCount + 1);
+        return new double[]{p.getXMm() + w, p.getYMm() + spacing * opticalIndex};
     }
 
     private PortHit portAt(Point pt) {
         double s = scale();
+        List<NetworkDevicePlacement> devices = plan.getDevices();
         for (int i = devices.size() - 1; i >= 0; i--) {
             NetworkDevicePlacement p = devices.get(i);
-            int n = effectivePortCount(p);
+            int n = effectiveTotalPortCount(p);
             for (int port = 1; port <= n; port++) {
                 double[] c = portCenterCanvasUnits(p, port);
                 int px = (int) (PADDING + c[0] * s);
@@ -885,12 +1397,13 @@ public class NetworkCanvasPanel extends JPanel {
 
     private NetworkDevicePlacement deviceAt(Point pt) {
         double s = scale();
+        List<NetworkDevicePlacement> devices = plan.getDevices();
         for (int i = devices.size() - 1; i >= 0; i--) {
             NetworkDevicePlacement p = devices.get(i);
             int x = (int) (PADDING + p.getXMm() * s);
             int y = (int) (PADDING + p.getYMm() * s);
-            int w = (int) (DEVICE_W * s);
-            int h = (int) (DEVICE_H * s);
+            int w = (int) (p.getWidth() * s);
+            int h = (int) (p.getHeight() * s);
             if (pt.x >= x && pt.x <= x + w && pt.y >= y && pt.y <= y + h) {
                 return p;
             }
@@ -898,13 +1411,33 @@ public class NetworkCanvasPanel extends JPanel {
         return null;
     }
 
+    /** Юго-восточный хват растягивания — попадание только у ВЫДЕЛЕННОГО блока
+     *  (тот же приём, что видимость точек излома только у выделенной связи),
+     *  иначе канвас с десятками блоков был бы захламлён хватами отовсюду. */
+    private NetworkDevicePlacement resizeHandleAt(Point pt) {
+        if (selected == null) {
+            return null;
+        }
+        double s = scale();
+        double hx = selected.getXMm() + selected.getWidth() - RESIZE_HANDLE_PX / s;
+        double hy = selected.getYMm() + selected.getHeight() - RESIZE_HANDLE_PX / s;
+        int x = (int) (PADDING + hx * s);
+        int y = (int) (PADDING + hy * s);
+        int x2 = (int) (PADDING + (selected.getXMm() + selected.getWidth()) * s);
+        int y2 = (int) (PADDING + (selected.getYMm() + selected.getHeight()) * s);
+        if (pt.x >= x && pt.x <= x2 && pt.y >= y && pt.y <= y2) {
+            return selected;
+        }
+        return null;
+    }
+
     /** Полный маршрут связи в КООРДИНАТАХ КАНВАСА: порт-источник, точки излома по
      *  порядку, порт-приёмник — {@code null}, если один из концов ссылается на
      *  уже удалённое устройство (защитно, не должно происходить в норме — {@link
-     *  #removeDevice} чистит связи вместе с устройством). */
+     *  #deleteDeviceEntirely} чистит связи вместе с устройством). */
     private List<double[]> routePoints(NetworkLink link) {
-        NetworkDevicePlacement from = findDeviceById(link.getFromDeviceId());
-        NetworkDevicePlacement to = findDeviceById(link.getToDeviceId());
+        NetworkDevicePlacement from = NetworkTopology.deviceById(plan, link.getFromDeviceId());
+        NetworkDevicePlacement to = NetworkTopology.deviceById(plan, link.getToDeviceId());
         if (from == null || to == null) {
             return null;
         }
@@ -919,7 +1452,7 @@ public class NetworkCanvasPanel extends JPanel {
 
     private NetworkLink linkAt(Point pt) {
         double s = scale();
-        for (NetworkLink link : links) {
+        for (NetworkLink link : plan.getLinks()) {
             List<double[]> pts = routePoints(link);
             if (pts == null) {
                 continue;
@@ -967,19 +1500,148 @@ public class NetworkCanvasPanel extends JPanel {
     public Dimension getPreferredSize() {
         double s = scale();
         double maxX = 0, maxY = 0;
-        for (NetworkDevicePlacement p : devices) {
-            maxX = Math.max(maxX, p.getXMm() + DEVICE_W);
-            maxY = Math.max(maxY, p.getYMm() + DEVICE_H);
+        for (NetworkDevicePlacement p : plan.getDevices()) {
+            maxX = Math.max(maxX, p.getXMm() + p.getWidth());
+            maxY = Math.max(maxY, p.getYMm() + p.getHeight());
         }
         int w = (int) (maxX * s) + PADDING * 2;
         int h = (int) (maxY * s) + PADDING * 2;
         return new Dimension(Math.max(REF_VIEWPORT_W, w), Math.max(REF_VIEWPORT_H, h));
     }
 
+    /** Границы сети в КООРДИНАТАХ КАНВАСА (до масштаба/{@link #PADDING}) — живьём
+     *  пересчитываются из фактических координат СВОИХ устройств (см. {@link
+     *  NetworkTopology#devicesInNetwork}) и точек излома СВОИХ связей (не
+     *  кэшируется — тот же принцип, что {@link #resolveLabel}), с отступом
+     *  {@link #NETWORK_BG_PADDING}. {@code null} для сети без устройств
+     *  (пустая, только что созданная) — рисовать подложку не вокруг чего. */
+    private java.awt.geom.Rectangle2D networkBoundsCanvasUnits(Network network) {
+        List<NetworkDevicePlacement> devs = NetworkTopology.devicesInNetwork(plan, network.getId());
+        if (devs.isEmpty()) {
+            return null;
+        }
+        double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE;
+        double maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
+        for (NetworkDevicePlacement p : devs) {
+            minX = Math.min(minX, p.getXMm());
+            minY = Math.min(minY, p.getYMm());
+            maxX = Math.max(maxX, p.getXMm() + p.getWidth());
+            maxY = Math.max(maxY, p.getYMm() + p.getHeight());
+        }
+        for (NetworkLink link : NetworkTopology.linksInNetwork(plan, network.getId())) {
+            for (NetworkLinkWaypoint w : link.getWaypoints()) {
+                minX = Math.min(minX, w.getX());
+                minY = Math.min(minY, w.getY());
+                maxX = Math.max(maxX, w.getX());
+                maxY = Math.max(maxY, w.getY());
+            }
+        }
+        return new java.awt.geom.Rectangle2D.Double(minX - NETWORK_BG_PADDING, minY - NETWORK_BG_PADDING,
+                (maxX - minX) + NETWORK_BG_PADDING * 2, (maxY - minY) + NETWORK_BG_PADDING * 2);
+    }
+
+    /** Полупрозрачная цветная подложка вокруг устройств одной сети (запрос
+     *  пользователя: "разные сети... должны быть в одном экране, но визуально
+     *  отличаться, типа как отдельные цветные подложки") — цвет берётся из
+     *  {@link #resolveNetworkColor}, "текущая" (см. {@link #currentNetwork})
+     *  сеть рисуется заметно ярче/непрозрачнее и сплошной обводкой (визуально
+     *  однозначно, куда сейчас попадут новые устройства), остальные —
+     *  приглушённо, пунктирной обводкой. */
+    private void drawNetworkBackground(Graphics2D g2, Network network, double s, float zoomF) {
+        java.awt.geom.Rectangle2D bounds = networkBoundsCanvasUnits(network);
+        if (bounds == null) {
+            return;
+        }
+        Color color = resolveNetworkColor(network);
+        boolean active = network == currentNetwork;
+        int x = (int) (PADDING + bounds.getX() * s);
+        int y = (int) (PADDING + bounds.getY() * s);
+        int w = (int) (bounds.getWidth() * s);
+        int h = (int) (bounds.getHeight() * s);
+
+        g2.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), active ? 48 : 26));
+        g2.fillRoundRect(x, y, w, h, 18, 18);
+        g2.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), active ? 220 : 130));
+        g2.setStroke(active
+                ? new BasicStroke(clampF(2.2f * zoomF, 1.5f, 4f))
+                : new BasicStroke(clampF(1.3f * zoomF, 1f, 3f), BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND,
+                        0, new float[]{6f, 4f}, 0));
+        g2.drawRoundRect(x, y, w, h, 18, 18);
+
+        String label = networkDisplayName(network);
+        g2.setFont(getFont().deriveFont(Font.BOLD, clampF(13f * zoomF, 10f, 22f)));
+        g2.setColor(color.darker());
+        g2.drawString(label, x + 10, y + g2.getFontMetrics().getAscent() + 6);
+    }
+
+    /** Рисует одну связь (включая точки излома выделенной связи) заданным
+     *  цветом сети. */
+    private void drawLink(Graphics2D g2, NetworkLink link, Color linkColor, double s, float zoomF) {
+        List<double[]> pts = routePoints(link);
+        if (pts == null) {
+            return;
+        }
+        boolean isSelected = link == selectedLink;
+        g2.setColor(isSelected ? Color.WHITE : linkColor);
+        g2.setStroke(new BasicStroke(clampF((isSelected ? 3f : 2f) * zoomF, 1f, 6f)));
+        for (int i = 0; i < pts.size() - 1; i++) {
+            int x1 = (int) (PADDING + pts.get(i)[0] * s), y1 = (int) (PADDING + pts.get(i)[1] * s);
+            int x2 = (int) (PADDING + pts.get(i + 1)[0] * s), y2 = (int) (PADDING + pts.get(i + 1)[1] * s);
+            g2.drawLine(x1, y1, x2, y2);
+        }
+        if (isSelected) {
+            g2.setStroke(new BasicStroke(1f));
+            for (NetworkLinkWaypoint w : link.getWaypoints()) {
+                int wx = (int) (PADDING + w.getX() * s), wy = (int) (PADDING + w.getY() * s);
+                g2.setColor(Color.WHITE);
+                g2.fillOval(wx - WAYPOINT_HANDLE_PX / 2, wy - WAYPOINT_HANDLE_PX / 2,
+                        WAYPOINT_HANDLE_PX, WAYPOINT_HANDLE_PX);
+                g2.setColor(Palette.BORDER);
+                g2.drawOval(wx - WAYPOINT_HANDLE_PX / 2, wy - WAYPOINT_HANDLE_PX / 2,
+                        WAYPOINT_HANDLE_PX, WAYPOINT_HANDLE_PX);
+            }
+        }
+    }
+
+    /** Отрисовка в изображение заданного размера — экспорт «карты сети» в
+     *  JPEG (запрос пользователя, см. {@code ui.stage.CurrentSchemeExporter}),
+     *  та же схема, что {@code SchemaCanvasPanel}/{@code SceneCanvasPanel}:
+     *  вызывающая сторона строит ОДНОРАЗОВЫЙ экземпляр канваса (свежий {@code
+     *  zoom=1.0} — логический масштаб 1:1 независимо от того, что сейчас
+     *  выставлено в интерактивном виде у пользователя), передаёт план через
+     *  {@link #setPlan} и берёт размер из {@link #getPreferredSize()}, как
+     *  тут. {@code dpiScale} — множитель качества ({@code dpi/72.0}), не
+     *  интерактивный zoom — геометрия считается в тех же логических {@code
+     *  width}/{@code height}, просто растеризуется в больше физических
+     *  пикселей (тот же приём, что {@code SchemaCanvasPanel#renderImage}). */
+    public java.awt.image.BufferedImage renderImage(int width, int height, double dpiScale) {
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(
+                Math.max(1, (int) Math.round(width * dpiScale)), Math.max(1, (int) Math.round(height * dpiScale)),
+                java.awt.image.BufferedImage.TYPE_INT_RGB);
+        Graphics2D g2 = img.createGraphics();
+        g2.scale(dpiScale, dpiScale);
+        g2.setColor(Palette.BG);
+        g2.fillRect(0, 0, width, height);
+        paint(g2);
+        g2.dispose();
+        return img;
+    }
+
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
         Graphics2D g2 = (Graphics2D) g.create();
+        paint(g2);
+        g2.dispose();
+    }
+
+    /** Тело отрисовки, общее для интерактивного вида ({@link #paintComponent})
+     *  и статического экспорта ({@link #renderImage}) — не трогает
+     *  {@code getWidth()}/{@code getHeight()} панели напрямую (кроме {@link
+     *  #drawSnapGuides}, который на СВЕЖЕМ экспортном экземпляре не
+     *  вызывается содержательно — {@code snapGuideX}/{@code snapGuideY} там
+     *  всегда {@code null}, перетаскивание не идёт). */
+    private void paint(Graphics2D g2) {
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
 
@@ -988,41 +1650,32 @@ public class NetworkCanvasPanel extends JPanel {
         Font labelFont = getFont().deriveFont(Font.BOLD, clampF(12f * zoomF, 9f, 24f));
         Font ipFont = getFont().deriveFont(Font.PLAIN, clampF(10f * zoomF, 8f, 20f));
 
-        // Связи -- под блоками, чтобы порты/блоки оставались кликабельны поверх линий.
-        for (NetworkLink link : links) {
-            List<double[]> pts = routePoints(link);
-            if (pts == null) {
-                continue;
-            }
-            boolean isSelected = link == selectedLink;
-            g2.setColor(isSelected ? Color.WHITE : linkColor);
-            g2.setStroke(new BasicStroke(clampF((isSelected ? 3f : 2f) * zoomF, 1f, 6f)));
-            for (int i = 0; i < pts.size() - 1; i++) {
-                int x1 = (int) (PADDING + pts.get(i)[0] * s), y1 = (int) (PADDING + pts.get(i)[1] * s);
-                int x2 = (int) (PADDING + pts.get(i + 1)[0] * s), y2 = (int) (PADDING + pts.get(i + 1)[1] * s);
-                g2.drawLine(x1, y1, x2, y2);
-            }
-            if (isSelected) {
-                g2.setStroke(new BasicStroke(1f));
-                for (NetworkLinkWaypoint w : link.getWaypoints()) {
-                    int wx = (int) (PADDING + w.getX() * s), wy = (int) (PADDING + w.getY() * s);
-                    g2.setColor(Color.WHITE);
-                    g2.fillOval(wx - WAYPOINT_HANDLE_PX / 2, wy - WAYPOINT_HANDLE_PX / 2,
-                            WAYPOINT_HANDLE_PX, WAYPOINT_HANDLE_PX);
-                    g2.setColor(Palette.BORDER);
-                    g2.drawOval(wx - WAYPOINT_HANDLE_PX / 2, wy - WAYPOINT_HANDLE_PX / 2,
-                            WAYPOINT_HANDLE_PX, WAYPOINT_HANDLE_PX);
-                }
-            }
+        // Цветные подложки сетей -- САМЫЙ нижний слой, под связями и блоками.
+        for (Network network : plan.getNetworks()) {
+            drawNetworkBackground(g2, network, s, zoomF);
         }
 
+        // Связи -- под блоками, чтобы порты/блоки оставались кликабельны поверх линий.
+        // Цвет -- по СТАТУСУ соединения, если он известен (запрос пользователя: "цвета
+        // линий должны обозначать текущий статус соединения, если есть информация"),
+        // иначе -- по сети, которой принадлежит связь (резолв живьём по порту-источнику,
+        // см. NetworkTopology#networkOfLink, не по хранимой ссылке -- её у связи нет).
+        for (NetworkLink link : plan.getLinks()) {
+            Network owner = NetworkTopology.networkOfLink(plan, link);
+            Color statusColor = linkStatusColor(link, owner);
+            Color linkColor = statusColor != null ? statusColor
+                    : owner != null ? resolveNetworkColor(owner) : COLOR_LINK_ORPHAN;
+            drawLink(g2, link, linkColor, s, zoomF);
+        }
+
+        List<NetworkDevicePlacement> devices = plan.getDevices();
         for (NetworkDevicePlacement p : devices) {
             int x = (int) (PADDING + p.getXMm() * s);
             int y = (int) (PADDING + p.getYMm() * s);
-            int w = (int) (DEVICE_W * s);
-            int h = (int) (DEVICE_H * s);
+            int w = (int) (p.getWidth() * s);
+            int h = (int) (p.getHeight() * s);
 
-            boolean ipConflict = NetworkIpConflicts.hasConflict(devices, p);
+            boolean ipConflict = NetworkIpConflicts.hasAnyConflict(plan, p);
 
             g2.setColor(resolveColor(p));
             g2.fillRoundRect(x, y, w, h, 8, 8);
@@ -1040,28 +1693,74 @@ public class NetworkCanvasPanel extends JPanel {
                         BasicStroke.JOIN_ROUND, 0, new float[]{5f, 4f}, 0));
                 g2.drawRoundRect(x - 3, y - 3, w + 6, h + 6, 10, 10);
             }
+            if (isSelected) {
+                // Хват растягивания -- виден только у выделенного блока (см. resizeHandleAt).
+                int handle = (int) (RESIZE_HANDLE_PX * Math.min(1.0, zoomF));
+                g2.setColor(Color.WHITE);
+                g2.fillRect(x + w - handle, y + h - handle, handle, handle);
+                g2.setColor(Palette.BORDER);
+                g2.drawRect(x + w - handle, y + h - handle, handle, handle);
+            }
 
             g2.setFont(labelFont);
             g2.setColor(Color.WHITE);
             String label = resolveLabel(p);
-            g2.drawString(clip(g2, label, w - 8), x + 6, y + g2.getFontMetrics().getAscent() + 4);
+            int textY = y + g2.getFontMetrics().getAscent() + 4;
+            g2.drawString(clip(g2, label, w - 8), x + 6, textY);
 
-            if (!p.getIpAddress().isBlank()) {
-                g2.setFont(ipFont);
-                g2.setColor(ipConflict ? COLOR_IP_CONFLICT : new Color(0xd8dee6));
-                // Баг-репорт/запрос: "конфликты IP -- хорошая идея, добавим" -- заметка
-                // "⚠ конфликт" прямо в подписи, не только цвет обводки -- цвет один и тот
-                // же красный уже занят категорией FIREWALL у каталожных устройств, так что
-                // сама по себе красная РАМКА могла бы быть неоднозначной; текст снимает
-                // всякую двусмысленность.
-                String ipText = p.getIpAddress() + (ipConflict ? "  ⚠ конфликт IP" : "");
-                g2.drawString(clip(g2, ipText, w - 8), x + 6, y + h - 6);
+            // Round 8: адрес живёт на подключении к КАЖДОЙ сети -- своя строка на
+            // подключение, а не одна общая (устройство может состоять в нескольких сетях
+            // сразу с разными адресами, см. class-javadoc).
+            g2.setFont(ipFont);
+            int lineHeight = g2.getFontMetrics().getHeight();
+            int lineY = textY + lineHeight;
+            for (NetworkAttachment att : p.getAttachments()) {
+                String ip = att.getIpAddress();
+                if (ip == null || ip.isBlank()) {
+                    continue;
+                }
+                boolean conflict = NetworkIpConflicts.hasConflict(plan, p, att);
+                if (lineY <= y + h - 4) {
+                    // Точка-индикатор доступности -- ТОЛЬКО если для этого адреса есть
+                    // данные опроса (запрос пользователя: "если есть информация"), иначе
+                    // текст просто начинается без неё, без нейтрального "неизвестно"-цвета.
+                    int textX = x + 6;
+                    Boolean reachable = availability.get(ip.trim());
+                    if (reachable != null) {
+                        int dotSize = 7;
+                        g2.setColor(reachable ? COLOR_STATUS_UP : COLOR_STATUS_DOWN);
+                        g2.fillOval(textX, lineY - dotSize, dotSize, dotSize);
+                        textX += dotSize + 4;
+                    }
+                    g2.setColor(conflict ? COLOR_IP_CONFLICT : new Color(0xd8dee6));
+                    String text = networkNameOrPlaceholder(att.getNetworkId()) + ": " + ip + (conflict ? "  ⚠" : "");
+                    g2.drawString(clip(g2, text, w - (textX - x) - 4), textX, lineY);
+                }
+                lineY += lineHeight;
             }
 
-            // Порты -- маленькие квадраты вдоль нижнего края; активный (источник строящейся
-            // связи) и валидная цель под курсором -- крупнее и ярче, чтобы состояние "идёт
-            // построение связи" было однозначно видно, а не терялось на мелком квадрате.
-            int n = effectivePortCount(p);
+            // Сводный статус видео-портов Novastar (экспериментально, см. class-javadoc
+            // Round 9/12) -- только если данные РЕАЛЬНО пришли (нет ключа устройства =
+            // не опрашивалось/выключено/недоступно, ничего не рисуем вообще).
+            java.util.Map<Integer, com.vjstb.ledscheme.service.novastar.NovastarPortStatusService.PortStatus>
+                    novastar = novastarStatuses.get(p.getId());
+            if (novastar != null && !novastar.isEmpty() && lineY <= y + h - 4) {
+                int total = novastar.size();
+                int ok = 0;
+                for (var st : novastar.values()) {
+                    if (st.enabled() && st.cardCount() != null && st.cardCount() > 0) {
+                        ok++;
+                    }
+                }
+                g2.setColor(ok == total ? COLOR_STATUS_UP : COLOR_STATUS_DOWN);
+                g2.drawString(clip(g2, "NovaLCT: " + ok + "/" + total + " портов с картами", w - 8), x + 6, lineY);
+                lineY += lineHeight;
+            }
+
+            // Порты -- Ethernet сверху, оптика справа (см. class-javadoc); активный
+            // (источник строящейся связи) и валидная цель под курсором -- крупнее и
+            // ярче; занятые -- красятся парой по связи (см. linkPairColor).
+            int n = effectiveTotalPortCount(p);
             for (int port = 1; port <= n; port++) {
                 double[] c = portCenterCanvasUnits(p, port);
                 int px = (int) (PADDING + c[0] * s);
@@ -1071,8 +1770,9 @@ public class NetworkCanvasPanel extends JPanel {
                 boolean isHoveredTarget = hoveredPort != null && hoveredPort.device() == p
                         && hoveredPort.port() == port;
                 int size = (isPendingSource || isHoveredTarget) ? PORT_HIGHLIGHT_SIZE_PX : PORT_SIZE_PX;
-                g2.setColor(isPendingSource ? COLOR_LINK_PENDING
-                        : isHoveredTarget ? COLOR_PORT_TARGET_HOVER : COLOR_PORT);
+                Color fill = isPendingSource ? COLOR_LINK_PENDING
+                        : isHoveredTarget ? COLOR_PORT_TARGET_HOVER : portOccupancyColor(p, port);
+                g2.setColor(fill);
                 g2.fillRect(px - size / 2, py - size / 2, size, size);
                 g2.setColor(isPendingSource || isHoveredTarget ? Color.WHITE : Palette.BORDER);
                 g2.setStroke(new BasicStroke(isPendingSource || isHoveredTarget ? 2f : 1f));
@@ -1091,16 +1791,57 @@ public class NetworkCanvasPanel extends JPanel {
         }
 
         drawSnapGuides(g2, s);
-        g2.dispose();
     }
 
-    /** Направляющие линии Shift-снаппинга точки излома — яркая пунктирная линия
-     *  через всю видимую область, тот же приём (и даже тот же цвет), что {@code
-     *  SchemaCanvasPanel#drawSnapGuides}, показывает, С ЧЕМ ИМЕННО сейчас
-     *  выровнена перетаскиваемая точка. {@link #snapGuideX}/{@link #snapGuideY} —
-     *  координаты канваса, переводятся в px через {@code PADDING}+масштаб, в
-     *  отличие от {@code SchemaCanvasPanel} (там весь {@code Graphics2D} уже
-     *  промасштабирован глобально, тут — нет, см. class-javadoc). */
+    /** Цвет заливки порта в состоянии покоя — {@link #COLOR_PORT} (нейтральный),
+     *  если порт свободен, иначе цвет пары связи, которая его занимает (см.
+     *  {@link #linkPairColor}, запрос пользователя "занятые порты должны
+     *  попарно краситься в цвета"). */
+    private Color portOccupancyColor(NetworkDevicePlacement device, int port) {
+        NetworkLink link = linkAtPort(device, port);
+        return link != null ? linkPairColor(link) : COLOR_PORT;
+    }
+
+    /** Связь, занимающая {@code port} устройства {@code device} — {@code null},
+     *  если порт свободен. Используется и для цвета порта ({@link
+     *  #portOccupancyColor}), и для тултипа ({@link #portTooltip}). */
+    private NetworkLink linkAtPort(NetworkDevicePlacement device, int port) {
+        for (NetworkLink link : plan.getLinks()) {
+            boolean matchesFrom = device.getId().equals(link.getFromDeviceId()) && link.getFromPort() == port;
+            boolean matchesTo = device.getId().equals(link.getToDeviceId()) && link.getToPort() == port;
+            if (matchesFrom || matchesTo) {
+                return link;
+            }
+        }
+        return null;
+    }
+
+    /** Подсказка при наведении на порт (одобрено пользователем: "подпись
+     *  порта («Порт 3 → Stage Left») — в тултипе") — просто номер для
+     *  свободного порта, номер + куда ведёт связь (имя устройства на другом
+     *  конце, живьём резолвленное через {@link #resolveLabel}, + подпись
+     *  самой связи в скобках, если задана) для занятого. */
+    private String portTooltip(PortHit hit) {
+        String base = "Порт " + hit.port();
+        NetworkLink link = linkAtPort(hit.device(), hit.port());
+        if (link == null) {
+            return base;
+        }
+        boolean isFrom = hit.device().getId().equals(link.getFromDeviceId());
+        String otherId = isFrom ? link.getToDeviceId() : link.getFromDeviceId();
+        NetworkDevicePlacement other = NetworkTopology.deviceById(plan, otherId);
+        String target = other != null ? resolveLabel(other) : "?";
+        String linkLabel = link.getLabel();
+        return base + " → " + target + (linkLabel != null && !linkLabel.isBlank() ? " (" + linkLabel + ")" : "");
+    }
+
+    /** Направляющие линии Shift-снаппинга (точки излома и размера блока) —
+     *  яркая пунктирная линия через всю видимую область, тот же приём (и даже
+     *  тот же цвет), что {@code SchemaCanvasPanel#drawSnapGuides}. {@link
+     *  #snapGuideX}/{@link #snapGuideY} — координаты канваса, переводятся в px
+     *  через {@code PADDING}+масштаб, в отличие от {@code SchemaCanvasPanel}
+     *  (там весь {@code Graphics2D} уже промасштабирован глобально, тут —
+     *  нет, см. class-javadoc). */
     private void drawSnapGuides(Graphics2D g2, double s) {
         if (snapGuideX == null && snapGuideY == null) {
             return;
