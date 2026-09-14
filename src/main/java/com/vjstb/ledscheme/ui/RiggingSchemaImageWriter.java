@@ -3,13 +3,18 @@ package com.vjstb.ledscheme.ui;
 import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.Screen;
+import com.vjstb.ledscheme.service.CableSpecCalc;
 import com.vjstb.ledscheme.service.RiggingCalc;
+import com.vjstb.ledscheme.service.TrussCalc;
 import java.awt.Color;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 
 /**
  * Рендерит PNG-схему для кнопки «Рассчитать точки подвеса» в
@@ -37,12 +42,29 @@ import java.awt.image.BufferedImage;
  * колонки ({@link #POINT_COL_W}) остаётся читаемой при любом количестве точек за счёт
  * округления X/нагрузки до целых (см. {@link #row}) — само значение X в таблице уже
  * достаточно, чтобы соотнести колонку с реальной позицией на экране.
+ *
+ * <p><b>Ферма подвеса</b> (см. {@code service.TrussCalc}, RIGGING_CALC_NOTES.md) — ряд
+ * прямоугольников сегментов рисуется НАД треугольниками точек, той же пиксельной шкалой
+ * (мм экрана → px сетки), что и они. Свес фермы за края экрана
+ * ({@link TrussCalc.Result#leftOffsetMm()}/{@code rightOffsetMm()} {@code > 0}) раздвигает
+ * левый край сетки ({@code gridX})/итоговую ширину картинки, чтобы сегменты и треугольники
+ * с отрицательной или превышающей ширину экрана {@code xMm} (см. {@link RiggingCalc}
+ * class-javadoc — координаты теперь считаются от фермы, не от экрана) не обрезались по
+ * краю изображения. Недостача (ферма короче экрана) картинку не раздвигает — рисуется
+ * просто короче сетки, плюс текстовое предупреждение под заголовком.
  */
 public final class RiggingSchemaImageWriter {
 
     private static final int CELL = 22;
     private static final int MARGIN = 16;
     private static final int TRIANGLE_H = 14;
+    /** Заметно толще ряда точек (баг-репорт 2026-09-14 "ферму почти не видно") — ферма
+     *  физически заметно массивнее самих точек подвеса. */
+    private static final int TRUSS_H = 18;
+    private static final int TRUSS_GAP = 4;
+    /** Высококонтрастный светло-серый ("металл"), фиксированный — прежний
+     *  {@code Palette.MUTED} на тёмном фоне почти сливался с ним. */
+    private static final Color TRUSS_FILL = new Color(0xc9d1d9);
     private static final int POINT_COL_W = 56;
     private static final int ROW_H = 20;
     private static final String[] ROW_LABELS = {"Точка", "X, мм", "Нагрузка, кг"};
@@ -50,17 +72,34 @@ public final class RiggingSchemaImageWriter {
     private RiggingSchemaImageWriter() {
     }
 
-    public static BufferedImage render(Screen screen, CabinetType type, RiggingCalc.Result result) {
+    public static BufferedImage render(Screen screen, CabinetType type, RiggingCalc.Result result,
+            TrussCalc.Result truss) {
         int gridW = Math.max(1, screen.getCols() * CELL);
         int gridH = Math.max(1, screen.getRows() * CELL);
         int pointCount = result.points().size();
 
+        double widthMm = screen.getCols() * (type != null ? type.getWidthMm() : 0);
+        double pxPerMm = widthMm > 0 ? gridW / widthMm : 0;
+        // Комплект сегментов не всегда бьёт целевую длину РОВНО (каталог может не содержать
+        // подходящей комбинации, см. MinimalKitCalc.solveMinimizingOverage) -- остаток
+        // излишка ложится хвостом СПРАВА (drawTruss укладывает сегменты слева направо без
+        // обрезки, см. её javadoc) и должен ТОЖЕ раздвигать картинку, иначе этот хвост
+        // обрежется по правому краю BufferedImage -- тот же баг-репорт "фермy не видно
+        // целиком", просто другая причина (не свес, а нехватка подходящей длины в каталоге).
+        double kitOverageMm = truss.pieces() != null ? Math.max(0, truss.totalKitLengthMm() - truss.targetLengthMm())
+                : 0;
+        int extraLeftPx = pxPerMm > 0 ? Math.max(0, (int) Math.round(truss.leftOffsetMm() * pxPerMm)) : 0;
+        int extraRightPx = pxPerMm > 0
+                ? Math.max(0, (int) Math.round((truss.rightOffsetMm() + kitOverageMm) * pxPerMm)) : 0;
+
         int labelColW = labelColumnWidth();
         int tableW = labelColW + pointCount * POINT_COL_W;
-        int width = Math.max(gridW, tableW) + MARGIN * 2;
+        int width = Math.max(gridW + extraLeftPx + extraRightPx, tableW) + MARGIN * 2;
 
+        boolean warnShort = truss.shorterThanScreenWarning();
         int titleY = MARGIN + 14;
-        int gridY = titleY + 10 + TRIANGLE_H;
+        int warnY = warnShort ? titleY + 16 : titleY;
+        int gridY = warnY + 10 + TRUSS_H + TRUSS_GAP + TRIANGLE_H;
         int tableTitleY = gridY + gridH + MARGIN + 14;
         int tableTopY = tableTitleY + 10;
         int height = tableTopY + ROW_LABELS.length * ROW_H + MARGIN;
@@ -75,9 +114,14 @@ public final class RiggingSchemaImageWriter {
         g2.setColor(Palette.TEXT);
         g2.setFont(g2.getFont().deriveFont(Font.BOLD, 15f));
         g2.drawString(screen.getName() + " — точки подвеса", MARGIN, titleY);
+        if (warnShort) {
+            g2.setColor(Palette.WARN);
+            g2.setFont(g2.getFont().deriveFont(Font.BOLD, 12f));
+            g2.drawString("Ферма короче ширины экрана", MARGIN, warnY);
+        }
 
-        double widthMm = screen.getCols() * (type != null ? type.getWidthMm() : 0);
-        int gridX = MARGIN;
+        int gridX = MARGIN + extraLeftPx;
+        drawTruss(g2, truss, gridX, gridY - TRIANGLE_H - TRUSS_GAP - TRUSS_H, pxPerMm);
         g2.setColor(Color.YELLOW);
         for (RiggingCalc.PointLoad p : result.points()) {
             int px = gridX + (widthMm > 0 ? (int) Math.round(p.xMm() / widthMm * gridW) : gridW / 2);
@@ -152,5 +196,50 @@ public final class RiggingSchemaImageWriter {
         int[] xs = {centerX - size / 2, centerX + size / 2, centerX};
         int[] ys = {tipY - size, tipY - size, tipY};
         g2.fillPolygon(xs, ys, 3);
+    }
+
+    /** Раскладывает {@code truss.pieces()} в ОТДЕЛЬНЫЕ сегменты (не один прямоугольник на
+     *  группу одинаковых длин — иначе стык между двумя кусками одной длины визуально
+     *  терялся бы), сортированные по убыванию длины и уложенные слева направо в
+     *  координатах, локальных для фермы (0 — левый край фермы), затем переведённые в
+     *  пиксели той же шкалой {@code pxPerMm}, что и точки/сетка, со сдвигом на {@code
+     *  truss.leftOffsetMm()} — та же формула перевода координат, что {@code
+     *  RiggingCalc.compute} использует для {@code PointLoad#xMm()} (см. class-javadoc).
+     *  Каждый сегмент — отдельный прямоугольник с рамкой (граница = стык), нарисованный
+     *  РЕАЛЬНОЙ физической длиной, БЕЗ обрезки по целевой длине экрана — баг-репорт
+     *  2026-09-14: раньше последний сегмент клэмпился {@code Math.min(cursorMm+len,
+     *  targetMm)}, из-за чего ферма из одного куска 2м на 1.5м экран визуально выглядела
+     *  как ~1м (обрезанная по краю экрана), маскируя реальный физический излишек, который
+     *  как раз важно ВИДЕТЬ на этой схеме. Ничего не рисует, если профиль не выбран/каталог
+     *  пуст/{@code pxPerMm <= 0} (ширина экрана неизвестна — нечем масштабировать). */
+    private static void drawTruss(Graphics2D g2, TrussCalc.Result truss, int gridX, int trussY, double pxPerMm) {
+        if (truss.pieces() == null || truss.pieces().isEmpty() || pxPerMm <= 0) {
+            return;
+        }
+        List<Double> segMm = new ArrayList<>();
+        for (CableSpecCalc.Piece p : truss.pieces()) {
+            for (int i = 0; i < p.count(); i++) {
+                segMm.add(p.lengthM() * 1000.0);
+            }
+        }
+        segMm.sort(Comparator.reverseOrder());
+
+        double leftOffsetMm = truss.leftOffsetMm();
+        double cursorMm = 0;
+        Color prevColor = g2.getColor();
+        for (double len : segMm) {
+            double startMm = cursorMm;
+            double endMm = cursorMm + len;
+            int px1 = gridX + (int) Math.round((startMm - leftOffsetMm) * pxPerMm);
+            int px2 = gridX + (int) Math.round((endMm - leftOffsetMm) * pxPerMm);
+            if (px2 > px1) {
+                g2.setColor(TRUSS_FILL);
+                g2.fillRect(px1, trussY, px2 - px1, TRUSS_H);
+                g2.setColor(Color.BLACK);
+                g2.drawRect(px1, trussY, px2 - px1, TRUSS_H);
+            }
+            cursorMm = endMm;
+        }
+        g2.setColor(prevColor);
     }
 }

@@ -20,6 +20,7 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseWheelEvent;
 import java.awt.image.BufferedImage;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -38,6 +39,11 @@ public class SceneCanvasPanel extends JPanel {
     /** Ниже этой ширины ячейки кабинета детальная сетка/цепочки уже нечитаемы —
      *  показываем упрощённый прямоугольник с названием, как в обычном обзоре. */
     private static final int DETAIL_MIN_CELL_PX = 5;
+    /** Заливка сегментов фермы подвеса (см. {@link #drawRiggingTruss}) — высококонтрастный
+     *  светло-серый ("металл"), фиксированный (не переключается темой/профилем, как {@link
+     *  Palette#WARN}) — прежний {@code Palette.MUTED} на тёмном фоне почти сливался с ним
+     *  (баг-репорт "ферму почти не видно"). */
+    private static final Color TRUSS_FILL = new Color(0xc9d1d9);
     private final AppModel model;
     private final SettingsManager settings;
     private boolean compact;
@@ -612,7 +618,16 @@ public class SceneCanvasPanel extends JPanel {
 
             if (showRiggingPoints && s.getMountType() == com.vjstb.ledscheme.model.ScreenMountType.RIGGED
                     && s.getRiggingPointsCount() > 0) {
-                drawRiggingPoints(g2, s.getRiggingPointsCount(), x, y, w);
+                double screenWidthMm = t.getWidthMm() * s.getCols();
+                com.vjstb.ledscheme.service.RiggingCalc.Result riggingResult =
+                        com.vjstb.ledscheme.service.RiggingCalc.compute(s, t, model.getWorkspace(),
+                                s.getRiggingPointsCount());
+                com.vjstb.ledscheme.service.TrussCalc.Result trussResult =
+                        com.vjstb.ledscheme.service.TrussCalc.compute(s, t, model.getWorkspace());
+                if (!trussResult.profileMissing() && !trussResult.catalogEmpty()) {
+                    drawRiggingTruss(g2, trussResult, screenWidthMm, x, y, w);
+                }
+                drawRiggingPoints(g2, riggingResult, screenWidthMm, x, y, w);
             }
 
             if (detailMode) {
@@ -789,18 +804,28 @@ public class SceneCanvasPanel extends JPanel {
         g2.setColor(prevColor);
     }
 
-    /** Точки подвеса — маркеры-треугольники, равномерно разнесённые по верхнему
-     *  краю экрана (визуализация результата «Рассчитать точки подвеса» из прерига).
-     *  Рисуются в общей раскладке сцены (этот же класс — «Показать все экраны» и
-     *  мини-превью прерига), а не только как число в поле. */
-    private static void drawRiggingPoints(Graphics2D g2, int count, int x, int y, int w) {
-        int s = Math.max(5, Math.min(12, w / (count * 3 + 1)));
+    /** Точки подвеса — маркеры-треугольники на верхнем краю экрана (визуализация
+     *  результата «Рассчитать точки подвеса» из прерига), позиционированные по РЕАЛЬНЫМ
+     *  координатам расчёта ({@link com.vjstb.ledscheme.service.RiggingCalc.PointLoad#xMm()},
+     *  считанным от краёв фермы — см. {@code RiggingCalc} class-javadoc), а не равномерным
+     *  делением по числу точек, как раньше — иначе при свесе/отступе фермы (см. {@link
+     *  #drawRiggingTruss}) точки на этой картинке визуально разъехались бы с фермой,
+     *  нарисованной над ними. {@code widthMm <= 0} (тип кабинета неизвестен) — точки не
+     *  рисуются вовсе (масштабировать нечем). Рисуются в общей раскладке сцены (этот же
+     *  класс — «Показать все экраны» и мини-превью прерига), а не только как число в поле. */
+    private static void drawRiggingPoints(Graphics2D g2, com.vjstb.ledscheme.service.RiggingCalc.Result result,
+            double widthMm, int x, int y, int w) {
+        int n = result.points().size();
+        if (n == 0 || widthMm <= 0) {
+            return;
+        }
+        int s = Math.max(5, Math.min(12, w / (n * 3 + 1)));
         Color prevColor = g2.getColor();
         java.awt.Stroke prevStroke = g2.getStroke();
         g2.setColor(Color.YELLOW);
         g2.setStroke(new BasicStroke(1f));
-        for (int i = 0; i < count; i++) {
-            int px = x + (int) Math.round((i + 0.5) * w / (double) count);
+        for (com.vjstb.ledscheme.service.RiggingCalc.PointLoad p : result.points()) {
+            int px = x + (int) Math.round(p.xMm() / widthMm * w);
             int[] xs = {px - s / 2, px + s / 2, px};
             int[] ys = {y, y, y + s};
             g2.fillPolygon(xs, ys, 3);
@@ -808,6 +833,57 @@ public class SceneCanvasPanel extends JPanel {
         }
         g2.setColor(prevColor);
         g2.setStroke(prevStroke);
+    }
+
+    /** Ферма подвеса — сегменты каталожных длин (см. {@code service.TrussCalc}) рисуются
+     *  НАД рядом точек ({@link #drawRiggingPoints}, меньший {@code y}), той же пиксельной
+     *  шкалой (мм экрана → px), со сдвигом на {@code truss.leftOffsetMm()} — та же формула
+     *  перевода координат, что {@code RiggingCalc.compute} использует для {@code
+     *  PointLoad#xMm()}. {@code result.pieces()} разворачивается в ОТДЕЛЬНЫЕ сегменты (не
+     *  один прямоугольник на группу одинаковых длин — иначе стык между двумя кусками одной
+     *  длины визуально терялся бы), отсортированные по убыванию длины и уложенные слева
+     *  направо в координатах, локальных для фермы — раскладка ДЕТЕРМИНИРОВАНА, но не
+     *  привязана к реальному проектному порядку сегментов (тот нигде не хранится). Рисуются
+     *  РЕАЛЬНОЙ физической длиной каждого куска, БЕЗ обрезки по целевой длине экрана —
+     *  баг-репорт 2026-09-14: раньше последний сегмент клэмпился {@code
+     *  Math.min(cursorMm+len, targetMm)}, из-за чего ферма из одного куска 2м на 1.5м экран
+     *  визуально выглядела как ~1м (обрезанная по краю экрана), маскируя реальный физический
+     *  излишек, который как раз важно ВИДЕТЬ. Диапазон закономерно может выходить за {@code
+     *  [x, x+w]} и при свесе фермы, и при излишке комплекта — это ожидаемо, не обрезается. */
+    private static void drawRiggingTruss(Graphics2D g2, com.vjstb.ledscheme.service.TrussCalc.Result truss,
+            double widthMm, int x, int y, int w) {
+        if (truss.pieces() == null || truss.pieces().isEmpty() || widthMm <= 0) {
+            return;
+        }
+        List<Double> segMm = new ArrayList<>();
+        for (com.vjstb.ledscheme.service.CableSpecCalc.Piece p : truss.pieces()) {
+            for (int i = 0; i < p.count(); i++) {
+                segMm.add(p.lengthM() * 1000.0);
+            }
+        }
+        segMm.sort(java.util.Comparator.reverseOrder());
+
+        // Заметно толще/светлее полосы точек (баг-репорт "ферму почти не видно") -- ферма
+        // физически заметно массивнее самих точек подвеса, отрисовка должна это отражать.
+        int trussH = Math.max(8, Math.min(20, w / 20));
+        int trussY = y - trussH - 3;
+        double leftOffsetMm = truss.leftOffsetMm();
+        double cursorMm = 0;
+        Color prevColor = g2.getColor();
+        for (double len : segMm) {
+            double startMm = cursorMm;
+            double endMm = cursorMm + len;
+            int px1 = x + (int) Math.round((startMm - leftOffsetMm) / widthMm * w);
+            int px2 = x + (int) Math.round((endMm - leftOffsetMm) / widthMm * w);
+            if (px2 > px1) {
+                g2.setColor(TRUSS_FILL);
+                g2.fillRect(px1, trussY, px2 - px1, trussH);
+                g2.setColor(Color.BLACK);
+                g2.drawRect(px1, trussY, px2 - px1, trussH);
+            }
+            cursorMm = endMm;
+        }
+        g2.setColor(prevColor);
     }
 
     /** Кабинет + экран, которому он принадлежит, + абсолютный центр в пикселях

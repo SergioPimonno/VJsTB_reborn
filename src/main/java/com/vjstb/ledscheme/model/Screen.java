@@ -66,6 +66,24 @@ public class Screen {
      *  используется {@link #riggingHoistCapacityKg} напрямую. */
     private String riggingHoistTypeId;
 
+    /** Ферма подвеса (см. {@code service.TrussCalc}, RIGGING_CALC_NOTES.md) — FK на
+     *  {@code TrussProfile} общей библиотеки (типоразмерный ряд длин сегментов). null —
+     *  профиль не выбран, BOM фермы не считается, но геометрия (см. ниже) всё равно
+     *  влияет на расстановку точек подвеса. */
+    private String riggingTrussProfileId;
+    /** Переопределение целевой длины фермы, мм — null/<=0 означает "авто" (см.
+     *  {@code service.TrussCalc#suggestTrussLengthMm} — физическая ширина экрана). */
+    private Double riggingTrussLengthMm;
+    /** true — свес фермы за края экрана (или недостача, если ферма короче) делится
+     *  поровну между левым и правым краем; false — левый отступ берётся из
+     *  {@link #riggingTrussManualLeftOffsetMm} вручную. */
+    private boolean riggingTrussSymmetricOffset = true;
+    /** Ручной левый отступ фермы от левого края экрана, мм — используется только при
+     *  {@link #riggingTrussSymmetricOffset} == false; положительное значение — ферма
+     *  нависает левее края экрана. */
+    private Double riggingTrussManualLeftOffsetMm;
+    private String riggingTrussNotes;
+
     /** Наземный конструктив (см. {@code service.StructureCalc}, STRUCTURE_CALC_NOTES.md) —
      *  поля ниже осмысленны только при {@link #mountType} == STRUCTURE, тот же принцип, что
      *  и riggingXxx выше для RIGGED. Каждое число — авторасчитанный ДЕФОЛТ, который
@@ -279,6 +297,46 @@ public class Screen {
         this.riggingHoistTypeId = riggingHoistTypeId;
     }
 
+    public String getRiggingTrussProfileId() {
+        return riggingTrussProfileId;
+    }
+
+    public void setRiggingTrussProfileId(String riggingTrussProfileId) {
+        this.riggingTrussProfileId = riggingTrussProfileId;
+    }
+
+    public Double getRiggingTrussLengthMm() {
+        return riggingTrussLengthMm;
+    }
+
+    public void setRiggingTrussLengthMm(Double riggingTrussLengthMm) {
+        this.riggingTrussLengthMm = riggingTrussLengthMm;
+    }
+
+    public boolean isRiggingTrussSymmetricOffset() {
+        return riggingTrussSymmetricOffset;
+    }
+
+    public void setRiggingTrussSymmetricOffset(boolean riggingTrussSymmetricOffset) {
+        this.riggingTrussSymmetricOffset = riggingTrussSymmetricOffset;
+    }
+
+    public Double getRiggingTrussManualLeftOffsetMm() {
+        return riggingTrussManualLeftOffsetMm;
+    }
+
+    public void setRiggingTrussManualLeftOffsetMm(Double riggingTrussManualLeftOffsetMm) {
+        this.riggingTrussManualLeftOffsetMm = riggingTrussManualLeftOffsetMm;
+    }
+
+    public String getRiggingTrussNotes() {
+        return riggingTrussNotes;
+    }
+
+    public void setRiggingTrussNotes(String riggingTrussNotes) {
+        this.riggingTrussNotes = riggingTrussNotes;
+    }
+
     public double getStructureTowerHeightMm() {
         return structureTowerHeightMm;
     }
@@ -480,6 +538,11 @@ public class Screen {
         s.riggingSafetyFactorMin = riggingSafetyFactorMin;
         s.riggingHoistCapacityKg = riggingHoistCapacityKg;
         s.riggingHoistTypeId = riggingHoistTypeId;
+        s.riggingTrussProfileId = riggingTrussProfileId;
+        s.riggingTrussLengthMm = riggingTrussLengthMm;
+        s.riggingTrussSymmetricOffset = riggingTrussSymmetricOffset;
+        s.riggingTrussManualLeftOffsetMm = riggingTrussManualLeftOffsetMm;
+        s.riggingTrussNotes = riggingTrussNotes;
         s.structureTowerHeightMm = structureTowerHeightMm;
         s.structureTowerCount = structureTowerCount;
         s.structureVerticalFramesPerTower = structureVerticalFramesPerTower;

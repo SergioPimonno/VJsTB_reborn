@@ -18,6 +18,7 @@ import com.vjstb.ledscheme.model.ControllerInstance;
 import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.InterfaceType;
 import com.vjstb.ledscheme.model.Network;
+import com.vjstb.ledscheme.model.NetworkAttachment;
 import com.vjstb.ledscheme.model.NetworkDeviceCategory;
 import com.vjstb.ledscheme.model.NetworkDevicePlacement;
 import com.vjstb.ledscheme.model.NetworkDeviceType;
@@ -510,12 +511,17 @@ class AppModelTest {
     void savesAndReloadsNetworkManagerPlan(@TempDir Path dir) {
         // Полный цикл через РЕАЛЬНЫЙ файл (пересоздание AppModel на диске, не тот же
         // объект в памяти) — подтверждает, что генерическая Jackson-сериализация
-        // NetworkManagerPlan/Network/NetworkDevicePlacement не теряет данные, тем же
-        // приёмом, что savesAndReloadsWorkspace выше.
+        // NetworkManagerPlan/Network/NetworkDevicePlacement/NetworkAttachment не
+        // теряет данные, тем же приёмом, что savesAndReloadsWorkspace выше.
+        // Round 8: устройства/связи — общий список ПЛАНА (не сети), адрес — на
+        // NetworkAttachment; тест заодно проверяет устройство сразу с ДВУМЯ
+        // подключениями (к разным сетям) — прямой сценарий запроса пользователя
+        // "один блок может принадлежать разным сеткам".
         File file = new File(dir.toFile(), "workspace.json");
         AppModel model1 = new AppModel(new WorkspaceStore(file));
         NetworkDeviceType typeSeed = new NetworkDeviceType();
-        typeSeed.setPortCount(24);
+        typeSeed.setEthernetPortCount(24);
+        typeSeed.setOpticalPortCount(2);
         NetworkDeviceType deviceType = model1.addNetworkDeviceType(typeSeed);
         model1.selectProject(model1.addProject("P"));
         Scene scene = model1.addScene("S1");
@@ -523,26 +529,43 @@ class AppModelTest {
         SchemaNode node = model1.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SERVER, "Медиасервер", 0, 0, null);
 
         NetworkManagerPlan plan = new NetworkManagerPlan();
-        Network network = new Network();
-        network.setName("Сеть управления");
-        network.setColor(0xff8800);
+        Network networkA = new Network();
+        networkA.setName("Сеть управления");
+        networkA.setColor(0xff8800);
+        Network networkB = new Network();
+        networkB.setName("Сеть контента");
+        networkB.setColor(0x0088ff);
+        plan.getNetworks().add(networkA);
+        plan.getNetworks().add(networkB);
 
+        // Медиасервер -- в ОБЕИХ сетях сразу, с разными адресами и разбитыми портами.
         NetworkDevicePlacement linked = new NetworkDevicePlacement();
         linked.setLinkedSchemaNodeId(node.getId());
-        linked.setIpAddress("192.168.1.10");
-        linked.setSubnetMask("255.255.255.0");
-        linked.setGateway("192.168.1.1");
         linked.setWebInterfaceUrl("http://192.168.1.10");
         linked.setHasWebInterface(true);
         linked.setXMm(10);
         linked.setYMm(20);
-        linked.setPortCount(8);
-        network.getDevices().add(linked);
+        linked.setWidth(180);
+        linked.setHeight(70);
+        linked.setEthernetPortCount(8);
+        linked.setOpticalPortCount(1);
+        NetworkAttachment attA = new NetworkAttachment(networkA.getId());
+        attA.setIpAddress("192.168.1.10");
+        attA.setSubnetMask("255.255.255.0");
+        attA.setGateway("192.168.1.1");
+        attA.setPorts(List.of(1, 2));
+        linked.getAttachments().add(attA);
+        NetworkAttachment attB = new NetworkAttachment(networkB.getId());
+        attB.setIpAddress("10.0.0.10");
+        linked.getAttachments().add(attB);
+        plan.getDevices().add(linked);
 
         NetworkDevicePlacement catalog = new NetworkDevicePlacement();
         catalog.setDeviceTypeId(deviceType.getId());
-        catalog.setIpAddress("192.168.1.20");
-        network.getDevices().add(catalog);
+        NetworkAttachment catalogAtt = new NetworkAttachment(networkA.getId());
+        catalogAtt.setIpAddress("192.168.1.20");
+        catalog.getAttachments().add(catalogAtt);
+        plan.getDevices().add(catalog);
 
         NetworkLink link = new NetworkLink();
         link.setFromDeviceId(linked.getId());
@@ -551,9 +574,8 @@ class AppModelTest {
         link.setToPort(3);
         link.setLabel("Uplink");
         link.getWaypoints().add(new NetworkLinkWaypoint(55, 65));
-        network.getLinks().add(link);
+        plan.getLinks().add(link);
 
-        plan.getNetworks().add(network);
         model1.saveNetworkManagerPlan(scene, plan);
 
         AppModel model2 = new AppModel(new WorkspaceStore(file));
@@ -561,35 +583,47 @@ class AppModelTest {
         NetworkManagerPlan reloadedPlan = reloadedScene.getNetworkManagerPlan();
 
         assertNotNull(reloadedPlan);
-        assertEquals(1, reloadedPlan.getNetworks().size());
-        Network reloadedNetwork = reloadedPlan.getNetworks().get(0);
-        assertEquals("Сеть управления", reloadedNetwork.getName());
-        assertEquals(Integer.valueOf(0xff8800), reloadedNetwork.getColor());
-        assertEquals(2, reloadedNetwork.getDevices().size());
+        assertEquals(2, reloadedPlan.getNetworks().size());
+        assertEquals(2, reloadedPlan.getDevices().size());
 
-        NetworkDevicePlacement reloadedLinked = reloadedNetwork.getDevices().get(0);
+        NetworkDevicePlacement reloadedLinked = reloadedPlan.getDevices().get(0);
         assertEquals(node.getId(), reloadedLinked.getLinkedSchemaNodeId());
-        assertEquals("192.168.1.10", reloadedLinked.getIpAddress());
-        assertEquals("255.255.255.0", reloadedLinked.getSubnetMask());
-        assertEquals("192.168.1.1", reloadedLinked.getGateway());
         assertEquals("http://192.168.1.10", reloadedLinked.getWebInterfaceUrl());
         assertTrue(reloadedLinked.isHasWebInterface());
         assertEquals(10.0, reloadedLinked.getXMm());
         assertEquals(20.0, reloadedLinked.getYMm());
-        assertEquals(8, reloadedLinked.getPortCount());
+        assertEquals(180.0, reloadedLinked.getWidth());
+        assertEquals(70.0, reloadedLinked.getHeight());
+        assertEquals(8, reloadedLinked.getEthernetPortCount());
+        assertEquals(1, reloadedLinked.getOpticalPortCount());
         assertNotNull(reloadedLinked.getId());
+        assertEquals(2, reloadedLinked.getAttachments().size());
 
-        NetworkDevicePlacement reloadedCatalog = reloadedNetwork.getDevices().get(1);
+        NetworkAttachment reloadedAttA = reloadedLinked.attachmentFor(reloadedPlan.getNetworks().get(0).getId());
+        assertNotNull(reloadedAttA);
+        assertEquals("192.168.1.10", reloadedAttA.getIpAddress());
+        assertEquals("255.255.255.0", reloadedAttA.getSubnetMask());
+        assertEquals("192.168.1.1", reloadedAttA.getGateway());
+        assertEquals(List.of(1, 2), reloadedAttA.getPorts());
+
+        NetworkAttachment reloadedAttB = reloadedLinked.attachmentFor(reloadedPlan.getNetworks().get(1).getId());
+        assertNotNull(reloadedAttB);
+        assertEquals("10.0.0.10", reloadedAttB.getIpAddress());
+        assertTrue(reloadedAttB.getPorts().isEmpty(), "пустой список портов значит \"все порты\"");
+
+        NetworkDevicePlacement reloadedCatalog = reloadedPlan.getDevices().get(1);
         assertEquals(deviceType.getId(), reloadedCatalog.getDeviceTypeId());
-        assertEquals("192.168.1.20", reloadedCatalog.getIpAddress());
+        assertEquals("192.168.1.20",
+                reloadedCatalog.attachmentFor(reloadedPlan.getNetworks().get(0).getId()).getIpAddress());
         assertFalse(reloadedCatalog.isHasWebInterface(), "по умолчанию флаг веб-интерфейса снят");
 
         NetworkDeviceType reloadedType = model2.getWorkspace().networkDeviceTypeById(deviceType.getId());
         assertNotNull(reloadedType);
-        assertEquals(24, reloadedType.getPortCount());
+        assertEquals(24, reloadedType.getEthernetPortCount());
+        assertEquals(2, reloadedType.getOpticalPortCount());
 
-        assertEquals(1, reloadedNetwork.getLinks().size());
-        NetworkLink reloadedLink = reloadedNetwork.getLinks().get(0);
+        assertEquals(1, reloadedPlan.getLinks().size());
+        NetworkLink reloadedLink = reloadedPlan.getLinks().get(0);
         assertEquals(reloadedLinked.getId(), reloadedLink.getFromDeviceId());
         assertEquals(1, reloadedLink.getFromPort());
         assertEquals(reloadedCatalog.getId(), reloadedLink.getToDeviceId());
@@ -598,6 +632,47 @@ class AppModelTest {
         assertEquals(1, reloadedLink.getWaypoints().size());
         assertEquals(55.0, reloadedLink.getWaypoints().get(0).getX());
         assertEquals(65.0, reloadedLink.getWaypoints().get(0).getY());
+    }
+
+    @Test
+    void migratesLegacyNetworkManagerPlanFromNestedNetworkDevices(@TempDir Path dir) throws Exception {
+        // Round 8 изменил форму хранения: устройства/связи раньше лежали ВНУТРИ
+        // каждой сети ("networks[i].devices"/"links"), адрес был плоским полем
+        // устройства -- теперь общий список плана + NetworkAttachment. Пишем файл
+        // СТАРОЙ формы напрямую (как лежало на диске до этого захода) и проверяем,
+        // что WorkspaceStore.migrateLegacyNetworkManagerPlans поднимает всё наверх
+        // без потерь -- см. её javadoc за тем, почему это миграция СЫРОГО дерева
+        // JSON, а не типизированного объекта, как migrateLegacyChains.
+        File file = new File(dir.toFile(), "workspace.json");
+        String legacyJson = "{\"projects\":[{\"id\":\"p1\",\"name\":\"P\",\"scenes\":[{\"id\":\"s1\",\"name\":\"S1\","
+                + "\"networkManagerPlan\":{\"networks\":[{\"id\":\"net1\",\"name\":\"Legacy\",\"color\":123,"
+                + "\"devices\":[{\"id\":\"d1\",\"customLabel\":\"Switch\",\"ipAddress\":\"192.168.1.5\","
+                + "\"subnetMask\":\"255.255.255.0\",\"gateway\":\"192.168.1.1\",\"portCount\":16,\"xmm\":5,\"ymm\":6}],"
+                + "\"links\":[{\"id\":\"l1\",\"fromDeviceId\":\"d1\",\"fromPort\":1,\"toDeviceId\":\"d1\","
+                + "\"toPort\":2,\"label\":\"loop\"}]}]}}]}]}";
+        java.nio.file.Files.writeString(file.toPath(), legacyJson);
+
+        AppModel model = new AppModel(new WorkspaceStore(file));
+        Scene scene = model.getWorkspace().getProjects().get(0).getScenes().get(0);
+        NetworkManagerPlan plan = scene.getNetworkManagerPlan();
+
+        assertNotNull(plan);
+        assertEquals(1, plan.getNetworks().size());
+        assertEquals("Legacy", plan.getNetworks().get(0).getName());
+        assertEquals(1, plan.getDevices().size());
+        NetworkDevicePlacement device = plan.getDevices().get(0);
+        assertEquals("Switch", device.getCustomLabel());
+        assertEquals(16, device.getEthernetPortCount(), "старое \"portCount\" -- это ethernet-порты");
+        assertEquals(5.0, device.getXMm());
+        assertEquals(6.0, device.getYMm());
+        assertEquals(1, device.getAttachments().size());
+        NetworkAttachment attachment = device.getAttachments().get(0);
+        assertEquals("net1", attachment.getNetworkId());
+        assertEquals("192.168.1.5", attachment.getIpAddress());
+        assertEquals("255.255.255.0", attachment.getSubnetMask());
+        assertEquals("192.168.1.1", attachment.getGateway());
+        assertEquals(1, plan.getLinks().size());
+        assertEquals("loop", plan.getLinks().get(0).getLabel());
     }
 
     @Test
@@ -2452,6 +2527,106 @@ class AppModelTest {
         assertEquals(1, summary.skippedDeleted());
         assertEquals(1, model.getWorkspace().getSharedHoistTypes().size(),
                 "запись должна остаться — на неё ссылается riggingHoistTypeId реального экрана");
+    }
+
+    @Test
+    void librarySyncAddsTrussProfile(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        var dto = new LibrarySyncClient.LibraryItemDto("srv-truss-1", "TRUSS_PROFILE", "Ферма 300мм",
+                "{\"name\":\"Ферма 300мм\",\"availableLengthsM\":[1.0,2.0,0.5],\"weightKgPerM\":2.5}", 5, false);
+
+        AppModel.LibrarySyncSummary summary = model.applyLibrarySyncItems(List.of(dto));
+
+        assertEquals(1, summary.added());
+        assertEquals(1, model.getTrussProfiles().size());
+        assertEquals("srv-truss-1", model.getTrussProfiles().get(0).getId());
+        assertEquals("Ферма 300мм", model.getTrussProfiles().get(0).getName());
+        assertEquals(List.of(1.0, 2.0, 0.5), model.getTrussProfiles().get(0).getAvailableLengthsM());
+        assertEquals(2.5, model.getTrussProfiles().get(0).getWeightKgPerM(), 1e-6);
+    }
+
+    @Test
+    void librarySyncMigratesScreenTrussProfileReferenceWhenPersonalProfileIsPromoted(@TempDir Path dir) {
+        // Тот же перенос ссылок, что и у HOIST (см. librarySyncMigratesScreenHoistTypeReference...),
+        // но для Screen.riggingTrussProfileId.
+        AppModel model = freshModel(dir);
+        com.vjstb.ledscheme.model.TrussProfile personal = new com.vjstb.ledscheme.model.TrussProfile();
+        personal.setName("Ферма 300мм");
+        personal = model.addTrussProfile(personal);
+        String oldId = personal.getId();
+        CabinetType cabinetType = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", cabinetType.getId(), 2, 3, 0, 0);
+        screen.setRiggingTrussProfileId(oldId);
+
+        model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-truss-1", "TRUSS_PROFILE", "Ферма 300мм", "{\"name\":\"Ферма 300мм\"}", 5, false)));
+
+        assertTrue(model.getWorkspace().getTrussProfiles().isEmpty(), "личная запись должна быть продвинута (удалена)");
+        assertEquals("srv-truss-1", screen.getRiggingTrussProfileId(),
+                "ссылка экрана должна перенестись на новый id общей записи, а не остаться повисшей на старом личном id");
+    }
+
+    @Test
+    void librarySyncKeepsSharedTrussProfileDeletionIfScreenStillReferencesIt(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-truss-1", "TRUSS_PROFILE", "Ферма 300мм", "{\"name\":\"Ферма 300мм\"}", 5, false)));
+        CabinetType cabinetType = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", cabinetType.getId(), 2, 3, 0, 0);
+        screen.setRiggingTrussProfileId("srv-truss-1");
+
+        AppModel.LibrarySyncSummary summary = model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
+                "srv-truss-1", "TRUSS_PROFILE", "Ферма 300мм", "{\"name\":\"Ферма 300мм\"}", 6, true)));
+
+        assertEquals(0, summary.deleted());
+        assertEquals(1, summary.skippedDeleted());
+        assertEquals(1, model.getWorkspace().getSharedTrussProfiles().size(),
+                "запись должна остаться — на неё ссылается riggingTrussProfileId реального экрана");
+    }
+
+    @Test
+    void addTrussProfile_rejectsDuplicateNameCaseInsensitive(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        com.vjstb.ledscheme.model.TrussProfile first = new com.vjstb.ledscheme.model.TrussProfile();
+        first.setName("Ферма 300мм");
+        model.addTrussProfile(first);
+
+        com.vjstb.ledscheme.model.TrussProfile duplicate = new com.vjstb.ledscheme.model.TrussProfile();
+        duplicate.setName("ферма 300мм");
+        assertThrows(IllegalStateException.class, () -> model.addTrussProfile(duplicate));
+    }
+
+    @Test
+    void updateScreenTruss_persistsProfileLengthOffsetAndNotes(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        com.vjstb.ledscheme.model.TrussProfile profile = model.addTrussProfile(
+                new com.vjstb.ledscheme.model.TrussProfile());
+        CabinetType cabinetType = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", cabinetType.getId(), 2, 3, 0, 0);
+
+        model.updateScreenTruss(screen, profile.getId(), 4000.0, false, 250.0, "заметка");
+
+        assertEquals(profile.getId(), screen.getRiggingTrussProfileId());
+        assertEquals(4000.0, screen.getRiggingTrussLengthMm(), 1e-6);
+        assertFalse(screen.isRiggingTrussSymmetricOffset());
+        assertEquals(250.0, screen.getRiggingTrussManualLeftOffsetMm(), 1e-6);
+        assertEquals("заметка", screen.getRiggingTrussNotes());
+
+        // Переключение обратно на симметричный режим обязано СБРОСИТЬ устаревшее ручное
+        // число -- иначе оно "проснулось" бы молча при следующем снятии галочки симметрии.
+        model.updateScreenTruss(screen, profile.getId(), 4000.0, true, 250.0, "заметка");
+        assertTrue(screen.isRiggingTrussSymmetricOffset());
+        assertNull(screen.getRiggingTrussManualLeftOffsetMm());
+
+        // Неположительная длина трактуется как "авто" -- сбрасывается в null.
+        model.updateScreenTruss(screen, profile.getId(), 0.0, true, null, "заметка");
+        assertNull(screen.getRiggingTrussLengthMm());
     }
 
     @Test

@@ -299,4 +299,62 @@ class RiggingCalcTest {
         assertTrue(result.points().stream().noneMatch(RiggingCalc.PointLoad::overCapacity),
                 "предложенное количество точек обязано реально устранять превышение, а не просто вырасти на 1");
     }
+
+    @Test
+    void compute_pointsFollowLongerTrussLengthWithSymmetricOverhang() {
+        // Запрос пользователя: точки подвеса считаются по РЕАЛЬНОЙ ферме, не по ширине
+        // экрана. Экран 6*500=3000мм, ферма переопределена на 5000мм (симметричный свес
+        // по умолчанию) -- overhang=2000, leftOffsetMm=1000. Отступ/расстановка считаются
+        // от 5000мм фермы (margin=500, usable=4000), затем сдвигаются в координаты экрана
+        // вычитанием leftOffsetMm -- первая точка уезжает ЛЕВЕЕ края экрана (x<0),
+        // последняя -- ПРАВЕЕ его ширины (x>3000), это ожидаемо при свесе.
+        com.vjstb.ledscheme.model.Workspace ws = new com.vjstb.ledscheme.model.Workspace();
+        CabinetType t500 = type(10);
+        Screen screen = new Screen();
+        screen.setCols(6);
+        screen.setRows(1);
+        screen.setRiggingTrussLengthMm(5000.0);
+
+        RiggingCalc.Result result = RiggingCalc.compute(screen, t500, ws, 3);
+        assertEquals(-500.0, result.points().get(0).xMm(), 1e-6);
+        assertEquals(1500.0, result.points().get(1).xMm(), 1e-6);
+        assertEquals(3500.0, result.points().get(2).xMm(), 1e-6);
+    }
+
+    @Test
+    void compute_manualAsymmetricOffsetShiftsAllPointsByThatAmount() {
+        // Тот же экран/ферма, что compute_pointsFollowLongerTrussLengthWithSymmetricOverhang,
+        // но отступ задан ВРУЧНУЮ (200мм, не симметричные 1000мм) -- все точки должны
+        // сдвинуться на ЭТОТ отступ, а не на автоматический симметричный.
+        com.vjstb.ledscheme.model.Workspace ws = new com.vjstb.ledscheme.model.Workspace();
+        CabinetType t500 = type(10);
+        Screen screen = new Screen();
+        screen.setCols(6);
+        screen.setRows(1);
+        screen.setRiggingTrussLengthMm(5000.0);
+        screen.setRiggingTrussSymmetricOffset(false);
+        screen.setRiggingTrussManualLeftOffsetMm(200.0);
+
+        RiggingCalc.Result result = RiggingCalc.compute(screen, t500, ws, 3);
+        assertEquals(300.0, result.points().get(0).xMm(), 1e-6);
+        assertEquals(2300.0, result.points().get(1).xMm(), 1e-6);
+        assertEquals(4300.0, result.points().get(2).xMm(), 1e-6);
+    }
+
+    @Test
+    void compute_shorterTrussPlacesPointsWithinTrussSpanNotScreenSpan() {
+        // Ферма КОРОЧЕ экрана (2000мм против 3000мм) -- точки обязаны лечь внутри РЕАЛЬНОЙ
+        // фермы (симметрично отцентрованной по умолчанию: leftOffsetMm=-500), а не
+        // растянуться на всю ширину экрана, как было бы при игнорировании TrussCalc.
+        com.vjstb.ledscheme.model.Workspace ws = new com.vjstb.ledscheme.model.Workspace();
+        CabinetType t500 = type(10);
+        Screen screen = new Screen();
+        screen.setCols(6);
+        screen.setRows(1);
+        screen.setRiggingTrussLengthMm(2000.0);
+
+        RiggingCalc.Result result = RiggingCalc.compute(screen, t500, ws, 2);
+        assertEquals(1000.0, result.points().get(0).xMm(), 1e-6);
+        assertEquals(2000.0, result.points().get(1).xMm(), 1e-6);
+    }
 }
