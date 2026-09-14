@@ -130,13 +130,6 @@ public final class SchemeRenderer {
                                    List<PowerChain> powerChains, List<SignalChain> signalChains,
                                    List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers,
                                    boolean powerUnitKw) {
-        // Подпись «строка,столбец» физически не помещается в мелкую ячейку (мини-
-        // обзор сцены с несколькими экранами целиком, сильный зум-аут) — рисуем её,
-        // только если в ячейке реально есть место, иначе текст соседних кабинетов
-        // наезжает друг на друга и на линии цепочек, превращаясь в нечитаемое пятно.
-        boolean showLabels = cellH >= 16 && cellW >= 16;
-        // Round (баг-репорт: "подписи покрупнее раза в 2") -- было max(9, cellH*0.14).
-        Font labelFont = showLabels ? g2.getFont().deriveFont(Font.PLAIN, Math.max(18f, cellH * 0.28f)) : null;
         for (CabinetInstance cab : scr.getCabinets()) {
             // Деактивированная (скрытая) ячейка — по определению "не считается, не
             // рисуется, не участвует в цепочках" (см. CabinetInstance.isHidden) —
@@ -164,11 +157,7 @@ public final class SchemeRenderer {
             g2.setColor(Palette.BORDER);
             outlineCabinetShape(g2, x, y, ew, eh, shape, rotationDeg);
 
-            if (showLabels) {
-                g2.setColor(new Color(0xc0, 0xc8, 0xd0));
-                g2.setFont(labelFont);
-                g2.drawString(cab.getDisplayRow() + "," + cab.getDisplayCol(), x + 4, y + labelFont.getSize() + 2);
-            }
+            drawCabinetIndexLabel(g2, cab, x, y, ew, eh);
         }
 
         if (power) {
@@ -188,6 +177,41 @@ public final class SchemeRenderer {
                         signalChainEndLabel(sceneControllers, chain, workspace));
             }
         }
+    }
+
+    /** Подпись «строка,столбец» кабинета — общая точка правды для {@link #paintScheme}
+     *  и для оверлеев поверх него (например, {@code SceneCanvasPanel.drawCabinetOverrideMarks},
+     *  который красит ячейку сплошной заливкой ПОСЛЕ paintScheme — баг-репорт 2026-09-14
+     *  «из-за заливки не видно порядкового номера кабинетов»: подпись рисовалась только
+     *  один раз, здесь, и следующий проход её молча перекрывал; теперь оверлеи вызывают
+     *  этот метод сами, чтобы подпись оставалась поверх любой заливки).
+     *  <p>Не рисует ничего, если ячейка мельче {@code MIN_LABEL_CELL_PX} — иначе на сильном
+     *  зум-ауте текст соседних кабинетов наезжает друг на друга и на линии цепочек,
+     *  превращаясь в нечитаемое пятно. Размер шрифта пропорционален высоте ячейки
+     *  ({@code eh * 0.28}, см. баг-репорт «подписи покрупнее раза в 2»), но дополнительно
+     *  ужимается по ширине через {@link #fitFontToWidth} — раньше был жёсткий пол в 18пт
+     *  БОЛЬШЕ порога видимости (16px), из-за чего подпись гарантированно вылезала за
+     *  собственную ячейку на зуме около этого порога и не уменьшалась дальше при
+     *  дальнейшем отдалении (баг-репорт «индексы кабинетов остаются постоянной высоты
+     *  шрифта, при отдалении получается грязно») — теперь пол общий с порогом видимости,
+     *  а верхняя граница нигде не зажата явно: и высота, и ширина ячейки одинаково
+     *  ограничивают размер шрифта, так что подпись всегда вписывается в габариты кабинета. */
+    private static final int MIN_LABEL_CELL_PX = 16;
+
+    public static void drawCabinetIndexLabel(Graphics2D g2, CabinetInstance cab, int x, int y, int ew, int eh) {
+        if (eh < MIN_LABEL_CELL_PX || ew < MIN_LABEL_CELL_PX) {
+            return;
+        }
+        String text = cab.getDisplayRow() + "," + cab.getDisplayCol();
+        float baseSize = Math.max(MIN_LABEL_CELL_PX / 2f, eh * 0.28f);
+        float size = fitFontToWidth(g2, text, Font.PLAIN, baseSize, MIN_LABEL_CELL_PX / 2f, ew - 6);
+        Font prevFont = g2.getFont();
+        Color prevColor = g2.getColor();
+        g2.setFont(g2.getFont().deriveFont(Font.PLAIN, size));
+        g2.setColor(new Color(0xc0, 0xc8, 0xd0));
+        g2.drawString(text, x + 4, y + g2.getFont().getSize() + 2);
+        g2.setFont(prevFont);
+        g2.setColor(prevColor);
     }
 
     /** Кабинет принадлежит цепочке под индексом chainIndex (для цвета — тот же

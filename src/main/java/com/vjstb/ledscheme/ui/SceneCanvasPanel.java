@@ -65,6 +65,22 @@ public class SceneCanvasPanel extends JPanel {
      *  просто лишний визуальный шум, не относящийся к текущей задаче. */
     private boolean showRiggingPoints;
 
+    /** v3.0: ферма/точки подвеса рисуются НАД экраном, клик по этой полосе открывает
+     *  панель редактирования подвеса в {@code SetupStagePanel} (см. {@link
+     *  #rigLevelListener}/{@link #rigLevelAt}) для ЭТОГО экрана, а не двигает его, как
+     *  обычный клик. Экран — единственный отмеченный элемент (см. class-javadoc
+     *  {@link #rigLevelAt}), поэтому колбэк передаёт только сам экран, без отдельного
+     *  "уровня". */
+    public interface RigLevelListener {
+        void onRigLevelClicked(Screen screen);
+    }
+
+    private RigLevelListener rigLevelListener;
+
+    public void setRigLevelListener(RigLevelListener listener) {
+        this.rigLevelListener = listener;
+    }
+
     /** Перетаскивание ЦЕЛОГО экрана (Task #7/v1.6) — только когда chainController
      *  не задан (т.е. этот виджет используется как прериг-превью, а не как
      *  интерактивная пропись цепочек Питания/Сигнала — там клик по экрану/кабинету
@@ -94,6 +110,37 @@ public class SceneCanvasPanel extends JPanel {
     private Double snapGuideAbsMmX;
     private Double snapGuideAbsMmY;
 
+    /** v3.0: Shift-прилипание ЦЕЛОГО экрана к соседним экранам сцены (не к сетке
+     *  кабинетов внутри одного экрана, см. {@link #snapCabinetOffset}) — отдельная
+     *  пара направляющих ({@link #snapScreenPosition}), т.к. цель тут в АБСОЛЮТНЫХ
+     *  мм сцены, а не в мм относительно сетки одного экрана, как у {@link
+     *  #snapGuideAbsMmX}/{@link #snapGuideAbsMmY}. */
+    private Double screenSnapGuideAbsMmX;
+    private Double screenSnapGuideAbsMmY;
+
+    /** v3.0: зум компактного (не detailMode) обзора сцены — Ctrl+колесо, см. {@link
+     *  #mouseWheelMoved}; 1.0 = обычная подгонка под окно, без искусственного минимума
+     *  (в отличие от {@link #detailZoom}, тут уменьшать некуда — фит уже минимален). */
+    private double compactZoom = 1.0;
+
+    /** v3.0: панорамирование средней кнопкой мыши — двигает viewport окружающего
+     *  JScrollPane напрямую (та же логика, что у полосы прокрутки), работает и в
+     *  compact, и в detailMode. */
+    private boolean panning;
+    private int panPressScreenX, panPressScreenY;
+    private java.awt.Point panViewStart;
+
+    /** v3.0: ПКМ по кабинету в detailMode (прериг, не построение цепочки) открывает
+     *  радиальное меню ячейки — перенесено из убранного отдельного окна «Форма
+     *  экрана» (см. {@code ShapeEditorPanel}, баг-репорт 2026-09-14 "избавляемся от
+     *  отдельного окна"; ЛКМ-перетаскивание кабинета в detailMode уже было и здесь,
+     *  не менялось). {@code radialMenuActive} — тот же приём защиты от click-through
+     *  RadialMenu (окно-попап на части платформ не перехватывает клик мыши само,
+     *  см. showCabinetRadialMenu): пока меню открыто, обычные ЛКМ-клики по холсту
+     *  игнорируются, иначе клик по пункту меню дополнительно долетал бы досюда и
+     *  начинал перетаскивание/скрытие ячейки под меню как побочный эффект. */
+    private boolean radialMenuActive;
+
     public SceneCanvasPanel(AppModel model, SettingsManager settings) {
         this.model = model;
         this.settings = settings;
@@ -102,6 +149,17 @@ public class SceneCanvasPanel extends JPanel {
             @Override
             public void mousePressed(MouseEvent e) {
                 requestFocusInWindow();
+                if (javax.swing.SwingUtilities.isMiddleMouseButton(e)) {
+                    java.awt.Container parent = getParent();
+                    if (parent instanceof javax.swing.JViewport viewport) {
+                        panning = true;
+                        panPressScreenX = e.getXOnScreen();
+                        panPressScreenY = e.getYOnScreen();
+                        panViewStart = viewport.getViewPosition();
+                        setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.MOVE_CURSOR));
+                    }
+                    return;
+                }
                 if (javax.swing.SwingUtilities.isRightMouseButton(e)) {
                     if (detailMode && chainController != null && chainController.isChainBuilding()) {
                         // Кабинет для удаления из строящейся цепочки может принадлежать
@@ -111,6 +169,16 @@ public class SceneCanvasPanel extends JPanel {
                         if (hit != null && hit[1] != null) {
                             chainController.removeFromActive(((CabinetInstance) hit[1]).getId());
                         }
+                    } else if (detailMode && chainController == null) {
+                        // v3.0: радиальное меню ячейки (скрыть/восстановить, форма, угол,
+                        // тип) — переехало сюда из убранного отдельного «Форма экрана»
+                        // (баг-репорт 2026-09-14 "избавляемся от отдельного окна"), только
+                        // в контексте прерига (не при построении цепочки — там ПКМ уже
+                        // занят удалением из цепочки, см. ветку выше).
+                        Object[] hit = screenAndCabinetAt(e.getX(), e.getY());
+                        if (hit != null && hit[1] != null) {
+                            showCabinetRadialMenu(e, (Screen) hit[0], (CabinetInstance) hit[1]);
+                        }
                     }
                     return;
                 }
@@ -119,6 +187,19 @@ public class SceneCanvasPanel extends JPanel {
                 // реальной интерактивной прописке цепочек (Питание/Сигнал, chainController
                 // задан) клик по экрану/кабинету означает совсем другое — ветка ниже.
                 if (chainController == null && javax.swing.SwingUtilities.isLeftMouseButton(e)) {
+                    if (radialMenuActive) {
+                        return;
+                    }
+                    if (!detailMode && showRiggingPoints) {
+                        Screen rigHit = rigLevelAt(e.getX(), e.getY());
+                        if (rigHit != null) {
+                            model.selectScreen(rigHit);
+                            if (rigLevelListener != null) {
+                                rigLevelListener.onRigLevelClicked(rigHit);
+                            }
+                            return;
+                        }
+                    }
                     if (detailMode) {
                         Object[] hit = screenAndCabinetAt(e.getX(), e.getY());
                         if (hit != null) {
@@ -182,9 +263,16 @@ public class SceneCanvasPanel extends JPanel {
 
             @Override
             public void mouseReleased(MouseEvent e) {
+                if (panning) {
+                    panning = false;
+                    setCursor(java.awt.Cursor.getDefaultCursor());
+                    return;
+                }
                 lastDragCabId = null;
                 snapGuideAbsMmX = null;
                 snapGuideAbsMmY = null;
+                screenSnapGuideAbsMmX = null;
+                screenSnapGuideAbsMmY = null;
                 if (draggingScreen != null) {
                     if (dragScreenMoved) {
                         // Тот же приём, что и у перетаскивания подписи связи в общей схеме
@@ -219,6 +307,17 @@ public class SceneCanvasPanel extends JPanel {
 
             @Override
             public void mouseDragged(MouseEvent e) {
+                if (panning) {
+                    java.awt.Container parent = getParent();
+                    if (parent instanceof javax.swing.JViewport viewport && panViewStart != null) {
+                        int dx = e.getXOnScreen() - panPressScreenX;
+                        int dy = e.getYOnScreen() - panPressScreenY;
+                        int nx = Math.max(0, panViewStart.x - dx);
+                        int ny = Math.max(0, panViewStart.y - dy);
+                        viewport.setViewPosition(new java.awt.Point(nx, ny));
+                    }
+                    return;
+                }
                 if (!javax.swing.SwingUtilities.isLeftMouseButton(e)) {
                     return;
                 }
@@ -233,8 +332,18 @@ public class SceneCanvasPanel extends JPanel {
                     if (!dragScreenMoved && Math.hypot(e.getX() - dragScreenPressPxX, e.getY() - dragScreenPressPxY) > 3) {
                         dragScreenMoved = true;
                     }
-                    draggingScreen.setPosXMm(dragScreenStartX + dxMm);
-                    draggingScreen.setPosYMm(dragScreenStartY + dyMm);
+                    double candidateX = dragScreenStartX + dxMm;
+                    double candidateY = dragScreenStartY + dyMm;
+                    if (e.isShiftDown()) {
+                        double[] snapped = snapScreenPosition(draggingScreen, candidateX, candidateY, sc);
+                        candidateX = snapped[0];
+                        candidateY = snapped[1];
+                    } else {
+                        screenSnapGuideAbsMmX = null;
+                        screenSnapGuideAbsMmY = null;
+                    }
+                    draggingScreen.setPosXMm(candidateX);
+                    draggingScreen.setPosYMm(candidateY);
                     repaint();
                     return;
                 }
@@ -296,6 +405,15 @@ public class SceneCanvasPanel extends JPanel {
                 if (detailMode && !detailFit && e.isControlDown()) {
                     double factor = e.getWheelRotation() < 0 ? 1.1 : 1 / 1.1;
                     detailZoom = Math.max(0.2, Math.min(4.0, detailZoom * factor));
+                    revalidate();
+                    repaint();
+                } else if (compact && !detailMode && e.isControlDown()) {
+                    // v3.0: зум компактного обзора сцены (мини-превью прерига) — тот же жест
+                    // (Ctrl+колесо), что и detailZoom выше, отдельное поле (compactZoom),
+                    // т.к. базовый масштаб здесь всегда "подгонка под окно" (boundsToScale),
+                    // а не фиксированный DETAIL_PX_PER_MM.
+                    double factor = e.getWheelRotation() < 0 ? 1.1 : 1 / 1.1;
+                    compactZoom = Math.max(1.0, Math.min(6.0, compactZoom * factor));
                     revalidate();
                     repaint();
                 } else if (getParent() != null) {
@@ -371,6 +489,162 @@ public class SceneCanvasPanel extends JPanel {
         return null;
     }
 
+    /** ПКМ (зажать и повести к пункту, как в Krita) по кабинету в detailMode —
+     *  2-уровневое радиальное меню: 1 уровень — скрыть/восстановить ячейку, «Форма»,
+     *  «Угол», «Тип»; 2 уровень (для «Форма»/«Угол»/«Тип») — сам выбор конкретного
+     *  значения. Перенесено дословно (та же логика веток/подпунктов) из убранного
+     *  отдельного «Форма экрана» (см. class-javadoc {@link #radialMenuActive}). */
+    private void showCabinetRadialMenu(MouseEvent e, Screen scr, CabinetInstance cab) {
+        String cabId = cab.getId();
+        List<RadialMenu.Item> items = new ArrayList<>();
+        items.add(RadialMenu.Item.leaf(cab.isHidden() ? "Восстановить кабинет" : "Удалить кабинет",
+                Palette.MUTED, () -> model.toggleCabinetHidden(cabId)));
+        // Пункт "Форма" виден только если у эффективного типа этого кабинета вообще
+        // есть выбор — если физически возможна только одна форма (обычный случай),
+        // пункт скрывается целиком: выбирать всё равно не из чего.
+        CabinetType effective = ScreenLogic.effectiveType(cab, model.typeOf(scr), model.getWorkspace());
+        if (effective != null && effective.getAllowedShapes().size() > 1) {
+            items.add(RadialMenu.Item.branch("Форма", Palette.BORDER, shapeSubmenu(cabId, effective)));
+        }
+        // "Угол" — только если ФАКТИЧЕСКАЯ форма ячейки (с учётом переопределения)
+        // вообще непрямоугольная: прямоугольнику ориентировать нечего.
+        com.vjstb.ledscheme.model.CabinetShape effectiveShape = cab.getShapeOverride() != null
+                ? cab.getShapeOverride() : (effective != null ? effective.getShape() : null);
+        if (effectiveShape != null && effectiveShape != com.vjstb.ledscheme.model.CabinetShape.RECTANGLE) {
+            items.add(RadialMenu.Item.branch("Угол", Palette.ACCENT, rotationSubmenu(cabId, cab)));
+        }
+        items.add(RadialMenu.Item.branch("Тип", Palette.ACCENT, typeSubmenu(cabId)));
+
+        java.awt.Point screenPt = e.getLocationOnScreen();
+        radialMenuActive = true;
+        // onClose срабатывает синхронно ВНУТРИ обработки того же события мыши, что
+        // его вызвало — см. class-javadoc radialMenuActive про click-through.
+        // SwingUtilities.invokeLater откладывает снятие флага на следующий проход
+        // цикла событий, защита остаётся активной до конца обработки текущего клика.
+        RadialMenu.show(this, screenPt.x, screenPt.y, items,
+                () -> javax.swing.SwingUtilities.invokeLater(() -> radialMenuActive = false));
+    }
+
+    private List<RadialMenu.Item> shapeSubmenu(String cabId, CabinetType effective) {
+        List<RadialMenu.Item> items = new ArrayList<>();
+        items.add(RadialMenu.Item.leaf("По умолчанию", Palette.PHASE_NONE, () -> applyShape(cabId, null)));
+        // Только формы, физически возможные для ЭТОГО типа кабинета.
+        for (com.vjstb.ledscheme.model.CabinetShape shape : effective.getAllowedShapes()) {
+            items.add(RadialMenu.Item.leaf(shape.getLabel(), Palette.signalColor(shape.ordinal()),
+                    () -> applyShape(cabId, shape)));
+        }
+        return items;
+    }
+
+    /** 5 пунктов: "По умолчанию" (снять переопределение — угол типа кабинета из
+     *  библиотеки), 4 стандартных угла с шагом в четверть оборота, и "Другое…" —
+     *  свободный ввод произвольного угла. */
+    private List<RadialMenu.Item> rotationSubmenu(String cabId, CabinetInstance cab) {
+        List<RadialMenu.Item> items = new ArrayList<>();
+        items.add(RadialMenu.Item.leaf("По умолчанию", Palette.PHASE_NONE, () -> applyRotation(cabId, null)));
+        for (int deg : new int[]{0, 90, 180, 270}) {
+            items.add(RadialMenu.Item.leaf(deg + "°", Palette.signalColor(deg / 90), () -> applyRotation(cabId, deg)));
+        }
+        items.add(RadialMenu.Item.leaf("Другое…", Palette.MUTED, () -> promptCustomRotation(cabId, cab)));
+        return items;
+    }
+
+    private void promptCustomRotation(String cabId, CabinetInstance cab) {
+        Integer current = cab.getRotationOverride();
+        String initial = current != null ? String.valueOf(current) : "0";
+        String input = javax.swing.JOptionPane.showInputDialog(this,
+                "Угол, градусы (0° — прямой угол слева-снизу, далее по часовой стрелке):", initial);
+        if (input == null) {
+            return;
+        }
+        try {
+            int deg = (int) Math.round(Double.parseDouble(input.trim().replace(',', '.')));
+            applyRotation(cabId, deg);
+        } catch (NumberFormatException ex) {
+            javax.swing.JOptionPane.showMessageDialog(this, "Введите число", "Проверка данных",
+                    javax.swing.JOptionPane.WARNING_MESSAGE);
+        }
+    }
+
+    private void applyRotation(String cabId, Integer rotationDeg) {
+        model.setCabinetRotationOverride(cabId, rotationDeg);
+    }
+
+    private List<RadialMenu.Item> typeSubmenu(String cabId) {
+        List<RadialMenu.Item> items = new ArrayList<>();
+        List<CabinetType> types = model.getCabinetTypes();
+        items.add(RadialMenu.Item.leaf("По умолчанию", Palette.PHASE_NONE, () -> applyType(cabId, null)));
+        for (CabinetType t : types) {
+            // Тот же typeColor(...), что и при отрисовке ячеек в detailMode — иначе
+            // цвет пункта меню и итоговый цвет закрашенной ячейки расходятся.
+            items.add(RadialMenu.Item.leaf(t.getName(), typeColorFor(types, t), () -> applyType(cabId, t.getId())));
+        }
+        return items;
+    }
+
+    private void applyType(String cabId, String typeId) {
+        try {
+            model.setCabinetTypeOverride(cabId, typeId);
+        } catch (RuntimeException ex) {
+            javax.swing.JOptionPane.showMessageDialog(this, ex.getMessage(), "Ошибка",
+                    javax.swing.JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void applyShape(String cabId, com.vjstb.ledscheme.model.CabinetShape shape) {
+        model.setCabinetShapeOverride(cabId, shape);
+    }
+
+    /** Стабильный цвет по позиции типа в библиотеке — та же палитра, что и в самом
+     *  радиальном меню, чтобы цвет пункта совпадал с цветом соответствующего типа. */
+    private static Color typeColorFor(List<CabinetType> types, CabinetType type) {
+        int idx = types.indexOf(type);
+        return Palette.signalColor(Math.max(0, idx));
+    }
+
+    /** Подсветка кабинетов с переопределением типа (см. {@link #showCabinetRadialMenu}
+     *  → "Тип") — тонированная заливка цветом типа поверх обычной раскраски {@code
+     *  paintScheme}, и переопределения формы (→ "Форма"/"Угол") — реальный контур
+     *  формы, а не декоративная метка. Только в {@code detailMode}: тот же принцип,
+     *  что был у убранного {@code ShapeEditorPanel} — переопределение должно быть
+     *  видно СРАЗУ, не только через тултип/диалог параметров. */
+    private void drawCabinetOverrideMarks(Graphics2D g2, Screen s, CabinetType defaultType,
+                                           int cellW, int cellH, int offX, int offY) {
+        List<CabinetType> types = model.getCabinetTypes();
+        for (CabinetInstance c : s.getCabinets()) {
+            if (c.isHidden()) {
+                continue;
+            }
+            int x = cabX(c, defaultType, cellW, offX);
+            int y = cabY(c, defaultType, cellH, offY);
+            if (c.getCabinetTypeId() != null) {
+                CabinetType override = model.getWorkspace().cabinetTypeById(c.getCabinetTypeId());
+                Color typeColor = override != null ? typeColorFor(types, override) : Palette.ACCENT;
+                g2.setColor(blend(Palette.PHASE_NONE, typeColor, 0.55f));
+                g2.fillRect(x + 1, y + 1, cellW - 2, cellH - 2);
+                g2.setColor(Palette.ACCENT);
+                g2.drawRect(x + 1, y + 1, cellW - 2, cellH - 2);
+                // Заливка выше рисуется ПОВЕРХ paintScheme (см. javadoc метода) и без этого
+                // молча перекрывала подпись «строка,столбец» — баг-репорт 2026-09-14.
+                SchemeRenderer.drawCabinetIndexLabel(g2, c, x, y, cellW, cellH);
+            }
+            com.vjstb.ledscheme.model.CabinetShape shape = c.getShapeOverride();
+            if (shape != null && shape != com.vjstb.ledscheme.model.CabinetShape.RECTANGLE) {
+                CabinetType effective = ScreenLogic.effectiveType(c, defaultType, model.getWorkspace());
+                double rotationDeg = SchemeRenderer.effectiveRotationDeg(c, effective);
+                g2.setColor(Palette.TEXT);
+                SchemeRenderer.outlineCabinetShape(g2, x + 1, y + 1, cellW - 2, cellH - 2, shape, rotationDeg);
+            }
+        }
+    }
+
+    private static Color blend(Color a, Color b, float t) {
+        return new Color(
+                Math.round(a.getRed() * (1 - t) + b.getRed() * t),
+                Math.round(a.getGreen() * (1 - t) + b.getGreen() * t),
+                Math.round(a.getBlue() * (1 - t) + b.getBlue() * t));
+    }
+
     /** Режим «показать все экраны сцены» (Питание/Сигнал): вместо простого
      *  прямоугольника с названием — полная сетка кабинетов КАЖДОГО экрана сцены
      *  с текущей прописью цепочек этапа (питание или сигнал), как в SchemeRenderer.
@@ -400,14 +674,45 @@ public class SceneCanvasPanel extends JPanel {
 
     @Override
     public Dimension getPreferredSize() {
-        if (!detailMode || detailFit) {
-            return super.getPreferredSize();
+        if (detailMode && !detailFit) {
+            double[] b = boundsMm();
+            double scale = DETAIL_PX_PER_MM * detailZoom;
+            int w = b != null ? (int) Math.round((b[2] - b[0]) * scale) + PADDING * 2 : 600;
+            int h = b != null ? (int) Math.round((b[3] - b[1]) * scale) + PADDING * 2 : 400;
+            return new Dimension(Math.max(200, w), Math.max(200, h));
         }
-        double[] b = boundsMm();
-        double scale = DETAIL_PX_PER_MM * detailZoom;
-        int w = b != null ? (int) Math.round((b[2] - b[0]) * scale) + PADDING * 2 : 600;
-        int h = b != null ? (int) Math.round((b[3] - b[1]) * scale) + PADDING * 2 : 400;
-        return new Dimension(Math.max(200, w), Math.max(200, h));
+        // v3.0: зум компактного обзора (см. compactZoom/mouseWheelMoved) — раздувает
+        // preferredSize пропорционально, чтобы окружающий JScrollPane начал скроллить
+        // (панорамирование средней кнопкой — panning выше — двигает именно этот
+        // скролл). Базовый ("подогнанный") масштаб считаем от размера ВЬЮПОРТА, а не
+        // текущего getWidth()/getHeight() этой панели — та уже могла быть раздута
+        // предыдущим зумом, взять фит-масштаб от неё же значило бы всё время
+        // отталкиваться от уже увеличенного размера (дрейф при повторном зуме).
+        if (compact && !detailMode && compactZoom != 1.0) {
+            double[] b = boundsMm();
+            if (b != null) {
+                Dimension vp = viewportSize();
+                double fit = boundsToScale(b, vp.width, Math.max(1, vp.height - rigHeadroomPx()));
+                double scale = fit * compactZoom;
+                int w = (int) Math.round((b[2] - b[0]) * scale) + padding() * 2;
+                int h = (int) Math.round((b[3] - b[1]) * scale) + padding() * 2 + rigHeadroomPx();
+                return new Dimension(Math.max(vp.width, w), Math.max(vp.height, h));
+            }
+        }
+        return super.getPreferredSize();
+    }
+
+    /** Размер окружающего {@link javax.swing.JViewport}, если панель внутри
+     *  {@link javax.swing.JScrollPane} (обычный случай для этого класса) — иначе
+     *  текущий собственный размер. Нужен для {@link #getPreferredSize} при зуме:
+     *  масштаб "подгонки" должен считаться от размера ВЬЮПОРТА (что реально видно),
+     *  а не от уже раздутого зумом текущего getWidth()/getHeight(). */
+    private Dimension viewportSize() {
+        java.awt.Container parent = getParent();
+        if (parent instanceof javax.swing.JViewport viewport) {
+            return viewport.getExtentSize();
+        }
+        return getSize();
     }
 
     private double[] boundsMm() {
@@ -452,7 +757,7 @@ public class SceneCanvasPanel extends JPanel {
     private int[] screenBoxPx(Screen s, CabinetType t, double[] b, double sc, int padding) {
         double[] ext = screenExtentMm(s, t);
         int x = padding + (int) Math.round((s.getPosXMm() + ext[0] - b[0]) * sc);
-        int y = padding + (int) Math.round((s.getPosYMm() + ext[1] - b[1]) * sc);
+        int y = padding + rigHeadroomPx() + (int) Math.round((s.getPosYMm() + ext[1] - b[1]) * sc);
         int w = Math.max(2, (int) Math.round((ext[2] - ext[0]) * sc));
         int h = Math.max(2, (int) Math.round((ext[3] - ext[1]) * sc));
         return new int[]{x, y, w, h};
@@ -467,7 +772,7 @@ public class SceneCanvasPanel extends JPanel {
     }
 
     private int screenGridY(Screen s, double[] b, double sc, int padding) {
-        return padding + (int) Math.round((s.getPosYMm() - b[1]) * sc);
+        return padding + rigHeadroomPx() + (int) Math.round((s.getPosYMm() - b[1]) * sc);
     }
 
     /** Компактный режим для мини-превью (прериг): без подписей и без разметки под
@@ -511,7 +816,19 @@ public class SceneCanvasPanel extends JPanel {
         if (detailMode && !detailFit) {
             return DETAIL_PX_PER_MM * detailZoom;
         }
-        return boundsToScale(b, width, height);
+        return boundsToScale(b, width, Math.max(1, height - rigHeadroomPx()));
+    }
+
+    /** v3.0: полосы уровня подвеса (лебёдки/ферма/точки, см. {@link #rigBands}) рисуются
+     *  НАД прямоугольником экрана — резервируем эту высоту сверху КАЖДЫЙ раз, когда они
+     *  вообще могут появиться (см. paint() — не рисуются в detailMode вовсе), иначе у
+     *  экранов на самом верху раскладки полосы уезжают за пределы холста (баг-репорт
+     *  2026-09-14 «ферма где-то за областью»). Централизованно здесь и в {@link
+     *  #screenBoxPx}/{@link #screenGridY} (не на каждом отдельном вызывающем месте) —
+     *  все места, где считается позиция экрана (отрисовка, хит-тест клика/драга),
+     *  автоматически остаются согласованными друг с другом. */
+    private int rigHeadroomPx() {
+        return (showRiggingPoints && !detailMode) ? RIG_TOP_HEADROOM_PX : 0;
     }
 
     /** Рендерит текущий вид в изображение заданного размера (для экспорта). */
@@ -602,7 +919,12 @@ public class SceneCanvasPanel extends JPanel {
                     // пустым НЕЗАВИСИМО от факта расключения — зелёный оттенок,
                     // пропорциональный доле уже расключённых кабинетов, даёт видеть
                     // текущее состояние расключения, не переключаясь на детальный вид.
-                    Color base = current ? Palette.PHASE_NONE : Palette.PANEL;
+                    // Цветная метка зоны/площадки (v3.0), если назначена, подмешивается
+                    // В ТУ ЖЕ базу ДО зелёного оттенка расключения — оба сигнала должны
+                    // читаться одновременно (метка не должна тонуть под "всё расключено").
+                    java.awt.Color tag = s.getTagColor().color();
+                    Color base = tag != null ? blendTag(current ? Palette.PHASE_NONE : Palette.PANEL, tag)
+                            : (current ? Palette.PHASE_NONE : Palette.PANEL);
                     fill = blendGreen(base, wiredFraction(s) * 0.6);
                 } else {
                     fill = Palette.PHASE_NONE;
@@ -616,7 +938,7 @@ public class SceneCanvasPanel extends JPanel {
                     : new BasicStroke(current ? 2.5f : 1.4f));
             g2.drawRect(x, y, w, h);
 
-            if (showRiggingPoints && s.getMountType() == com.vjstb.ledscheme.model.ScreenMountType.RIGGED
+            if (showRiggingPoints && !detailMode && s.getMountType() == com.vjstb.ledscheme.model.ScreenMountType.RIGGED
                     && s.getRiggingPointsCount() > 0) {
                 double screenWidthMm = t.getWidthMm() * s.getCols();
                 com.vjstb.ledscheme.service.RiggingCalc.Result riggingResult =
@@ -624,10 +946,23 @@ public class SceneCanvasPanel extends JPanel {
                                 s.getRiggingPointsCount());
                 com.vjstb.ledscheme.service.TrussCalc.Result trussResult =
                         com.vjstb.ledscheme.service.TrussCalc.compute(s, t, model.getWorkspace());
-                if (!trussResult.profileMissing() && !trussResult.catalogEmpty()) {
-                    drawRiggingTruss(g2, trussResult, screenWidthMm, x, y, w);
+                RigBands rb = rigBands(y);
+                int neededHeight = rb.trussBottom() - rb.pointsTop();
+                if (hasRoomAboveForRigBand(scene, s, b, sc, padding, x, y, w, neededHeight)) {
+                    drawRiggingPoints(g2, riggingResult, screenWidthMm, x, rb.pointsTop(), rb.pointsBottom(), w);
+                    if (!trussResult.profileMissing() && !trussResult.catalogEmpty()) {
+                        drawRiggingTruss(g2, trussResult, screenWidthMm, x, rb.trussTop(), rb.trussBottom(), w);
+                    }
+                } else {
+                    // Полоса не влезает (см. hasRoomAboveForRigBand) -- тонкая белая
+                    // черта прямо над экраном вместо полного исчезновения: знак "здесь
+                    // есть ферма", без попытки нарисовать её в деталях там, где места
+                    // объективно нет (баг-репорт 2026-09-14).
+                    Color prevColor = g2.getColor();
+                    g2.setColor(Color.WHITE);
+                    g2.fillRect(x, y - WHITE_STRIP_H, w, WHITE_STRIP_H);
+                    g2.setColor(prevColor);
                 }
-                drawRiggingPoints(g2, riggingResult, screenWidthMm, x, y, w);
             }
 
             if (detailMode) {
@@ -660,6 +995,15 @@ public class SceneCanvasPanel extends JPanel {
                             drawChainBuildingOverlay(g2, s, cellW, cellH, gridX, gridY);
                         }
                     }
+                    // v3.0: подсветка кабинетов с переопределением типа/формы — раньше
+                    // это рисовал сам ShapeEditorPanel в своей отдельной упрощённой сетке
+                    // (баг-репорт 2026-09-14: "поправь отображение изменённых кабинетов" —
+                    // после переноса правки в этот, общий, рендер сетки типа/формы
+                    // визуально никак не выделялись, хотя переопределение реально
+                    // применялось). Отдельным проходом ПОВЕРХ paintScheme — тот целиком
+                    // общий с реальным холстом расключения (CanvasPanel), туда эту
+                    // подсветку добавлять не нужно.
+                    drawCabinetOverrideMarks(g2, s, t, cellW, cellH, gridX, gridY);
                     // NB: НОМИНАЛЬНОЕ начало сетки (gridX/gridY), не расширенный бокс x/y —
                     // locateCabinet ниже вызывает cabX/cabY, которые сами уже прибавляют
                     // (возможно отрицательное) мм-смещение конкретного кабинета поверх
@@ -729,7 +1073,7 @@ public class SceneCanvasPanel extends JPanel {
                     padding, height - 10);
         }
 
-        drawSnapGuides(g2, screenBoxes, sc, width, height);
+        drawSnapGuides(g2, screenBoxes, b, sc, padding, width, height);
 
         g2.dispose();
     }
@@ -739,26 +1083,40 @@ public class SceneCanvasPanel extends JPanel {
      *  цель в мм относительно начала СЕТКИ ЭКРАНА — переводим в экранные px через
      *  {@code screenBoxes} (тот же offset/масштаб, что уже посчитан для отрисовки
      *  сетки этого экрана чуть выше в этом же вызове paintComponent). */
-    private void drawSnapGuides(Graphics2D g2, java.util.Map<String, int[]> screenBoxes, double sc,
-                                 int width, int height) {
-        if ((snapGuideAbsMmX == null && snapGuideAbsMmY == null) || draggingCabinetScreen == null) {
-            return;
+    private void drawSnapGuides(Graphics2D g2, java.util.Map<String, int[]> screenBoxes, double[] b, double sc,
+                                 int padding, int width, int height) {
+        if ((snapGuideAbsMmX != null || snapGuideAbsMmY != null) && draggingCabinetScreen != null) {
+            int[] box = screenBoxes.get(draggingCabinetScreen.getId());
+            if (box != null) {
+                int gridX = box[0];
+                int gridY = box[1];
+                g2.setColor(Color.MAGENTA);
+                g2.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 0, new float[]{4, 4}, 0));
+                if (snapGuideAbsMmX != null) {
+                    int x = (int) Math.round(gridX + snapGuideAbsMmX * sc);
+                    g2.drawLine(x, 0, x, height);
+                }
+                if (snapGuideAbsMmY != null) {
+                    int y = (int) Math.round(gridY + snapGuideAbsMmY * sc);
+                    g2.drawLine(0, y, width, y);
+                }
+            }
         }
-        int[] box = screenBoxes.get(draggingCabinetScreen.getId());
-        if (box == null) {
-            return;
-        }
-        int gridX = box[0];
-        int gridY = box[1];
-        g2.setColor(Color.MAGENTA);
-        g2.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 0, new float[]{4, 4}, 0));
-        if (snapGuideAbsMmX != null) {
-            int x = (int) Math.round(gridX + snapGuideAbsMmX * sc);
-            g2.drawLine(x, 0, x, height);
-        }
-        if (snapGuideAbsMmY != null) {
-            int y = (int) Math.round(gridY + snapGuideAbsMmY * sc);
-            g2.drawLine(0, y, width, y);
+        // v3.0: направляющие Shift-прилипания ЦЕЛОГО экрана (см. snapScreenPosition) —
+        // цель в АБСОЛЮТНЫХ мм сцены (не мм относительно сетки одного экрана, как у
+        // кабинетных направляющих выше), переводим в px той же формулой, что и
+        // screenBoxPx/screenGridY для координаты экрана (padding + rigHeadroomPx()).
+        if ((screenSnapGuideAbsMmX != null || screenSnapGuideAbsMmY != null) && draggingScreen != null) {
+            g2.setColor(Color.MAGENTA);
+            g2.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 0, new float[]{4, 4}, 0));
+            if (screenSnapGuideAbsMmX != null) {
+                int x = padding + (int) Math.round((screenSnapGuideAbsMmX - b[0]) * sc);
+                g2.drawLine(x, 0, x, height);
+            }
+            if (screenSnapGuideAbsMmY != null) {
+                int y = padding + rigHeadroomPx() + (int) Math.round((screenSnapGuideAbsMmY - b[1]) * sc);
+                g2.drawLine(0, y, width, y);
+            }
         }
     }
 
@@ -804,30 +1162,148 @@ public class SceneCanvasPanel extends JPanel {
         g2.setColor(prevColor);
     }
 
-    /** Точки подвеса — маркеры-треугольники на верхнем краю экрана (визуализация
-     *  результата «Рассчитать точки подвеса» из прерига), позиционированные по РЕАЛЬНЫМ
-     *  координатам расчёта ({@link com.vjstb.ledscheme.service.RiggingCalc.PointLoad#xMm()},
-     *  считанным от краёв фермы — см. {@code RiggingCalc} class-javadoc), а не равномерным
-     *  делением по числу точек, как раньше — иначе при свесе/отступе фермы (см. {@link
-     *  #drawRiggingTruss}) точки на этой картинке визуально разъехались бы с фермой,
-     *  нарисованной над ними. {@code widthMm <= 0} (тип кабинета неизвестен) — точки не
-     *  рисуются вовсе (масштабировать нечем). Рисуются в общей раскладке сцены (этот же
-     *  класс — «Показать все экраны» и мини-превью прерига), а не только как число в поле. */
+    /** Полосы подвеса НАД экраном, в пикселях текущей раскладки — сверху вниз: точки
+     *  (жёлтые треугольники — то, что пользователь называет "лебёдками", верхняя
+     *  точка подвеса), затем ферма прямо над экраном (баг-репорт 2026-09-14: раньше
+     *  порядок был обратный — исправлено). Отдельного визуального "колпака" лебёдок
+     *  больше нет (тоже баг-репорт — был лишним, самих лебёдок как таковых на схеме
+     *  не рисуем, только точку подвеса). Общая геометрия и для отрисовки ({@link
+     *  #paint}), и для хит-теста клика ({@link #rigLevelAt}) — один источник истины.
+     *  <b>Экран — единственная помеченная/кликабельная сущность</b>: вся полоса
+     *  целиком (или {@link #WHITE_STRIP_H заглушка}, если места не хватило) — ОДНА
+     *  зона клика, относящаяся к экрану. */
+    private record RigBands(int pointsTop, int pointsBottom, int trussTop, int trussBottom) {
+    }
+
+    private static final int RIG_POINTS_GAP = 6;
+    private static final int RIG_BAND_GAP = 4;
+    /** Фиксированные размеры — баг-репорт 2026-09-14: раньше высота полос/размер
+     *  точек масштабировались от пиксельной ширины экрана ({@code w}), из-за чего
+     *  крупные экраны получали заметно более крупные метки фермы/точек, чем мелкие —
+     *  по фидбэку размер должен быть ОДИНАКОВЫМ для всех экранов независимо от их
+     *  собственной ширины. */
+    private static final int RIG_TRUSS_H = 10;
+    private static final int RIG_POINT_SIZE = 9;
+    /** Суммарная высота полос + зазоров (см. {@link #rigBands}): pointSize(9) +
+     *  gap(4) + trussH(10) + gap(6) = 29, с запасом — см. {@link #rigHeadroomPx}. */
+    private static final int RIG_TOP_HEADROOM_PX = 34;
+    /** Высота полосы-заглушки ("здесь есть ферма, но полностью не показана из-за
+     *  нехватки места") — см. {@link #hasRoomAboveForRigBand}/{@link #paint}. */
+    private static final int WHITE_STRIP_H = 3;
+
+    private static RigBands rigBands(int screenTopY) {
+        int trussBottom = screenTopY - RIG_POINTS_GAP;
+        int trussTop = trussBottom - RIG_TRUSS_H;
+        int pointsBottom = trussTop - RIG_BAND_GAP;
+        int pointsTop = pointsBottom - RIG_POINT_SIZE;
+        return new RigBands(pointsTop, pointsBottom, trussTop, trussBottom);
+    }
+
+    /** true, если между верхним краем экрана ({@code y}) и {@code neededHeight}
+     *  пикселей выше него НЕТ другого экрана сцены — при вертикальной стыковке
+     *  экранов (см. "экраны могут располагаться друг под другом") полный размер
+     *  полосы туда физически не влезает; вызывающий код рисует/кликает {@link
+     *  #WHITE_STRIP_H заглушку} вместо полной полосы (баг-репорт 2026-09-14: по
+     *  фидбэку — НЕ подсвечивать столкновение красным, как обычное физическое
+     *  наложение кабинетов, а именно схлопывать полосу до тонкой белой черты; при
+     *  приближении, когда места снова достаточно, полоса рисуется полностью).
+     *  Смотрит на РЕАЛЬНЫЕ боксы всех экранов сцены (не только соседей по списку),
+     *  совпадение по X — пересечение прямоугольников, не только точное совпадение
+     *  краёв. */
+    private boolean hasRoomAboveForRigBand(Scene scene, Screen self, double[] b, double sc, int padding,
+                                            int x, int y, int w, int neededHeight) {
+        int bandTop = y - neededHeight;
+        for (Screen other : scene.getScreens()) {
+            if (other == self) {
+                continue;
+            }
+            CabinetType ot = model.typeOf(other);
+            if (ot == null) {
+                continue;
+            }
+            int[] ob = screenBoxPx(other, ot, b, sc, padding);
+            int ox = ob[0], oy = ob[1], ow = ob[2], oh = ob[3];
+            boolean overlapsX = x < ox + ow && ox < x + w;
+            boolean bottomInBand = oy + oh > bandTop && oy + oh <= y;
+            if (overlapsX && bottomInBand) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Экран под пикселем ({@code px},{@code py}) в полосе подвеса НАД ним (ферма/
+     *  точки — см. {@link #rigBands} — либо {@link #WHITE_STRIP_H заглушка}, если
+     *  {@link #hasRoomAboveForRigBand} не хватило места), для клика на холсте.
+     *  <b>Одна и та же метка на весь экран</b> (баг-репорт v3.0 2026-09-14: раньше
+     *  лебёдки и ферма были самостоятельными кликабельными уровнями со своими
+     *  карточками — по фидбэку экран должен быть единственным помеченным элементом):
+     *  клик по любой части полосы (или заглушки) ЛЮБОГО RIGGED-экрана сцены
+     *  возвращает {@code screen} — {@code SetupStagePanel} открывает для него ОДНУ
+     *  карточку "Подвес" со всеми полями сразу. Геометрия — та же, что рисует {@link
+     *  #paint}, пересчитанная заново из состояния модели (тот же приём, что {@link
+     *  #screenAt}: без кэша между отрисовкой и кликом). {@code null}, если клик мимо
+     *  полосы ЛЮБОГО экрана сцены — в т.ч. клик по самому прямоугольнику экрана (тот
+     *  должен ловить обычный {@link #screenAt}, не эта функция). */
+    private Screen rigLevelAt(int px, int py) {
+        Scene scene = model.getCurrentScene();
+        double[] b = boundsMm();
+        if (scene == null || b == null) {
+            return null;
+        }
+        double sc = scaleFor(b, getWidth(), getHeight());
+        int padding = padding();
+        for (Screen s : scene.getScreens()) {
+            if (s.getMountType() != com.vjstb.ledscheme.model.ScreenMountType.RIGGED
+                    || s.getRiggingPointsCount() <= 0) {
+                continue;
+            }
+            CabinetType t = model.typeOf(s);
+            if (t == null) {
+                continue;
+            }
+            int[] box = screenBoxPx(s, t, b, sc, padding);
+            int x = box[0], y = box[1], w = box[2];
+            if (px < x || px > x + w) {
+                continue;
+            }
+            RigBands rb = rigBands(y);
+            int neededHeight = rb.trussBottom() - rb.pointsTop();
+            boolean hasRoom = hasRoomAboveForRigBand(scene, s, b, sc, padding, x, y, w, neededHeight);
+            int top = hasRoom ? rb.pointsTop() : y - WHITE_STRIP_H;
+            if (py >= top && py <= y) {
+                return s;
+            }
+        }
+        return null;
+    }
+
+    /** Точки подвеса — маркеры-треугольники (визуализация результата «Рассчитать точки
+     *  подвеса» из прерига), позиционированные по РЕАЛЬНЫМ координатам расчёта ({@link
+     *  com.vjstb.ledscheme.service.RiggingCalc.PointLoad#xMm()}, считанным от краёв фермы —
+     *  см. {@code RiggingCalc} class-javadoc), а не равномерным делением по числу точек, как
+     *  раньше — иначе при свесе/отступе фермы (см. {@link #drawRiggingTruss}) точки на этой
+     *  картинке визуально разъехались бы с фермой, нарисованной над ними. Полоса ({@code
+     *  topY}..{@code bottomY}) — {@link #rigBands}, слегка НАД самим экраном (баг-репорт
+     *  v3.0 — раньше треугольник начинался прямо на верхнем крае экрана, сливаясь с ним).
+     *  {@code widthMm <= 0} (тип кабинета неизвестен) — точки не рисуются вовсе
+     *  (масштабировать нечем). Рисуются в общей раскладке сцены (этот же класс — «Показать
+     *  все экраны» и мини-превью прерига), а не только как число в поле. */
     private static void drawRiggingPoints(Graphics2D g2, com.vjstb.ledscheme.service.RiggingCalc.Result result,
-            double widthMm, int x, int y, int w) {
+            double widthMm, int x, int topY, int bottomY, int w) {
         int n = result.points().size();
         if (n == 0 || widthMm <= 0) {
             return;
         }
-        int s = Math.max(5, Math.min(12, w / (n * 3 + 1)));
+        int size = bottomY - topY;
         Color prevColor = g2.getColor();
         java.awt.Stroke prevStroke = g2.getStroke();
         g2.setColor(Color.YELLOW);
         g2.setStroke(new BasicStroke(1f));
         for (com.vjstb.ledscheme.service.RiggingCalc.PointLoad p : result.points()) {
             int px = x + (int) Math.round(p.xMm() / widthMm * w);
-            int[] xs = {px - s / 2, px + s / 2, px};
-            int[] ys = {y, y, y + s};
+            int[] xs = {px - size / 2, px + size / 2, px};
+            int[] ys = {topY, topY, bottomY};
             g2.fillPolygon(xs, ys, 3);
             g2.drawPolygon(xs, ys, 3);
         }
@@ -835,10 +1311,10 @@ public class SceneCanvasPanel extends JPanel {
         g2.setStroke(prevStroke);
     }
 
-    /** Ферма подвеса — сегменты каталожных длин (см. {@code service.TrussCalc}) рисуются
-     *  НАД рядом точек ({@link #drawRiggingPoints}, меньший {@code y}), той же пиксельной
-     *  шкалой (мм экрана → px), со сдвигом на {@code truss.leftOffsetMm()} — та же формула
-     *  перевода координат, что {@code RiggingCalc.compute} использует для {@code
+    /** Ферма подвеса — сегменты каталожных длин (см. {@code service.TrussCalc}) рисуются в
+     *  полосе ({@code topY}..{@code bottomY}, из {@link #rigBands}) НАД рядом точек, той же
+     *  пиксельной шкалой (мм экрана → px), со сдвигом на {@code truss.leftOffsetMm()} — та
+     *  же формула перевода координат, что {@code RiggingCalc.compute} использует для {@code
      *  PointLoad#xMm()}. {@code result.pieces()} разворачивается в ОТДЕЛЬНЫЕ сегменты (не
      *  один прямоугольник на группу одинаковых длин — иначе стык между двумя кусками одной
      *  длины визуально терялся бы), отсортированные по убыванию длины и уложенные слева
@@ -851,7 +1327,7 @@ public class SceneCanvasPanel extends JPanel {
      *  излишек, который как раз важно ВИДЕТЬ. Диапазон закономерно может выходить за {@code
      *  [x, x+w]} и при свесе фермы, и при излишке комплекта — это ожидаемо, не обрезается. */
     private static void drawRiggingTruss(Graphics2D g2, com.vjstb.ledscheme.service.TrussCalc.Result truss,
-            double widthMm, int x, int y, int w) {
+            double widthMm, int x, int topY, int bottomY, int w) {
         if (truss.pieces() == null || truss.pieces().isEmpty() || widthMm <= 0) {
             return;
         }
@@ -863,10 +1339,7 @@ public class SceneCanvasPanel extends JPanel {
         }
         segMm.sort(java.util.Comparator.reverseOrder());
 
-        // Заметно толще/светлее полосы точек (баг-репорт "ферму почти не видно") -- ферма
-        // физически заметно массивнее самих точек подвеса, отрисовка должна это отражать.
-        int trussH = Math.max(8, Math.min(20, w / 20));
-        int trussY = y - trussH - 3;
+        int trussH = bottomY - topY;
         double leftOffsetMm = truss.leftOffsetMm();
         double cursorMm = 0;
         Color prevColor = g2.getColor();
@@ -877,9 +1350,9 @@ public class SceneCanvasPanel extends JPanel {
             int px2 = x + (int) Math.round((endMm - leftOffsetMm) / widthMm * w);
             if (px2 > px1) {
                 g2.setColor(TRUSS_FILL);
-                g2.fillRect(px1, trussY, px2 - px1, trussH);
+                g2.fillRect(px1, topY, px2 - px1, trussH);
                 g2.setColor(Color.BLACK);
-                g2.drawRect(px1, trussY, px2 - px1, trussH);
+                g2.drawRect(px1, topY, px2 - px1, trussH);
             }
             cursorMm = endMm;
         }
@@ -956,7 +1429,10 @@ public class SceneCanvasPanel extends JPanel {
         }
     }
 
-    /** Экраны, чьи прямоугольники (мм) пересекаются хотя бы с одним другим экраном сцены. */
+    /** Экраны, чьи прямоугольники (мм) пересекаются хотя бы с одним другим экраном
+     *  сцены — чисто физическое наложение кабинетов (без учёта полосы подвеса, см.
+     *  {@link #hasRoomAboveForRigBand} — та коллизия обрабатывается отдельно, белой
+     *  полосой-заглушкой, не этим красным/пунктирным выделением). */
     private Set<Screen> overlappingScreens(Scene scene) {
         Set<Screen> result = new HashSet<>();
         List<Screen> screens = scene.getScreens();
@@ -1002,6 +1478,18 @@ public class SceneCanvasPanel extends JPanel {
                 Math.round(base.getRed() * (1 - f)),
                 Math.round(base.getGreen() * (1 - f) + 0xa0 * f),
                 Math.round(base.getBlue() * (1 - f) + 0x40 * f));
+    }
+
+    /** Цветная метка зоны/площадки (v3.0) — тонирует базовую заливку в сторону цвета
+     *  метки, не заменяет её целиком (иначе на тёмном фоне холста тусклые метки типа
+     *  {@link com.vjstb.ledscheme.model.ScreenTagColor#YELLOW} выглядели бы грязно,
+     *  а различить current/не-current экран по заливке стало бы нельзя). */
+    private static Color blendTag(Color base, Color tag) {
+        float f = 0.45f;
+        return new Color(
+                Math.round(base.getRed() * (1 - f) + tag.getRed() * f),
+                Math.round(base.getGreen() * (1 - f) + tag.getGreen() * f),
+                Math.round(base.getBlue() * (1 - f) + tag.getBlue() * f));
     }
 
     /** Доля НЕ скрытых кабинетов экрана, уже занятых какой-либо цепочкой (питания
@@ -1113,6 +1601,100 @@ public class SceneCanvasPanel extends JPanel {
                 snapGuideAbsMmX = bestTarget;
             } else {
                 snapGuideAbsMmY = bestTarget;
+            }
+        }
+        return best;
+    }
+
+    /** Технологический зазор между экранами (кабель-каналы/обслуживание) — вторая
+     *  "встык"-цель у {@link #snapScreenPosition}, рядом с полностью вплотную
+     *  (0 мм): пользователь двигает экран — сначала ловит примыкание ВПЛОТНУЮ к
+     *  соседу, чуть дальше (тот же порог, просто другая абсолютная позиция) —
+     *  примыкание ЧЕРЕЗ этот зазор, а дальше отпускает и ищет следующего соседа.
+     *  Фиксированное значение первой версии — не читается из профиля настроек
+     *  (в отличие от {@code getSnapThresholdPx}/{@code getSnapStrengthPercent}). */
+    private static final double SCREEN_GAP_MM = 20;
+
+    /** v3.0: привязка кандидата позиции ЦЕЛОГО экрана (posXMm/posYMm, не свободного
+     *  смещения кабинета внутри сетки — см. {@link #snapCabinetOffset} для того
+     *  случая) к краям ДРУГИХ экранов сцены — тот же принцип (порог в px текущего
+     *  масштаба, сила прилипания из профиля), но 6 целей на каждого соседа по
+     *  каждой оси (экраны, в отличие от однотипных кабинетов, могут быть разной
+     *  ширины/высоты, поэтому "выравнять по левому краю" и "выравнять по правому
+     *  краю" — не взаимозаменяемые цели, как у кабинетов одного типа): левый край к
+     *  левому краю соседа, левый край к правому краю соседа (встык вплотную справа
+     *  от соседа), левый край к правому краю соседа + {@link #SCREEN_GAP_MM}
+     *  (встык через зазор справа), правый край к правому краю соседа, правый край
+     *  к левому краю соседа (встык вплотную слева), правый край к левому краю
+     *  соседа − {@link #SCREEN_GAP_MM} (встык через зазор слева). {@link
+     *  #closestScreenMm} сам находит ближайшую из ВСЕХ целей на каждый вызов (не
+     *  запоминает "уже прилипло") — поэтому при продолжении перетаскивания мимо
+     *  одной цели пользователь естественно попадает на следующую подходящую, без
+     *  специальной логики "отпустить и искать дальше". Цели считаются сразу в
+     *  терминах posXMm/posYMm (не "левый/верхний край"), поэтому результат можно
+     *  писать в Screen#setPosXMm/setPosYMm без обратного пересчёта. */
+    private double[] snapScreenPosition(Screen dragging, double candidateX, double candidateY, double sc) {
+        screenSnapGuideAbsMmX = null;
+        screenSnapGuideAbsMmY = null;
+        Scene scene = model.getCurrentScene();
+        CabinetType myType = model.typeOf(dragging);
+        if (scene == null || myType == null) {
+            return new double[]{candidateX, candidateY};
+        }
+        double[] myExt = screenExtentMm(dragging, myType);
+        double thresholdMm = settings.activeProfile().getSnapThresholdPx() / Math.max(0.0001, sc);
+        int strength = settings.activeProfile().getSnapStrengthPercent();
+        List<Double> xTargets = new java.util.ArrayList<>();
+        List<Double> yTargets = new java.util.ArrayList<>();
+        for (Screen other : scene.getScreens()) {
+            if (other == dragging) {
+                continue;
+            }
+            CabinetType ot = model.typeOf(other);
+            if (ot == null) {
+                continue;
+            }
+            double[] oExt = screenExtentMm(other, ot);
+            double oLeft = other.getPosXMm() + oExt[0];
+            double oRight = other.getPosXMm() + oExt[2];
+            double oTop = other.getPosYMm() + oExt[1];
+            double oBottom = other.getPosYMm() + oExt[3];
+            xTargets.add(oLeft - myExt[0]);
+            xTargets.add(oRight - myExt[0]);
+            xTargets.add(oRight + SCREEN_GAP_MM - myExt[0]);
+            xTargets.add(oRight - myExt[2]);
+            xTargets.add(oLeft - myExt[2]);
+            xTargets.add(oLeft - SCREEN_GAP_MM - myExt[2]);
+            yTargets.add(oTop - myExt[1]);
+            yTargets.add(oBottom - myExt[1]);
+            yTargets.add(oBottom + SCREEN_GAP_MM - myExt[1]);
+            yTargets.add(oBottom - myExt[3]);
+            yTargets.add(oTop - myExt[3]);
+            yTargets.add(oTop - SCREEN_GAP_MM - myExt[3]);
+        }
+        double snappedX = closestScreenMm(candidateX, xTargets, thresholdMm, strength, true);
+        double snappedY = closestScreenMm(candidateY, yTargets, thresholdMm, strength, false);
+        return new double[]{snappedX, snappedY};
+    }
+
+    private double closestScreenMm(double value, List<Double> targets, double threshold, int strengthPercent,
+                                    boolean isXAxis) {
+        double best = value;
+        double bestDist = threshold;
+        Double bestTarget = null;
+        for (double target : targets) {
+            double d = Math.abs(target - value);
+            if (d < bestDist) {
+                bestDist = d;
+                bestTarget = target;
+            }
+        }
+        if (bestTarget != null) {
+            best = SnapMath.blend(value, bestTarget, strengthPercent);
+            if (isXAxis) {
+                screenSnapGuideAbsMmX = bestTarget;
+            } else {
+                screenSnapGuideAbsMmY = bestTarget;
             }
         }
         return best;

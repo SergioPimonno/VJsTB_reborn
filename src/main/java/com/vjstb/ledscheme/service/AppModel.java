@@ -3513,6 +3513,14 @@ public class AppModel {
         changed();
     }
 
+    /** Цветная метка зоны/площадки (v3.0) — чисто визуальная тонировка заливки экрана
+     *  на схеме сцены прерига, см. {@link com.vjstb.ledscheme.model.ScreenTagColor}. */
+    public void setScreenTagColor(Screen screen, com.vjstb.ledscheme.model.ScreenTagColor tagColor) {
+        pushUndo("Метка «" + screen.getName() + "»");
+        screen.setTagColor(tagColor);
+        changed();
+    }
+
     /** Одноразовая миграция при загрузке проекта (2026-08-13, см. class-javadoc
      *  {@link CanvasPlacement}): раньше цвет чек-борда хранился per-{@link
      *  CanvasPlacement}, теперь общий на {@link Screen}. Не молча обнуляет уже
