@@ -12,14 +12,13 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Отправка предложения нового элемента в общую библиотеку (см. {@code ProposalController}
- * на сервере). Требует токен (см. {@link AuthClient}) — в отличие от анонимного
+ * Отправка предложения в общую библиотеку (см. {@code ProposalController} на
+ * сервере) — либо нового элемента ({@code kind=NEW_ITEM}), либо правки уже
+ * синхронизированного ({@code kind=EDIT_EXISTING}, {@code targetItemId} =
+ * id того же элемента на сервере, см. {@code AppModel.isSharedXxx} и
+ * {@code applyLibrarySyncItems}, который сохраняет серверный id локально при
+ * синке). Требует токен (см. {@link AuthClient}) — в отличие от анонимного
  * чтения (см. {@link LibrarySyncClient}).
- *
- * <p>Осознанное сужение объёма (см. план): всегда {@code kind=NEW_ITEM} — клиент
- * сейчас не отличает "этот локальный элемент реально с сервера" от "чисто
- * локальный", поэтому не пытается предлагать {@code EDIT_EXISTING}; модератор
- * при необходимости сведёт дубликат вручную.
  */
 public class ProposalClient {
 
@@ -41,11 +40,13 @@ public class ProposalClient {
         this.baseUrl = baseUrl;
     }
 
-    public ProposalDto submit(String token, String libraryItemKind, String draftJson, String justification)
-            throws IOException, InterruptedException {
+    /** {@code targetItemId == null} — предложение нового элемента; иначе — правка
+     *  существующего с этим id (см. class-javadoc). */
+    public ProposalDto submit(String token, String libraryItemKind, String targetItemId, String draftJson,
+                               String justification) throws IOException, InterruptedException {
         Map<String, Object> body = new java.util.LinkedHashMap<>();
-        body.put("kind", "NEW_ITEM");
-        body.put("targetItemId", null);
+        body.put("kind", targetItemId == null ? "NEW_ITEM" : "EDIT_EXISTING");
+        body.put("targetItemId", targetItemId);
         body.put("libraryItemKind", libraryItemKind);
         body.put("draftJson", draftJson);
         body.put("justification", justification);

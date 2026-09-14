@@ -20,33 +20,45 @@ import javax.swing.JTextArea;
 import javax.swing.SwingWorker;
 
 /**
- * «Предложить…» — отправляет уже сохранённый локальный элемент библиотеки
- * (кабинет/контроллер/пресет/кабель/интерфейс) как предложение на сервер (см.
- * {@link ProposalClient}). Требует вход в аккаунт (см. {@link AccountDialog}) —
- * если токена нет, диалог даже не открывается.
+ * «Предложить…» — отправляет элемент библиотеки как предложение на сервер (см.
+ * {@link ProposalClient}): новый локальный элемент (кабинет/контроллер/пресет/
+ * кабель/интерфейс), либо правку уже синхронизированного общего элемента, если
+ * вызвано с {@code targetItemId != null} (см. перегрузку и {@code LibrariesStagePanel} —
+ * там же построение отредактированного черновика без изменения локальной копии).
+ * Требует вход в аккаунт (см. {@link AccountDialog}) — если токена нет, диалог
+ * даже не открывается.
  */
 public class ProposeDialog extends JDialog {
 
+    /** Предложение нового элемента ({@code targetItemId=null}). */
     public static void show(Window owner, SettingsManager settings, String libraryItemKind, String itemName,
                              Object item) {
+        show(owner, settings, libraryItemKind, itemName, item, null);
+    }
+
+    /** {@code targetItemId != null} — предложение правки уже существующего на
+     *  сервере элемента с этим id, вместо предложения нового. */
+    public static void show(Window owner, SettingsManager settings, String libraryItemKind, String itemName,
+                             Object item, String targetItemId) {
         if (settings.getSettings().getAuthToken() == null) {
             JOptionPane.showMessageDialog(owner,
                     "Сначала войдите в аккаунт (Настройки → Аккаунт…).",
                     "Нужен вход", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
-        new ProposeDialog(owner, settings, libraryItemKind, itemName, item).setVisible(true);
+        new ProposeDialog(owner, settings, libraryItemKind, itemName, item, targetItemId).setVisible(true);
     }
 
     private ProposeDialog(Window owner, SettingsManager settings, String libraryItemKind, String itemName,
-                           Object item) {
-        super(owner, "Предложить в общую библиотеку", ModalityType.APPLICATION_MODAL);
+                           Object item, String targetItemId) {
+        super(owner, targetItemId != null ? "Предложить правку в общую библиотеку" : "Предложить в общую библиотеку",
+                ModalityType.APPLICATION_MODAL);
 
         JPanel content = new JPanel();
         content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
         content.setBorder(BorderFactory.createEmptyBorder(14, 14, 14, 14));
 
-        JLabel name = new JLabel("Элемент: " + itemName);
+        JLabel name = new JLabel((targetItemId != null ? "Правка элемента: " : "Элемент: ") + itemName);
         name.setAlignmentX(LEFT_ALIGNMENT);
         content.add(name);
         content.add(Box.createVerticalStrut(10));
@@ -78,7 +90,7 @@ public class ProposeDialog extends JDialog {
             }
             submit.setEnabled(false);
             status.setText("Отправка…");
-            submitProposal(settings, libraryItemKind, item, justificationText, status, submit);
+            submitProposal(settings, libraryItemKind, targetItemId, item, justificationText, status, submit);
         });
         buttons.add(cancel);
         buttons.add(submit);
@@ -89,15 +101,15 @@ public class ProposeDialog extends JDialog {
         setLocationRelativeTo(owner);
     }
 
-    private void submitProposal(SettingsManager settings, String libraryItemKind, Object item, String justification,
-                                 JLabel status, JButton submit) {
+    private void submitProposal(SettingsManager settings, String libraryItemKind, String targetItemId, Object item,
+                                 String justification, JLabel status, JButton submit) {
         String token = settings.getSettings().getAuthToken();
         new SwingWorker<ProposalClient.ProposalDto, Void>() {
             @Override
             protected ProposalClient.ProposalDto doInBackground() throws Exception {
                 String draftJson = new ObjectMapper().writeValueAsString(item);
                 return new ProposalClient(LibrarySyncClient.resolveBaseUrl(settings))
-                        .submit(token, libraryItemKind, draftJson, justification);
+                        .submit(token, libraryItemKind, targetItemId, draftJson, justification);
             }
 
             @Override

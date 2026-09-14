@@ -1,11 +1,13 @@
 package com.vjstb.ledscheme.ui.stage;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.CableLengthProfile;
 import com.vjstb.ledscheme.model.CableType;
 import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.EquipmentPreset;
 import com.vjstb.ledscheme.model.InterfaceType;
+import com.vjstb.ledscheme.model.NetworkDeviceType;
 import com.vjstb.ledscheme.model.SchemaCard;
 import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.SchemaNodeType;
@@ -20,6 +22,7 @@ import com.vjstb.ledscheme.ui.ControllerTypeDialog;
 import com.vjstb.ledscheme.ui.EquipmentPresetDialog;
 import com.vjstb.ledscheme.ui.ListSizing;
 import com.vjstb.ledscheme.ui.NamedRenderer;
+import com.vjstb.ledscheme.ui.NetworkDeviceTypeDialog;
 import com.vjstb.ledscheme.ui.PowerConnectorsConfigDialog;
 import com.vjstb.ledscheme.ui.ProposeDialog;
 import com.vjstb.ledscheme.ui.UiKit;
@@ -96,12 +99,17 @@ public class LibrariesStagePanel extends JPanel {
     private final JList<InterfaceType> interfaceTypeList = new JList<>(interfaceTypeModel);
     private final JScrollPane interfaceTypeScroll = new JScrollPane(interfaceTypeList);
 
+    private final DefaultListModel<NetworkDeviceType> networkDeviceModel = new DefaultListModel<>();
+    private final JList<NetworkDeviceType> networkDeviceList = new JList<>(networkDeviceModel);
+    private final JScrollPane networkDeviceScroll = new JScrollPane(networkDeviceList);
+
     private NamedRenderer<CabinetType> libRenderer;
     private NamedRenderer<ControllerType> ctrlLibRenderer;
     private NamedRenderer<EquipmentPreset> powerPresetRenderer;
     private NamedRenderer<CableType> cableRenderer;
     private NamedRenderer<CableLengthProfile> cableLengthProfileRenderer;
     private NamedRenderer<InterfaceType> interfaceTypeRenderer;
+    private NamedRenderer<NetworkDeviceType> networkDeviceRenderer;
 
     private javax.swing.JComponent exportImportSection;
     private javax.swing.JComponent cabinetsSection;
@@ -111,6 +119,7 @@ public class LibrariesStagePanel extends JPanel {
     private javax.swing.JComponent cableSection;
     private javax.swing.JComponent cableLengthProfileSection;
     private javax.swing.JComponent interfaceTypeSection;
+    private javax.swing.JComponent networkDeviceSection;
 
     /** Ширина содержимого этапа (окно минус вертикальный скроллбар минус паддинг
      *  body) — пересчитывается живьём при ресайзе (см. конструктор), а не
@@ -146,6 +155,7 @@ public class LibrariesStagePanel extends JPanel {
         cableSection = buildCableLibrary();
         cableLengthProfileSection = buildCableLengthProfileLibrary();
         interfaceTypeSection = buildInterfaceTypeSection();
+        networkDeviceSection = buildNetworkDeviceLibrary();
         body.add(exportImportSection);
         body.add(UiKit.vgap(10));
         body.add(cabinetsSection);
@@ -161,6 +171,8 @@ public class LibrariesStagePanel extends JPanel {
         body.add(cableLengthProfileSection);
         body.add(UiKit.vgap(10));
         body.add(interfaceTypeSection);
+        body.add(UiKit.vgap(10));
+        body.add(networkDeviceSection);
         body.add(javax.swing.Box.createVerticalGlue());
 
         JScrollPane scroll = new JScrollPane(body);
@@ -169,7 +181,7 @@ public class LibrariesStagePanel extends JPanel {
         add(scroll, BorderLayout.CENTER);
 
         for (JScrollPane sp : new JScrollPane[]{libScroll, ctrlLibScroll, powerPresetScroll, cableScroll,
-                cableLengthProfileScroll, interfaceTypeScroll}) {
+                cableLengthProfileScroll, interfaceTypeScroll, networkDeviceScroll}) {
             sp.setMinimumSize(new Dimension(200, 80));
             // ВСЕГДА показывать вертикальный скроллбар (даже когда все позиции
             // помещаются) — иначе два списка одинаковой ширины секции переносят
@@ -301,7 +313,13 @@ public class LibrariesStagePanel extends JPanel {
         JButton propose = new JButton("Предложить…");
         propose.addActionListener(e -> {
             CabinetType sel = libList.getSelectedValue();
-            if (sel != null) ProposeDialog.show(topWindow(), settings, "CABINET", sel.getName(), sel);
+            if (sel == null) return;
+            if (model.isSharedCabinetType(sel.getId())) {
+                CabinetType edited = new CabinetTypeDialog(topWindow(), model, sel).showDialog();
+                if (edited != null) ProposeDialog.show(topWindow(), settings, "CABINET", edited.getName(), edited, sel.getId());
+            } else {
+                ProposeDialog.show(topWindow(), settings, "CABINET", sel.getName(), sel);
+            }
         });
         crud.add(add);
         crud.add(edit);
@@ -313,11 +331,10 @@ public class LibrariesStagePanel extends JPanel {
             boolean shared = sel != null && model.isSharedCabinetType(sel.getId());
             edit.setEnabled(sel != null && !shared);
             del.setEnabled(sel != null && !shared);
-            propose.setEnabled(sel != null && !shared);
-            String tip = shared ? sharedTip : null;
-            edit.setToolTipText(tip);
-            del.setToolTipText(tip);
-            propose.setToolTipText(tip);
+            propose.setEnabled(sel != null);
+            edit.setToolTipText(shared ? sharedTip : null);
+            del.setToolTipText(shared ? sharedTip : null);
+            propose.setToolTipText(shared ? "Внести правку и предложить её в общую библиотеку" : null);
         });
         return (JPanel) UiKit.dynamicSection("Библиотека кабинетов", listSectionBody(libScroll, crud));
     }
@@ -373,7 +390,15 @@ public class LibrariesStagePanel extends JPanel {
         JButton propose = new JButton("Предложить…");
         propose.addActionListener(e -> {
             ControllerType sel = ctrlLibList.getSelectedValue();
-            if (sel != null) ProposeDialog.show(topWindow(), settings, "CONTROLLER", sel.getName(), sel);
+            if (sel == null) return;
+            if (model.isSharedControllerType(sel.getId())) {
+                ControllerType edited = new ControllerTypeDialog(topWindow(), model, sel).showDialog();
+                if (edited != null) {
+                    ProposeDialog.show(topWindow(), settings, "CONTROLLER", edited.getName(), edited, sel.getId());
+                }
+            } else {
+                ProposeDialog.show(topWindow(), settings, "CONTROLLER", sel.getName(), sel);
+            }
         });
         crud.add(add);
         crud.add(edit);
@@ -387,12 +412,12 @@ public class LibrariesStagePanel extends JPanel {
             edit.setEnabled(sel != null && !shared);
             cardsBtn.setEnabled(sel != null && !shared);
             del.setEnabled(sel != null && !shared);
-            propose.setEnabled(sel != null && !shared);
+            propose.setEnabled(sel != null);
             String tip = shared ? ctrlSharedTip : null;
             edit.setToolTipText(tip);
             cardsBtn.setToolTipText(tip);
             del.setToolTipText(tip);
-            propose.setToolTipText(tip);
+            propose.setToolTipText(shared ? "Внести правку и предложить её в общую библиотеку" : null);
         });
         return (JPanel) UiKit.dynamicSection("Библиотека контроллеров", listSectionBody(ctrlLibScroll, crud));
     }
@@ -499,7 +524,15 @@ public class LibrariesStagePanel extends JPanel {
         JButton propose = new JButton("Предложить…");
         propose.addActionListener(e -> {
             EquipmentPreset sel = presetList.getSelectedValue();
-            if (sel != null) ProposeDialog.show(topWindow(), settings, "EQUIPMENT", sel.getName(), sel);
+            if (sel == null) return;
+            if (model.isSharedEquipmentPreset(sel.getId())) {
+                EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), model, sel).showDialog();
+                if (r == null) return;
+                EquipmentPreset draft = editedPresetDraft(sel, mode, r);
+                ProposeDialog.show(topWindow(), settings, "EQUIPMENT", draft.getName(), draft, sel.getId());
+            } else {
+                ProposeDialog.show(topWindow(), settings, "EQUIPMENT", sel.getName(), sel);
+            }
         });
         crud.add(add);
         crud.add(edit);
@@ -513,12 +546,12 @@ public class LibrariesStagePanel extends JPanel {
             edit.setEnabled(sel != null && !shared);
             cardsBtn.setEnabled(sel != null && !shared);
             del.setEnabled(sel != null && !shared);
-            propose.setEnabled(sel != null && !shared);
+            propose.setEnabled(sel != null);
             String tip = shared ? presetSharedTip : null;
             edit.setToolTipText(tip);
             cardsBtn.setToolTipText(tip);
             del.setToolTipText(tip);
-            propose.setToolTipText(tip);
+            propose.setToolTipText(shared ? "Внести правку и предложить её в общую библиотеку" : null);
         });
 
         categoryList.addListSelectionListener(e -> {
@@ -542,6 +575,28 @@ public class LibrariesStagePanel extends JPanel {
         split.setContinuousLayout(true);
 
         return (JPanel) UiKit.dynamicSection(title, listSectionBody(split));
+    }
+
+    /** Черновик правки общего пресета для «Предложить…»: {@code EquipmentPresetDialog.Result}
+     *  несёт только часть полей (карты правятся отдельно через "Карты…"/"Разъёмы…"),
+     *  а {@code model.updateEquipmentPreset} мутирует переданный экземпляр на месте —
+     *  для общего пресета это недопустимо (испортило бы локальную копию-зеркало без
+     *  подтверждения модератора), поэтому собираем независимую копию через JSON. */
+    private static EquipmentPreset editedPresetDraft(EquipmentPreset original, SchemaMode mode,
+                                                       EquipmentPresetDialog.Result r) {
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            EquipmentPreset draft = mapper.readValue(mapper.writeValueAsString(original), EquipmentPreset.class);
+            draft.setMode(mode);
+            draft.setCategory(r.category());
+            draft.setName(r.name() == null ? "" : r.name().trim());
+            draft.setDescription(r.description() == null ? "" : r.description().trim());
+            draft.setCustomCategoryLabel(r.customCategoryLabel());
+            draft.setCompany(r.company());
+            return draft;
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            throw new IllegalStateException(ex);
+        }
     }
 
     // ---- библиотека кабелей/переходников (WireLabelDialog/PowerConnectorsConfigDialog) ----
@@ -641,7 +696,15 @@ public class LibrariesStagePanel extends JPanel {
         JButton propose = new JButton("Предложить…");
         propose.addActionListener(e -> {
             CableLengthProfile sel = cableLengthProfileList.getSelectedValue();
-            if (sel != null) ProposeDialog.show(topWindow(), settings, "CABLE_LENGTH_PROFILE", sel.getName(), sel);
+            if (sel == null) return;
+            if (model.isSharedCableLengthProfile(sel.getId())) {
+                CableLengthProfile edited = new CableLengthProfileDialog(topWindow(), sel).showDialog();
+                if (edited != null) {
+                    ProposeDialog.show(topWindow(), settings, "CABLE_LENGTH_PROFILE", edited.getName(), edited, sel.getId());
+                }
+            } else {
+                ProposeDialog.show(topWindow(), settings, "CABLE_LENGTH_PROFILE", sel.getName(), sel);
+            }
         });
         addRow.add(add);
         addRow.add(edit);
@@ -653,11 +716,11 @@ public class LibrariesStagePanel extends JPanel {
             boolean shared = sel != null && model.isSharedCableLengthProfile(sel.getId());
             edit.setEnabled(sel != null && !shared);
             del.setEnabled(sel != null && !shared);
-            propose.setEnabled(sel != null && !shared);
+            propose.setEnabled(sel != null);
             String tip = shared ? cableLengthSharedTip : null;
             edit.setToolTipText(tip);
             del.setToolTipText(tip);
-            propose.setToolTipText(tip);
+            propose.setToolTipText(shared ? "Внести правку и предложить её в общую библиотеку" : null);
         });
         return (JPanel) UiKit.dynamicSection("Каталог длин кабелей", listSectionBody(cableLengthProfileScroll, addRow));
     }
@@ -703,6 +766,82 @@ public class LibrariesStagePanel extends JPanel {
             propose.setToolTipText(shared ? "Уже входит в общую библиотеку" : null);
         });
         return (JPanel) UiKit.dynamicSection("Виды интерфейса", listSectionBody(interfaceTypeScroll, addRow));
+    }
+
+    // ---- сетевое оборудование (каталог для Сетевого менеджера, ui.NetworkManagerPanel) ----
+    //      Раньше был виден/редактируем ТОЛЬКО изнутри Сетевого менеджера (палитра
+    //      каталога устройств, кнопка "+ Новый тип..." — только создание, без
+    //      Изменить/Удалить/Предложить), хотя весь CRUD (add/update/delete,
+    //      isSharedNetworkDeviceType) в AppModel уже был реализован — баг-репорт
+    //      "сетевое оборудование не видно в библиотеках и недоступно для
+    //      редактирования". Секция здесь — точная копия остальных (см. buildLibrary),
+    //      просто даёт этому каталогу тот же полноценный доступ, что у CabinetType/
+    //      ControllerType/CableType, вместо единственной точки входа через палитру.
+
+    private JPanel buildNetworkDeviceLibrary() {
+        networkDeviceList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        networkDeviceRenderer = new NamedRenderer<NetworkDeviceType>(
+                NetworkDeviceType::getName,
+                t -> t.getCategory().getLabel() + " · " + Math.max(1, t.getEthernetPortCount()) + " сет. порт(ов)"
+                        + (t.getOpticalPortCount() > 0 ? " · " + t.getOpticalPortCount() + " опт. порт(ов)" : "")
+                        + (t.getDescription() == null || t.getDescription().isEmpty() ? "" : " · " + t.getDescription())
+                        + (t.getCompany() == null || t.getCompany().isEmpty() ? "" : " · Компания: " + t.getCompany()),
+                t -> model.isSharedNetworkDeviceType(t.getId()));
+        networkDeviceList.setCellRenderer(networkDeviceRenderer);
+
+        JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
+        JButton add = new JButton("Добавить");
+        add.addActionListener(e -> {
+            NetworkDeviceType t = new NetworkDeviceTypeDialog(topWindow(), null).showDialog();
+            if (t != null) tryRun(() -> model.addNetworkDeviceType(t));
+        });
+        JButton edit = new JButton("Изменить");
+        edit.addActionListener(e -> {
+            NetworkDeviceType sel = networkDeviceList.getSelectedValue();
+            if (sel == null) return;
+            NetworkDeviceType t = new NetworkDeviceTypeDialog(topWindow(), sel).showDialog();
+            if (t != null) tryRun(() -> model.updateNetworkDeviceType(t));
+        });
+        Runnable deleteSelectedNetworkDeviceType = () -> {
+            NetworkDeviceType sel = networkDeviceList.getSelectedValue();
+            if (sel != null && confirm("Удалить тип сетевого оборудования «" + sel.getName() + "» из библиотеки?")) {
+                tryRun(() -> model.deleteNetworkDeviceType(sel.getId()));
+            }
+        };
+        JButton del = new JButton("Удалить");
+        del.addActionListener(e -> deleteSelectedNetworkDeviceType.run());
+        UiKit.bindDeleteKey(networkDeviceList, deleteSelectedNetworkDeviceType);
+        JButton propose = new JButton("Предложить…");
+        propose.addActionListener(e -> {
+            NetworkDeviceType sel = networkDeviceList.getSelectedValue();
+            if (sel == null) return;
+            if (model.isSharedNetworkDeviceType(sel.getId())) {
+                NetworkDeviceType edited = new NetworkDeviceTypeDialog(topWindow(), sel).showDialog();
+                if (edited != null) {
+                    ProposeDialog.show(topWindow(), settings, "NETWORK_DEVICE", edited.getName(), edited, sel.getId());
+                }
+            } else {
+                ProposeDialog.show(topWindow(), settings, "NETWORK_DEVICE", sel.getName(), sel);
+            }
+        });
+        crud.add(add);
+        crud.add(edit);
+        crud.add(del);
+        crud.add(propose);
+        String sharedTip = "Общие элементы редактируются только через админ-консоль";
+        networkDeviceList.addListSelectionListener(e -> {
+            NetworkDeviceType sel = networkDeviceList.getSelectedValue();
+            boolean shared = sel != null && model.isSharedNetworkDeviceType(sel.getId());
+            edit.setEnabled(sel != null && !shared);
+            del.setEnabled(sel != null && !shared);
+            propose.setEnabled(sel != null);
+            String tip = shared ? sharedTip : null;
+            edit.setToolTipText(tip);
+            del.setToolTipText(tip);
+            propose.setToolTipText(shared ? "Внести правку и предложить её в общую библиотеку" : null);
+        });
+        return (JPanel) UiKit.dynamicSection("Библиотека сетевого оборудования",
+                listSectionBody(networkDeviceScroll, crud));
     }
 
     // ---- оборудование сигнала: слева тип оборудования, справа его карты-шаблоны ----
@@ -764,7 +903,15 @@ public class LibrariesStagePanel extends JPanel {
         JButton propose = new JButton("Предложить…");
         propose.addActionListener(e -> {
             EquipmentPreset sel = signalPresetList.getSelectedValue();
-            if (sel != null) ProposeDialog.show(topWindow(), settings, "EQUIPMENT", sel.getName(), sel);
+            if (sel == null) return;
+            if (model.isSharedEquipmentPreset(sel.getId())) {
+                EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), model, sel).showDialog();
+                if (r == null) return;
+                EquipmentPreset draft = editedPresetDraft(sel, SchemaMode.SIGNAL, r);
+                ProposeDialog.show(topWindow(), settings, "EQUIPMENT", draft.getName(), draft, sel.getId());
+            } else {
+                ProposeDialog.show(topWindow(), settings, "EQUIPMENT", sel.getName(), sel);
+            }
         });
         leftCrud.add(add);
         leftCrud.add(edit);
@@ -846,14 +993,14 @@ public class LibrariesStagePanel extends JPanel {
             boolean shared = sel != null && model.isSharedEquipmentPreset(sel.getId());
             edit.setEnabled(sel != null && !shared);
             del.setEnabled(sel != null && !shared);
-            propose.setEnabled(sel != null && !shared);
+            propose.setEnabled(sel != null);
             cardAdd.setEnabled(sel != null && !shared);
             cardDel.setEnabled(sel != null && !shared);
             defaultLoadoutBtn.setEnabled(sel != null && !shared);
             String tip = shared ? signalPresetSharedTip : null;
             edit.setToolTipText(tip);
             del.setToolTipText(tip);
-            propose.setToolTipText(tip);
+            propose.setToolTipText(shared ? "Внести правку и предложить её в общую библиотеку" : null);
             cardAdd.setToolTipText(tip);
             cardDel.setToolTipText(tip);
         });
@@ -947,6 +1094,11 @@ public class LibrariesStagePanel extends JPanel {
         syncList(interfaceTypeModel, model.getInterfaceTypes());
         ListSizing.fit(interfaceTypeList, interfaceTypeScroll, 2, 6, w);
         recapSection(interfaceTypeSection);
+
+        networkDeviceRenderer.setFixedWidth(rw);
+        syncList(networkDeviceModel, model.getNetworkDeviceTypes());
+        ListSizing.fit(networkDeviceList, networkDeviceScroll, 2, 6, w);
+        recapSection(networkDeviceSection);
     }
 
     private List<EquipmentPreset> presetsForModeAndCategory(SchemaMode mode, SchemaNodeType category) {
