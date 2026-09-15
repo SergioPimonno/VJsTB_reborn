@@ -1,6 +1,7 @@
 package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.model.CabinetType;
+import com.vjstb.ledscheme.model.ScreenDefaults;
 import com.vjstb.ledscheme.model.ScreenMountType;
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
@@ -51,14 +52,41 @@ public class NewScreenDialog extends JDialog {
 
     public NewScreenDialog(Window owner, List<CabinetType> cabinetTypes, String suggestedName,
                             double suggestedX, double suggestedY) {
+        this(owner, cabinetTypes, suggestedName, suggestedX, suggestedY, null);
+    }
+
+    /** {@code defaults} — «Параметры по умолчанию» текущей сцены (см. {@link
+     *  ScreenDefaults}, {@code ui.stage.SetupStagePanel}), {@code null} —
+     *  сцена их не задавала. Используется ТОЛЬКО чтобы предзаполнить комбобоксы
+     *  кабинета/способа монтажа подсказанным значением вместо жёстко зашитого
+     *  "первый в библиотеке"/{@code RIGGED} — пользователь по-прежнему может
+     *  выбрать любой другой вариант перед созданием, тот и победит (см. javadoc
+     *  {@link ScreenDefaults#applyTo}: эти два поля туда сознательно не входят,
+     *  ровно чтобы явный выбор в ЭТОМ диалоге всегда был окончательным). */
+    public NewScreenDialog(Window owner, List<CabinetType> cabinetTypes, String suggestedName,
+                            double suggestedX, double suggestedY, ScreenDefaults defaults) {
         super(owner, "Новый экран", ModalityType.APPLICATION_MODAL);
 
         for (CabinetType t : cabinetTypes) {
             typeField.addItem(t);
         }
         typeField.setRenderer(new CabinetTypeRenderer());
-        if (typeField.getItemCount() > 0) {
+        CabinetType preselectType = null;
+        if (defaults != null && defaults.getCabinetTypeId() != null) {
+            for (CabinetType t : cabinetTypes) {
+                if (t.getId().equals(defaults.getCabinetTypeId())) {
+                    preselectType = t;
+                    break;
+                }
+            }
+        }
+        if (preselectType != null) {
+            typeField.setSelectedItem(preselectType);
+        } else if (typeField.getItemCount() > 0) {
             typeField.setSelectedIndex(0);
+        }
+        if (defaults != null && defaults.getMountType() != null) {
+            mountTypeField.setSelectedItem(defaults.getMountType());
         }
         nameField.setText(suggestedName);
         xField.setText(UiKit.fmt(suggestedX));

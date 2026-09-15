@@ -132,6 +132,14 @@ public class MainMenuBar extends JMenuBar {
         vehicleCalc.addActionListener(e -> new VehicleCalculatorDialog(owner, model, settings).setVisible(true));
         menu.add(vehicleCalc);
 
+        menu.addSeparator();
+        JMenuItem localArchive = new JMenuItem("Архив проектов…");
+        localArchive.setToolTipText("Убрать проект с рабочего стола в отдельную папку на диске (контроль версий"
+                + " и автосохранение там не ведутся) и вернуть его обратно для правок — папка архива"
+                + " выбирается в этом же окне");
+        localArchive.addActionListener(e -> LocalArchiveDialog.show(owner, model, settings));
+        menu.add(localArchive);
+
         return menu;
     }
 

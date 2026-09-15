@@ -8,6 +8,7 @@ import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.HoistType;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
+import com.vjstb.ledscheme.model.TrussProfile;
 import com.vjstb.ledscheme.store.WorkspaceStore;
 import java.io.File;
 import java.nio.file.Path;
@@ -356,5 +357,60 @@ class RiggingCalcTest {
         RiggingCalc.Result result = RiggingCalc.compute(screen, t500, ws, 2);
         assertEquals(1000.0, result.points().get(0).xMm(), 1e-6);
         assertEquals(2000.0, result.points().get(1).xMm(), 1e-6);
+    }
+
+    @Test
+    void compute_pointsFollowRealBuiltTrussLengthNotAbstractTarget(@TempDir Path dir) {
+        // Прямой тест на баг-репорт: "расчёт подвеса и нагрузки на точки должен
+        // идти по длине фермы, не экрана". Профиль в каталоге -- только куски по
+        // 2м, экран 6*500=3000мм -> реально набранная ферма 4м (2 куска), на 1м
+        // длиннее цели. Точки обязаны расставляться по этим РЕАЛЬНЫМ 4м (отступ от
+        // краёв фермы EDGE_MARGIN_MM=500, симметричный свес по 500мм с каждой
+        // стороны экрана), а не по целевым 3м, как было бы при игнорировании
+        // фактического комплекта.
+        AppModel model = freshModel(dir);
+        CabinetType t = model.addCabinetType(type(10));
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("E", t.getId(), 1, 6, 0, 0);
+        TrussProfile p = new TrussProfile();
+        p.setName("Only2m");
+        p.setAvailableLengthsM(java.util.List.of(2.0));
+        model.addTrussProfile(p);
+        screen.setRiggingTrussProfileId(p.getId());
+
+        RiggingCalc.Result result = RiggingCalc.compute(screen, t, model.getWorkspace(), 2);
+        // Реальная ферма 4м, отступ фермы от края -- 500мм с каждой стороны, симметричный
+        // свес -- тоже 500мм с каждой стороны экрана: 500-500=0 и 3500-500=3000, то есть
+        // ровно на кромках экрана. При игнорировании реального комплекта (старое
+        // поведение, цель=экран=3000мм) точки легли бы на 500/2500 -- внутри экрана.
+        assertEquals(0.0, result.points().get(0).xMm(), 1e-6);
+        assertEquals(3000.0, result.points().get(1).xMm(), 1e-6);
+    }
+
+    @Test
+    void compute_evenPointCountGivesEqualCenterLoadsForSymmetricScreen(@TempDir Path dir) {
+        // Прямой тест на баг-репорт: "если количество точек чётное, то часто при
+        // одинаковых нагрузках на центральные точки расчёт показывает разную
+        // нагрузку, чего быть не может". Тот же реальный сценарий, что и
+        // compute_edgeTieBreaksTowardCenterNotLeft (17х15 Dicolor, 4 точки) -- та
+        // правка выровняла КРАЙНИЕ точки (0 и 3), но у него же ЕСТЬ вторая, до сих
+        // пор не замеченная двойная ничья: колонка k=8 (17 колонок, индексы 0..16)
+        // лежит РОВНО в геометрическом центре фермы (x=4250мм) -- ровно посередине
+        // между ЦЕНТРАЛЬНЫМИ точками 1 (x=3000) и 2 (x=5500), которые сами по
+        // построению равноудалены от центра. "Ближе к центру" ничего не решает,
+        // когда сами кандидаты и есть центральная пара -- без явной обработки этого
+        // случая колонка целиком уходила первой встреченной (левой) точке.
+        AppModel model = freshModel(dir);
+        CabinetType t = model.addCabinetType(type(7.2));
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("E", t.getId(), 1, 17, 0, 0);
+
+        RiggingCalc.Result result = RiggingCalc.compute(screen, t, model.getWorkspace(), 4);
+        assertEquals(result.points().get(2).loadKg(), result.points().get(1).loadKg(), 1e-6,
+                "центральные точки симметричного экрана обязаны нести ОДИНАКОВУЮ нагрузку");
     }
 }

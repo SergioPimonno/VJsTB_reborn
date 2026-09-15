@@ -7,21 +7,22 @@ import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.SceneStats;
 import com.vjstb.ledscheme.ui.CabinetTypeRenderer;
-import com.vjstb.ledscheme.ui.ListSizing;
 import com.vjstb.ledscheme.ui.MathFields;
-import com.vjstb.ledscheme.ui.NamedRenderer;
 import com.vjstb.ledscheme.ui.Palette;
 import com.vjstb.ledscheme.ui.UiKit;
 import java.awt.BorderLayout;
+import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
 import javax.swing.DefaultComboBoxModel;
-import javax.swing.DefaultListModel;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
+import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JOptionPane;
@@ -30,9 +31,14 @@ import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.JSplitPane;
 import javax.swing.JTextField;
-import javax.swing.ListSelectionModel;
+import javax.swing.JTree;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingUtilities;
+import javax.swing.tree.DefaultMutableTreeNode;
+import javax.swing.tree.DefaultTreeCellRenderer;
+import javax.swing.tree.DefaultTreeModel;
+import javax.swing.tree.TreePath;
+import javax.swing.tree.TreeSelectionModel;
 
 /**
  * Этап «Сетап»: состав проекта (проекты → сцены → экраны), библиотека кабинетов,
@@ -44,21 +50,22 @@ public class SetupStagePanel extends JPanel {
     private final com.vjstb.ledscheme.settings.SettingsManager settings;
     private boolean refreshing;
 
-    private final DefaultListModel<Project> projModel = new DefaultListModel<>();
-    private final JList<Project> projList = new JList<>(projModel);
-    private final JScrollPane projScroll = new JScrollPane(projList);
-    private final JTextField newProjectField = new JTextField();
-
-    private final JPanel scenesSection;
-    private final DefaultListModel<Scene> sceneModel = new DefaultListModel<>();
-    private final JList<Scene> sceneList = new JList<>(sceneModel);
-    private final JScrollPane sceneScroll = new JScrollPane(sceneList);
-    private final JTextField newSceneField = new JTextField();
-
-    private final JPanel screensSection;
-    private final DefaultListModel<Screen> screenModel = new DefaultListModel<>();
-    private final JList<Screen> screenList = new JList<>(screenModel);
-    private final JScrollPane screenScroll = new JScrollPane(screenList);
+    // Единое дерево Проекты → Сцены → Экраны (2026-09-14, было — три отдельных
+    // JList в цепочке JSplitPane, см. git-историю SetupStagePanel — постоянно
+    // ломалась пропорция разделителей при схлопывании пустых уровней, баг-репорт
+    // "граница окна дерева проекта неисправна"). Один JTree в одном JScrollPane —
+    // без вложенных сплитов внутри навигации, схлопывать нечего.
+    private final DefaultMutableTreeNode navRoot = new DefaultMutableTreeNode();
+    private final DefaultTreeModel navTreeModel = new DefaultTreeModel(navRoot);
+    private final JTree navTree = new JTree(navTreeModel);
+    /** Одна кнопка вместо трёх раздельных элементов добавления (текстовое поле +
+     *  «+» для проекта/сцены, отдельная «+ Добавить экран» — баг-репорт 2026-09-15
+     *  "пусть кнопка добавить проект/сцену/экран заменяется"): подпись и действие
+     *  меняются по текущему выбору в {@link #syncTree} — см. {@link
+     *  #addContextualNode}. */
+    private final JButton addNodeBtn = new JButton();
+    private final JButton arrangeScreensBtn = new JButton("Расставить экраны без наложения");
+    private final JButton deleteNodeBtn = new JButton("✕ Удалить");
 
     private final JPanel prerigSection;
     private final JLabel prerigScreens = new JLabel();
@@ -69,7 +76,6 @@ public class SetupStagePanel extends JPanel {
     private final JButton calcRiggingBtn = new JButton("Рассчитать точки подвеса");
     private final JButton alignCabinetsBtn = new JButton("Выровнять кабинеты по сетке");
 
-    private final JPanel paramsSection;
     // Явное число колонок (а не пустой конструктор) — предпочтительная ширина поля
     // тогда предсказуема и небольшая; иначе GridLayout(0,2) в узком окне раздувал
     // всю секцию «Параметры экрана» шире доступного места (поля обрезались, у
@@ -143,6 +149,32 @@ public class SetupStagePanel extends JPanel {
      *  ещё не открывалось в этой сессии редактора экрана. */
     private com.vjstb.ledscheme.ui.Structure3DDialog structure3DDialog;
 
+    // ---- «Параметры по умолчанию» сцены (см. model.ScreenDefaults) ----
+    // Стартовые значения для НОВЫХ экранов ЭТОЙ сцены — отдельная карточка
+    // инспектора, СЦЕНОВОГО, а не поэкранного уровня (не привязана к
+    // model.getCurrentScreen()). Каждое поле — свой комбобокс/текст-филд с
+    // ведущим "не задано" (null) вместо значения по умолчанию Screen, см.
+    // populateScreenDefaultsFields()/buildScreenDefaultsCard().
+    // Комбобоксы ниже строятся ПУСТЫМИ здесь и заполняются моделью с ведущим
+    // null-элементом ("не задано") в buildScreenDefaultsCard() — тот же приём,
+    // что уже используют pRiggingHoistType/pRiggingTrussProfile/pStructureFrameType
+    // (DefaultComboBoxModel + addElement(null)), не конструктор из массива.
+    private final JComboBox<CabinetType> dCabinetType = new JComboBox<>();
+    private final JComboBox<com.vjstb.ledscheme.model.ScreenMountType> dMountType = new JComboBox<>();
+    private final JComboBox<Integer> dRefreshHz = new JComboBox<>(new Integer[]{null, 50, 60, 120, 144, 240});
+    private final JComboBox<Integer> dBitDepth = new JComboBox<>(new Integer[]{null, 8, 10, 12});
+    private final JComboBox<com.vjstb.ledscheme.model.MaskColorPreset> dBackground = new JComboBox<>();
+    private final JComboBox<com.vjstb.ledscheme.model.ScreenTagColor> dTagColor = new JComboBox<>();
+    private final JTextField dRiggingSafetyFactor = new JTextField(10);
+    private final JComboBox<com.vjstb.ledscheme.model.HoistType> dRiggingHoistType = new JComboBox<>();
+    private final JComboBox<com.vjstb.ledscheme.model.TrussProfile> dRiggingTrussProfile = new JComboBox<>();
+    private final JTextField dStructureTowerHeight = new JTextField(10);
+    private final JTextField dStructureBaseExtension = new JTextField(10);
+    private final JTextField dStructureBallastRatio = new JTextField(10);
+    private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> dStructureFrameType = new JComboBox<>();
+    private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> dStructureCupType = new JComboBox<>();
+    private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> dStructureBallastType = new JComboBox<>();
+
     /** Поля подвеса и поля конструктива показываются ТОЛЬКО для своего способа монтажа
      *  (см. refresh()/{@link #applyMountTypeVisibility}) — баг-репорт: с обоими блоками
      *  видимыми одновременно всегда «Прериг сцены» разрасталась настолько, что кнопки
@@ -151,14 +183,6 @@ public class SetupStagePanel extends JPanel {
     private JPanel riggingFieldsPanel;
     private JPanel trussFieldsPanel;
     private JPanel structureFieldsPanel;
-
-    // Поля (не локальные переменные), чтобы rebuild() мог явно дёрнуть revalidate/repaint
-    // именно на тех разделителях, чьи дети меняют видимость — иначе секции иногда не
-    // перерисовываются сразу после выбора проекта/сцены, а только после следующего
-    // взаимодействия с интерфейсом (см. UiKit.setInitialDividerOnShow — похожая природа).
-    private final JSplitPane leftSplit3;
-    private final JSplitPane leftSplit2;
-    private final JSplitPane leftSplitNav;
 
     /** v3.0: «Прериг сцены» больше не делит высоту с постоянно видимым блоком полей —
      *  холст ({@link #prerigLayered}) занимает всю секцию целиком, а {@link
@@ -170,47 +194,67 @@ public class SetupStagePanel extends JPanel {
      *  {@code BorderLayout.EAST} в {@link #prerigCanvasHost}). Открывается кликом по
      *  экрану на холсте ({@link com.vjstb.ledscheme.ui.SceneCanvasPanel.RigLevelListener})
      *  или кнопкой в верхней панели ({@link #riggingQuickBtn}/{@link
-     *  #structureQuickBtn}) — см. {@link #showInspector}/{@link #closeInspector}/
-     *  {@link #dockCurrentInspector}. <b>Одна карточка "Подвес" на лебёдки+ферму
+     *  #structureQuickBtn}) — см. {@link #showInspector}/{@link #hideInspector}/
+     *  {@link #dockCurrentInspector}/{@link #undockCurrentInspector}. <b>Одна карточка "Подвес" на лебёдки+ферму
      *  вместе</b> (не две отдельных, как в первой версии v3.0) — баг-репорт
      *  2026-09-14: экран должен быть единственным помеченным элементом сцены,
      *  лебёдки/ферма — его зависимые атрибуты, не самостоятельные "метки" со своими
-     *  отдельными карточками. */
+     *  отдельными карточками. Тот же механизм карточек (2026-09-14, отдельный
+     *  баг-репорт «дерево слева — только проект/сцена/экраны, параметры экрана — в
+     *  инспектор») несёт и {@link #screenCard} — левая колонка теперь только
+     *  навигация (см. {@link #buildScreens}), базовые параметры экрана (имя,
+     *  кабинет, сетка, X/Y, способ монтажа, метка, герцовка/бит) открываются
+     *  кнопкой {@link #screenParamsQuickBtn} тем же {@link #showInspector}. */
     private javax.swing.JLayeredPane prerigLayered;
     private JPanel prerigCanvasHost;
     private JPanel dockPanel;
     private JPanel dockZoneIndicator;
     private JPanel floatingCard;
+    private JPanel screenCard;
     private JPanel riggingCard;
     private JPanel structureCard;
+    /** «Параметры по умолчанию» сцены (см. model.ScreenDefaults) — в отличие от
+     *  screenCard/riggingCard/structureCard, СЦЕНОВЫЙ уровень, не завязан на
+     *  {@link AppModel#getCurrentScreen()}: валиден, пока выбрана хоть какая-то
+     *  сцена, вне зависимости от выбора конкретного экрана — см. {@link
+     *  #applyMountTypeVisibility}. */
+    private JPanel defaultsCard;
     private String openInspectorLevel;
     private boolean inspectorDocked;
+    private JButton screenParamsQuickBtn;
     private JButton riggingQuickBtn;
     private JButton structureQuickBtn;
+    private JButton defaultsQuickBtn;
+    /** Последние размер/положение плавающей карточки — общие для ВСЕХ карточек
+     *  (screenCard/riggingCard/structureCard — разные инстансы), не пер-карточные.
+     *  Баг-репорт 2026-09-15: «переключение типа инспектора дёргает его в верхний
+     *  левый угол» — {@link #showInspector} раньше подставлял фиксированные (16,16)
+     *  КАЖДЫЙ раз, когда конкретно ЭТА карточка добавлялась в {@link #prerigLayered}
+     *  впервые, так что смена типа (тот же клик — другая карточка, ещё не
+     *  показывавшаяся) выглядела как прыжок в угол, даже если предыдущую
+     *  пользователь уже передвинул. {@code null} — ещё не двигали/не меняли
+     *  размер, используется дефолт из {@link #showInspector}. */
+    private java.awt.Rectangle floatingCardBounds;
+    private JPanel resizeGrip;
 
     public SetupStagePanel(AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings) {
         this.model = model;
         this.settings = settings;
+        // Восстанавливаем закреплённое/плавающее состояние инспектора из профиля —
+        // баг-репорт 2026-09-15, см. javadoc com.vjstb.ledscheme.settings.UserProfile#isInspectorDocked.
+        this.inspectorDocked = settings.activeProfile().isInspectorDocked();
         setLayout(new BorderLayout());
 
-        // Левая колонка — навигация (Проекты/Сцены/Экраны) + параметры выбранного
-        // экрана внизу; между блоками — перетаскиваемые разделители (высота каждого
-        // блока регулируется пользователем, а не только по количеству элементов,
-        // и запоминается в профиле настроек — переживает перезапуск).
-        scenesSection = buildScenes();
-        screensSection = buildScreens();
-        paramsSection = buildScreenParams();
-        leftSplit3 = new JSplitPane(JSplitPane.VERTICAL_SPLIT, screensSection, paramsSection);
-        leftSplit3.setResizeWeight(0.32);
-        leftSplit2 = new JSplitPane(JSplitPane.VERTICAL_SPLIT, scenesSection, leftSplit3);
-        leftSplit2.setResizeWeight(0.18);
-        leftSplitNav = new JSplitPane(JSplitPane.VERTICAL_SPLIT, buildProjects(), leftSplit2);
-        leftSplitNav.setResizeWeight(0.16);
-        UiKit.persistentDivider(settings, "setup.screensParams", leftSplit3, 0.32);
-        UiKit.persistentDivider(settings, "setup.scenes", leftSplit2, 0.18);
-        UiKit.persistentDivider(settings, "setup.projects", leftSplitNav, 0.16);
-        JPanel left = new JPanel(new BorderLayout());
-        left.add(leftSplitNav, BorderLayout.CENTER);
+        // Левая колонка — ТОЛЬКО навигация: единое дерево Проекты → Сцены → Экраны
+        // (2026-09-14, было — три отдельных JList в цепочке JSplitPane, постоянно
+        // ломавшихся при схлопывании пустых уровней). Один JTree в одном
+        // JScrollPane — не нужно ни одного вложенного JSplitPane внутри навигации,
+        // схлопывать нечего, растягивание высоты работает через обычный BorderLayout.
+        // Параметры выбранного экрана (2026-09-14, было — постоянный блок под
+        // списком экранов) — в инспекторе правой колонки, см. {@link #screenCard}/
+        // {@link #buildScreenParams}.
+        buildScreenParams();
+        JPanel left = buildNav();
 
         // v3.0: правая колонка — теперь только "Прериг сцены" целиком, без соседней
         // «Формы экрана» (та функция переехала в сам холст — ПКМ по кабинету в
@@ -222,9 +266,10 @@ public class SetupStagePanel extends JPanel {
         prerigPreview.setShowRiggingPoints(true);
         prerigSection = buildPrerig();
 
-        JScrollPane leftScroll = new JScrollPane(left);
-        leftScroll.setBorder(null);
-        leftScroll.getVerticalScrollBar().setUnitIncrement(16);
+        // Без обёртки в ещё один JScrollPane вокруг left (было — вложенный скролл
+        // вокруг дерева JSplitPane'ов, до 2026-09-14): navTree скроллится сам, а
+        // тулбар под ним закреплён обычным BorderLayout.SOUTH — вложенный скролл
+        // внутри скролла только путал колёсико мыши и был лишним слоем.
         // stretchToViewport(prerigSection) -- см. javadoc метода: без этой обёртки
         // JPanel не растягивается на высоту окна внутри JScrollPane (сам не
         // Scrollable), из-за чего «Прериг сцены» вычисляла начальную высоту от
@@ -233,17 +278,10 @@ public class SetupStagePanel extends JPanel {
         rightScroll.setBorder(null);
         rightScroll.getVerticalScrollBar().setUnitIncrement(16);
 
-        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftScroll, rightScroll);
+        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, rightScroll);
         split.setContinuousLayout(true);
         UiKit.persistentDivider(settings, "setup.outer", split, 0.28);
         add(split, BorderLayout.CENTER);
-
-        // Минимум — заголовок секции + одна позиция списка, чтобы после выбора
-        // проекта/сцены содержимое было видно сразу, без ручной растяжки разделителей.
-        // Расти дальше секции могут и сами (если позиций больше) и от руки (перетаскиванием).
-        for (JScrollPane sp : new JScrollPane[]{projScroll, sceneScroll, screenScroll}) {
-            sp.setMinimumSize(new Dimension(120, 56));
-        }
 
         model.addListener(this::rebuild);
         // Переключатель Вт/кВт (Персонализация) не меняет модель — без этого подписчика
@@ -253,136 +291,201 @@ public class SetupStagePanel extends JPanel {
         rebuild();
     }
 
-    // ---- проекты ----
+    // ---- навигация (дерево Проекты → Сцены → Экраны) ----
 
-    private JPanel buildProjects() {
-        JPanel body = UiKit.vbox();
-        projList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        projList.setCellRenderer(new NamedRenderer<Project>(Project::getName, p -> p.getScenes().size() + " сцен"));
-        projList.addListSelectionListener(e -> {
-            if (refreshing || e.getValueIsAdjusting()) return;
-            Project p = projList.getSelectedValue();
-            if (p != null && p != model.getCurrentProject()) model.selectProject(p);
-        });
-        // Список растягивается на всё, что даст разделитель JSplitPane (высота — по
-        // перетаскиванию пользователем, а не только по числу элементов).
-        projScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
-        body.add(projScroll);
-
-        JPanel addRow = new JPanel(new BorderLayout(4, 0));
-        newProjectField.putClientProperty("JTextField.placeholderText", "Название проекта…");
-        JButton add = new JButton("+");
-        add.addActionListener(e -> {
-            String name = newProjectField.getText().trim();
-            if (!name.isEmpty()) { model.selectProject(model.addProject(name)); newProjectField.setText(""); }
-        });
-        Runnable deleteSelectedProject = () -> {
-            Project p = projList.getSelectedValue();
-            if (p != null && confirm("Удалить проект со всеми сценами и экранами?")) model.deleteProject(p);
-        };
-        JButton del = new JButton("✕");
-        del.addActionListener(e -> deleteSelectedProject.run());
-        UiKit.bindDeleteKey(projList, deleteSelectedProject);
-        addRow.add(newProjectField, BorderLayout.CENTER);
-        JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
-        btns.add(add);
-        btns.add(del);
-        addRow.add(btns, BorderLayout.EAST);
-        body.add(UiKit.vgap());
-        body.add(addRow);
-        return (JPanel) UiKit.dynamicSection("Проекты", body);
-    }
-
-    // ---- сцены ----
-
-    private JPanel buildScenes() {
-        JPanel body = UiKit.vbox();
-        sceneList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        sceneList.setCellRenderer(new NamedRenderer<Scene>(Scene::getName, s -> s.getScreens().size() + " экранов"));
-        sceneList.addListSelectionListener(e -> {
-            if (refreshing || e.getValueIsAdjusting()) return;
-            Scene s = sceneList.getSelectedValue();
-            if (s != null && s != model.getCurrentScene()) model.selectScene(s);
-        });
-        sceneScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
-        body.add(sceneScroll);
-
-        JPanel addRow = new JPanel(new BorderLayout(4, 0));
-        newSceneField.putClientProperty("JTextField.placeholderText", "Название сцены…");
-        JButton add = new JButton("+");
-        add.addActionListener(e -> {
-            String name = newSceneField.getText().trim();
-            if (!name.isEmpty()) { model.selectScene(model.addScene(name)); newSceneField.setText(""); }
-        });
-        Runnable deleteSelectedScene = () -> {
-            Scene s = sceneList.getSelectedValue();
-            if (s != null && confirm("Удалить сцену со всеми экранами?")) model.deleteScene(s);
-        };
-        JButton del = new JButton("✕");
-        del.addActionListener(e -> deleteSelectedScene.run());
-        UiKit.bindDeleteKey(sceneList, deleteSelectedScene);
-        addRow.add(newSceneField, BorderLayout.CENTER);
-        JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
-        btns.add(add);
-        btns.add(del);
-        addRow.add(btns, BorderLayout.EAST);
-        body.add(UiKit.vgap());
-        body.add(addRow);
-        return (JPanel) UiKit.dynamicSection("Сцены", body);
-    }
-
-    // ---- экраны ----
-
-    private JPanel buildScreens() {
-        JPanel body = UiKit.vbox();
-        screenList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        screenList.setCellRenderer(new NamedRenderer<Screen>(Screen::getName, s -> {
-            CabinetType ct = model.typeOf(s);
-            return s.getCols() + "×" + s.getRows() + (ct != null ? " · " + ct.getName() : "");
-        }));
-        screenList.addListSelectionListener(e -> {
-            if (refreshing || e.getValueIsAdjusting()) return;
-            Screen s = screenList.getSelectedValue();
-            if (s != null && s != model.getCurrentScreen()) model.selectScreen(s);
-        });
-        UiKit.enableListReorder(screenList, (from, drop) -> {
-            Scene scene = model.getCurrentScene();
-            if (scene != null) {
-                model.reorderScreens(scene, from, drop);
+    /** Единственная точка сборки левой колонки — дерево + компактный тулбар под
+     *  ним. Добавление контекстно зависит от текущего выбора модели (см. {@link
+     *  #addProjectOrScene}), удаление и Delete/Backspace работают с узлом,
+     *  выбранным СЕЙЧАС в дереве (см. {@link #deleteSelectedNode}) — то же
+     *  разделение ответственности, что раньше было у трёх пар «+»/«✕». */
+    private JPanel buildNav() {
+        navTree.setRootVisible(false);
+        navTree.setShowsRootHandles(true);
+        navTree.setRowHeight(22);
+        navTree.getSelectionModel().setSelectionMode(TreeSelectionModel.SINGLE_TREE_SELECTION);
+        navTree.setCellRenderer(new NavTreeCellRenderer());
+        navTree.addTreeSelectionListener(e -> {
+            if (refreshing) return;
+            TreePath path = navTree.getSelectionPath();
+            if (path == null) return;
+            Object obj = ((DefaultMutableTreeNode) path.getLastPathComponent()).getUserObject();
+            if (obj instanceof Project p) {
+                if (p != model.getCurrentProject()) model.selectProject(p);
+            } else if (obj instanceof Scene s) {
+                if (s != model.getCurrentScene()) model.selectScene(s);
+            } else if (obj instanceof Screen scr) {
+                if (scr != model.getCurrentScreen()) model.selectScreen(scr);
             }
         });
-        screenScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
-        body.add(screenScroll);
+        enableScreenReorder();
+        UiKit.bindDeleteKey(navTree, this::deleteSelectedNode);
+        // ПКМ на УЖЕ выбранном узле снимает выделение целиком (баг-репорт
+        // 2026-09-15) — свежая копия координат клика проверяется против ТЕКУЩЕГО
+        // пути выделения (а не просто "клик по дереву правой кнопкой") — иначе ПКМ
+        // где угодно по дереву сбрасывал бы выбор, включая клик по другому узлу.
+        // selectProject(null) каскадом обнуляет и сцену, и экран — то же самое, что
+        // "ничего не выбрано" при старте, не частичный откат на уровень выше.
+        navTree.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent e) {
+                if (!javax.swing.SwingUtilities.isRightMouseButton(e)) {
+                    return;
+                }
+                TreePath clicked = navTree.getPathForLocation(e.getX(), e.getY());
+                if (clicked != null && clicked.equals(navTree.getSelectionPath())) {
+                    model.selectProject(null);
+                }
+            }
+        });
 
-        // "✕" рядом со списком — как у сцен выше (buildScenes) — не заставляет
-        // прокручивать вниз до «Параметры экрана», где тоже есть «Удалить экран»
-        // (оставлен как есть — оба места работают с ТЕКУЩИМ выбранным экраном).
-        JPanel screenBtnRow = new JPanel(new BorderLayout(4, 0));
-        JButton add = new JButton("+ Добавить экран");
-        add.addActionListener(e -> addScreen());
-        Runnable deleteSelectedScreen = () -> {
-            Screen s = screenList.getSelectedValue();
-            if (s != null && confirm("Удалить экран «" + s.getName() + "»?")) model.deleteScreen(s);
-        };
-        JButton delScreen = new JButton("✕");
-        delScreen.setToolTipText("Удалить выбранный экран");
-        delScreen.addActionListener(e -> deleteSelectedScreen.run());
-        UiKit.bindDeleteKey(screenList, deleteSelectedScreen);
-        screenBtnRow.add(add, BorderLayout.CENTER);
-        screenBtnRow.add(delScreen, BorderLayout.EAST);
-        body.add(UiKit.vgap());
-        body.add(screenBtnRow);
+        JScrollPane treeScroll = new JScrollPane(navTree);
+        treeScroll.setBorder(null);
+        treeScroll.getVerticalScrollBar().setUnitIncrement(16);
+        treeScroll.setMinimumSize(new Dimension(160, 120));
 
-        JButton arrange = new JButton("Расставить экраны без наложения");
-        arrange.setToolTipText("Перестроит X/Y всех экранов сцены в ряд, чтобы они не перекрывались на «Визуализации»");
-        arrange.addActionListener(e -> model.autoArrangeScreensInScene());
-        body.add(UiKit.vgap());
-        body.add(arrange);
+        JPanel toolbar = UiKit.vbox();
+        addNodeBtn.addActionListener(e -> addContextualNode());
+        toolbar.add(addNodeBtn);
 
-        JLabel hint = UiKit.muted("<html>Параметры нового экрана — справа, в «Параметры экрана».</html>");
-        body.add(UiKit.vgap());
-        body.add(hint);
-        return (JPanel) UiKit.dynamicSection("Экраны на сцене", body);
+        toolbar.add(UiKit.vgap());
+        arrangeScreensBtn.setToolTipText(
+                "Перестроит X/Y всех экранов сцены в ряд, чтобы они не перекрывались на «Визуализации»");
+        arrangeScreensBtn.addActionListener(e -> model.autoArrangeScreensInScene());
+        toolbar.add(arrangeScreensBtn);
+
+        toolbar.add(UiKit.vgap());
+        deleteNodeBtn.setToolTipText("Удалить выбранный в дереве узел (проект/сцену/экран) со всем содержимым.");
+        deleteNodeBtn.addActionListener(e -> deleteSelectedNode());
+        toolbar.add(deleteNodeBtn);
+
+        toolbar.add(UiKit.vgap());
+        JLabel hint = UiKit.muted("<html>Параметры экрана — в инспекторе справа,"
+                + " кнопка «Параметры экрана…» в «Прериг сцены».</html>");
+        toolbar.add(hint);
+
+        JPanel body = new JPanel(new BorderLayout());
+        body.add(treeScroll, BorderLayout.CENTER);
+        body.add(toolbar, BorderLayout.SOUTH);
+        return (JPanel) UiKit.dynamicSection("Дерево проекта", body);
+    }
+
+    /** Действие {@link #addNodeBtn} — какой именно уровень добавляется, определяется
+     *  тем, что СЕЙЧАС выбрано в модели (дерево и модель всегда синхронны вне
+     *  {@code refreshing}): есть сцена — новый экран (тот же диалог, что и раньше,
+     *  см. {@link #addScreen}); есть только проект — новая сцена в нём; ничего не
+     *  выбрано — новый проект. Имя проекта/сцены — через тот же {@code
+     *  JOptionPane.showInputDialog} с подсказкой по умолчанию, что и везде в
+     *  проекте (см. например {@code PersonalizationDialog}), вместо отдельного
+     *  постоянного текстового поля — баг-репорт 2026-09-15 "кнопка добавить
+     *  проект/сцену/экран заменяется", а не сосуществует с полем ввода рядом. */
+    private void addContextualNode() {
+        if (model.getCurrentScene() != null) {
+            addScreen();
+            return;
+        }
+        if (model.getCurrentProject() != null) {
+            String suggested = "Сцена " + (model.getCurrentProject().getScenes().size() + 1);
+            String name = JOptionPane.showInputDialog(this, "Название сцены:", suggested);
+            if (name != null && !name.trim().isEmpty()) {
+                model.selectScene(model.addScene(name.trim()));
+            }
+            return;
+        }
+        String suggested = "Проект " + (model.getProjects().size() + 1);
+        String name = JOptionPane.showInputDialog(this, "Название проекта:", suggested);
+        if (name != null && !name.trim().isEmpty()) {
+            model.selectProject(model.addProject(name.trim()));
+        }
+    }
+
+    private void deleteSelectedNode() {
+        TreePath path = navTree.getSelectionPath();
+        if (path == null) {
+            return;
+        }
+        Object obj = ((DefaultMutableTreeNode) path.getLastPathComponent()).getUserObject();
+        if (obj instanceof Project p) {
+            if (confirm("Удалить проект со всеми сценами и экранами?")) model.deleteProject(p);
+        } else if (obj instanceof Scene s) {
+            if (confirm("Удалить сцену со всеми экранами?")) model.deleteScene(s);
+        } else if (obj instanceof Screen scr) {
+            if (confirm("Удалить экран «" + scr.getName() + "»?")) model.deleteScreen(scr);
+        }
+    }
+
+    /** Перетаскивание строк экранов для смены порядка — единственный уровень
+     *  дерева, где порядок значим (сквозная нумерация портов, см. {@link
+     *  AppModel#reorderScreens}). Разрешён только между экранами ОДНОЙ и той же
+     *  сцены — {@code canImport} сверяет родителя точки вставки с родителем
+     *  перетаскиваемого узла, иначе перенос экрана в чужую сцену молча бы не имел
+     *  смысла для {@link AppModel#reorderScreens} (та работает индексами внутри
+     *  {@code Scene#getScreens()}). */
+    private void enableScreenReorder() {
+        navTree.setDragEnabled(true);
+        navTree.setDropMode(javax.swing.DropMode.INSERT);
+        navTree.setTransferHandler(new javax.swing.TransferHandler() {
+            private Screen dragScreen;
+            private Scene dragScene;
+
+            @Override
+            public int getSourceActions(JComponent c) {
+                return MOVE;
+            }
+
+            @Override
+            protected java.awt.datatransfer.Transferable createTransferable(JComponent c) {
+                dragScreen = null;
+                dragScene = null;
+                TreePath path = navTree.getSelectionPath();
+                if (path == null) {
+                    return null;
+                }
+                DefaultMutableTreeNode node = (DefaultMutableTreeNode) path.getLastPathComponent();
+                DefaultMutableTreeNode parent = (DefaultMutableTreeNode) node.getParent();
+                if (!(node.getUserObject() instanceof Screen scr) || parent == null
+                        || !(parent.getUserObject() instanceof Scene sc)) {
+                    return null;
+                }
+                dragScreen = scr;
+                dragScene = sc;
+                return new java.awt.datatransfer.StringSelection(scr.getId());
+            }
+
+            @Override
+            public boolean canImport(TransferSupport support) {
+                if (!support.isDrop() || dragScreen == null) {
+                    return false;
+                }
+                JTree.DropLocation dl = (JTree.DropLocation) support.getDropLocation();
+                TreePath path = dl.getPath();
+                return path != null
+                        && ((DefaultMutableTreeNode) path.getLastPathComponent()).getUserObject() == dragScene;
+            }
+
+            @Override
+            public boolean importData(TransferSupport support) {
+                if (!canImport(support)) {
+                    return false;
+                }
+                JTree.DropLocation dl = (JTree.DropLocation) support.getDropLocation();
+                Scene scene = dragScene;
+                int from = scene.getScreens().indexOf(dragScreen);
+                int drop = dl.getChildIndex();
+                dragScreen = null;
+                dragScene = null;
+                if (from >= 0 && drop >= 0 && drop != from) {
+                    model.reorderScreens(scene, from, drop);
+                    return true;
+                }
+                return false;
+            }
+
+            @Override
+            protected void exportDone(JComponent source, java.awt.datatransfer.Transferable data, int action) {
+                dragScreen = null;
+                dragScene = null;
+            }
+        });
     }
 
     private void addScreen() {
@@ -395,7 +498,7 @@ public class SetupStagePanel extends JPanel {
         double[] pos = model.suggestedNextPosition(model.getCabinetTypes().get(0).getId(), 3);
         com.vjstb.ledscheme.ui.NewScreenDialog dialog = new com.vjstb.ledscheme.ui.NewScreenDialog(
                 javax.swing.SwingUtilities.getWindowAncestor(this), model.getCabinetTypes(), "Экран " + n,
-                pos[0], pos[1]);
+                pos[0], pos[1], model.getCurrentScene() != null ? model.getCurrentScene().getScreenDefaults() : null);
         com.vjstb.ledscheme.ui.NewScreenDialog.Result r = dialog.showDialog();
         if (r == null) {
             return;
@@ -428,6 +531,13 @@ public class SetupStagePanel extends JPanel {
         // теперь прямо на холсте, ПКМ по кабинету в режиме «Кабинеты по отдельности»
         // (см. SceneCanvasPanel, баг-репорт 2026-09-14 "избавляемся от отдельного
         // окна").
+        // «Параметры экрана…» — первой, в отличие от «Подвес…»/«Конструктив…» видна
+        // ВСЕГДА, пока выбран экран (не зависит от способа монтажа), см.
+        // applyMountTypeVisibility.
+        screenParamsQuickBtn = new JButton("Параметры экрана…");
+        screenParamsQuickBtn.setToolTipText("Название, кабинет, сетка колонн/строк, положение X/Y, способ монтажа,"
+                + " метка зоны, герцовка контента и глубина цвета выбранного экрана.");
+        screenParamsQuickBtn.addActionListener(e -> showInspector("screen"));
         riggingQuickBtn = new JButton("Подвес…");
         riggingQuickBtn.setToolTipText("Лебёдки (модель/WLL, точки, запас прочности) и ферма (тип/длина/отступы)"
                 + " одного экрана вместе — то же самое открывается кликом по ферме/точкам над экраном на холсте.");
@@ -437,9 +547,25 @@ public class SetupStagePanel extends JPanel {
         structureQuickBtn.addActionListener(e -> showInspector("structure"));
         JPanel quickButtonsRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         quickButtonsRow.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        quickButtonsRow.add(screenParamsQuickBtn);
         quickButtonsRow.add(riggingQuickBtn);
         quickButtonsRow.add(structureQuickBtn);
-        stats.add(quickButtonsRow);
+        // «Параметры по умолчанию…» — сценовый (не поэкранный) уровень, выровнен
+        // ПРАВЕЕ трёх кнопок выше (запрос пользователя), чтобы визуально читаться
+        // отдельно от них: те правят выбранный экран, эта — стартовые значения
+        // ДЛЯ БУДУЩИХ экранов сцены.
+        defaultsQuickBtn = new JButton("Параметры по умолчанию…");
+        defaultsQuickBtn.setToolTipText("Стартовые значения (тип кабинета, способ монтажа, герцовка, глубина"
+                + " цвета, цвет маски/метки зоны, ключевые параметры подвеса и конструктива) для НОВЫХ экранов"
+                + " ЭТОЙ сцены — задаются один раз для сцены, вместо того чтобы выставлять их руками на каждом"
+                + " экране. Уже существующих экранов не касается; правки, сделанные вручную после создания"
+                + " экрана, этими значениями повторно не перезаписываются.");
+        defaultsQuickBtn.addActionListener(e -> showInspector("defaults"));
+        JPanel quickButtonsWrap = new JPanel(new BorderLayout());
+        quickButtonsWrap.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        quickButtonsWrap.add(quickButtonsRow, BorderLayout.WEST);
+        quickButtonsWrap.add(defaultsQuickBtn, BorderLayout.EAST);
+        stats.add(quickButtonsWrap);
         stats.add(UiKit.vgap());
 
         // Мини-превью раскладки сцены: показывает все экраны сцены сразу, но
@@ -529,6 +655,32 @@ public class SetupStagePanel extends JPanel {
         dockZoneIndicator.setBorder(BorderFactory.createMatteBorder(0, 2, 0, 0, Palette.ACCENT));
         dockZoneIndicator.setVisible(false);
         prerigLayered.add(dockZoneIndicator, javax.swing.JLayeredPane.DEFAULT_LAYER + 1);
+
+        // Ручка изменения размера плавающей карточки (баг-репорт 2026-09-15: "давай
+        // добавим возможность растягивать его окошко") — отдельный компонент поверх
+        // карточки (PALETTE_LAYER+1 — выше самой карточки), а не часть {@link
+        // #wrapAsInspectorCard}: карточка одна на все три уровня по очереди
+        // (screenCard/riggingCard/structureCard), ручка тоже одна, просто
+        // перепозиционируется на угол ТЕКУЩЕЙ {@link #floatingCard} — см. {@link
+        // #positionResizeGrip}. Резать только в плавающем режиме — в закреплённой
+        // колонке ширина карточки берётся из {@link #dockPanel}, не нужно.
+        resizeGrip = new JPanel() {
+            @Override
+            protected void paintComponent(java.awt.Graphics g) {
+                super.paintComponent(g);
+                g.setColor(Palette.MUTED);
+                for (int i = 0; i < 3; i++) {
+                    int off = i * 4;
+                    g.drawLine(getWidth() - 2 - off, getHeight() - 2, getWidth() - 2, getHeight() - 2 - off);
+                }
+            }
+        };
+        resizeGrip.setOpaque(false);
+        resizeGrip.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.SE_RESIZE_CURSOR));
+        resizeGrip.setToolTipText("Потяните, чтобы изменить размер панели.");
+        resizeGrip.setVisible(false);
+        prerigLayered.add(resizeGrip, javax.swing.JLayeredPane.PALETTE_LAYER + 1);
+        wireCardResize();
 
         dockPanel = new JPanel(new BorderLayout());
         dockPanel.setBorder(BorderFactory.createMatteBorder(0, 1, 0, 0, Palette.BORDER));
@@ -653,9 +805,9 @@ public class SetupStagePanel extends JPanel {
         calcTrussBtn.addActionListener(e -> calculateTruss());
         trussFieldsPanel.add(calcTrussBtn);
         trussFieldsPanel.add(UiKit.vgap());
-        buildTrussSpecBtn.setToolTipText("Считает спецификацию (комплект сегментов + соединители) фермы по"
-                + " текущим сохранённым параметрам. Тот же список автоматически попадает в общую спецификацию"
-                + " проекта (лист «Фермы», этап «Вывод»).");
+        buildTrussSpecBtn.setToolTipText("Считает спецификацию (комплект сегментов + крепёж стыков — пальцы,"
+                + " шпильки, бобышки) фермы по текущим сохранённым параметрам. Тот же список автоматически"
+                + " попадает в общую спецификацию проекта (лист «Фермы», этап «Вывод»).");
         buildTrussSpecBtn.addActionListener(e -> buildTrussSpec());
         trussFieldsPanel.add(buildTrussSpecBtn);
         buildTrussSpecSceneBtn.setToolTipText("Считает спецификацию фермы сразу по ВСЕМ экранам текущей сцены"
@@ -750,18 +902,31 @@ public class SetupStagePanel extends JPanel {
         riggingCombined.add(trussFieldsPanel);
         riggingCard = wrapAsInspectorCard("Подвес", riggingCombined);
         structureCard = wrapAsInspectorCard("Конструктив", structureFieldsPanel);
+        buildScreenDefaultsCard();
 
         return (JPanel) UiKit.dynamicSection("Прериг сцены", canvasArea);
     }
 
     private static final int DOCK_ZONE_PX = 64;
 
+    /** Клиент-свойство {@link JPanel#putClientProperty} на карточке — ссылка на её
+     *  собственную кнопку «Открепить» (см. {@link #wrapAsInspectorCard}), чтобы
+     *  {@link #showInspector}/{@link #dockCurrentInspector}/{@link
+     *  #undockCurrentInspector} могли переключать её видимость по текущему
+     *  {@link #inspectorDocked} без отдельной Map&lt;JPanel,JButton&gt;. */
+    private static final String UNDOCK_BTN_KEY = "undockBtn";
+
     /** Оборачивает уже построенную (см. {@link #buildPrerig}) панель полей в карточку
      *  с заголовком — перетаскиваемым (см. {@link #wireCardDrag}) для закрепления
-     *  вправо и кнопкой закрытия. Содержимое строится ОДИН раз, как и раньше, просто
-     *  без постоянного места в layout — {@link #showInspector} только перевешивает
-     *  готовую карточку между плавающим слоем ({@link #prerigLayered}) и закреплённой
-     *  колонкой ({@link #dockPanel}). */
+     *  вправо, кнопкой «Открепить» (видна, только пока карточка ЗАКРЕПЛЕНА — см.
+     *  {@link #UNDOCK_BTN_KEY}/{@link #undockCurrentInspector}, баг-репорт 2026-09-15:
+     *  раньше единственным способом вернуть закреплённую панель в плавающий режим
+     *  было закрыть её крестиком и открыть заново — что попутно СБРАСЫВАЛО признак
+     *  "закреплено") и кнопкой закрытия «✕» (см. {@link #hideInspector} — та больше
+     *  НЕ трогает {@link #inspectorDocked}, только прячет саму панель). Содержимое
+     *  строится ОДИН раз, как и раньше, просто без постоянного места в layout —
+     *  {@link #showInspector} только перевешивает готовую карточку между плавающим
+     *  слоем ({@link #prerigLayered}) и закреплённой колонкой ({@link #dockPanel}). */
     private JPanel wrapAsInspectorCard(String title, JPanel content) {
         JPanel card = new JPanel(new BorderLayout());
         card.setBorder(BorderFactory.createLineBorder(Palette.BORDER));
@@ -775,12 +940,22 @@ public class SetupStagePanel extends JPanel {
         head.setToolTipText("Перетащите к правому краю холста, чтобы закрепить панель колонкой.");
         JLabel titleLbl = new JLabel(title);
         titleLbl.setFont(titleLbl.getFont().deriveFont(java.awt.Font.BOLD));
+        JButton undockBtn = new JButton(undockIcon());
+        undockBtn.setMargin(new java.awt.Insets(0, 4, 0, 4));
+        undockBtn.setToolTipText("Открепить — сделать плавающим окном");
+        undockBtn.setVisible(inspectorDocked);
+        undockBtn.addActionListener(e -> undockCurrentInspector());
+        card.putClientProperty(UNDOCK_BTN_KEY, undockBtn);
         JButton closeBtn = new JButton("✕");
         closeBtn.setMargin(new java.awt.Insets(0, 4, 0, 4));
         closeBtn.setToolTipText("Закрыть панель");
-        closeBtn.addActionListener(e -> closeInspector());
+        closeBtn.addActionListener(e -> hideInspector());
+        JPanel headButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        headButtons.setOpaque(false);
+        headButtons.add(undockBtn);
+        headButtons.add(closeBtn);
         head.add(titleLbl, BorderLayout.WEST);
-        head.add(closeBtn, BorderLayout.EAST);
+        head.add(headButtons, BorderLayout.EAST);
         card.add(head, BorderLayout.NORTH);
         JScrollPane contentScroll = new JScrollPane(content);
         contentScroll.setBorder(null);
@@ -790,13 +965,58 @@ public class SetupStagePanel extends JPanel {
         return card;
     }
 
+    /** Небольшая пиктограмма «открепить» — вертикальная планка (правый край, символ
+     *  дока) со стрелкой, уходящей от неё влево (символ "отделяется и улетает в
+     *  сторону"), по эскизу пользователя (баг-репорт 2026-09-15). Рисуется вручную
+     *  (тот же приём, что и цветной квадратик {@link #pTagColor}), а не из
+     *  библиотеки иконок — в проекте таковой нет. */
+    private static javax.swing.Icon undockIcon() {
+        return new javax.swing.Icon() {
+            @Override
+            public void paintIcon(java.awt.Component c, java.awt.Graphics g, int x, int y) {
+                java.awt.Graphics2D g2 = (java.awt.Graphics2D) g.create();
+                g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
+                        java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(c.isEnabled() ? c.getForeground() : Palette.MUTED);
+                int barX = x + 11;
+                g2.drawLine(barX, y + 2, barX, y + 12);
+                int tipX = x + 2;
+                int midY = y + 7;
+                g2.drawLine(barX - 1, midY, tipX, midY);
+                g2.drawLine(tipX, midY, tipX + 5, midY - 4);
+                g2.drawLine(tipX, midY, tipX + 5, midY + 4);
+                g2.dispose();
+            }
+
+            @Override
+            public int getIconWidth() {
+                return 16;
+            }
+
+            @Override
+            public int getIconHeight() {
+                return 16;
+            }
+        };
+    }
+
+    private static void setUndockButtonVisible(JPanel card, boolean visible) {
+        if (card == null) {
+            return;
+        }
+        Object btn = card.getClientProperty(UNDOCK_BTN_KEY);
+        if (btn instanceof JButton b) {
+            b.setVisible(visible);
+        }
+    }
+
     /** Перетаскивание за шапку карточки — свободное перемещение, пока карточка
      *  плавающая ({@link #floatingCard}); отпускание правее {@link #DOCK_ZONE_PX} от
      *  правого края холста переключает её в закреплённую колонку ({@link
      *  #dockCurrentInspector}). Закреплённая карточка этим слушателем не
-     *  перетаскивается — открепление только кнопкой «✕» в {@link
-     *  #wrapAsInspectorCard} (полное закрытие, не просто возврат к плаванию —
-     *  сознательное упрощение первой версии). */
+     *  перетаскивается назад — обратное переключение (закреплено → плавающее) идёт
+     *  отдельной кнопкой «Открепить» в шапке (см. {@link #wrapAsInspectorCard},
+     *  {@link #undockCurrentInspector}), не перетаскиванием. */
     private void wireCardDrag(javax.swing.JComponent head, JPanel card) {
         java.awt.event.MouseAdapter drag = new java.awt.event.MouseAdapter() {
             int pressScreenX, pressScreenY, cardOrigX, cardOrigY;
@@ -820,6 +1040,8 @@ public class SetupStagePanel extends JPanel {
                 int nx = cardOrigX + (e.getXOnScreen() - pressScreenX);
                 int ny = Math.max(0, cardOrigY + (e.getYOnScreen() - pressScreenY));
                 card.setLocation(nx, ny);
+                positionResizeGrip();
+                floatingCardBounds = card.getBounds();
                 setDockZoneHighlighted(nx + card.getWidth() > prerigLayered.getWidth() - DOCK_ZONE_PX);
             }
 
@@ -836,6 +1058,60 @@ public class SetupStagePanel extends JPanel {
         };
         head.addMouseListener(drag);
         head.addMouseMotionListener(drag);
+    }
+
+    /** Перетаскивание ручки {@link #resizeGrip} — меняет ширину/высоту ТЕКУЩЕЙ
+     *  плавающей карточки ({@link #floatingCard}), зажатую между разумным минимумом
+     *  и границами холста. Один слушатель на все три карточки — ручка не пересоздаётся
+     *  под каждую, просто оперирует тем, что сейчас плавает. */
+    private void wireCardResize() {
+        java.awt.event.MouseAdapter resize = new java.awt.event.MouseAdapter() {
+            int pressScreenX, pressScreenY, origW, origH;
+
+            @Override
+            public void mousePressed(java.awt.event.MouseEvent e) {
+                if (floatingCard == null) {
+                    return;
+                }
+                pressScreenX = e.getXOnScreen();
+                pressScreenY = e.getYOnScreen();
+                origW = floatingCard.getWidth();
+                origH = floatingCard.getHeight();
+            }
+
+            @Override
+            public void mouseDragged(java.awt.event.MouseEvent e) {
+                if (floatingCard == null) {
+                    return;
+                }
+                int maxW = Math.max(220, prerigLayered.getWidth() - floatingCard.getX());
+                int maxH = Math.max(140, prerigLayered.getHeight() - floatingCard.getY());
+                int nw = Math.min(maxW, Math.max(220, origW + (e.getXOnScreen() - pressScreenX)));
+                int nh = Math.min(maxH, Math.max(140, origH + (e.getYOnScreen() - pressScreenY)));
+                floatingCard.setSize(nw, nh);
+                positionResizeGrip();
+                floatingCardBounds = floatingCard.getBounds();
+            }
+        };
+        resizeGrip.addMouseListener(resize);
+        resizeGrip.addMouseMotionListener(resize);
+    }
+
+    /** Ставит {@link #resizeGrip} на нижний правый угол {@link #floatingCard} —
+     *  вызывать после любого показа/перемещения/ресайза плавающей карточки. Скрыта,
+     *  пока ничего не плавает (закрыто или закреплено колонкой). */
+    private void positionResizeGrip() {
+        if (resizeGrip == null) {
+            return;
+        }
+        if (floatingCard == null || inspectorDocked) {
+            resizeGrip.setVisible(false);
+            return;
+        }
+        resizeGrip.setBounds(floatingCard.getX() + floatingCard.getWidth() - 14,
+                floatingCard.getY() + floatingCard.getHeight() - 14, 14, 14);
+        prerigLayered.moveToFront(resizeGrip);
+        resizeGrip.setVisible(true);
     }
 
     /** Небольшая подсветка правого края холста, пока перетаскиваемая карточка над
@@ -856,11 +1132,17 @@ public class SetupStagePanel extends JPanel {
     }
 
     private JPanel cardFor(String level) {
+        if ("screen".equals(level)) {
+            return screenCard;
+        }
         if ("rigging".equals(level)) {
             return riggingCard;
         }
         if ("structure".equals(level)) {
             return structureCard;
+        }
+        if ("defaults".equals(level)) {
+            return defaultsCard;
         }
         return null;
     }
@@ -878,34 +1160,72 @@ public class SetupStagePanel extends JPanel {
         }
         openInspectorLevel = level;
         if (inspectorDocked) {
+            setUndockButtonVisible(card, true);
             dockPanel.removeAll();
             dockPanel.add(card, BorderLayout.CENTER);
+            // hideInspector() (смена контекста — другой экран/сцена/проект) уже могла
+            // открепить dockPanel от prerigCanvasHost, не трогая сам флаг inspectorDocked
+            // (см. его javadoc) — переприкрепляем, если нужно, вместо того чтобы полагаться
+            // на то, что он всё ещё в дереве компонентов с прошлого раза.
+            if (dockPanel.getParent() != prerigCanvasHost) {
+                dockPanel.setPreferredSize(new Dimension(280, 10));
+                prerigCanvasHost.add(dockPanel, BorderLayout.EAST);
+                prerigCanvasHost.revalidate();
+                prerigCanvasHost.repaint();
+            }
             dockPanel.revalidate();
             dockPanel.repaint();
             return;
         }
+        setUndockButtonVisible(card, false);
+        showFloating(card);
+    }
+
+    /** Общий хвост «открыть карточку плавающей поверх холста» — используется и
+     *  {@link #showInspector} (ветка "не закреплено"), и {@link
+     *  #undockCurrentInspector} (после того как карточка уже убрана из {@link
+     *  #dockPanel}). Одни и те же (x,y,ширина,высота) для ЛЮБОЙ карточки, не
+     *  (16,16) заново на каждую новую — иначе переключение «Параметры экрана…» →
+     *  «Конструктив…» выглядело как прыжок в угол (баг-репорт), хотя пользователь
+     *  до этого уже передвинул/растянул предыдущую карточку. См. javadoc {@link
+     *  #floatingCardBounds}. */
+    private void showFloating(JPanel card) {
         if (floatingCard != null && floatingCard != card) {
             prerigLayered.remove(floatingCard);
         }
         floatingCard = card;
         if (card.getParent() != prerigLayered) {
             prerigLayered.add(card, javax.swing.JLayeredPane.PALETTE_LAYER);
+        }
+        java.awt.Rectangle b = floatingCardBounds;
+        if (b == null) {
             int cw = 280;
             int ch = Math.max(160, Math.min(360, prerigLayered.getHeight() - 24));
-            card.setBounds(16, 16, cw, ch);
+            b = new java.awt.Rectangle(16, 16, cw, ch);
         }
+        card.setBounds(b);
+        floatingCardBounds = b;
         prerigLayered.moveToFront(card);
+        positionResizeGrip();
         prerigLayered.revalidate();
         prerigLayered.repaint();
     }
 
-    /** Закрывает текущую панель уровня целиком — и плавающую карточку, и закреплённую
-     *  колонку, если она была раскрыта. */
-    private void closeInspector() {
-        if (inspectorDocked) {
+    /** Прячет текущую панель уровня — и плавающую карточку, и закреплённую колонку,
+     *  если она была раскрыта — НЕ трогая {@link #inspectorDocked}: при следующем
+     *  {@link #showInspector} панель возвращается в том же виде (закреплённой или
+     *  плавающей), в котором её оставил пользователь. Единственный обработчик кнопки
+     *  закрытия «✕» ({@link #wrapAsInspectorCard}, баг-репорт 2026-09-15: раньше
+     *  крестик заодно и открепление сбрасывал, теперь за переключение
+     *  закреплено/плавающее целиком отвечают {@link #dockCurrentInspector}/{@link
+     *  #undockCurrentInspector}, крестик — просто "закрыть, не трогая режим"), а
+     *  также точка входа для автоматического скрытия при смене контекста (другой
+     *  экран/сцена/проект, другой способ монтажа — {@link
+     *  #applyMountTypeVisibility}). */
+    private void hideInspector() {
+        if (dockPanel.getParent() != null) {
             dockPanel.removeAll();
             prerigCanvasHost.remove(dockPanel);
-            inspectorDocked = false;
             prerigCanvasHost.revalidate();
             prerigCanvasHost.repaint();
         }
@@ -916,11 +1236,14 @@ public class SetupStagePanel extends JPanel {
             prerigLayered.repaint();
         }
         openInspectorLevel = null;
+        positionResizeGrip();
     }
 
     /** Перетаскивание карточки к правому краю холста (см. {@link #wireCardDrag})
      *  закрепляет её колонкой вместо плавающего окна — переиспользует ТУ ЖЕ карточку
-     *  (не строит копию), просто меняет родителя. */
+     *  (не строит копию), просто меняет родителя. Обратное действие — {@link
+     *  #undockCurrentInspector}, кнопка «Открепить» в шапке ({@link
+     *  #wrapAsInspectorCard}), перетаскиванием в эту сторону панель не двигается. */
     private void dockCurrentInspector() {
         if (openInspectorLevel == null) {
             return;
@@ -930,10 +1253,13 @@ public class SetupStagePanel extends JPanel {
             return;
         }
         if (floatingCard == card) {
+            floatingCardBounds = floatingCard.getBounds();
             prerigLayered.remove(floatingCard);
             floatingCard = null;
         }
         inspectorDocked = true;
+        settings.setInspectorDocked(true);
+        setUndockButtonVisible(card, true);
         dockPanel.removeAll();
         dockPanel.add(card, BorderLayout.CENTER);
         dockPanel.setPreferredSize(new Dimension(280, 10));
@@ -942,24 +1268,63 @@ public class SetupStagePanel extends JPanel {
         prerigCanvasHost.repaint();
         prerigLayered.revalidate();
         prerigLayered.repaint();
+        positionResizeGrip();
+    }
+
+    /** Кнопка «Открепить» в шапке карточки ({@link #wrapAsInspectorCard}) — обратное
+     *  действие к {@link #dockCurrentInspector}: убирает открытую карточку из {@link
+     *  #dockPanel} и показывает её плавающей поверх холста (через {@link
+     *  #showFloating}), сбрасывает и персистит {@link #inspectorDocked}. Ничего не
+     *  делает, если панель сейчас не закреплена — кнопка в этом случае скрыта (см.
+     *  {@link #setUndockButtonVisible}), но защита на всякий случай (программный
+     *  вызов/гонка событий). */
+    private void undockCurrentInspector() {
+        if (openInspectorLevel == null || !inspectorDocked) {
+            return;
+        }
+        JPanel card = cardFor(openInspectorLevel);
+        if (card == null) {
+            return;
+        }
+        dockPanel.removeAll();
+        prerigCanvasHost.remove(dockPanel);
+        prerigCanvasHost.revalidate();
+        prerigCanvasHost.repaint();
+        inspectorDocked = false;
+        settings.setInspectorDocked(false);
+        setUndockButtonVisible(card, false);
+        showFloating(card);
     }
 
     /** Показывает/скрывает быстрые кнопки уровней (rigging для RIGGED, конструктив
-     *  для STRUCTURE, ни одной — для LAYER/FLOOR/{@code null}) и закрывает открытую
-     *  панель уровня, если она перестала быть осмысленной для нового способа монтажа
-     *  (например, экран переключили с RIGGED на STRUCTURE при открытой «Ферма…»). */
-    private void applyMountTypeVisibility(com.vjstb.ledscheme.model.ScreenMountType mountType) {
+     *  для STRUCTURE, ни одной — для LAYER/FLOOR/{@code null}; {@link
+     *  #screenParamsQuickBtn} не зависит от способа монтажа — включена/выключена
+     *  просто по наличию выбранного экрана, {@code hasScreen}) и ПРЯЧЕТ (см. {@link
+     *  #hideInspector()} — признак "закреплено" не трогаем) открытую панель уровня,
+     *  если она перестала быть осмысленной — либо
+     *  для нового способа монтажа (например, экран переключили с RIGGED на
+     *  STRUCTURE при открытой «Ферма…»), либо потому что экран/сцена/проект вовсе
+     *  сменились (карточка «Параметры экрана» при {@code hasScreen == false}). */
+    private void applyMountTypeVisibility(com.vjstb.ledscheme.model.ScreenMountType mountType, boolean hasScreen) {
         boolean rigged = mountType == com.vjstb.ledscheme.model.ScreenMountType.RIGGED;
         boolean structure = mountType == com.vjstb.ledscheme.model.ScreenMountType.STRUCTURE;
         if (riggingQuickBtn != null) {
             riggingQuickBtn.setVisible(rigged);
             structureQuickBtn.setVisible(structure);
         }
+        if (screenParamsQuickBtn != null) {
+            screenParamsQuickBtn.setEnabled(hasScreen);
+        }
         if (openInspectorLevel != null) {
             boolean stillValid = (rigged && "rigging".equals(openInspectorLevel))
-                    || (structure && "structure".equals(openInspectorLevel));
+                    || (structure && "structure".equals(openInspectorLevel))
+                    || (hasScreen && "screen".equals(openInspectorLevel))
+                    // Сценовый уровень — не зависит ни от способа монтажа, ни от того,
+                    // выбран ли конкретный экран, только от того, что «Прериг сцены»
+                    // вообще виден (это гарантирует hasScene выше по вызову doRebuild).
+                    || "defaults".equals(openInspectorLevel);
             if (!stillValid) {
-                closeInspector();
+                hideInspector();
             }
         }
         if (prerigSection != null) {
@@ -1054,7 +1419,8 @@ public class SetupStagePanel extends JPanel {
 
     /** Сохраняет параметры фермы формы ({@link AppModel#updateScreenTruss}) и показывает
      *  сводку (целевая длина/отступы/предупреждение о короткой ферме + комплект сегментов
-     *  из библиотеки/число соединителей на стыках, см. {@code TrussCalc}) — по образцу
+     *  из библиотеки/крепёж на стыках — пальцы/шпильки/бобышки, см. {@code TrussCalc}) —
+     *  по образцу
      *  {@link #calculateRiggingPoints()}. Точки подвеса НЕ пересчитываются автоматически
      *  этой кнопкой (они читают ферму напрямую из {@code Screen} при следующем нажатии «"
      *  + calcRiggingBtn.getText() + "») — тот же принцип разделения, что у {@link
@@ -1089,11 +1455,14 @@ public class SetupStagePanel extends JPanel {
             msg.append("В библиотечном профиле фермы нет ни одной длины — комплект сегментов не посчитан.");
             warn = true;
         } else {
-            msg.append(String.format("%nСегментов: %d, соединителей на стыках: %d%n",
-                    result.totalPieceCount(), result.connectorCount()));
+            msg.append(String.format("%nСегментов: %d, стыков: %d%n",
+                    result.totalPieceCount(), result.jointCount()));
             for (com.vjstb.ledscheme.service.CableSpecCalc.Piece p : result.pieces()) {
                 msg.append(String.format("  %.2f м × %d%n", p.lengthM(), p.count()));
             }
+            msg.append(String.format("Крепёж на стыках — пальцев: %d, шпилек: %d (добираются отдельно);"
+                    + " бобышек: %d (обычно уже установлены в торцах фермы, отдельно не закупаются)%n",
+                    result.pinCount(), result.clipCount(), result.spigotCount()));
             msg.append("\nТочки подвеса теперь пересчитываются от этой фермы — нажмите «")
                     .append(calcRiggingBtn.getText()).append("», чтобы обновить их расстановку.");
         }
@@ -1125,11 +1494,14 @@ public class SetupStagePanel extends JPanel {
         } else if (result.catalogEmpty()) {
             msg.append("\nВ библиотечном профиле фермы нет ни одной длины.");
         } else {
-            msg.append(String.format("%nСегментов: %d%n", result.totalPieceCount()));
+            msg.append(String.format("%nСегментов: %d, стыков: %d%n", result.totalPieceCount(), result.jointCount()));
             for (com.vjstb.ledscheme.service.CableSpecCalc.Piece p : result.pieces()) {
                 msg.append(String.format("  %.2f м × %d%n", p.lengthM(), p.count()));
             }
-            msg.append(String.format("Соединителей: %d%n", result.connectorCount()));
+            msg.append(String.format("Пальцев: %d, шпилек: %d — добираются отдельно%n",
+                    result.pinCount(), result.clipCount()));
+            msg.append(String.format("Бобышек: %d — обычно уже в комплекте фермы, отдельно не закупаются%n",
+                    result.spigotCount()));
             msg.append("\nЭтот же список войдёт в общую спецификацию проекта (лист «Фермы») на этапе «Вывод».");
         }
         msg.append("\nТребует независимой инженерной перепроверки перед монтажом — см. RIGGING_CALC_NOTES.md.");
@@ -1153,7 +1525,9 @@ public class SetupStagePanel extends JPanel {
         }
         java.util.TreeMap<String, java.util.TreeMap<Double, Integer>> kitTotals = new java.util.TreeMap<>();
         int screensCounted = 0;
-        int totalConnectors = 0;
+        int totalPins = 0;
+        int totalClips = 0;
+        int totalSpigots = 0;
         StringBuilder warnings = new StringBuilder();
         for (Screen scr : scene.getScreens()) {
             if (scr.getMountType() != com.vjstb.ledscheme.model.ScreenMountType.RIGGED
@@ -1171,7 +1545,9 @@ public class SetupStagePanel extends JPanel {
                         .append("» — в библиотечном профиле нет ни одной длины, комплект не учтён\n");
                 continue;
             }
-            totalConnectors += result.connectorCount();
+            totalPins += result.pinCount();
+            totalClips += result.clipCount();
+            totalSpigots += result.spigotCount();
             com.vjstb.ledscheme.model.TrussProfile profile =
                     model.getWorkspace().trussProfileById(scr.getRiggingTrussProfileId());
             String profileName = profile != null ? profile.getName() : "(запись удалена)";
@@ -1196,8 +1572,11 @@ public class SetupStagePanel extends JPanel {
         } else {
             int totalPieces = kitTotals.values().stream()
                     .flatMap(m -> m.values().stream()).mapToInt(Integer::intValue).sum();
-            msg.append(String.format("Сегментов всего: %d, соединителей на стыках всего: %d%n",
-                    totalPieces, totalConnectors));
+            msg.append(String.format("Сегментов всего: %d%n", totalPieces));
+            msg.append(String.format("Пальцев всего: %d, шпилек всего: %d — добираются отдельно%n",
+                    totalPins, totalClips));
+            msg.append(String.format("Бобышек всего: %d — обычно уже в комплекте фермы, отдельно не закупаются%n",
+                    totalSpigots));
             for (var typeEntry : kitTotals.entrySet()) {
                 msg.append("  ").append(typeEntry.getKey()).append(":\n");
                 for (var entry : typeEntry.getValue().entrySet()) {
@@ -1450,7 +1829,16 @@ public class SetupStagePanel extends JPanel {
 
     // ---- параметры экрана ----
 
-    private JPanel buildScreenParams() {
+    /** Строит содержимое инспекторной карточки «Параметры экрана» и сохраняет её в
+     *  {@link #screenCard} — тот же механизм карточек, что {@link #riggingCard}/
+     *  {@link #structureCard} (см. {@link #wrapAsInspectorCard}), открывается кнопкой
+     *  {@link #screenParamsQuickBtn} (см. {@link #buildPrerig}). Вызывается из
+     *  конструктора ДО {@link #buildPrerig} — {@link #prerigLayered}/{@link #dockPanel}
+     *  на момент вызова ещё не построены, но это не проблема: карточка лишь
+     *  оборачивается здесь, а на {@link #prerigLayered}/{@link #dockPanel} она
+     *  ссылается только изнутри колбэков (закрытие/перетаскивание), выполняющихся уже
+     *  после того, как конструктор полностью отработает. */
+    private void buildScreenParams() {
         JPanel body = UiKit.vbox();
         pType.setRenderer(new CabinetTypeRenderer());
         // formRow — подпись сверху, поле снизу, на всю доступную ширину секции —
@@ -1485,7 +1873,7 @@ public class SetupStagePanel extends JPanel {
                 pRiggingPoints.setValue(com.vjstb.ledscheme.service.ScreenLogic.suggestRiggingPoints(
                         scr, model.typeOf(scr), model.getWorkspace()));
             }
-            applyMountTypeVisibility((com.vjstb.ledscheme.model.ScreenMountType) pMountType.getSelectedItem());
+            applyMountTypeVisibility((com.vjstb.ledscheme.model.ScreenMountType) pMountType.getSelectedItem(), true);
         });
 
         body.add(UiKit.vgap(10));
@@ -1572,16 +1960,297 @@ public class SetupStagePanel extends JPanel {
         });
         body.add(UiKit.vgap());
         body.add(del);
-        return (JPanel) UiKit.section("Параметры экрана", body);
+        screenCard = wrapAsInspectorCard("Параметры экрана", body);
+    }
+
+    /** Карточка «Параметры по умолчанию» (см. model.ScreenDefaults, class-javadoc
+     *  {@link #defaultsCard}) — сценовый уровень: правит {@link
+     *  com.vjstb.ledscheme.model.Scene#getScreenDefaults()} текущей сцены, а не
+     *  выбранный экран. Каждое поле — свой комбобокс/текст-филд с ведущим "не
+     *  задано" (пусто/{@code null}), заполняется {@link
+     *  #populateScreenDefaultsFields}. Единая кнопка «Сохранить», как и у
+     *  {@link #buildScreenParams} — читает ВСЕ поля разом в новый {@link
+     *  com.vjstb.ledscheme.model.ScreenDefaults} и сохраняет через {@link
+     *  AppModel#updateScreenDefaults}. */
+    private void buildScreenDefaultsCard() {
+        JPanel body = UiKit.vbox();
+        body.add(new JLabel("<html>Стартовые значения для НОВЫХ экранов этой сцены — не трогают уже"
+                + " существующие экраны, и правки, сделанные вручную после создания экрана, повторным"
+                + " сохранением этих значений не перезаписываются.</html>"));
+        body.add(UiKit.vgap(10));
+
+        dCabinetType.setRenderer(new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public java.awt.Component getListCellRendererComponent(JList<?> list, Object value, int index,
+                    boolean isSelected, boolean cellHasFocus) {
+                java.awt.Component c = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                if (value == null) {
+                    setText("Не задано (первый в библиотеке)");
+                } else if (value instanceof CabinetType ct) {
+                    setText(ct.getName());
+                }
+                return c;
+            }
+        });
+        body.add(UiKit.formRow("Тип кабинета", dCabinetType));
+        body.add(UiKit.vgap());
+
+        // Пустые комбобоксы (см. javadoc над полями) — модель с ведущим null
+        // строится тут же, ОДИН раз, а не в populateScreenDefaultsFields() (та
+        // только переключает setSelectedItem при каждой пересборке).
+        DefaultComboBoxModel<com.vjstb.ledscheme.model.ScreenMountType> mtModel = new DefaultComboBoxModel<>();
+        mtModel.addElement(null);
+        for (com.vjstb.ledscheme.model.ScreenMountType v : com.vjstb.ledscheme.model.ScreenMountType.values()) {
+            mtModel.addElement(v);
+        }
+        dMountType.setModel(mtModel);
+        dMountType.setRenderer(notSetRenderer());
+        body.add(UiKit.formRow("Способ монтажа", dMountType));
+        body.add(UiKit.vgap());
+
+        dRefreshHz.setRenderer(notSetRenderer());
+        body.add(UiKit.formRow("Герцовка контента", dRefreshHz));
+        body.add(UiKit.vgap());
+
+        dBitDepth.setRenderer(notSetRenderer());
+        body.add(UiKit.formRow("Глубина цвета, бит", dBitDepth));
+        body.add(UiKit.vgap(10));
+
+        DefaultComboBoxModel<com.vjstb.ledscheme.model.MaskColorPreset> bgModel = new DefaultComboBoxModel<>();
+        bgModel.addElement(null);
+        for (com.vjstb.ledscheme.model.MaskColorPreset v : com.vjstb.ledscheme.model.MaskColorPreset.values()) {
+            bgModel.addElement(v);
+        }
+        dBackground.setModel(bgModel);
+        dBackground.setRenderer(notSetRenderer());
+        body.add(UiKit.formRow("Цвет маски", dBackground));
+        body.add(UiKit.vgap());
+
+        DefaultComboBoxModel<com.vjstb.ledscheme.model.ScreenTagColor> tagModel = new DefaultComboBoxModel<>();
+        tagModel.addElement(null);
+        for (com.vjstb.ledscheme.model.ScreenTagColor v : com.vjstb.ledscheme.model.ScreenTagColor.values()) {
+            tagModel.addElement(v);
+        }
+        dTagColor.setModel(tagModel);
+        dTagColor.setRenderer(notSetRenderer());
+        body.add(UiKit.formRow("Метка (цвет зоны)", dTagColor));
+        body.add(UiKit.vgap(10));
+
+        body.add(new JLabel("Подвес"));
+        body.add(UiKit.vgap());
+        dRiggingSafetyFactor.setToolTipText("Пусто — не задано, используется обычный дефолт (5.0).");
+        body.add(UiKit.formRow("Запас прочности подвеса", dRiggingSafetyFactor));
+        body.add(UiKit.vgap());
+        dRiggingHoistType.setRenderer(new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public java.awt.Component getListCellRendererComponent(JList<?> list, Object value, int index,
+                    boolean isSelected, boolean cellHasFocus) {
+                java.awt.Component c = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                if (value == null) {
+                    setText("Не задано");
+                } else if (value instanceof com.vjstb.ledscheme.model.HoistType h) {
+                    setText(h.getName() + " — WLL " + UiKit.fmt(h.getWllKg()) + " кг");
+                }
+                return c;
+            }
+        });
+        body.add(UiKit.formRow("Модель лебёдки (библиотека)", dRiggingHoistType));
+        body.add(UiKit.vgap());
+        dRiggingTrussProfile.setRenderer(new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public java.awt.Component getListCellRendererComponent(JList<?> list, Object value, int index,
+                    boolean isSelected, boolean cellHasFocus) {
+                java.awt.Component c = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                if (value == null) {
+                    setText("Не задано");
+                } else if (value instanceof com.vjstb.ledscheme.model.TrussProfile t) {
+                    setText(t.getName() + " — " + t.getAvailableLengthsM().size() + " длин");
+                }
+                return c;
+            }
+        });
+        body.add(UiKit.formRow("Тип фермы (библиотека)", dRiggingTrussProfile));
+        body.add(UiKit.vgap(10));
+
+        body.add(new JLabel("Конструктив"));
+        body.add(UiKit.vgap());
+        dStructureTowerHeight.setToolTipText("Пусто — не задано, используется обычный дефолт (3000 мм).");
+        body.add(UiKit.formRow("Высота башни, мм", dStructureTowerHeight));
+        body.add(UiKit.vgap());
+        dStructureBaseExtension.setToolTipText("Пусто — не задано, используется обычный дефолт (500 мм).");
+        body.add(UiKit.formRow("Вынос базы под балласт, мм", dStructureBaseExtension));
+        body.add(UiKit.vgap());
+        dStructureBallastRatio.setToolTipText("Пусто — не задано, используется обычный дефолт (0.6).");
+        body.add(UiKit.formRow("Коэфф. отгруз/масса экрана", dStructureBallastRatio));
+        body.add(UiKit.vgap());
+        setStructureFrameRenderer(dStructureFrameType);
+        setStructureFrameRenderer(dStructureCupType);
+        setStructureFrameRenderer(dStructureBallastType);
+        body.add(UiKit.formRow("Тип рамы (библиотека)", dStructureFrameType));
+        body.add(UiKit.vgap());
+        body.add(UiKit.formRow("Тип стакана (библиотека)", dStructureCupType));
+        body.add(UiKit.vgap());
+        body.add(UiKit.formRow("Тип контейнера балласта (библиотека)", dStructureBallastType));
+        body.add(UiKit.vgap());
+
+        JButton apply = new JButton("Сохранить параметры по умолчанию");
+        apply.addActionListener(e -> {
+            Scene scene = model.getCurrentScene();
+            if (scene == null) return;
+            com.vjstb.ledscheme.model.ScreenDefaults d = new com.vjstb.ledscheme.model.ScreenDefaults();
+            CabinetType ct = (CabinetType) dCabinetType.getSelectedItem();
+            d.setCabinetTypeId(ct != null ? ct.getId() : null);
+            d.setMountType((com.vjstb.ledscheme.model.ScreenMountType) dMountType.getSelectedItem());
+            d.setRefreshRateHz((Integer) dRefreshHz.getSelectedItem());
+            d.setColorBitDepth((Integer) dBitDepth.getSelectedItem());
+            d.setBackground((com.vjstb.ledscheme.model.MaskColorPreset) dBackground.getSelectedItem());
+            d.setTagColor((com.vjstb.ledscheme.model.ScreenTagColor) dTagColor.getSelectedItem());
+            d.setRiggingSafetyFactorMin(com.vjstb.ledscheme.ui.MathExpr.tryEval(dRiggingSafetyFactor.getText()));
+            com.vjstb.ledscheme.model.HoistType ht =
+                    (com.vjstb.ledscheme.model.HoistType) dRiggingHoistType.getSelectedItem();
+            d.setRiggingHoistTypeId(ht != null ? ht.getId() : null);
+            com.vjstb.ledscheme.model.TrussProfile tp =
+                    (com.vjstb.ledscheme.model.TrussProfile) dRiggingTrussProfile.getSelectedItem();
+            d.setRiggingTrussProfileId(tp != null ? tp.getId() : null);
+            d.setStructureTowerHeightMm(com.vjstb.ledscheme.ui.MathExpr.tryEval(dStructureTowerHeight.getText()));
+            d.setStructureBaseExtensionMm(com.vjstb.ledscheme.ui.MathExpr.tryEval(dStructureBaseExtension.getText()));
+            d.setStructureBallastRatio(com.vjstb.ledscheme.ui.MathExpr.tryEval(dStructureBallastRatio.getText()));
+            d.setStructureFrameTypeId(structureFrameTypeId(dStructureFrameType));
+            d.setStructureCupTypeId(structureFrameTypeId(dStructureCupType));
+            d.setStructureBallastTypeId(structureFrameTypeId(dStructureBallastType));
+            model.updateScreenDefaults(scene, d);
+        });
+        body.add(apply);
+
+        defaultsCard = wrapAsInspectorCard("Параметры по умолчанию", body);
+    }
+
+    /** Общий рендерер "null → «Не задано»" для комбобоксов, где непустое значение уже
+     *  само по себе достаточно читаемо через {@code toString()} (enum'ы вроде {@link
+     *  com.vjstb.ledscheme.model.ScreenMountType}/{@link com.vjstb.ledscheme.model.MaskColorPreset}/
+     *  {@link com.vjstb.ledscheme.model.ScreenTagColor}, обычный {@code Integer}) —
+     *  комбобоксам, которым для непустого значения нужен СВОЙ текст (тип кабинета,
+     *  лебёдка, ферма, рама конструктива), нужен собственный рендерер, см. вызывающий код.*/
+    private static javax.swing.DefaultListCellRenderer notSetRenderer() {
+        return new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public java.awt.Component getListCellRendererComponent(JList<?> list, Object value, int index,
+                    boolean isSelected, boolean cellHasFocus) {
+                java.awt.Component c = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                if (value == null) {
+                    setText("Не задано");
+                }
+                return c;
+            }
+        };
+    }
+
+    /** Заполняет карточку «Параметры по умолчанию» из {@code sd} ({@code null} —
+     *  сцена их ещё не задавала, все поля показываются пустыми/"не задано"). Вызывается
+     *  из {@link #doRebuild} при каждой пересборке, пока текущая сцена существует —
+     *  сценовый уровень, поэтому не завязано на выбор конкретного экрана. */
+    private void populateScreenDefaultsFields(com.vjstb.ledscheme.model.ScreenDefaults sd) {
+        populateDefaultsCabinetTypeCombo(sd != null ? sd.getCabinetTypeId() : null);
+        dMountType.setSelectedItem(sd != null ? sd.getMountType() : null);
+        dRefreshHz.setSelectedItem(sd != null ? sd.getRefreshRateHz() : null);
+        dBitDepth.setSelectedItem(sd != null ? sd.getColorBitDepth() : null);
+        dBackground.setSelectedItem(sd != null ? sd.getBackground() : null);
+        dTagColor.setSelectedItem(sd != null ? sd.getTagColor() : null);
+        dRiggingSafetyFactor.setText(sd != null && sd.getRiggingSafetyFactorMin() != null
+                ? UiKit.fmt(sd.getRiggingSafetyFactorMin()) : "");
+        populateDefaultsHoistTypeCombo(sd != null ? sd.getRiggingHoistTypeId() : null);
+        populateDefaultsTrussProfileCombo(sd != null ? sd.getRiggingTrussProfileId() : null);
+        dStructureTowerHeight.setText(sd != null && sd.getStructureTowerHeightMm() != null
+                ? UiKit.fmt(sd.getStructureTowerHeightMm()) : "");
+        dStructureBaseExtension.setText(sd != null && sd.getStructureBaseExtensionMm() != null
+                ? UiKit.fmt(sd.getStructureBaseExtensionMm()) : "");
+        dStructureBallastRatio.setText(sd != null && sd.getStructureBallastRatio() != null
+                ? UiKit.fmt(sd.getStructureBallastRatio()) : "");
+        populateDefaultsStructureFrameCombo(dStructureFrameType,
+                com.vjstb.ledscheme.model.StructureFrameType.Kind.FRAME, sd != null ? sd.getStructureFrameTypeId() : null);
+        populateDefaultsStructureFrameCombo(dStructureCupType,
+                com.vjstb.ledscheme.model.StructureFrameType.Kind.CUP, sd != null ? sd.getStructureCupTypeId() : null);
+        populateDefaultsStructureFrameCombo(dStructureBallastType,
+                com.vjstb.ledscheme.model.StructureFrameType.Kind.BALLAST_CONTAINER,
+                sd != null ? sd.getStructureBallastTypeId() : null);
+    }
+
+    /** В отличие от {@link #populateTypeCombo} (тип кабинета выбранного ЭКРАНА, где
+     *  комбобокс не содержит "не задано" — экран всегда ссылается на конкретный тип),
+     *  здесь ведущий {@code null}-элемент значим сам по себе. */
+    private void populateDefaultsCabinetTypeCombo(String selectId) {
+        DefaultComboBoxModel<CabinetType> m = new DefaultComboBoxModel<>();
+        m.addElement(null);
+        CabinetType toSelect = null;
+        for (CabinetType t : model.getCabinetTypes()) {
+            m.addElement(t);
+            if (selectId != null && selectId.equals(t.getId())) {
+                toSelect = t;
+            }
+        }
+        dCabinetType.setModel(m);
+        dCabinetType.setSelectedItem(toSelect);
+    }
+
+    /** В отличие от {@link #populateHoistTypeCombo} — тот при {@code selectId == null}
+     *  подставляет первую библиотечную запись как ПОДСКАЗКУ ({@link #pickDefault}),
+     *  здесь {@code null} остаётся {@code null} ("не задано" — самостоятельный смысл,
+     *  не просто временная заглушка на экране без сохранённого выбора). */
+    private void populateDefaultsHoistTypeCombo(String selectId) {
+        DefaultComboBoxModel<com.vjstb.ledscheme.model.HoistType> m = new DefaultComboBoxModel<>();
+        m.addElement(null);
+        com.vjstb.ledscheme.model.HoistType toSelect = null;
+        for (com.vjstb.ledscheme.model.HoistType h : model.getHoistTypes()) {
+            m.addElement(h);
+            if (selectId != null && selectId.equals(h.getId())) {
+                toSelect = h;
+            }
+        }
+        dRiggingHoistType.setModel(m);
+        dRiggingHoistType.setSelectedItem(toSelect);
+    }
+
+    /** См. {@link #populateDefaultsHoistTypeCombo} за тем, чем отличается от
+     *  {@link #populateTrussProfileCombo}. */
+    private void populateDefaultsTrussProfileCombo(String selectId) {
+        DefaultComboBoxModel<com.vjstb.ledscheme.model.TrussProfile> m = new DefaultComboBoxModel<>();
+        m.addElement(null);
+        com.vjstb.ledscheme.model.TrussProfile toSelect = null;
+        for (com.vjstb.ledscheme.model.TrussProfile t : model.getTrussProfiles()) {
+            m.addElement(t);
+            if (selectId != null && selectId.equals(t.getId())) {
+                toSelect = t;
+            }
+        }
+        dRiggingTrussProfile.setModel(m);
+        dRiggingTrussProfile.setSelectedItem(toSelect);
+    }
+
+    /** См. {@link #populateDefaultsHoistTypeCombo} за тем, чем отличается от
+     *  {@link #populateStructureFrameCombo}. */
+    private void populateDefaultsStructureFrameCombo(JComboBox<com.vjstb.ledscheme.model.StructureFrameType> combo,
+            com.vjstb.ledscheme.model.StructureFrameType.Kind kind, String selectId) {
+        DefaultComboBoxModel<com.vjstb.ledscheme.model.StructureFrameType> m = new DefaultComboBoxModel<>();
+        m.addElement(null);
+        com.vjstb.ledscheme.model.StructureFrameType toSelect = null;
+        for (com.vjstb.ledscheme.model.StructureFrameType t : model.getStructureFrameTypes()) {
+            if (t.getKind() != kind) continue;
+            m.addElement(t);
+            if (selectId != null && selectId.equals(t.getId())) {
+                toSelect = t;
+            }
+        }
+        combo.setModel(m);
+        combo.setSelectedItem(toSelect);
     }
 
     // ---- rebuild ----
 
     /** Публичный вход — выполняет пересборку отложенно (invokeLater), как и
-     *  MainFrame.refresh(): вызывается синхронно из колбэков выбора в JList
-     *  (ProjectList/SceneList и т.д.), и без отсрочки видимость вложенных секций
-     *  внутри JSplitPane иногда не перерисовывалась сразу — только при следующем
-     *  взаимодействии с интерфейсом (свайп/ресайз/клик где-то ещё). */
+     *  MainFrame.refresh(): вызывается синхронно из колбэков выбора в дереве
+     *  навигации и т.д., и без отсрочки видимость «Прериг сцены» иногда не
+     *  перерисовывалась сразу — только при следующем взаимодействии с
+     *  интерфейсом (свайп/ресайз/клик где-то ещё). */
     public void rebuild() {
         SwingUtilities.invokeLater(this::doRebuild);
     }
@@ -1589,53 +2258,24 @@ public class SetupStagePanel extends JPanel {
     private void doRebuild() {
         refreshing = true;
         try {
-            syncList(projModel, model.getProjects());
-            projList.setSelectedValue(model.getCurrentProject(), true);
-            // ListSizing.fit() даёт списку ЯВНЫЙ preferred/maximum размер по числу строк —
-            // без этого JList с многострочным HTML-рендерером (NamedRenderer) иногда
-            // на раннем layout-проходе (пока ширина ещё не установлена окончательно)
-            // сообщает совершенно неверный preferred height; в JSplitPane это провоцирует
-            // собственный внутренний пересчёт позиции разделителя (BasicSplitPaneUI),
-            // раздувающий секцию со списком почти на всю высоту соседнего сплита.
-            ListSizing.fit(projList, projScroll, 2, 6);
-
-            boolean hasProject = model.getCurrentProject() != null;
-            UiKit.setSectionVisible(scenesSection, hasProject, leftSplit2, settings, "setup.scenes", 0.18);
-            if (hasProject) {
-                syncList(sceneModel, model.getCurrentProject().getScenes());
-                sceneList.setSelectedValue(model.getCurrentScene(), true);
-                ListSizing.fit(sceneList, sceneScroll, 2, 6);
-            }
+            // Единое дерево — один вызов вместо трёх syncList/ListSizing/
+            // setSectionVisible на три отдельных JList (см. class-javadoc {@link
+            // #navTree}): раскрытие узлов, выбор текущего пути и активность кнопок
+            // тулбара пересчитываются внутри {@link #syncTree}.
+            syncTree();
 
             boolean hasScene = model.getCurrentScene() != null;
             Screen scr = model.getCurrentScreen();
-            // screensSection и paramsSection — оба потомки ОДНОГО leftSplit3. Если оба
-            // становятся видимы в одном и том же проходе doRebuild() (например,
-            // восстановление выбора и сцены, и экрана из сохранённого состояния при
-            // открытии проекта), нельзя вызывать setSectionVisible/restoreDividerProportion
-            // по отдельности для каждого — см. javadoc restoreDividerProportion: два
-            // независимых invokeLater гонятся с внутренним пересчётом JSplitPane и в сумме
-            // дают абсурдный результат. Раньше это и происходило (баг-репорт: кнопка
-            // «Применить настройки экрана» иногда залипает — видна, но нулевой высоты,
-            // пока пользователь не потянет окно руками). Переключаем видимость обеих
-            // секций напрямую и вызываем restoreDividerProportion ОДИН раз, если хотя бы
-            // одна из них только что стала видимой.
-            boolean screensWasVisible = screensSection.isVisible();
-            boolean paramsWasVisible = paramsSection.isVisible();
-            screensSection.setVisible(hasScene);
-            paramsSection.setVisible(scr != null);
-            if ((hasScene && !screensWasVisible) || (scr != null && !paramsWasVisible)) {
-                UiKit.restoreDividerProportion(leftSplit3, settings, "setup.screensParams", 0.32);
-            }
             // v3.0: "Прериг сцены" больше не делит правую колонку с "Формой экрана"
             // (той больше нет — см. class-javadoc про SceneCanvasPanel/ПКМ) — просто
             // видимость, без общего JSplitPane-разделителя и restoreDividerProportion.
             prerigSection.setVisible(hasScene);
+            if (defaultsQuickBtn != null) {
+                defaultsQuickBtn.setEnabled(hasScene);
+            }
             if (hasScene) {
-                syncList(screenModel, model.getCurrentScene().getScreens());
-                screenList.setSelectedValue(model.getCurrentScreen(), true);
-                ListSizing.fit(screenList, screenScroll, 2, 8);
                 rebuildPrerig();
+                populateScreenDefaultsFields(model.getCurrentScene().getScreenDefaults());
             }
             if (scr != null) {
                 pName.setText(scr.getName());
@@ -1708,17 +2348,10 @@ public class SetupStagePanel extends JPanel {
                         ? UiKit.fmt(scr.getStructureScreenElevationMm()) : "");
                 pStructureNotes.setText(scr.getStructureNotes() != null ? scr.getStructureNotes() : "");
             }
-            applyMountTypeVisibility(scr != null ? scr.getMountType() : null);
+            applyMountTypeVisibility(scr != null ? scr.getMountType() : null, scr != null);
 
         } finally {
             refreshing = false;
-        }
-        // Явно на каждом разделителе, чьи дети (Сцены/Экраны/Параметры) только что
-        // поменяли видимость — иначе место под них не пересчитывается немедленно
-        // (revalidate() на верхнем this не всегда достаточен).
-        for (JSplitPane sp : new JSplitPane[]{leftSplit3, leftSplit2, leftSplitNav}) {
-            sp.revalidate();
-            sp.repaint();
         }
         revalidate();
         repaint();
@@ -1805,10 +2438,133 @@ public class SetupStagePanel extends JPanel {
         pRiggingTrussProfile.setSelectedItem(toSelect);
     }
 
-    private static <T> void syncList(DefaultListModel<T> lm, List<T> items) {
-        lm.clear();
-        for (T i : items) {
-            lm.addElement(i);
+    /** Перестраивает {@link #navTree} с нуля из модели (Project/Scene/Screen —
+     *  обычные доменные объекты, не отдельная view-модель) и восстанавливает то,
+     *  что при полной пересборке узлов иначе терялось бы: раскрытые ветки (по id,
+     *  т.к. узлы — новые инстансы каждый вызов) и путь к текущему выбору. Заодно
+     *  синхронизирует состояние тулбара (плейсхолдер поля добавления, доступность
+     *  кнопок) — раньше это было размазано по {@link #buildProjects}/{@link
+     *  #buildScenes}/{@link #buildScreens}, теперь один проход. */
+    private void syncTree() {
+        Set<String> expandedProjects = new HashSet<>();
+        Set<String> expandedScenes = new HashSet<>();
+        for (int i = 0; i < navRoot.getChildCount(); i++) {
+            DefaultMutableTreeNode pNode = (DefaultMutableTreeNode) navRoot.getChildAt(i);
+            if (navTree.isExpanded(new TreePath(pNode.getPath()))) {
+                expandedProjects.add(((Project) pNode.getUserObject()).getId());
+            }
+            for (int j = 0; j < pNode.getChildCount(); j++) {
+                DefaultMutableTreeNode sNode = (DefaultMutableTreeNode) pNode.getChildAt(j);
+                if (navTree.isExpanded(new TreePath(sNode.getPath()))) {
+                    expandedScenes.add(((Scene) sNode.getUserObject()).getId());
+                }
+            }
+        }
+
+        navRoot.removeAllChildren();
+        DefaultMutableTreeNode currentProjectNode = null;
+        DefaultMutableTreeNode currentSceneNode = null;
+        DefaultMutableTreeNode currentScreenNode = null;
+        for (Project p : model.getProjects()) {
+            DefaultMutableTreeNode pNode = new DefaultMutableTreeNode(p);
+            navRoot.add(pNode);
+            if (p == model.getCurrentProject()) {
+                currentProjectNode = pNode;
+            }
+            for (Scene s : p.getScenes()) {
+                DefaultMutableTreeNode sNode = new DefaultMutableTreeNode(s);
+                pNode.add(sNode);
+                if (s == model.getCurrentScene()) {
+                    currentSceneNode = sNode;
+                }
+                for (Screen scr : s.getScreens()) {
+                    DefaultMutableTreeNode scrNode = new DefaultMutableTreeNode(scr);
+                    sNode.add(scrNode);
+                    if (scr == model.getCurrentScreen()) {
+                        currentScreenNode = scrNode;
+                    }
+                }
+            }
+        }
+        DefaultMutableTreeNode selectNode = currentScreenNode != null ? currentScreenNode
+                : currentSceneNode != null ? currentSceneNode : currentProjectNode;
+
+        navTreeModel.reload();
+
+        for (int i = 0; i < navRoot.getChildCount(); i++) {
+            DefaultMutableTreeNode pNode = (DefaultMutableTreeNode) navRoot.getChildAt(i);
+            Project p = (Project) pNode.getUserObject();
+            if (expandedProjects.contains(p.getId()) || p == model.getCurrentProject()) {
+                navTree.expandPath(new TreePath(pNode.getPath()));
+            }
+            for (int j = 0; j < pNode.getChildCount(); j++) {
+                DefaultMutableTreeNode sNode = (DefaultMutableTreeNode) pNode.getChildAt(j);
+                Scene s = (Scene) sNode.getUserObject();
+                if (expandedScenes.contains(s.getId()) || s == model.getCurrentScene()) {
+                    navTree.expandPath(new TreePath(sNode.getPath()));
+                }
+            }
+        }
+
+        if (selectNode != null) {
+            TreePath path = new TreePath(selectNode.getPath());
+            navTree.setSelectionPath(path);
+            navTree.scrollPathToVisible(path);
+        } else {
+            navTree.clearSelection();
+        }
+
+        if (model.getCurrentScene() != null) {
+            addNodeBtn.setText("+ Добавить экран");
+            addNodeBtn.setToolTipText("Открыть диалог добавления экрана в текущую сцену.");
+        } else if (model.getCurrentProject() != null) {
+            addNodeBtn.setText("+ Добавить сцену");
+            addNodeBtn.setToolTipText("Добавить сцену в текущий проект.");
+        } else {
+            addNodeBtn.setText("+ Добавить проект");
+            addNodeBtn.setToolTipText("Создать новый проект.");
+        }
+        arrangeScreensBtn.setEnabled(model.getCurrentScene() != null);
+        deleteNodeBtn.setEnabled(selectNode != null);
+    }
+
+    private static String navTreeText(java.awt.Color muted, String title, String meta) {
+        return "<html><b>" + escapeHtml(title) + "</b>&nbsp;&nbsp;<span style='color:" + toHex(muted)
+                + ";font-size:9px;'>" + escapeHtml(meta) + "</span></html>";
+    }
+
+    private static String toHex(java.awt.Color c) {
+        return String.format("#%06x", c.getRGB() & 0xFFFFFF);
+    }
+
+    private static String escapeHtml(String s) {
+        return s == null ? "" : s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
+    /** Рендерер узла дерева — жирное название + серая мелкая строка-пояснение,
+     *  как раньше {@code NamedRenderer} у трёх отдельных JList (см. git-историю). */
+    private class NavTreeCellRenderer extends DefaultTreeCellRenderer {
+        NavTreeCellRenderer() {
+            setLeafIcon(null);
+            setClosedIcon(null);
+            setOpenIcon(null);
+        }
+
+        @Override
+        public Component getTreeCellRendererComponent(JTree tree, Object value, boolean sel, boolean expanded,
+                boolean leaf, int row, boolean hasFocus) {
+            super.getTreeCellRendererComponent(tree, value, sel, expanded, leaf, row, hasFocus);
+            Object obj = value instanceof DefaultMutableTreeNode n ? n.getUserObject() : null;
+            if (obj instanceof Project p) {
+                setText(navTreeText(Palette.MUTED, p.getName(), p.getScenes().size() + " сцен"));
+            } else if (obj instanceof Scene s) {
+                setText(navTreeText(Palette.MUTED, s.getName(), s.getScreens().size() + " экранов"));
+            } else if (obj instanceof Screen scr) {
+                CabinetType ct = model.typeOf(scr);
+                String meta = scr.getCols() + "×" + scr.getRows() + (ct != null ? " · " + ct.getName() : "");
+                setText(navTreeText(Palette.MUTED, scr.getName(), meta));
+            }
+            return this;
         }
     }
 

@@ -29,6 +29,16 @@ public class UserProfile {
      *  углу холста на этапах Питание/Сигнал (см. группу 2 плана правок). */
     private boolean previewWidgetEnabled = true;
 
+    /** Закреплён ли инспектор «Подвес»/«Конструктив»/«Параметры экрана» колонкой
+     *  справа от холста «Прериг сцены» (см. {@code ui.stage.SetupStagePanel#inspectorDocked}) —
+     *  вместо плавающей карточки. Персистится, а не только внутрисессионное состояние
+     *  — баг-репорт 2026-09-15: "переключение проекта закрывает закреплённый
+     *  инспектор, повторное открытие — уже НЕ закреплённым"; смена контекста
+     *  (другой экран/сцена/проект, другой способ монтажа) прячет панель, не трогая
+     *  этот флаг — {@code SetupStagePanel#hideInspector()} против {@code
+     *  #closeInspector()} (последний — явное открепление кнопкой «✕»). */
+    private boolean inspectorDocked = false;
+
     /** Учитывать ли центр канваса как цель прилипания при Shift-перетаскивании
      *  экрана в редакторе канваса (помимо краёв уже размещённых экранов и краёв
      *  самого канваса, которые прилипают всегда). */
@@ -250,6 +260,15 @@ public class UserProfile {
      *  "под печать" физически бессмысленно (растянуло бы контент с панели). */
     private int docExportDpi = 72;
 
+    /** Масштаб всего интерфейса в процентах (см. {@code App.main} — устанавливается
+     *  системным свойством {@code flatlaf.uiScale} ДО создания L&F), 100 по
+     *  умолчанию = без масштабирования. Как и {@link #lafStyle} (см. javadoc
+     *  {@code MainMenuBar#applyTheme}), применяется только при следующем запуске:
+     *  масштаб влияет на размеры/координаты холстов с собственной отрисовкой не
+     *  меньше, чем цвет темы — живое переключение рискованно тем же классом бага
+     *  ("залипания"), только для геометрии, а не цвета. */
+    private int uiScalePercent = 100;
+
     public UserProfile() {
     }
 
@@ -331,6 +350,14 @@ public class UserProfile {
 
     public void setPreviewWidgetEnabled(boolean previewWidgetEnabled) {
         this.previewWidgetEnabled = previewWidgetEnabled;
+    }
+
+    public boolean isInspectorDocked() {
+        return inspectorDocked;
+    }
+
+    public void setInspectorDocked(boolean inspectorDocked) {
+        this.inspectorDocked = inspectorDocked;
     }
 
     public boolean isCanvasSnapToCenter() {
@@ -596,6 +623,14 @@ public class UserProfile {
         this.docExportDpi = docExportDpi > 0 ? docExportDpi : 72;
     }
 
+    public int getUiScalePercent() {
+        return uiScalePercent > 0 ? uiScalePercent : 100;
+    }
+
+    public void setUiScalePercent(int uiScalePercent) {
+        this.uiScalePercent = uiScalePercent > 0 ? uiScalePercent : 100;
+    }
+
     /** true — тёмный бакет цветов Palette (см. Palette#applyTheme); ПРОИЗВОДНОЕ от
      *  {@link #lafStyle}, не отдельное состояние (Darcula считается тёмным,
      *  IntelliJ — светлым, см. {@code ui.LafStyle#isDark}). */
@@ -637,6 +672,7 @@ public class UserProfile {
         p.signalColors = signalColors != null ? new ArrayList<>(signalColors) : null;
         p.layout = new LinkedHashMap<>(layout);
         p.previewWidgetEnabled = previewWidgetEnabled;
+        p.inspectorDocked = inspectorDocked;
         p.canvasSnapToCenter = canvasSnapToCenter;
         p.snapThresholdPx = snapThresholdPx;
         p.snapStrengthPercent = snapStrengthPercent;
@@ -664,6 +700,7 @@ public class UserProfile {
         p.lafStyle = lafStyle;
         p.fontFamily = fontFamily;
         p.docExportDpi = docExportDpi;
+        p.uiScalePercent = uiScalePercent;
         p.keyBindings = new LinkedHashMap<>();
         for (Map.Entry<String, KeyCombo> en : keyBindings.entrySet()) {
             p.keyBindings.put(en.getKey(), en.getValue().copy());

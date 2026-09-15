@@ -239,6 +239,31 @@ public class PersonalizationDialog extends javax.swing.JDialog {
         fontRow.add(fontCombo, java.awt.BorderLayout.EAST);
         body.add(fontRow);
 
+        String[] scaleOptions = {"100%", "125%", "150%", "175%", "200%"};
+        JComboBox<String> scaleCombo = new JComboBox<>(scaleOptions);
+        scaleCombo.setSelectedItem(settings.activeProfile().getUiScalePercent() + "%");
+        scaleCombo.setToolTipText("Размер всех элементов интерфейса — для экранов/мониторов с непривычным DPI"
+                + " (например, ноутбук с очень мелким или очень крупным разрешением)");
+        scaleCombo.addActionListener(e -> {
+            String sel = (String) scaleCombo.getSelectedItem();
+            if (sel == null) {
+                return;
+            }
+            int percent = Integer.parseInt(sel.substring(0, sel.length() - 1));
+            if (percent == settings.activeProfile().getUiScalePercent()) {
+                return;
+            }
+            settings.setUiScalePercent(percent);
+            UiKit.promptRestartRequired(this, "Масштаб интерфейса " + sel + " будет применён при следующем"
+                    + " запуске.");
+        });
+        JPanel scaleRow = new JPanel(new java.awt.BorderLayout(8, 0));
+        scaleRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        scaleRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+        scaleRow.add(new JLabel("Масштаб интерфейса"), java.awt.BorderLayout.CENTER);
+        scaleRow.add(scaleCombo, java.awt.BorderLayout.EAST);
+        body.add(scaleRow);
+
         return (JPanel) UiKit.section("Стиль оформления", body);
     }
 

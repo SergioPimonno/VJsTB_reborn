@@ -557,7 +557,8 @@ public class OutputStagePanel extends JPanel {
     private void addTrussSheet(Workbook wb, Project project) {
         Sheet sheet = com.vjstb.ledscheme.service.SpecXlsxWriter.addSheet(wb, "Фермы",
                 "Сцена", "Экран", "Тип фермы", "Целевая длина, мм", "Отступ слева, мм", "Отступ справа, мм",
-                "Комплект", "Сегментов, шт", "Соединителей, шт");
+                "Комплект", "Сегментов, шт", "Стыков, шт", "Пальцев, шт", "Шпилек, шт",
+                "Бобышек, шт (в комплекте фермы)");
         for (Scene scene : project.getScenes()) {
             for (Screen scr : scene.getScreens()) {
                 if (scr.getMountType() != com.vjstb.ledscheme.model.ScreenMountType.RIGGED
@@ -574,10 +575,11 @@ public class OutputStagePanel extends JPanel {
                                 .collect(java.util.stream.Collectors.joining(", "));
                 com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, scene.getName(), scr.getName(),
                         profile != null ? profile.getName() : "(запись удалена)", r.targetLengthMm(),
-                        r.leftOffsetMm(), r.rightOffsetMm(), kitText, r.totalPieceCount(), r.connectorCount());
+                        r.leftOffsetMm(), r.rightOffsetMm(), kitText, r.totalPieceCount(), r.jointCount(),
+                        r.pinCount(), r.clipCount(), r.spigotCount());
             }
         }
-        com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(sheet, 9);
+        com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(sheet, 12);
     }
 
     /** Лист «Общий список» — по прямому запросу пользователя, ОДНА сводная таблица
@@ -634,8 +636,11 @@ public class OutputStagePanel extends JPanel {
                     "шт");
         }
 
-        // Фермы -- сегменты/соединители, просуммированные по каждому профилю библиотеки
-        // (см. addTrussSheet за детализацией по экранам).
+        // Фермы -- сегменты/крепёж стыков, просуммированные по каждому профилю библиотеки
+        // (см. addTrussSheet за детализацией по экранам). Крепёж -- 3 отдельные строки, не
+        // одна: бобышки обычно уже установлены в торцах фермы заводом (не закупаются
+        // отдельно), а пальцы/шпильки -- расходники, которые нужно добрать (см. javadoc
+        // TrussCalc.SPIGOTS_PER_JOINT/PINS_PER_JOINT/CLIPS_PER_JOINT).
         java.util.LinkedHashMap<String, int[]> trusses = new java.util.LinkedHashMap<>();
         for (Scene scene : project.getScenes()) {
             for (Screen scr : scene.getScreens()) {
@@ -653,15 +658,20 @@ public class OutputStagePanel extends JPanel {
                 if (r.pieces() == null) {
                     continue;
                 }
-                trusses.merge(profile.getName(), new int[]{r.totalPieceCount(), r.connectorCount()},
-                        (a, bb) -> new int[]{a[0] + bb[0], a[1] + bb[1]});
+                trusses.merge(profile.getName(),
+                        new int[]{r.totalPieceCount(), r.pinCount(), r.clipCount(), r.spigotCount()},
+                        (a, bb) -> new int[]{a[0] + bb[0], a[1] + bb[1], a[2] + bb[2], a[3] + bb[3]});
             }
         }
         for (var entry : trusses.entrySet()) {
             com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Фермы", entry.getKey() + " — сегментов",
                     entry.getValue()[0], "шт");
-            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Фермы", entry.getKey() + " — соединителей",
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Фермы", entry.getKey() + " — пальцев",
                     entry.getValue()[1], "шт");
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Фермы", entry.getKey() + " — шпилек",
+                    entry.getValue()[2], "шт");
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Фермы",
+                    entry.getKey() + " — бобышек (в комплекте фермы)", entry.getValue()[3], "шт");
         }
 
         // Рамы -- ОДНО общее число (вертикальные + перемычки + секции базы), не три строки, по

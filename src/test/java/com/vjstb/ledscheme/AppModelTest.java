@@ -36,6 +36,7 @@ import com.vjstb.ledscheme.model.SchemaNode;
 import com.vjstb.ledscheme.model.SchemaNodeType;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
+import com.vjstb.ledscheme.model.ScreenDefaults;
 import com.vjstb.ledscheme.model.SignalChain;
 import com.vjstb.ledscheme.model.Workspace;
 import com.vjstb.ledscheme.service.AppModel;
@@ -88,6 +89,46 @@ class AppModelTest {
         assertEquals(5 * 128, stats.resolutionHeightPx());
         assertEquals(15 * 150.0, stats.totalPowerW());
         assertEquals(15 * 12.0, stats.totalWeightKg());
+    }
+
+    /** Баг-репорт/запрос пользователя 2026-09-15: "выставлять для каждого экрана
+     *  руками, когда в сцене используется только другой тип кабинетов —
+     *  фрустрирующе" — {@link ScreenDefaults} должны применяться РОВНО к экранам,
+     *  созданным ПОСЛЕ того, как заданы, не трогать уже существующие, и не
+     *  перезаписывать правки пользователя, сделанные после создания экрана (см.
+     *  javadoc {@link ScreenDefaults#applyTo}). */
+    @Test
+    void screenDefaultsApplyOnlyToScreensCreatedAfterwards(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+
+        Screen before = model.addScreen("Before", type.getId(), 2, 2, 0, 0);
+        assertEquals(60, before.getRefreshRateHz());
+
+        ScreenDefaults defaults = new ScreenDefaults();
+        defaults.setRefreshRateHz(50);
+        defaults.setColorBitDepth(10);
+        defaults.setRiggingSafetyFactorMin(8.0);
+        defaults.setStructureTowerHeightMm(2500.0);
+        model.updateScreenDefaults(scene, defaults);
+
+        // Уже существующий экран не тронут заданием дефолтов сцены.
+        assertEquals(60, before.getRefreshRateHz());
+
+        Screen after = model.addScreen("After", type.getId(), 2, 2, 0, 0);
+        assertEquals(50, after.getRefreshRateHz());
+        assertEquals(10, after.getColorBitDepth());
+        assertEquals(8.0, after.getRiggingSafetyFactorMin());
+        assertEquals(2500.0, after.getStructureTowerHeightMm());
+
+        // Правка пользователя после создания экрана не откатывается повторным
+        // применением дефолтов (те применяются один раз, только в addScreen).
+        model.updateScreenSignalSpec(after, 60, 12);
+        assertEquals(60, after.getRefreshRateHz());
+        assertEquals(12, after.getColorBitDepth());
     }
 
     @Test

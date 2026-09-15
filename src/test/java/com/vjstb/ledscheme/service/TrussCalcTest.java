@@ -196,7 +196,10 @@ class TrussCalcTest {
         assertEquals(1, result.pieces().get(1).count());
         assertEquals(2, result.totalPieceCount());
         assertEquals(2500.0, result.totalKitLengthMm(), 1e-6);
-        assertEquals(TrussCalc.CONNECTORS_PER_JOINT, result.connectorCount());
+        assertEquals(1, result.jointCount());
+        assertEquals(TrussCalc.SPIGOTS_PER_JOINT, result.spigotCount());
+        assertEquals(TrussCalc.PINS_PER_JOINT, result.pinCount());
+        assertEquals(TrussCalc.CLIPS_PER_JOINT, result.clipCount());
     }
 
     @Test
@@ -245,11 +248,64 @@ class TrussCalcTest {
         assertEquals(1.0, result.pieces().get(1).lengthM());
         assertEquals(1, result.pieces().get(1).count());
         assertEquals(4, result.totalPieceCount());
-        assertEquals(3 * TrussCalc.CONNECTORS_PER_JOINT, result.connectorCount());
+        assertEquals(3, result.jointCount());
+        assertEquals(3 * TrussCalc.SPIGOTS_PER_JOINT, result.spigotCount());
+        assertEquals(3 * TrussCalc.PINS_PER_JOINT, result.pinCount());
+        assertEquals(3 * TrussCalc.CLIPS_PER_JOINT, result.clipCount());
     }
 
     @Test
-    void compute_singlePieceKitHasZeroConnectors(@TempDir Path dir) {
+    void builtTrussLengthMm_usesRealKitLengthNotTarget(@TempDir Path dir) {
+        // Баг-репорт 2026-09-15: длина фермы, используемая для геометрии (свес/
+        // отступы/расстановка точек подвеса), обязана быть РЕАЛЬНОЙ длиной
+        // набранного комплекта, а не абстрактной целью, когда профиль выбран.
+        AppModel model = freshModel(dir);
+        CabinetType t = model.addCabinetType(type500());
+        model.selectProject(model.addProject("P"));
+        var scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("E", t.getId(), 1, 6, 0, 0); // цель 3000мм
+        TrussProfile p = model.addTrussProfile(profile(2)); // только куски по 2м -> набор 2+2=4м
+        screen.setRiggingTrussProfileId(p.getId());
+
+        assertEquals(4000.0, TrussCalc.builtTrussLengthMm(screen, t, model.getWorkspace()), 1e-6);
+        assertEquals(500.0, TrussCalc.leftOffsetMm(screen, t, model.getWorkspace()), 1e-6);
+        assertEquals(500.0, TrussCalc.rightOffsetMm(screen, t, model.getWorkspace()), 1e-6);
+
+        // Без выбранного профиля -- прежнее поведение (по целевой длине).
+        screen.setRiggingTrussProfileId(null);
+        assertEquals(3000.0, TrussCalc.builtTrussLengthMm(screen, t, model.getWorkspace()), 1e-6);
+        assertEquals(0.0, TrussCalc.leftOffsetMm(screen, t, model.getWorkspace()), 1e-6);
+    }
+
+    @Test
+    void compute_symmetricOffsetSplitsBuiltKitOverageEvenlyNotJustTarget(@TempDir Path dir) {
+        // Прямой тест на баг-репорт пользователя: "если сборная длина фермы
+        // превышает длину экрана, а стоит галочка равномерного отступа, свес
+        // получается асимметричным". Экран 3м, в каталоге только куски по 2м ->
+        // ближайшее покрытие цели -- 2 куска (4м), излишек 1м. С включённым (по
+        // умолчанию) симметричным отступом излишек ОБЯЗАН делиться поровну по
+        // 500мм на каждую сторону, а не оставаться нулевым слева / полным справа
+        // (было так, пока отступ считался от ЦЕЛЕВОЙ длины, совпадающей с шириной
+        // экрана, а не от РЕАЛЬНО набранной).
+        AppModel model = freshModel(dir);
+        CabinetType t = model.addCabinetType(type500());
+        model.selectProject(model.addProject("P"));
+        var scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("E", t.getId(), 1, 6, 0, 0); // 3000мм
+        TrussProfile p = model.addTrussProfile(profile(2));
+        screen.setRiggingTrussProfileId(p.getId());
+
+        TrussCalc.Result result = TrussCalc.compute(screen, t, model.getWorkspace());
+        assertEquals(3000.0, result.targetLengthMm(), 1e-6);
+        assertEquals(4000.0, result.totalKitLengthMm(), 1e-6, "2 куска по 2м -- ближайшее покрытие цели 3м");
+        assertEquals(500.0, result.leftOffsetMm(), 1e-6, "излишек 1м делится поровну -- 500мм с каждой стороны");
+        assertEquals(500.0, result.rightOffsetMm(), 1e-6);
+    }
+
+    @Test
+    void compute_singlePieceKitHasZeroJointHardware(@TempDir Path dir) {
         AppModel model = freshModel(dir);
         CabinetType t = model.addCabinetType(type500());
         model.selectProject(model.addProject("P"));
@@ -261,6 +317,9 @@ class TrussCalcTest {
 
         TrussCalc.Result result = TrussCalc.compute(screen, t, model.getWorkspace());
         assertEquals(1, result.totalPieceCount());
-        assertEquals(0, result.connectorCount());
+        assertEquals(0, result.jointCount());
+        assertEquals(0, result.spigotCount());
+        assertEquals(0, result.pinCount());
+        assertEquals(0, result.clipCount());
     }
 }

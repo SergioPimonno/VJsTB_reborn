@@ -57,6 +57,11 @@ public class Scene {
      *  связанного {@code SchemaNode} на общей схеме (топология сети и физическая
      *  схема раскладываются независимо). */
     private NetworkManagerPlan networkManagerPlan;
+    /** Стартовые значения для НОВЫХ экранов этой сцены (кнопка «Параметры по
+     *  умолчанию» в прериге, см. {@link ScreenDefaults}) — {@code null}, пока
+     *  пользователь их ни разу не задавал (тогда действуют обычные хардкод-
+     *  дефолты {@link Screen}). Не затрагивает уже существующие экраны. */
+    private ScreenDefaults screenDefaults;
 
     public Scene() {
     }
@@ -167,5 +172,13 @@ public class Scene {
 
     public void setNetworkManagerPlan(NetworkManagerPlan networkManagerPlan) {
         this.networkManagerPlan = networkManagerPlan;
+    }
+
+    public ScreenDefaults getScreenDefaults() {
+        return screenDefaults;
+    }
+
+    public void setScreenDefaults(ScreenDefaults screenDefaults) {
+        this.screenDefaults = screenDefaults;
     }
 }

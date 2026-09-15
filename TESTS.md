@@ -22,7 +22,7 @@
 
 ## Корневой пакет `com.vjstb.ledscheme` — 13 классов, ≈170 методов
 
-### `AppModelTest` (≈118) — доменное ядро без UI
+### `AppModelTest` (≈119) — доменное ядро без UI
 Сценарий проект→сцена→экран→цепочки, пересчёт характеристик, undo,
 round-trip JSON. Крупнейший класс проекта. Покрывает: создание иерархии и
 статистику; цепочки питания/сигнала (undo, перегруз против кастомного рейтинга
@@ -48,7 +48,11 @@ custom equipment category, игнор неизвестного kind); `autoPopul
 / `toggleStructureFrameCell*` — сид-грид, ручные удаления в новых границах,
 per-cell override, row-2 усиление; маски (`setMaskColor` общий для всех
 placements экрана, seed легаси per-placement на загрузке); проекторы (add по
-сцене, delete по id, throw без выбранной сцены).
+сцене, delete по id, throw без выбранной сцены); `screenDefaultsApplyOnlyToScreensCreatedAfterwards`
+— `ScreenDefaults` (кнопка «Параметры по умолчанию» сцены, см.
+`model.ScreenDefaults`/`SetupStagePanel`) применяются ТОЛЬКО к экранам,
+созданным ПОСЛЕ задания дефолтов, не трогают уже существующие и не
+перезаписывают правку пользователя, сделанную после создания экрана.
 
 ### `ChainInteractionControllerTest` (15) — построение цепочки без Swing/мыши
 Старт по выбору цели; добавление кликом/протяжкой и стрелками; завершение по Esc
@@ -197,7 +201,9 @@ Overage` — точную комбинацию 1+0.5 без излишка во�
 Геометрия (`suggestTrussLengthMm`/`effectiveTrussLengthMm`/`leftOffsetMm`/
 `rightOffsetMm`/`isShorterThanScreen`) в симметричном и ручном режиме отступа,
 оба знака свеса. BOM (`compute`): `profileMissing` при не выбранном/висячем
-FK, `catalogEmpty` при профиле без длин, число соединителей = (кусков-1)×2.
+FK, `catalogEmpty` при профиле без длин, крепёж на стыках = (кусков-1)×4
+раздельно для бобышек/пальцев/шпилек (`spigotCount`/`pinCount`/`clipCount` —
+см. RIGGING_CALC_NOTES.md "Крепёж на стыках фермы").
 Прямой тест на баг-репорт 2026-09-14 — экран 1.5м, каталог [1,2,0.5], полный
 путь через `Screen`/`Workspace`: ожидается ровно `{1×1, 0.5×1}`, не один кусок
 2м.
