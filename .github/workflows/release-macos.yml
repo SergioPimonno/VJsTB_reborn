@@ -30,8 +30,20 @@ jobs:
           if [ -z "$TAG" ]; then
             TAG="${{ github.ref_name }}"
           fi
+          VERSION="${TAG#v}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # jpackage --app-version на macOS (в отличие от .deb на Linux) требует
+          # СТРОГО 1-3 целых числа через точку — экспериментальные теги вида
+          # "2.4exp" валит сборку ("Version [2.4exp] contains invalid component
+          # [4exp]"). Отрезаем первый нечисловой/неточечный символ и всё после
+          # него — тег/имя файла релиза (см. шаги ниже) при этом остаются
+          # оригинальными, трогаем только то, что реально идёт в jpackage.
+          APP_VERSION=$(echo "$VERSION" | sed -E 's/[^0-9.].*$//')
+          if [ -z "$APP_VERSION" ]; then
+            APP_VERSION="0.0.1"
+          fi
+          echo "appversion=$APP_VERSION" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
         with:
@@ -72,7 +84,7 @@ jobs:
             --name "AVE_ToolBox" \
             --main-jar led-scheme.jar \
             --main-class com.vjstb.ledscheme.App \
-            --app-version "${{ steps.ver.outputs.version }}" \
+            --app-version "${{ steps.ver.outputs.appversion }}" \
             --vendor "AVE_ToolBox" \
             --mac-package-name "AVE_ToolBox" \
             --icon packaging/icon-main.icns
