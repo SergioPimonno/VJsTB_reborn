@@ -82,15 +82,22 @@ import java.util.TreeMap;
  *
  * <p><b>Точки расставляются от краёв ФЕРМЫ, не экрана (см. {@link TrussCalc})</b> —
  * ширина экрана {@code widthMm}, использовавшаяся выше и в {@link #EDGE_MARGIN_MM},
- * заменена на {@link TrussCalc#effectiveTrussLengthMm} (по умолчанию равна ширине
- * экрана — обратная совместимость сохраняется КОНСТРУКТИВНО, пока пользователь не
- * задал нестандартную длину фермы). Точки сначала расставляются в координатах,
- * локальных для ФЕРМЫ (0 — левый край фермы), затем переводятся в координаты ЭКРАНА
- * вычитанием {@link TrussCalc#leftOffsetMm} — так распределение нагрузки по ближайшей
- * колонке ({@link #nearestPointIndex}, координаты колонок всегда экранные) остаётся
- * корректным независимо от того, нависает ли ферма за края экрана или короче него.
- * {@link PointLoad#xMm()} после этого — координата ЭКРАНА и может стать отрицательной
- * или больше ширины экрана при свесе фермы — это ожидаемо, не ошибка.
+ * заменена на {@link TrussCalc#builtTrussLengthMm} — РЕАЛЬНУЮ физическую длину
+ * фермы (набранный комплект сегментов, когда профиль выбран; иначе целевая длина,
+ * по умолчанию равная ширине экрана — обратная совместимость сохраняется
+ * КОНСТРУКТИВНО). Не {@code effectiveTrussLengthMm} (абстрактная цель) — баг-репорт
+ * 2026-09-15: набранная из целых сегментов ферма почти всегда чуть длиннее цели, и
+ * расстановка/нагрузка точек должны идти по тому, что реально смонтировано, иначе
+ * визуально нарисованная ферма (см. {@code SceneCanvasPanel.drawRiggingTruss}, которая
+ * рисует РЕАЛЬНОЙ длиной кусков) расходится с точками, расставленными по цели. Точки
+ * сначала расставляются в координатах, локальных для ФЕРМЫ (0 — левый край фермы),
+ * затем переводятся в координаты ЭКРАНА вычитанием {@link
+ * TrussCalc#leftOffsetMm(Screen, CabinetType, Workspace)} — так распределение нагрузки
+ * по ближайшей колонке ({@link #nearestPointIndex}, координаты колонок всегда
+ * экранные) остаётся корректным независимо от того, нависает ли ферма за края экрана
+ * или короче него. {@link PointLoad#xMm()} после этого — координата ЭКРАНА и может
+ * стать отрицательной или больше ширины экрана при свесе фермы — это ожидаемо, не
+ * ошибка.
  */
 public final class RiggingCalc {
 
@@ -146,35 +153,62 @@ public final class RiggingCalc {
         return widthMm > 2 * EDGE_MARGIN_MM ? EDGE_MARGIN_MM : 0;
     }
 
-    /** Индекс ближайшей к колонке точки подвеса — при ТОЧНОЙ ничьей (колонка ровно
-     *  на середине между двумя соседними точками) выбирает ту, что БЛИЖЕ К ЦЕНТРУ
-     *  фермы, а не "первую встреченную по возрастанию индекса" (2026-08-19,
-     *  баг-репорт: «нагрузка на крайние точки неравномерна, похоже на то, что
-     *  расчёт идёт слева направо» — так и есть: старый код при {@code d < best}
-     *  оставлял для ничьей уже установленный МЕНЬШИЙ индекс, то есть точку левее,
-     *  систематически утяжеляя левый край и облегчая правый). Это правило
+    /** Ближайшая к колонке точка (или пара точек) подвеса — при ТОЧНОЙ ничьей
+     *  (колонка ровно на середине между двумя соседними точками) выбирает ту, что
+     *  БЛИЖЕ К ЦЕНТРУ фермы, а не "первую встреченную по возрастанию индекса"
+     *  (2026-08-19, баг-репорт: «нагрузка на крайние точки неравномерна, похоже на
+     *  то, что расчёт идёт слева направо» — так и есть: старый код при {@code d <
+     *  best} оставлял для ничьей уже установленный МЕНЬШИЙ индекс, то есть точку
+     *  левее, систематически утяжеляя левый край и облегчая правый). Это правило
      *  СИММЕТРИЧНО относительно зеркального отражения экрана (точка i ↔ точка
      *  n-1-i, x ↔ widthMm-x) — доказательство и разбор конкретного примера
      *  (17×15 Dicolor, 4 точки) см. RIGGING_CALC_NOTES.md: правило "первый слева"
      *  симметрии не сохраняет ни для одного варианта fixed-tie-break (ни "всегда
      *  меньший индекс", ни "всегда больший"), а "ближе к центру" сохраняет.
      *  Неизбежная (при остатке колонок, не делящемся ровно) асимметрия сдвигается
-     *  К ЦЕНТРУ фермы, где она не так критична, как на краях. */
-    private static int nearestPointIndex(double columnX, double[] pointX, double centerMm) {
+     *  К ЦЕНТРУ фермы, где она не так критична, как на краях.
+     *
+     * <p><b>Двойная ничья — колонка РОВНО в центре фермы при чётном числе точек
+     *  (2026-09-15, баг-репорт)</b>: "ближе к центру" само может ничего не решить —
+     *  для ДВУХ ЦЕНТРАЛЬНЫХ точек (n чётно, индексы n/2-1 и n/2) расстояние до
+     *  центра у обеих ОДИНАКОВОЕ по построению (они зеркальны друг другу). Когда
+     *  колонка при этом лежит ровно посередине между ними (типично при НЕЧЁТНОМ
+     *  числе занятых колонок — тогда одна колонка приходится точно на геометрический
+     *  центр экрана), условие {@code centerDist < bestCenterDist} для второй точки
+     *  ложно (расстояния равны, не меньше), и код молча оставлял первую встреченную
+     *  по возрастанию индекса — ЛЕВУЮ из пары — тот же перекос, который сама эта
+     *  функция была написана устранить, просто на уровень глубже. Возвращает
+     *  МАССИВ ИЗ ДВУХ индексов в этом случае — вызывающий код ({@link #compute})
+     *  делит вес колонки ПОПОЛАM между ними, а не отдаёт целиком одной (единственный
+     *  физически честный выход для нагрузки, приложенной ровно между двумя опорами
+     *  — та же логика, что тривиальный расчёт балки на двух опорах даёт по 50%
+     *  каждой опоре для груза точно в центре пролёта). Массив из ОДНОГО индекса —
+     *  как раньше, когда двойной ничьи нет. */
+    private static int[] nearestPointIndex(double columnX, double[] pointX, double centerMm) {
         int nearest = 0;
         double best = Double.MAX_VALUE;
+        double bestCenterDist = Double.MAX_VALUE;
+        int tieWith = -1;
         for (int i = 0; i < pointX.length; i++) {
             double d = Math.abs(columnX - pointX[i]);
+            double centerDist = Math.abs(pointX[i] - centerMm);
             if (d < best - TIE_EPSILON_MM) {
                 best = d;
                 nearest = i;
-            } else if (Math.abs(d - best) <= TIE_EPSILON_MM
-                    && Math.abs(pointX[i] - centerMm) < Math.abs(pointX[nearest] - centerMm)) {
-                best = d;
-                nearest = i;
+                bestCenterDist = centerDist;
+                tieWith = -1;
+            } else if (Math.abs(d - best) <= TIE_EPSILON_MM) {
+                if (centerDist < bestCenterDist - TIE_EPSILON_MM) {
+                    best = d;
+                    nearest = i;
+                    bestCenterDist = centerDist;
+                    tieWith = -1;
+                } else if (Math.abs(centerDist - bestCenterDist) <= TIE_EPSILON_MM) {
+                    tieWith = i;
+                }
             }
         }
-        return nearest;
+        return tieWith < 0 ? new int[]{nearest} : new int[]{nearest, tieWith};
     }
 
     /** Вес одной занятой колонки сетки экрана (суммарно по всем строкам) и её
@@ -202,9 +236,13 @@ public final class RiggingCalc {
      *  вообще ограничивает нагрузку на точку. {@code trussLengthMm <= 0}
      *  (ширина модуля неизвестна и длина фермы не переопределена) откатывается
      *  на абсолютный минимум 2 — без размера модуля посчитать физическую длину
-     *  нечем. */
-    private static int baseColumnPointCount(Screen screen, CabinetType defaultType) {
-        double trussLengthMm = TrussCalc.effectiveTrussLengthMm(screen, defaultType);
+     *  нечем. Использует {@link TrussCalc#builtTrussLengthMm} (РЕАЛЬНАЯ длина
+     *  набранного комплекта, когда профиль выбран), а не {@code
+     *  effectiveTrussLengthMm} — баг-репорт 2026-09-15: собранная из целых
+     *  сегментов ферма почти всегда чуть длиннее цели, и минимум точек должен
+     *  считаться от того, что реально смонтировано. */
+    private static int baseColumnPointCount(Screen screen, CabinetType defaultType, Workspace workspace) {
+        double trussLengthMm = TrussCalc.builtTrussLengthMm(screen, defaultType, workspace);
         if (trussLengthMm <= 0) {
             return 2;
         }
@@ -231,7 +269,7 @@ public final class RiggingCalc {
      *  бессмысленно (возвращается предел, а превышение по-прежнему видно в {@link
      *  PointLoad#overCapacity} для каждой точки на экране прерига). */
     public static int suggestPointCount(Screen screen, CabinetType defaultType, Workspace workspace) {
-        int base = baseColumnPointCount(screen, defaultType);
+        int base = baseColumnPointCount(screen, defaultType, workspace);
         Double capacity = effectiveHoistCapacityKg(screen, workspace);
         if (capacity == null || capacity <= 0) {
             return base;
@@ -287,15 +325,18 @@ public final class RiggingCalc {
 
     /** Распределяет суммарный вес занятых колонок (+ наценка на крепёж, см.
      *  {@link #HARDWARE_ALLOWANCE}) по {@code pointCount} точкам, расставленным
-     *  равномерно вдоль ДЛИНЫ ФЕРМЫ ({@link TrussCalc#effectiveTrussLengthMm}) —
-     *  методом грузовых площадей (каждая колонка отдаёт вес ближайшей по X точке,
-     *  см. {@link #nearestPointIndex} за симметричным правилом на случай точной
-     *  ничьей). Крайние точки отступают от краёв ФЕРМЫ на {@link #EDGE_MARGIN_MM}
-     *  (не 0 — см. её javadoc), между крайними точками остальные распределены
-     *  равномерно; при {@code n == 1} единственная точка по-прежнему ставится
-     *  строго в центр (отступ для одной точки не имеет смысла). Точки считаются
-     *  сначала в координатах, локальных для фермы, затем сдвигаются на {@link
-     *  TrussCalc#leftOffsetMm} в координаты экрана (см. class-javadoc). */
+     *  равномерно вдоль РЕАЛЬНОЙ ДЛИНЫ ФЕРМЫ ({@link TrussCalc#builtTrussLengthMm} —
+     *  не {@code effectiveTrussLengthMm}, см. её javadoc про баг-репорт 2026-09-15:
+     *  собранная из целых сегментов ферма почти всегда длиннее абстрактной цели, и
+     *  нагрузка должна раскладываться по тому, что реально смонтировано) — методом
+     *  грузовых площадей (каждая колонка отдаёт вес ближайшей по X точке, см. {@link
+     *  #nearestPointIndex} за симметричным правилом на случай точной ничьей).
+     *  Крайние точки отступают от краёв ФЕРМЫ на {@link #EDGE_MARGIN_MM} (не 0 — см.
+     *  её javadoc), между крайними точками остальные распределены равномерно; при
+     *  {@code n == 1} единственная точка по-прежнему ставится строго в центр (отступ
+     *  для одной точки не имеет смысла). Точки считаются сначала в координатах,
+     *  локальных для фермы, затем сдвигаются на {@link TrussCalc#leftOffsetMm(Screen,
+     *  CabinetType, Workspace)} в координаты экрана (см. class-javadoc). */
     public static Result compute(Screen screen, CabinetType defaultType, Workspace workspace, int pointCount) {
         List<ColumnWeight> columns = columnWeights(screen, defaultType, workspace);
         double totalCabinetWeight = 0;
@@ -305,8 +346,8 @@ public final class RiggingCalc {
         double hardwareFactor = 1 + HARDWARE_ALLOWANCE;
         double totalWithHardware = totalCabinetWeight * hardwareFactor;
 
-        double trussLengthMm = TrussCalc.effectiveTrussLengthMm(screen, defaultType);
-        double leftOffsetMm = TrussCalc.leftOffsetMm(screen, defaultType);
+        double trussLengthMm = TrussCalc.builtTrussLengthMm(screen, defaultType, workspace);
+        double leftOffsetMm = TrussCalc.leftOffsetMm(screen, defaultType, workspace);
         int n = Math.max(1, pointCount);
         double margin = edgeMarginMm(trussLengthMm);
         double usable = usableWidthMm(trussLengthMm);
@@ -318,9 +359,19 @@ public final class RiggingCalc {
         double centerMm = (pointX[0] + pointX[n - 1]) / 2.0;
         double[] pointWeight = new double[n];
         for (ColumnWeight c : columns) {
-            int nearest = nearestPointIndex(c.xMm(), pointX, centerMm);
-            pointWeight[nearest] += c.weightKg() * hardwareFactor;
+            int[] nearest = nearestPointIndex(c.xMm(), pointX, centerMm);
+            double w = c.weightKg() * hardwareFactor;
+            if (nearest.length == 1) {
+                pointWeight[nearest[0]] += w;
+            } else {
+                // Двойная ничья (колонка ровно в центре фермы, n чётно) — см. javadoc
+                // {@link #nearestPointIndex}: единственный физически честный вариант —
+                // поровну на обе центральные точки, не целиком одной.
+                pointWeight[nearest[0]] += w / 2.0;
+                pointWeight[nearest[1]] += w / 2.0;
+            }
         }
+        enforceMirrorSymmetry(columns, pointX, pointWeight, centerMm);
 
         Double capacity = effectiveHoistCapacityKg(screen, workspace);
         List<PointLoad> points = new ArrayList<>();
@@ -331,5 +382,62 @@ public final class RiggingCalc {
             maxLoad = Math.max(maxLoad, pointWeight[i]);
         }
         return new Result(totalCabinetWeight, totalWithHardware, maxLoad, points);
+    }
+
+    /** Заключительный проход по УЖЕ посчитанным {@code pointWeight} — по прямому
+     *  запросу пользователя (2026-09-15, баг-репорт «если количество точек чётное,
+     *  то часто при одинаковых нагрузках на центральные точки расчёт показывает
+     *  разную нагрузку, чего быть не может»). Корневая причина (двойная ничья на
+     *  центральной паре точек при нечётном числе занятых колонок) уже устранена
+     *  выше в {@link #nearestPointIndex} (делит вес такой колонки пополам, не
+     *  отдаёт целиком одной стороне) — этот проход не столько НУЖЕН, сколько
+     *  СТРАХУЕТ: если геометрия точек и веса колонок объективно зеркально
+     *  симметричны (см. {@link #columnsAreMirrorSymmetric}), но пара точек i/n-1-i
+     *  всё же разошлась (например, из-за иного, ещё не найденного источника
+     *  асимметрии, а не только уже устранённой двойной ничьи) — усредняет её
+     *  нагрузку между обеими точками пары, а не оставляет необъяснимый перекос
+     *  там, где сама физическая расстановка симметрична. НЕ трогает пары, для
+     *  которых зеркальная симметрия объективно НЕ выполняется (например, нечётное
+     *  число колонок без центральной, или намеренно несимметричная развеска) —
+     *  там разная нагрузка по краям физически ожидаема, не ошибка. */
+    private static void enforceMirrorSymmetry(List<ColumnWeight> columns, double[] pointX, double[] pointWeight,
+            double centerMm) {
+        int n = pointWeight.length;
+        if (n < 2 || !columnsAreMirrorSymmetric(columns, centerMm)) {
+            return;
+        }
+        for (int i = 0; i < n / 2; i++) {
+            int j = n - 1 - i;
+            // pointX[i]/pointX[j] зеркальны по построению (см. compute) — сверяем
+            // только на случай будущих изменений в расстановке точек, не считаем
+            // геометрию сама собой разумеющейся.
+            if (Math.abs((pointX[i] - centerMm) + (pointX[j] - centerMm)) > TIE_EPSILON_MM) {
+                continue;
+            }
+            if (Math.abs(pointWeight[i] - pointWeight[j]) > 1e-6) {
+                double avg = (pointWeight[i] + pointWeight[j]) / 2.0;
+                pointWeight[i] = avg;
+                pointWeight[j] = avg;
+            }
+        }
+    }
+
+    /** true, если у КАЖДОЙ занятой колонки есть зеркальная (по X относительно
+     *  {@code centerMm}, с тем же весом) — то есть распределение веса по ширине
+     *  экрана объективно симметрично, и потому парные точки подвеса ОБЯЗАНЫ нести
+     *  одинаковую нагрузку (см. {@link #enforceMirrorSymmetry}). Колонка сама себе
+     *  зеркало, если лежит ровно в {@code centerMm} (нечётное число колонок) — тоже
+     *  проходит проверку. Квадратичная по числу колонок — их обычно десятки, не
+     *  тысячи, отдельной оптимизации не требует. */
+    private static boolean columnsAreMirrorSymmetric(List<ColumnWeight> columns, double centerMm) {
+        for (ColumnWeight c : columns) {
+            double mirrorX = 2 * centerMm - c.xMm();
+            boolean hasMirror = columns.stream().anyMatch(o -> Math.abs(o.xMm() - mirrorX) <= TIE_EPSILON_MM
+                    && Math.abs(o.weightKg() - c.weightKg()) <= 1e-9);
+            if (!hasMirror) {
+                return false;
+            }
+        }
+        return true;
     }
 }

@@ -35,6 +35,11 @@ public class AppSettings {
      *  адрес вручную в Настройках. {@code null}/пусто -- использовать адрес по
      *  умолчанию, как раньше. */
     private String syncServerUrlOverride;
+    /** Папка локального архива проектов (см. ui.LocalArchiveDialog/store.LocalArchiveStore) —
+     *  выбирается пользователем один раз; {@code null}/пусто — архив ещё ни разу не
+     *  настраивался (диалог архива запросит папку при первом использовании). Один
+     *  путь на всю программу (не на профиль) — архив не связан с персонализацией. */
+    private String archiveFolder;
 
     public String getActiveProfileId() {
         return activeProfileId;
@@ -106,5 +111,13 @@ public class AppSettings {
 
     public void setSyncServerUrlOverride(String syncServerUrlOverride) {
         this.syncServerUrlOverride = syncServerUrlOverride;
+    }
+
+    public String getArchiveFolder() {
+        return archiveFolder;
+    }
+
+    public void setArchiveFolder(String archiveFolder) {
+        this.archiveFolder = archiveFolder;
     }
 }

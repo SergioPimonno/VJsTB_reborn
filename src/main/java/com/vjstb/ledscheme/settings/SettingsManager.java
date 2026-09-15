@@ -225,6 +225,11 @@ public class SettingsManager {
         persist();
     }
 
+    public void setInspectorDocked(boolean docked) {
+        activeProfile().setInspectorDocked(docked);
+        persist();
+    }
+
     public void setPowerSceneStatsEnabled(boolean enabled) {
         activeProfile().setPowerSceneStatsEnabled(enabled);
         persist();
@@ -252,6 +257,11 @@ public class SettingsManager {
 
     public void setDocExportDpi(int dpi) {
         activeProfile().setDocExportDpi(dpi);
+        persist();
+    }
+
+    public void setUiScalePercent(int percent) {
+        activeProfile().setUiScalePercent(percent);
         persist();
     }
 
@@ -293,6 +303,15 @@ public class SettingsManager {
 
     public void setSyncServerUrlOverride(String url) {
         settings.setSyncServerUrlOverride(url);
+        persist();
+    }
+
+    public String getArchiveFolder() {
+        return settings.getArchiveFolder();
+    }
+
+    public void setArchiveFolder(String path) {
+        settings.setArchiveFolder(path);
         persist();
     }
 

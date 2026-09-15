@@ -33,6 +33,7 @@ import com.vjstb.ledscheme.model.ProjectorInstance;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.VehicleLoadPlan;
 import com.vjstb.ledscheme.model.Screen;
+import com.vjstb.ledscheme.model.ScreenDefaults;
 import com.vjstb.ledscheme.model.SchemaCard;
 import com.vjstb.ledscheme.model.SchemaEdge;
 import com.vjstb.ledscheme.model.SchemaMode;
@@ -1026,6 +1027,34 @@ public class AppModel {
         return incoming;
     }
 
+    /** Убирает проект из рабочего списка в локальный архив (см. ui.LocalArchiveDialog/
+     *  store.LocalArchiveStore) — файл архива должен быть УЖЕ записан на диск
+     *  вызывающей стороной ДО этого вызова (тот же порядок, что и у скачивания из
+     *  облака наоборот), иначе при сбое записи проект бы просто исчез, не попав в
+     *  архив. Механически совпадает с {@link #deleteProject}, но означает не удаление
+     *  данных, а перемещение — сам проект здесь не трогаем. */
+    public void removeProjectForArchive(Project p) {
+        workspace.getProjects().remove(p);
+        if (currentProject == p) {
+            currentProject = null;
+            currentScene = null;
+            currentScreen = null;
+            undoStack.clear();
+        }
+        changed();
+    }
+
+    /** Возвращает проект из локального архива обратно в рабочий список — С ТЕМ ЖЕ
+     *  id, с которым он туда попал (в отличие от {@link #importProject}: это не
+     *  чужая скачанная копия, а тот же самый локальный проект, коллизий id при
+     *  извлечении не бывает). После этого вызова файл архива уже не нужен —
+     *  {@code LocalArchiveDialog} удаляет его отдельно через LocalArchiveStore. */
+    public Project restoreProjectFromArchive(Project p) {
+        workspace.getProjects().add(p);
+        changed();
+        return p;
+    }
+
     /** Проект только что впервые сохранён в облако (см. CloudProjectsDialog.upload) —
      *  запоминаем id и ревизию локально, чтобы следующее сохранение уже слало
      *  правильную baseRevision, а не создавало дубликат в облаке. */
@@ -1121,6 +1150,15 @@ public class AppModel {
             throw new IllegalArgumentException("Не выбран тип кабинета");
         }
         Screen scr = new Screen();
+        // Стартовые значения сцены (см. ScreenDefaults, кнопка «Параметры по
+        // умолчанию» в SetupStagePanel) — ПЕРЕД явными параметрами ниже, чтобы
+        // конкретный выбор диалога создания экрана (кабинет/сетка/позиция/способ
+        // монтажа) всегда побеждал. cabinetTypeId/mountType сюда намеренно не
+        // входят — applyTo() их не трогает, см. javadoc ScreenDefaults.
+        ScreenDefaults defaults = currentScene.getScreenDefaults();
+        if (defaults != null) {
+            defaults.applyTo(scr);
+        }
         scr.setName(name);
         scr.setCabinetTypeId(cabinetTypeId);
         scr.setRows(rows);
@@ -3436,6 +3474,19 @@ public class AppModel {
             return;
         }
         scene.setNetworkManagerPlan(plan);
+        changed();
+    }
+
+    /** Сохраняет стартовые значения для НОВЫХ экранов сцены (кнопка «Параметры по
+     *  умолчанию», см. {@link ScreenDefaults}) — только на будущее создание через
+     *  {@link #addScreen}, уже существующих экранов сцены не касается. Без
+     *  pushUndo — как и {@link #saveVehicleLoadPlan}/{@link #saveNetworkManagerPlan},
+     *  это настройка сцены, а не правка конкретного экрана/схемы. */
+    public void updateScreenDefaults(Scene scene, ScreenDefaults defaults) {
+        if (scene == null) {
+            return;
+        }
+        scene.setScreenDefaults(defaults);
         changed();
     }
 

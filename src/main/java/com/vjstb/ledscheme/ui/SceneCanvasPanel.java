@@ -617,21 +617,29 @@ public class SceneCanvasPanel extends JPanel {
             }
             int x = cabX(c, defaultType, cellW, offX);
             int y = cabY(c, defaultType, cellH, offY);
+            // Эффективная форма/угол ячейки (переопределение формы, иначе форма
+            // эффективного типа — с учётом возможного переопределения самого типа
+            // ниже) — та же форма, что рисует paintScheme, а не всегда прямоугольник:
+            // иначе заливка/контур подсветки перекрывают реальную (например,
+            // треугольную) форму кабинета сплошным прямоугольником — баг-репорт
+            // 2026-09-15 «заливка перекрывает/удаляет отрисовку формы (треугольники)».
+            CabinetType effective = ScreenLogic.effectiveType(c, defaultType, model.getWorkspace());
+            com.vjstb.ledscheme.model.CabinetShape effectiveShape = c.getShapeOverride() != null
+                    ? c.getShapeOverride() : (effective != null ? effective.getShape() : null);
+            double rotationDeg = SchemeRenderer.effectiveRotationDeg(c, effective);
             if (c.getCabinetTypeId() != null) {
                 CabinetType override = model.getWorkspace().cabinetTypeById(c.getCabinetTypeId());
                 Color typeColor = override != null ? typeColorFor(types, override) : Palette.ACCENT;
                 g2.setColor(blend(Palette.PHASE_NONE, typeColor, 0.55f));
-                g2.fillRect(x + 1, y + 1, cellW - 2, cellH - 2);
+                SchemeRenderer.fillCabinetShape(g2, x + 1, y + 1, cellW - 2, cellH - 2, effectiveShape, rotationDeg);
                 g2.setColor(Palette.ACCENT);
-                g2.drawRect(x + 1, y + 1, cellW - 2, cellH - 2);
+                SchemeRenderer.outlineCabinetShape(g2, x + 1, y + 1, cellW - 2, cellH - 2, effectiveShape, rotationDeg);
                 // Заливка выше рисуется ПОВЕРХ paintScheme (см. javadoc метода) и без этого
                 // молча перекрывала подпись «строка,столбец» — баг-репорт 2026-09-14.
                 SchemeRenderer.drawCabinetIndexLabel(g2, c, x, y, cellW, cellH);
             }
             com.vjstb.ledscheme.model.CabinetShape shape = c.getShapeOverride();
             if (shape != null && shape != com.vjstb.ledscheme.model.CabinetShape.RECTANGLE) {
-                CabinetType effective = ScreenLogic.effectiveType(c, defaultType, model.getWorkspace());
-                double rotationDeg = SchemeRenderer.effectiveRotationDeg(c, effective);
                 g2.setColor(Palette.TEXT);
                 SchemeRenderer.outlineCabinetShape(g2, x + 1, y + 1, cellW - 2, cellH - 2, shape, rotationDeg);
             }

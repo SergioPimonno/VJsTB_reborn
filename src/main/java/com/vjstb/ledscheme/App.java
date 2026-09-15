@@ -34,6 +34,12 @@ public class App {
             if (activeProfile.getFontFamily() != null) {
                 FlatLaf.setPreferredFontFamily(activeProfile.getFontFamily());
             }
+            // Масштаб интерфейса (Персонализация → Стиль оформления) — свойство читается
+            // FlatLaf'ом ОДИН РАЗ при установке L&F ниже, поэтому применяется только со
+            // следующего запуска (см. PersonalizationDialog.buildStylePanel/UserProfile.uiScalePercent).
+            if (activeProfile.getUiScalePercent() != 100) {
+                System.setProperty("flatlaf.uiScale", activeProfile.getUiScalePercent() + "%");
+            }
             try {
                 UIManager.setLookAndFeel(style.createLaf());
             } catch (Exception e) {
