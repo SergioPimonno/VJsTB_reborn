@@ -115,6 +115,25 @@ public class OutputStagePanel extends JPanel {
         generate.addActionListener(e -> generate());
         body.add(generate);
 
+        body.add(UiKit.vgap(16));
+        JPanel piecesPanel = UiKit.vbox();
+        JButton exportPower = new JButton("Экспортировать схемы этапа «Питание»");
+        exportPower.addActionListener(e -> exportSchemesForMode(true));
+        piecesPanel.add(exportPower);
+        piecesPanel.add(UiKit.vgap(6));
+        JButton exportSignal = new JButton("Экспортировать схемы этапа «Сигнал»");
+        exportSignal.addActionListener(e -> exportSchemesForMode(false));
+        piecesPanel.add(exportSignal);
+        piecesPanel.add(UiKit.vgap(6));
+        JButton exportSummary = new JButton("Сформировать сводку по проекту");
+        exportSummary.addActionListener(e -> exportReportOnly());
+        piecesPanel.add(exportSummary);
+        piecesPanel.add(UiKit.vgap(6));
+        JButton exportSpec = new JButton("Сформировать спецификацию оборудования");
+        exportSpec.addActionListener(e -> exportSpecOnly());
+        piecesPanel.add(exportSpec);
+        body.add(UiKit.section("Экспорт по отдельности", piecesPanel));
+
         body.add(javax.swing.Box.createVerticalGlue());
 
         return body;
@@ -160,11 +179,15 @@ public class OutputStagePanel extends JPanel {
         }
     }
 
-    private void generate() {
+    /** Общая проверка перед любым экспортом (пакет целиком и все отдельные кнопки ниже):
+     *  проект выбран, и, если включено отслеживание нагрузки, нет неподтверждённых
+     *  перегрузок цепочек. Показывает предупреждающий диалог сама и возвращает {@code
+     *  null}, если экспортировать сейчас нельзя. */
+    private Project requireExportableProject() {
         Project project = model.getCurrentProject();
         if (project == null) {
             JOptionPane.showMessageDialog(this, "Сначала выберите проект", "Нет проекта", JOptionPane.WARNING_MESSAGE);
-            return;
+            return null;
         }
         if (settings.activeProfile().isLoadTrackingEnabled() && hasUnacknowledgedOverload(project)) {
             JOptionPane.showMessageDialog(this,
@@ -174,14 +197,17 @@ public class OutputStagePanel extends JPanel {
                             + " кнопкой «Я знаю» (или измените коммутацию).<br>Экспорт остановлен, пока такие"
                             + " цепочки есть.</html>",
                     "Перегрузка цепочек", JOptionPane.WARNING_MESSAGE);
-            return;
+            return null;
         }
-        File folder = resolveFolder();
-        // Качество JPEG-схем (питание/сигнал/блок-схема/обзор сцены), НЕ масок —
-        // см. dpiCombo/UserProfile#getDocExportDpi. 1.0 = 72dpi = прежнее поведение.
-        int docExportDpi = settings.activeProfile().getDocExportDpi();
-        double dpiScale = docExportDpi / 72.0;
+        return project;
+    }
 
+    /** Текстовый отчёт по проекту: сквозные итоги (экраны/сцены/кабинеты/мощность/вес),
+     *  затем по каждой сцене и каждому её экрану — нагрузки, веса, разрешение, точки
+     *  подвеса (без самих цепочек, см. комментарий у их получения в generate()). Не
+     *  зависит от "текущей" сцены модели — используется и внутри пакета документации
+     *  (generate()), и отдельной кнопкой «Сформировать сводку по проекту». */
+    private String buildProjectReport(Project project, boolean kw) {
         StringBuilder report = new StringBuilder();
         report.append("Отчёт по проекту: ").append(project.getName()).append('\n');
         report.append("Дата: ").append(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))).append("\n\n");
@@ -219,9 +245,48 @@ public class OutputStagePanel extends JPanel {
         report.append("=== ИТОГО ПО ПРОЕКТУ ===\n");
         report.append(String.format("Экранов: %d, сцен: %d, кабинетов: %d%n",
                 totalScreens, project.getScenes().size(), totalCabinets));
-        boolean kw = settings.activeProfile().isPowerUnitKw();
         report.append(String.format("Суммарная мощность: %s, суммарный вес: %s кг%n%n",
                 UiKit.fmtPower(totalPower, kw), UiKit.fmt(totalWeight)));
+
+        for (Scene scene : project.getScenes()) {
+            SceneStats ss = ScreenLogic.sceneStats(scene, model.getWorkspace());
+            report.append("Сцена: ").append(scene.getName()).append('\n');
+            report.append(String.format("  Экранов: %d, кабинетов: %d, мощность: %s, вес: %s кг%n",
+                    ss.screenCount(), ss.totalCabinetCount(), UiKit.fmtPower(ss.totalPowerW(), kw),
+                    UiKit.fmt(ss.totalWeightKg())));
+
+            for (Screen scr : scene.getScreens()) {
+                CabinetType type = model.typeOf(scr);
+                ScreenStats st = ScreenLogic.stats(scr, type, model.getWorkspace());
+                report.append("  Экран «").append(scr.getName()).append("»\n");
+                report.append(String.format("    Кабинет: %s, сетка: %d×%d%n",
+                        type != null ? type.getName() : "—", scr.getCols(), scr.getRows()));
+                report.append(String.format("    Разрешение: %d×%d px, физический размер: %s×%s мм%n",
+                        st.resolutionWidthPx(), st.resolutionHeightPx(),
+                        UiKit.fmt(st.physicalWidthMm()), UiKit.fmt(st.physicalHeightMm())));
+                report.append(String.format("    Мощность: %s, вес: %s кг%n",
+                        UiKit.fmtPower(st.totalPowerW(), kw), UiKit.fmt(st.totalWeightKg())));
+                report.append(String.format("    Точек подвеса: %d%n", scr.getRiggingPointsCount()));
+                report.append('\n');
+            }
+            report.append('\n');
+        }
+        return report.toString();
+    }
+
+    private void generate() {
+        Project project = requireExportableProject();
+        if (project == null) {
+            return;
+        }
+        File folder = resolveFolder();
+        // Качество JPEG-схем (питание/сигнал/блок-схема/обзор сцены), НЕ масок —
+        // см. dpiCombo/UserProfile#getDocExportDpi. 1.0 = 72dpi = прежнее поведение.
+        int docExportDpi = settings.activeProfile().getDocExportDpi();
+        double dpiScale = docExportDpi / 72.0;
+        boolean kw = settings.activeProfile().isPowerUnitKw();
+
+        String report = buildProjectReport(project, kw);
 
         // Рендер схемы сцены целиком (SceneCanvasPanel) и маски канваса
         // (PixelGridRenderer.renderCanvasMask) читают "текущую" сцену модели, а не
@@ -238,12 +303,6 @@ public class OutputStagePanel extends JPanel {
             for (Scene scene : project.getScenes()) {
                 model.selectScene(scene);
 
-                SceneStats ss = ScreenLogic.sceneStats(scene, model.getWorkspace());
-                report.append("Сцена: ").append(scene.getName()).append('\n');
-                report.append(String.format("  Экранов: %d, кабинетов: %d, мощность: %s, вес: %s кг%n",
-                        ss.screenCount(), ss.totalCabinetCount(), UiKit.fmtPower(ss.totalPowerW(), kw),
-                        UiKit.fmt(ss.totalWeightKg())));
-
                 // Схемы и маски раньше сохранялись плоско в папку ПРОЕКТА — из-за
                 // этого схемы всех сцен смешивались в одном месте, и не было видно,
                 // какая схема к какой сцене относится, кроме как по имени файла.
@@ -258,17 +317,6 @@ public class OutputStagePanel extends JPanel {
 
                 for (Screen scr : scene.getScreens()) {
                     CabinetType type = model.typeOf(scr);
-                    ScreenStats st = ScreenLogic.stats(scr, type, model.getWorkspace());
-                    report.append("  Экран «").append(scr.getName()).append("»\n");
-                    report.append(String.format("    Кабинет: %s, сетка: %d×%d%n",
-                            type != null ? type.getName() : "—", scr.getCols(), scr.getRows()));
-                    report.append(String.format("    Разрешение: %d×%d px, физический размер: %s×%s мм%n",
-                            st.resolutionWidthPx(), st.resolutionHeightPx(),
-                            UiKit.fmt(st.physicalWidthMm()), UiKit.fmt(st.physicalHeightMm())));
-                    report.append(String.format("    Мощность: %s, вес: %s кг%n",
-                            UiKit.fmtPower(st.totalPowerW(), kw), UiKit.fmt(st.totalWeightKg())));
-                    report.append(String.format("    Точек подвеса: %d%n", scr.getRiggingPointsCount()));
-                    report.append('\n');
 
                     // Цепочки хранятся на уровне сцены (Task #78), а не экрана — берём
                     // только те, что физически затрагивают кабинеты ЭТОГО экрана (цепочка
@@ -391,12 +439,10 @@ public class OutputStagePanel extends JPanel {
                         jpegCount++;
                     }
                 }
-
-                report.append('\n');
             }
 
             File reportFile = new File(folder, OutputPaths.sanitize(project.getName()) + "_отчёт.txt");
-            Files.writeString(reportFile.toPath(), report.toString(), StandardCharsets.UTF_8);
+            Files.writeString(reportFile.toPath(), report, StandardCharsets.UTF_8);
 
             File specFile = new File(folder, OutputPaths.sanitize(project.getName()) + "_спецификация.xlsx");
             try (Workbook specWorkbook = buildEquipmentSpecWorkbook(project)) {
@@ -417,6 +463,138 @@ public class OutputStagePanel extends JPanel {
         } finally {
             model.selectScene(origScene);
             model.selectScreen(origScreen);
+        }
+    }
+
+    /** Схемы расключения (JPEG) только одного этапа — «Питание» или «Сигнал» — без масок,
+     *  отчёта, спецификации и схем транспорта: те же файлы и та же структура папок
+     *  (Сцена/Сила или Сцена/Сигнал), что и в полном пакете (см. generate()), просто без
+     *  остального. Для проекта, где нужно отправить смежникам схему только одной из двух
+     *  сетей, не пересобирая весь пакет документации. */
+    private void exportSchemesForMode(boolean power) {
+        Project project = requireExportableProject();
+        if (project == null) {
+            return;
+        }
+        File folder = resolveFolder();
+        int docExportDpi = settings.activeProfile().getDocExportDpi();
+        double dpiScale = docExportDpi / 72.0;
+        boolean kw = settings.activeProfile().isPowerUnitKw();
+        String modeFolderName = power ? "Сила" : "Сигнал";
+        String modeSuffix = power ? " Сила" : " Сигнал";
+
+        Scene origScene = model.getCurrentScene();
+        Screen origScreen = model.getCurrentScreen();
+        int jpegCount = 0;
+        try {
+            for (Scene scene : project.getScenes()) {
+                model.selectScene(scene);
+
+                File sceneFolder = new File(folder, OutputPaths.sanitize(scene.getName()));
+                File modeFolder = new File(sceneFolder, modeFolderName);
+                modeFolder.mkdirs();
+
+                for (Screen scr : scene.getScreens()) {
+                    CabinetType type = model.typeOf(scr);
+                    List<PowerChain> scrPowerChains = model.powerChainsTouchingScreen(scr);
+                    List<SignalChain> scrSignalChains = model.signalChainsTouchingScreen(scr);
+                    List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers =
+                            model.controllersInScene(scr);
+                    BufferedImage img = SchemeRenderer.renderImage(scr, type, power, 120, model.getWorkspace(),
+                            scrPowerChains, scrSignalChains, sceneControllers, kw, dpiScale);
+                    SchemeRenderer.writeJpeg(img,
+                            new File(modeFolder, OutputPaths.sanitize(scr.getName() + modeSuffix) + ".jpg"),
+                            docExportDpi);
+                    jpegCount++;
+                }
+
+                if (scene.getScreens().size() > 1) {
+                    SceneCanvasPanel overview = new SceneCanvasPanel(model, settings);
+                    overview.setDetailMode(true, power, false);
+                    Dimension size = overview.getPreferredSize();
+                    BufferedImage img = overview.renderImage(size.width, size.height, dpiScale);
+                    SchemeRenderer.writeJpeg(img, new File(modeFolder, "_Все экраны сцены.jpg"), docExportDpi);
+                    jpegCount++;
+                }
+
+                boolean screensAsWiring = settings.activeProfile().isSchemaScreensAsWiringDiagram();
+                SchemaMode schemaMode = power ? SchemaMode.POWER : SchemaMode.SIGNAL;
+                SchemaCanvasPanel schemaCanvas = new SchemaCanvasPanel(model, schemaMode, settings);
+                Dimension size = schemaCanvas.getPreferredSize();
+                BufferedImage img = schemaCanvas.renderImage(size.width, size.height, screensAsWiring, dpiScale);
+                SchemeRenderer.writeJpeg(img,
+                        new File(modeFolder, OutputPaths.sanitize(scene.getName() + modeSuffix) + ".jpg"),
+                        docExportDpi);
+                jpegCount++;
+            }
+
+            int answer = JOptionPane.showConfirmDialog(this,
+                    "Готово.\nJPEG-схем сохранено: " + jpegCount + "\n\nОткрыть папку?",
+                    "Схемы этапа «" + modeFolderName + "» сохранены", JOptionPane.YES_NO_OPTION,
+                    JOptionPane.INFORMATION_MESSAGE);
+            if (answer == JOptionPane.YES_OPTION) {
+                openFolder(folder);
+            }
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(this, "Ошибка экспорта схем: " + ex.getMessage(), "Ошибка",
+                    JOptionPane.ERROR_MESSAGE);
+        } finally {
+            model.selectScene(origScene);
+            model.selectScreen(origScreen);
+        }
+    }
+
+    /** Только текстовая сводка по проекту (см. {@link #buildProjectReport}), без схем/масок/
+     *  спецификации — по прямому запросу пользователя как отдельная кнопка (название
+     *  «сводка», не «отчёт», чтобы не путать с «отчётом по проекту» — так называется
+     *  содержимое этого же текста внутри полного пакета документации, см. generate()). */
+    private void exportReportOnly() {
+        Project project = requireExportableProject();
+        if (project == null) {
+            return;
+        }
+        File folder = resolveFolder();
+        boolean kw = settings.activeProfile().isPowerUnitKw();
+        try {
+            String report = buildProjectReport(project, kw);
+            File reportFile = new File(folder, OutputPaths.sanitize(project.getName()) + "_сводка.txt");
+            Files.writeString(reportFile.toPath(), report, StandardCharsets.UTF_8);
+
+            int answer = JOptionPane.showConfirmDialog(this,
+                    "Готово.\nСводка: " + reportFile.getName() + "\n\nОткрыть папку?",
+                    "Сводка по проекту сформирована", JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE);
+            if (answer == JOptionPane.YES_OPTION) {
+                openFolder(folder);
+            }
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(this, "Ошибка формирования сводки: " + ex.getMessage(), "Ошибка",
+                    JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    /** Только табличная спецификация оборудования (см. {@link #buildEquipmentSpecWorkbook}),
+     *  без схем/масок/сводки — отдельная кнопка по прямому запросу пользователя. */
+    private void exportSpecOnly() {
+        Project project = requireExportableProject();
+        if (project == null) {
+            return;
+        }
+        File folder = resolveFolder();
+        try {
+            File specFile = new File(folder, OutputPaths.sanitize(project.getName()) + "_спецификация.xlsx");
+            try (Workbook specWorkbook = buildEquipmentSpecWorkbook(project)) {
+                com.vjstb.ledscheme.service.SpecXlsxWriter.write(specWorkbook, specFile);
+            }
+
+            int answer = JOptionPane.showConfirmDialog(this,
+                    "Готово.\nСпецификация: " + specFile.getName() + "\n\nОткрыть папку?",
+                    "Спецификация сформирована", JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE);
+            if (answer == JOptionPane.YES_OPTION) {
+                openFolder(folder);
+            }
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(this, "Ошибка формирования спецификации: " + ex.getMessage(), "Ошибка",
+                    JOptionPane.ERROR_MESSAGE);
         }
     }
 
@@ -486,6 +664,14 @@ public class OutputStagePanel extends JPanel {
         for (Scene scene : project.getScenes()) {
             for (com.vjstb.ledscheme.model.SchemaNode n : scene.getSchemaNodes()) {
                 if (n.getType() == com.vjstb.ledscheme.model.SchemaNodeType.SCREEN) {
+                    continue;
+                }
+                // Авто-блок «Легенда портов» (см. SchemaNode#isAutoPortLegend(),
+                // AppModel.addSignalPortLegendNode) — это справочная таблица на холсте
+                // общей схемы, не физическая единица оборудования; попадал сюда как
+                // обычный CUSTOM-узел — баг-репорт 2026-09-16 "легенда портов не должна
+                // появляться в спецификации".
+                if (n.isAutoPortLegend()) {
                     continue;
                 }
                 String modeLabel = n.getMode() == com.vjstb.ledscheme.model.SchemaMode.POWER ? "Питание" : "Сигнал";
@@ -637,11 +823,16 @@ public class OutputStagePanel extends JPanel {
         }
 
         // Фермы -- сегменты/крепёж стыков, просуммированные по каждому профилю библиотеки
-        // (см. addTrussSheet за детализацией по экранам). Крепёж -- 3 отдельные строки, не
-        // одна: бобышки обычно уже установлены в торцах фермы заводом (не закупаются
-        // отдельно), а пальцы/шпильки -- расходники, которые нужно добрать (см. javadoc
-        // TrussCalc.SPIGOTS_PER_JOINT/PINS_PER_JOINT/CLIPS_PER_JOINT).
+        // (см. addTrussSheet за детализацией по экранам). Сегменты -- отдельная строка НА
+        // КАЖДУЮ длину куска (см. trussSegmentsByLength), не одна общая сумма -- общее число
+        // сегментов бесполезно для закупки, нужно знать именно сколько кусков какой длины
+        // (баг-репорт 2026-09-16 "важно видеть количества по длинам сегментов"). Крепёж -- 3
+        // отдельные строки, не одна: бобышки обычно уже установлены в торцах фермы заводом
+        // (не закупаются отдельно), а пальцы/шпильки -- расходники, которые нужно добрать
+        // (см. javadoc TrussCalc.SPIGOTS_PER_JOINT/PINS_PER_JOINT/CLIPS_PER_JOINT).
         java.util.LinkedHashMap<String, int[]> trusses = new java.util.LinkedHashMap<>();
+        java.util.LinkedHashMap<String, java.util.LinkedHashMap<Double, Integer>> trussSegmentsByLength =
+                new java.util.LinkedHashMap<>();
         for (Scene scene : project.getScenes()) {
             for (Screen scr : scene.getScreens()) {
                 if (scr.getMountType() != com.vjstb.ledscheme.model.ScreenMountType.RIGGED
@@ -659,19 +850,27 @@ public class OutputStagePanel extends JPanel {
                     continue;
                 }
                 trusses.merge(profile.getName(),
-                        new int[]{r.totalPieceCount(), r.pinCount(), r.clipCount(), r.spigotCount()},
-                        (a, bb) -> new int[]{a[0] + bb[0], a[1] + bb[1], a[2] + bb[2], a[3] + bb[3]});
+                        new int[]{r.pinCount(), r.clipCount(), r.spigotCount()},
+                        (a, bb) -> new int[]{a[0] + bb[0], a[1] + bb[1], a[2] + bb[2]});
+                java.util.LinkedHashMap<Double, Integer> byLength =
+                        trussSegmentsByLength.computeIfAbsent(profile.getName(), k -> new java.util.LinkedHashMap<>());
+                for (com.vjstb.ledscheme.service.CableSpecCalc.Piece piece : r.pieces()) {
+                    byLength.merge(piece.lengthM(), piece.count(), Integer::sum);
+                }
             }
         }
         for (var entry : trusses.entrySet()) {
-            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Фермы", entry.getKey() + " — сегментов",
+            String trussName = entry.getKey();
+            for (var lenEntry : trussSegmentsByLength.get(trussName).entrySet()) {
+                com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Фермы",
+                        trussName + " — сегментов " + UiKit.fmt(lenEntry.getKey()) + "м", lenEntry.getValue(), "шт");
+            }
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Фермы", trussName + " — пальцев",
                     entry.getValue()[0], "шт");
-            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Фермы", entry.getKey() + " — пальцев",
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Фермы", trussName + " — шпилек",
                     entry.getValue()[1], "шт");
-            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Фермы", entry.getKey() + " — шпилек",
-                    entry.getValue()[2], "шт");
             com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Фермы",
-                    entry.getKey() + " — бобышек (в комплекте фермы)", entry.getValue()[3], "шт");
+                    trussName + " — бобышек (в комплекте фермы)", entry.getValue()[2], "шт");
         }
 
         // Рамы -- ОДНО общее число (вертикальные + перемычки + секции базы), не три строки, по
