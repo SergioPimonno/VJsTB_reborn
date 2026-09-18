@@ -75,6 +75,15 @@ public final class Palette {
         MUTED = dark ? DARK_MUTED : LIGHT_MUTED;
     }
 
+    /** Текущая тема (тёмная/светлая) — по текущему {@link #BG}, а не отдельным
+     *  флагом, чтобы не рассинхронизироваться с {@link #applyTheme}. Нужен
+     *  {@code SchemaStyle.screen()} — незанятое гнездо схемы заливается базовым
+     *  цветом на контраст с фоном темы (docs/schema-ports-rework/PLAN.md, отзыв
+     *  пользователя 2026-09-16: пустые гнёзда неразличимы на тёмном фоне). */
+    public static boolean isDark() {
+        return BG.equals(DARK_BG);
+    }
+
     public static Color phaseColor(int phase) {
         return switch (phase) {
             case 1 -> PHASE1;
@@ -86,6 +95,17 @@ public final class Palette {
 
     public static Color signalColor(int index) {
         return SIGNAL[Math.floorMod(index, SIGNAL.length)];
+    }
+
+    /** Цвет из той же палитры {@link #signalColor}, СТАБИЛЬНЫЙ для данного {@code id}
+     *  (хеш строки, не позиция в каком-либо списке) — годится для окраски "категории"
+     *  сущности (например, типа кабинета) там, где важно, чтобы одна и та же
+     *  сущность получала один и тот же цвет КАЖДЫЙ раз, а не только пока порядок
+     *  окружающего списка не менялся (баг-репорт: "палитру нужно сохранять между
+     *  перезапусками" — при окраске по индексу в списке цвет типа сдвигался, стоило
+     *  где-то раньше по списку добавить/удалить любой ДРУГОЙ тип). */
+    public static Color stableColorFor(String id) {
+        return signalColor(id == null ? 0 : id.hashCode());
     }
 
     public static Color defaultAccent() {

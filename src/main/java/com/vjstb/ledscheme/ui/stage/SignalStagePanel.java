@@ -1202,7 +1202,7 @@ public class SignalStagePanel extends JPanel {
                 colorItem.addActionListener(ev -> {
                     java.awt.Color initial = chain.getColor() != null ? new java.awt.Color(chain.getColor()) : dot;
                     java.awt.Color chosen = UiKit.showColorChooser(SignalStagePanel.this,
-                            "Цвет цепочки сигнала", initial);
+                            "Цвет цепочки сигнала", initial, settings);
                     if (chosen != null) {
                         model.setSignalChainColor(chain, chosen.getRGB());
                     }

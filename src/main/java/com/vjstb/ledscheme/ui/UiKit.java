@@ -75,10 +75,17 @@ public final class UiKit {
      *  JColorChooser.showDialog(...)} везде, где выбирается цвет «линии» схемы
      *  (цепочки питания/сигнала, связи общей схемы, связи сетевого менеджера):
      *  баг-репорт: "вкладка recent должна быть общей для всех линий схемы, а не
-     *  только для текущей выбранной — тяжело из-за количества оттенков". Возвращает
-     *  выбранный цвет, или {@code null}, если диалог закрыт без подтверждения
-     *  (Отмена/крестик) — та же семантика, что и у {@code JColorChooser.showDialog}. */
-    public static java.awt.Color showColorChooser(Component owner, String title, java.awt.Color initial) {
+     *  только для текущей выбранной — тяжело из-за количества оттенков". Список
+     *  «недавних» персистентен между запусками приложения (баг-репорт: "палитру
+     *  нужно сохранять между перезапусками" — утилита для назначения цвета
+     *  одинаковым типам линий, не для типов кабинетов) — {@code settings} нужен
+     *  ИМЕННО для этого, подгружает/дописывает {@code UserProfile
+     *  .getRecentLineColors()}. Возвращает выбранный цвет, или {@code null}, если
+     *  диалог закрыт без подтверждения (Отмена/крестик) — та же семантика, что и
+     *  у {@code JColorChooser.showDialog}. */
+    public static java.awt.Color showColorChooser(Component owner, String title, java.awt.Color initial,
+            com.vjstb.ledscheme.settings.SettingsManager settings) {
+        RecentColorsChooserPanel.loadPersisted(settings);
         javax.swing.JColorChooser chooser = new javax.swing.JColorChooser(
                 initial != null ? initial : java.awt.Color.WHITE);
         javax.swing.colorchooser.AbstractColorChooserPanel[] existing = chooser.getChooserPanels();
@@ -91,7 +98,7 @@ public final class UiKit {
         javax.swing.JDialog dialog = javax.swing.JColorChooser.createDialog(owner, title, true, chooser,
                 e -> result[0] = chooser.getColor(), null);
         dialog.setVisible(true);
-        RecentColorsChooserPanel.remember(result[0]);
+        RecentColorsChooserPanel.remember(result[0], settings);
         return result[0];
     }
 

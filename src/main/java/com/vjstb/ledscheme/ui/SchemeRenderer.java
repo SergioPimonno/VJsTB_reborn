@@ -84,10 +84,20 @@ public final class SchemeRenderer {
     /** Экранный прямоугольник ячейки кабинета целиком — та же геометрия, что cabX/cabY
      *  (см. их javadoc), но сразу прямоугольником, для мест, которым нужна вся ячейка,
      *  а не только угол (например, отметить кабинет-«гнездо» подключения на общей
-     *  схеме — см. SchemaCanvasPanel). */
+     *  схеме — см. SchemaCanvasPanel). Размер — ФАКТИЧЕСКИЙ (см. {@link
+     *  ScreenLogic#effectiveCellW}/{@link ScreenLogic#effectiveCellH}), а не
+     *  номинальный {@code cellW}/{@code cellH} — иначе для кабинета с переопределённым
+     *  типом другого физического размера гнездо подключения рисовалось/хваталось бы
+     *  не там, где кабинет реально нарисован (баг-репорт: "привязки для уменьшенных
+     *  кабинетов сломались" — та же причина, что и у {@code SceneCanvasPanel
+     *  .cabinetAtPoint}/{@code locateCabinet}). {@code workspace} может быть
+     *  {@code null} — тогда переопределение не резолвится, как и раньше. */
     public static java.awt.Rectangle cabinetScreenRect(CabinetInstance cab, CabinetType type, int cellW, int cellH,
-            int offX, int offY) {
-        return new java.awt.Rectangle(cabX(cab, type, cellW, offX), cabY(cab, type, cellH, offY), cellW, cellH);
+            int offX, int offY, Workspace workspace) {
+        CabinetType effective = effectiveTypeOf(cab, type, workspace);
+        int ew = (int) Math.round(ScreenLogic.effectiveCellW(effective, type, cellW));
+        int eh = (int) Math.round(ScreenLogic.effectiveCellH(effective, type, cellH));
+        return new java.awt.Rectangle(cabX(cab, type, cellW, offX), cabY(cab, type, cellH, offY), ew, eh);
     }
 
     /** То же, но с указанием workspace — тогда для ячеек с переопределённым типом
@@ -130,6 +140,49 @@ public final class SchemeRenderer {
                                    List<PowerChain> powerChains, List<SignalChain> signalChains,
                                    List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers,
                                    boolean powerUnitKw) {
+        paintScheme(g2, scr, type, power, cellW, cellH, offX, offY, workspace, powerChains, signalChains,
+                sceneControllers, powerUnitKw, true);
+    }
+
+    /** {@code showCabinetIndexLabels} — подписи "строка,столбец" на кабинетах
+     *  (см. {@link #drawCabinetIndexLabel}); {@code false} — для сводных картинок
+     *  масштаба целой площадки, где эти подписи всё равно нечитаемы и не нужны
+     *  (см. {@link #renderScreensOverviewImage}, баг-репорт: "нумерацию кабинетов
+     *  уберём"). Остальные перегрузки всегда рисуют их (интерактивный холст
+     *  прописи — привычный вид для клика по кабинетам). */
+    public static void paintScheme(Graphics2D g2, Screen scr, CabinetType type, boolean power,
+                                   int cellW, int cellH, int offX, int offY, Workspace workspace,
+                                   List<PowerChain> powerChains, List<SignalChain> signalChains,
+                                   List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers,
+                                   boolean powerUnitKw, boolean showCabinetIndexLabels) {
+        paintSchemeGrid(g2, scr, type, cellW, cellH, offX, offY, workspace, showCabinetIndexLabels);
+        paintSchemeChains(g2, scr, power, cellW, cellH, offX, offY, type, workspace,
+                powerChains, signalChains, sceneControllers);
+    }
+
+    /** Часть {@link #paintScheme} — только сетка кабинетов (контур ячейки + подпись
+     *  "строка,столбец"), без линий цепочек. Вынесено отдельно, чтобы вызывающий код
+     *  мог вставить свой оверлей МЕЖДУ сеткой и цепочками (см. {@link #paintSchemeChains}
+     *  и {@code SceneCanvasPanel.drawCabinetOverrideMarks}) — баг-репорт 2026-09-16:
+     *  подсветка переопределения типа/формы кабинета рисовалась одним проходом ПОСЛЕ
+     *  всего {@code paintScheme} (в т.ч. после цепочек) и своей сплошной заливкой
+     *  перекрывала уже нарисованную линию цепочки; правильный порядок — заливка ПОД
+     *  цепочкой (между сеткой и цепочками), а не над ней. Обычные вызывающие коды
+     *  (CanvasPanel, PortPickerPanel и т.п.), которым этот порядок безразличен,
+     *  по-прежнему используют единый {@link #paintScheme}. */
+    public static void paintSchemeGrid(Graphics2D g2, Screen scr, CabinetType type,
+                                        int cellW, int cellH, int offX, int offY, Workspace workspace) {
+        paintSchemeGrid(g2, scr, type, cellW, cellH, offX, offY, workspace, true);
+    }
+
+    /** {@code showCabinetIndexLabels} — см. javadoc {@link #paintScheme}'s перегрузка
+     *  с тем же параметром ({@link #renderScreensOverviewImage} — единственный
+     *  вызывающий код, которому нужен {@code false}; интерактивный холст прописи
+     *  через {@link SceneCanvasPanel} по-прежнему зовёт 8-параметровую перегрузку
+     *  выше, всегда получая подписи). */
+    public static void paintSchemeGrid(Graphics2D g2, Screen scr, CabinetType type,
+                                        int cellW, int cellH, int offX, int offY, Workspace workspace,
+                                        boolean showCabinetIndexLabels) {
         for (CabinetInstance cab : scr.getCabinets()) {
             // Деактивированная (скрытая) ячейка — по определению "не считается, не
             // рисуется, не участвует в цепочках" (см. CabinetInstance.isHidden) —
@@ -157,9 +210,18 @@ public final class SchemeRenderer {
             g2.setColor(Palette.BORDER);
             outlineCabinetShape(g2, x, y, ew, eh, shape, rotationDeg);
 
-            drawCabinetIndexLabel(g2, cab, x, y, ew, eh);
+            if (showCabinetIndexLabels) {
+                drawCabinetIndexLabel(g2, cab, x, y, ew, eh);
+            }
         }
+    }
 
+    /** Часть {@link #paintScheme} — только линии цепочек, см. javadoc {@link #paintSchemeGrid}. */
+    public static void paintSchemeChains(Graphics2D g2, Screen scr, boolean power,
+                                         int cellW, int cellH, int offX, int offY, CabinetType type,
+                                         Workspace workspace, List<PowerChain> powerChains,
+                                         List<SignalChain> signalChains,
+                                         List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers) {
         if (power) {
             for (PowerChain chain : powerChains) {
                 // Метка фазы — только у НАЧАЛА цепочки: питание не закольцовывается
@@ -1156,6 +1218,230 @@ public final class SchemeRenderer {
 
         g2.dispose();
         return img;
+    }
+
+    /** Экраны сцены сверху — не декоративные прямоугольники, а тот же вид отдельными
+     *  кабинетами, что и в детальном обзоре сцены ({@code SceneCanvasPanel}, режим
+     *  «Кабинеты по отдельности», см. {@link #paintScheme}) — риггеру нужно видеть
+     *  форму сборки (вырезы, треугольные угловые кабинеты и т.п.), а не голый
+     *  силуэт (баг-репорт: "должны рисоваться не прямоугольники, а вид как при
+     *  включенных кабинеты по отдельности"). Раскладка экранов на картинке — их
+     *  РЕАЛЬНЫЕ X/Y из окна «Настройка» (один общий масштаб на всю площадку, как в
+     *  {@code SceneCanvasPanel.boundsMm}/{@code scaleFor}), а не список слева
+     *  направо — баг-репорт: "раскладка экранов пусть соответствует той что в окне
+     *  сетапа, не просто же так инженер их там расставляет". Внутри каждого экрана
+     *  подписи "строка,столбец" на кабинетах НЕ рисуются (баг-репорт: "нумерацию
+     *  кабинетов уберём") — в масштабе площадки целиком они всё равно нечитаемы и
+     *  для сводной таблицы не нужны; номер экрана (чип в углу) — это ДРУГАЯ
+     *  нумерация, по строкам таблицы, оставлена для сверки картинки с таблицей.
+     *  Таблица ниже: №, экран, размеры, разрешение, вес, нагрузка, тип монтажа,
+     *  примечания (баг-репорт: "нужно указывать названия экранов и примечания к
+     *  ним, а также электрическую нагрузку") — примечания берутся из общего поля
+     *  {@link Screen#getNotes()} (не из {@code riggingNotes}/{@code structureNotes},
+     *  которые видны только при соответствующем типе монтажа — баг-репорт: "для
+     *  экранов сейчас негде писать примечания"). По образцу {@link
+     *  #renderPortLegendImage} (тот же приём измерения через "пробный" {@link
+     *  Graphics2D}, шрифты/отступы/разделитель). Габариты/разрешение — по
+     *  НОМИНАЛЬНОЙ сетке экрана, вес/нагрузка — по фактически стоящим (не скрытым)
+     *  кабинетам (см. {@link ScreenLogic#stats}). */
+    public static BufferedImage renderScreensOverviewImage(String sceneName, AppModel model,
+            List<Screen> screens, double dpiScale) {
+        record Row(String number, String name, String size, String resolution, String weight, String load,
+                   String mount, String notes, double widthMm, double heightMm) {
+        }
+        List<Row> rows = new ArrayList<>();
+        for (int i = 0; i < screens.size(); i++) {
+            Screen s = screens.get(i);
+            CabinetType type = model.typeOf(s);
+            ScreenStats st = ScreenLogic.stats(s, type, model.getWorkspace());
+            String notes = s.getNotes();
+            rows.add(new Row(String.valueOf(i + 1),
+                    s.getName() == null || s.getName().isEmpty() ? "—" : s.getName(),
+                    trim(st.physicalWidthMm()) + "×" + trim(st.physicalHeightMm()) + " мм",
+                    st.resolutionWidthPx() + "×" + st.resolutionHeightPx() + " px",
+                    trim(st.totalWeightKg()) + " кг",
+                    formatLoad(st.totalPowerW()),
+                    s.getMountType().getLabel(),
+                    notes == null || notes.isBlank() ? "—" : notes,
+                    st.physicalWidthMm(), st.physicalHeightMm()));
+        }
+
+        Font titleFont = new Font(Font.SANS_SERIF, Font.BOLD, 20);
+        Font headerFont = new Font(Font.SANS_SERIF, Font.BOLD, 15);
+        Font rowFont = new Font(Font.SANS_SERIF, Font.PLAIN, 15);
+        Font screenNumberFont = new Font(Font.SANS_SERIF, Font.BOLD, 16);
+
+        BufferedImage probe = new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB);
+        Graphics2D pg = probe.createGraphics();
+        pg.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+
+        String title = "Экраны" + (sceneName != null && !sceneName.isEmpty() ? " — " + sceneName : "");
+        pg.setFont(titleFont);
+        int titleW = pg.getFontMetrics().stringWidth(title);
+        int titleH = pg.getFontMetrics().getHeight();
+
+        pg.setFont(headerFont);
+        java.awt.FontMetrics headerFm = pg.getFontMetrics();
+        String[] headers = {"№", "Экран", "Размеры", "Разрешение", "Вес", "Нагрузка", "Тип монтажа", "Примечания"};
+        int[] colW = new int[headers.length];
+        for (int i = 0; i < headers.length; i++) {
+            colW[i] = headerFm.stringWidth(headers[i]);
+        }
+        int headerH = headerFm.getHeight();
+
+        // "Примечания" — единственная колонка переменной, потенциально большой
+        // длины (свободный текст) — ограничиваем её отдельным максимумом, а не
+        // даём разрастись до ширины самой длинной записи, иначе одно длинное
+        // примечание растягивало бы всю картинку на всю его длину.
+        int notesMaxW = 420;
+        pg.setFont(rowFont);
+        java.awt.FontMetrics rowFm = pg.getFontMetrics();
+        for (Row r : rows) {
+            colW[0] = Math.max(colW[0], rowFm.stringWidth(r.number()));
+            colW[1] = Math.max(colW[1], rowFm.stringWidth(r.name()));
+            colW[2] = Math.max(colW[2], rowFm.stringWidth(r.size()));
+            colW[3] = Math.max(colW[3], rowFm.stringWidth(r.resolution()));
+            colW[4] = Math.max(colW[4], rowFm.stringWidth(r.weight()));
+            colW[5] = Math.max(colW[5], rowFm.stringWidth(r.load()));
+            colW[6] = Math.max(colW[6], rowFm.stringWidth(r.mount()));
+            colW[7] = Math.min(notesMaxW, Math.max(colW[7], rowFm.stringWidth(r.notes())));
+        }
+        int rowH = rowFm.getHeight() + 10;
+        pg.dispose();
+
+        int pad = 24;
+        int colGap = 28;
+        int[] colX = new int[headers.length];
+        colX[0] = pad;
+        for (int i = 0; i < headers.length; i++) {
+            colW[i] += 6;
+            if (i > 0) {
+                colX[i] = colX[i - 1] + colW[i - 1] + colGap;
+            }
+        }
+        int tableW = colX[headers.length - 1] + colW[headers.length - 1];
+
+        // Раскладка экранов — их РЕАЛЬНЫЕ X/Y (см. javadoc метода), один общий
+        // масштаб на всю площадку (как SceneCanvasPanel.boundsMm/scaleFor), а не
+        // независимый масштаб на каждый экран — иначе относительное расположение
+        // и размеры экранов друг относительно друга исказились бы. planMaxW/H —
+        // целевой размер этой области картинки (масштаб подбирается вписыванием
+        // общего бокса экранов в эти пределы), нижняя/верхняя граница масштаба —
+        // подстраховка от вырожденных случаев (один кабинет или экраны, разнесённые
+        // на десятки метров).
+        int planMaxW = 900;
+        int planMaxH = 480;
+        double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE, maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
+        double[][] ext = new double[screens.size()][];
+        for (int i = 0; i < screens.size(); i++) {
+            Screen s = screens.get(i);
+            CabinetType type = model.typeOf(s);
+            double[] e = type != null ? ScreenLogic.cabinetExtentMm(s, type, model.getWorkspace())
+                    : new double[]{0, 0, 100, 100};
+            ext[i] = e;
+            minX = Math.min(minX, s.getPosXMm() + e[0]);
+            minY = Math.min(minY, s.getPosYMm() + e[1]);
+            maxX = Math.max(maxX, s.getPosXMm() + e[2]);
+            maxY = Math.max(maxY, s.getPosYMm() + e[3]);
+        }
+        boolean hasScreens = !rows.isEmpty();
+        double boundW = hasScreens ? Math.max(1, maxX - minX) : 1;
+        double boundH = hasScreens ? Math.max(1, maxY - minY) : 1;
+        double scale = hasScreens
+                ? Math.max(0.02, Math.min(3.0, Math.min(planMaxW / boundW, planMaxH / boundH))) : 1;
+        int planPxW = hasScreens ? Math.max(40, (int) Math.round(boundW * scale)) : 0;
+        int planPxH = hasScreens ? Math.max(40, (int) Math.round(boundH * scale)) : 0;
+
+        int w = Math.max(titleW, Math.max(tableW, planPxW)) + pad * 2;
+        int titleY = pad + titleH - 6;
+        int screensY = titleY + 24;
+        int tableTop = rows.isEmpty() ? screensY : screensY + planPxH + 40;
+        int headerY = tableTop + headerH;
+        int firstRowY = headerY + 16;
+        int h = rows.isEmpty() ? headerY + pad
+                : firstRowY + (rows.size() - 1) * rowH + rowFm.getDescent() + pad;
+
+        BufferedImage img = new BufferedImage(Math.max(1, (int) Math.round(w * dpiScale)),
+                Math.max(1, (int) Math.round(h * dpiScale)), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g2 = img.createGraphics();
+        g2.scale(dpiScale, dpiScale);
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        g2.setColor(Palette.BG);
+        g2.fillRect(0, 0, w, h);
+
+        g2.setColor(Palette.TEXT);
+        g2.setFont(titleFont);
+        g2.drawString(title, pad, titleY);
+
+        for (int i = 0; i < screens.size(); i++) {
+            Screen scr = screens.get(i);
+            CabinetType type = model.typeOf(scr);
+            double[] e = ext[i];
+            int sx = pad + (int) Math.round((scr.getPosXMm() + e[0] - minX) * scale);
+            int sy = screensY + (int) Math.round((scr.getPosYMm() + e[1] - minY) * scale);
+            int sw = Math.max(2, (int) Math.round((e[2] - e[0]) * scale));
+            int sh = Math.max(2, (int) Math.round((e[3] - e[1]) * scale));
+            g2.setColor(Palette.BG);
+            g2.fillRect(sx, sy, sw, sh);
+            if (type != null) {
+                int cellW = Math.max(1, (int) Math.round(type.getWidthMm() * scale));
+                int cellH = Math.max(1, (int) Math.round(type.getHeightMm() * scale));
+                int gx = pad + (int) Math.round((scr.getPosXMm() - minX) * scale);
+                int gy = screensY + (int) Math.round((scr.getPosYMm() - minY) * scale);
+                Graphics2D clipped = (Graphics2D) g2.create();
+                clipped.clipRect(sx, sy, sw, sh);
+                paintScheme(clipped, scr, type, false, cellW, cellH, gx, gy, model.getWorkspace(),
+                        List.of(), List.of(), List.of(), false, false);
+                clipped.dispose();
+            }
+            g2.setColor(Palette.BORDER);
+            g2.drawRect(sx, sy, sw, sh);
+            g2.setColor(Palette.TEXT);
+            g2.setFont(screenNumberFont);
+            String number = rows.get(i).number();
+            java.awt.FontMetrics numFm = g2.getFontMetrics();
+            int chipW = numFm.stringWidth(number) + 10, chipH = numFm.getHeight() + 4;
+            g2.setColor(new Color(0, 0, 0, 190));
+            g2.fillRoundRect(sx + 3, sy + 3, chipW, chipH, 6, 6);
+            g2.setColor(Color.WHITE);
+            g2.drawString(number, sx + 8, sy + 3 + numFm.getAscent() + 1);
+        }
+
+        g2.setFont(headerFont);
+        g2.setColor(Palette.TEXT);
+        for (int i = 0; i < headers.length; i++) {
+            g2.drawString(headers[i], colX[i], headerY);
+        }
+        g2.setColor(new Color(0, 0, 0, 120));
+        g2.drawLine(pad, headerY + 6, w - pad, headerY + 6);
+
+        g2.setFont(rowFont);
+        g2.setColor(Palette.TEXT);
+        int y = firstRowY;
+        for (Row r : rows) {
+            g2.drawString(r.number(), colX[0], y);
+            g2.drawString(r.name(), colX[1], y);
+            g2.drawString(r.size(), colX[2], y);
+            g2.drawString(r.resolution(), colX[3], y);
+            g2.drawString(r.weight(), colX[4], y);
+            g2.drawString(r.load(), colX[5], y);
+            g2.drawString(r.mount(), colX[6], y);
+            g2.drawString(clipToWidth(g2, r.notes(), notesMaxW), colX[7], y);
+            y += rowH;
+        }
+
+        g2.dispose();
+        return img;
+    }
+
+    /** Электрическая нагрузка экрана для таблицы (см. {@link #renderScreensOverviewImage}) —
+     *  в кВт с одним знаком после запятой при 1 кВт и больше (обычный диапазон для
+     *  экрана из нескольких кабинетов), иначе в Вт целыми — единица подбирается по
+     *  значению, а не по глобальной настройке юнита (у {@link SchemeRenderer} нет
+     *  доступа к {@code SettingsManager}, как и у остального этого класса). */
+    private static String formatLoad(double watts) {
+        return watts >= 1000 ? String.format("%.1f кВт", watts / 1000.0) : Math.round(watts) + " Вт";
     }
 
     /** Известный рецепт для javax.imageio (нет прямого API "setDpi") — JFIF-узел
