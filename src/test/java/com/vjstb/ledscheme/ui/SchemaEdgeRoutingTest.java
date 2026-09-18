@@ -130,13 +130,12 @@ class SchemaEdgeRoutingTest {
     /** Баг-репорт пользователя 2026-09-18: "если гнездо слева, а линия идёт справа
      *  или снизу, то она заходит под блок и заходит напрямую в гнездо, это
      *  некрасиво". Причина: свой же узел одного из концов связи был ЦЕЛИКОМ
-     *  исключён из препятствий (иначе раздутие на {@code ROUTE_OBSTACLE_MARGIN}
-     *  затянуло бы гнездо, лежащее РОВНО на его границе, "внутрь" препятствия) —
-     *  но это же позволяло связующему участку маршрута срезать прямо ЧЕРЕЗ тело
-     *  этого узла, если гнездо на одной стороне, а сосед — с другой. Фикс — свой
-     *  же узел тоже препятствие, просто без внешнего раздутия и с небольшим
-     *  внутренним отступом ({@code SchemaCanvasPanel.SELF_OBSTACLE_INSET}) для
-     *  страховки от double-погрешности. */
+     *  исключён из препятствий (иначе раздутие затянуло бы гнездо, лежащее РОВНО
+     *  на его границе, "внутрь" препятствия) — но это же позволяло связующему
+     *  участку маршрута срезать прямо ЧЕРЕЗ тело этого узла, если гнездо на одной
+     *  стороне, а сосед — с другой. Фикс — свой же узел тоже препятствие, раздутое
+     *  с 3 сторон, кроме той, где само гнездо ({@code SchemaCanvasPanel
+     *  .selfObstacleWithClearance}). */
     @Test
     void autoRouteNeverCutsThroughTheOwnBodyOfEitherEndpointNode(@TempDir Path dir) {
         AppModel model = model(dir);
@@ -166,6 +165,39 @@ class SchemaEdgeRoutingTest {
             assertFalse(crossesInterior(pts.get(i), pts.get(i + 1), a),
                     "сегмент " + i + " проходит через тело узла A — гнездо этого же узла");
         }
+    }
+
+    /** Баг-репорт пользователя 2026-09-18: "отступ линии снизу/сверху блока не
+     *  работает" — обход СВОЕГО ЖЕ узла (со сторон, отличных от той, где гнездо
+     *  этого конца связи) должен держать тот же отступ, что и от чужих блоков, а
+     *  не идти вплотную к границе (раньше — 0, см. {@code
+     *  SchemaCanvasPanel.selfObstacleWithClearance}). */
+    @Test
+    void ownNodeBypassKeepsTheSameClearanceAsOtherBlocks(@TempDir Path dir) {
+        AppModel model = model(dir);
+        SchemaNode a = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "A", 300, 300, null);
+        CardPort aIn = model.addCardToNode(a, "Видео", List.of(
+                new CardPort("HDMI", PortDirection.IN, 1))).getPorts().get(0);
+        a.setWidth(200);
+        a.setHeight(120);
+        SchemaNode b = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "B", 700, 340, null);
+        b.setOrientation(NodeOrientation.LEFT);
+        CardPort bOut = model.addCardToNode(b, "Видео", List.of(
+                new CardPort("HDMI", PortDirection.OUT, 1))).getPorts().get(0);
+        SchemaEdge edge = model.addSchemaEdge(SchemaMode.SIGNAL, b.getId(), bOut.getId(), null,
+                a.getId(), aIn.getId(), null, null, EdgeRouteMode.AUTO);
+
+        SettingsManager settings = new SettingsManager(new SettingsStore(new File(dir.toFile(), "settings.json")));
+        settings.setSchemaRouteStubPx(30);
+        SchemaCanvasPanel canvas = new SchemaCanvasPanel(model, SchemaMode.SIGNAL, settings);
+        List<double[]> pts = canvas.routePointsForTest(edge);
+
+        double aRight = a.getX() + a.getWidth();
+        double closestX = pts.stream().mapToDouble(p -> p[0]).filter(x -> x >= aRight - 1e-6).min().orElse(Double.NaN);
+        assertFalse(Double.isNaN(closestX), "маршрут должен пройти правее A хотя бы одной точкой");
+        assertTrue(closestX - aRight >= 30 - 1e-6,
+                "обход своего же узла A (не с той стороны, где гнездо) держится вплотную (" + (closestX - aRight)
+                        + "px) вместо настроенного отступа (30px)");
     }
 
     private static boolean crossesInterior(double[] p1, double[] p2, SchemaNode n) {

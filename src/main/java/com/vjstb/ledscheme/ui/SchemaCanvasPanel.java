@@ -1649,17 +1649,16 @@ public class SchemaCanvasPanel extends JPanel {
                 // маршрута срезать напрямую ЧЕРЕЗ/ПОД телом своего же узла, если
                 // гнездо на одной стороне, а маршрут удобнее вести с другой (баг-
                 // репорт пользователя 2026-09-18: "если гнездо слева, а линия идёт
-                // справа или снизу, то она заходит под блок"). Вместо полного
-                // исключения — свой же узел ТОЖЕ препятствие, но без внешнего
-                // раздутия и с небольшим ВНУТРЕННИМ отступом (SELF_OBSTACLE_INSET)
-                // для страховки от погрешности double — гнездо и его ус (см.
-                // routeEndpointFor/OrthogonalRouter.outward) всегда лежат НА
-                // границе или СНАРУЖИ узла, а не внутри нового, чуть уменьшенного
-                // прямоугольника.
-                double inset = SELF_OBSTACLE_INSET;
-                obstacles.add(new com.vjstb.ledscheme.service.schemalayout.OrthogonalRouter.Obstacle(
-                        n.getX() + inset, n.getY() + inset,
-                        Math.max(0, n.getWidth() - 2 * inset), Math.max(0, n.getHeight() - 2 * inset)));
+                // справа или снизу, то она заходит под блок"). Раздутие на ВСЕ 4
+                // стороны (как у чужих блоков) тоже не годится — тогда сторона,
+                // где стоит само гнездо, "съела" бы гнездо и его ус целиком. Вместо
+                // этого — раздуваем только 3 стороны, отличные от стороны гнезда
+                // (см. {@link #selfObstacleWithClearance}) — тот же отступ, что и
+                // от чужих блоков, для обхода СВОЕГО ЖЕ блока с других сторон (баг-
+                // репорт пользователя 2026-09-18: "отступ линии снизу/сверху блока
+                // не работает" — раньше тут было 0 со всех сторон), но без риска
+                // проглотить собственное гнездо на четвёртой стороне.
+                obstacles.add(selfObstacleWithClearance(n, n == a ? ea.side() : eb.side(), stub));
                 continue;
             }
             obstacles.add(new com.vjstb.ledscheme.service.schemalayout.OrthogonalRouter.Obstacle(
@@ -1670,16 +1669,36 @@ public class SchemaCanvasPanel extends JPanel {
         return result.points();
     }
 
-    /** Внутренний отступ прямоугольника СВОЕГО ЖЕ узла, когда тот всё же считается
-     *  препятствием (см. {@link #autoRoutePoints}) — намеренно 0, а не отступ
-     *  наружу (тот как раз ломает гнездо, сидящее ровно на границе). {@code
-     *  Obstacle.containsInterior} использует
-     *  строгое неравенство, так что точка РОВНО на границе (гнездо) или дальше
-     *  (ус, уходящий наружу) и без отступа не считается "внутри" — держим
-     *  константу ради самодокументирования, а не потому что число обязано быть
-     *  больше 0 (первая версия с отступом 2px пропускала обход в 2px от реальной
-     *  границы блока — заметно на тесте, хоть и незаметно на глаз). */
-    private static final double SELF_OBSTACLE_INSET = 0;
+    /** Прямоугольник СВОЕГО ЖЕ узла как препятствие (см. {@link #autoRoutePoints}) —
+     *  раздут отступом {@code margin} на 3 стороны, кроме той, где стоит {@code
+     *  pinSide} (гнездо этого конца связи). Та сторона остаётся РОВНО на истинной
+     *  границе узла (без раздутия): гнездо лежит на ней, а ус уходит ДАЛЬШЕ
+     *  наружу — оба варианта строго вне (или на границе) прямоугольника даже без
+     *  запаса, {@code Obstacle.containsInterior} использует строгое неравенство.
+     *  Раздутие ТРЁХ остальных сторон — баг-репорт пользователя 2026-09-18:
+     *  "отступ линии снизу/сверху блока не работает" — маршрут, огибающий свой же
+     *  блок с ЛЮБОЙ другой стороны (не той, где гнездо), должен держать тот же
+     *  отступ, что и от чужих блоков, а не идти вплотную. */
+    private static com.vjstb.ledscheme.service.schemalayout.OrthogonalRouter.Obstacle selfObstacleWithClearance(
+            SchemaNode n, NodeSide pinSide, double margin) {
+        double left = n.getX();
+        double top = n.getY();
+        double right = n.getX() + n.getWidth();
+        double bottom = n.getY() + n.getHeight();
+        if (pinSide != NodeSide.LEFT) {
+            left -= margin;
+        }
+        if (pinSide != NodeSide.RIGHT) {
+            right += margin;
+        }
+        if (pinSide != NodeSide.TOP) {
+            top -= margin;
+        }
+        if (pinSide != NodeSide.BOTTOM) {
+            bottom += margin;
+        }
+        return new com.vjstb.ledscheme.service.schemalayout.OrthogonalRouter.Obstacle(left, top, right - left, bottom - top);
+    }
 
     /** Точка привязки конца связи для орто-трассировки + сторона, определяющая
      *  направление "уса" ({@link com.vjstb.ledscheme.service.schemalayout.
