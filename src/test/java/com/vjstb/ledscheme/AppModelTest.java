@@ -1560,6 +1560,71 @@ class AppModelTest {
     }
 
     @Test
+    void signalPortLegendUsesEthernetPoolLocalNumberingNotRawPortWithFiberGaps(@TempDir Path dir) {
+        // Баг-репорт: "Контроллер H2 с картами Fiber+Ethernet — в расключении экрана
+        // порядковые номера портов пересчитываются верно, в легенде неправильно
+        // (начинается счёт с fiber портов)". Причина — formatSignalPortGroups
+        // печатал СЫРОЙ сквозной номер порта контроллера (считает и fiber-порты
+        // тоже) вместо номера В ПРЕДЕЛАХ Ethernet-пула (см. {@link
+        // ControllerType#ethernetPoolLocalPort}), которым уже пользуются
+        // PortPickerPanel/NovaLctControllerResolver.
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("Экран", type.getId(), 3, 3, 0, 0);
+        model.selectScreen(screen);
+
+        // Карта: 4 fiber-порта ПЕРЕД 4 ethernet-портами (как у реальных карт
+        // Ethernet+Fiber Output) — сырой номер 2-го ethernet-порта равен 6 (после
+        // 4 fiber), правильный номер "в расключении" — 2.
+        ControllerType h2 = new ControllerType();
+        h2.setName("H2");
+        h2.getCards().add(new SchemaCard("Card 1", List.of(
+                new CardPort("Fiber", PortDirection.OUT, 4),
+                new CardPort("Ethernet", PortDirection.OUT, 4))));
+        h2 = model.addControllerType(h2);
+        ControllerInstance ci = model.addControllerToScreen(screen, h2.getId());
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+        model.addSignalChain(6, false, List.of(ids.get(0)));
+
+        List<AppModel.SignalPortLegendRow> rows = model.signalPortLegendRows(model.getCurrentScene());
+        assertEquals(1, rows.size());
+        assertEquals(ci.getLabel() + " P2", rows.get(0).main(),
+                "номер должен быть в пределах Ethernet-пула (2), не сырой (6)");
+    }
+
+    @Test
+    void signalPortLegendQualifiesWithCardNumberOnlyWhenMultiplePoolsUsed(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("Экран", type.getId(), 3, 3, 0, 0);
+        model.selectScreen(screen);
+
+        ControllerType h2 = new ControllerType();
+        h2.setName("H2");
+        h2.getCards().add(new SchemaCard("Card 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 4))));
+        h2.getCards().add(new SchemaCard("Card 2", List.of(new CardPort("Ethernet", PortDirection.OUT, 4))));
+        h2 = model.addControllerType(h2);
+        ControllerInstance ci = model.addControllerToScreen(screen, h2.getId());
+
+        List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+        // Оба порта на карте 0 (raw 1,2) — один пул задействован, без "Карта N".
+        model.addSignalChain(1, false, List.of(ids.get(0)));
+        model.addSignalChain(2, false, List.of(ids.get(1)));
+        assertEquals(ci.getLabel() + " P1-2", model.signalPortLegendRows(model.getCurrentScene()).get(0).main());
+
+        // Ещё порт на карте 1 (raw 5 = pool-local 1) — теперь два пула, с "Карта N".
+        model.addSignalChain(5, false, List.of(ids.get(2)));
+        String withTwoPools = model.signalPortLegendRows(model.getCurrentScene()).get(0).main();
+        assertTrue(withTwoPools.contains("Карта 1") && withTwoPools.contains("Карта 2"),
+                "оба пула задействованы -- обе части должны различать карту: " + withTwoPools);
+    }
+
+    @Test
     void overlapDetectionAndBottomAlignedAutoArrange(@TempDir Path dir) {
         AppModel model = freshModel(dir);
         CabinetType tall = model.addCabinetType(sampleType()); // 500x500мм, будет 2 ряда = 1000мм

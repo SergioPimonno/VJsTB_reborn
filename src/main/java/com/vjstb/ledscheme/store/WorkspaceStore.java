@@ -50,6 +50,17 @@ public class WorkspaceStore {
         if (!workspaceFile.exists()) {
             return new Workspace();
         }
+        if (workspaceFile.length() == 0) {
+            // Баг-репорт 2026-09-15: до исправления save() ниже запись была НЕ атомарной
+            // (mapper.writeValue прямо в workspaceFile), и обрыв процесса ровно во время
+            // неё (зависшее на I/O приложение, снятое через диспетчер задач) оставлял этот
+            // файл пустым -- на старте это падало необрабатываемым NPE внутри
+            // migrateLegacyChains (root == MissingNode -> convertValue возвращает null).
+            // Пустой файл — такой же однозначный сигнал "данных тут нет", как и
+            // отсутствующий (ветка выше), а не повреждённый JSON с шансом на частичное
+            // восстановление -- отвечаем на него так же, не обрывая запуск приложения.
+            return new Workspace();
+        }
         try {
             JsonNode root = mapper.readTree(workspaceFile);
             migrateLegacyNetworkManagerPlans(root);
@@ -174,15 +185,41 @@ public class WorkspaceStore {
         }
     }
 
+    /** Пишет во временный файл рядом и атомарно подменяет им {@code workspaceFile} —
+     *  баг-репорт: {@code mapper.writeValue(workspaceFile, ...)} писал НАПРЯМУЮ в целевой
+     *  файл, а это открывает его на запись (== мгновенно обнуляет содержимое) ЗАДОЛГО до
+     *  того, как весь JSON окажется на диске; эта функция вызывается синхронно на каждое
+     *  изменение модели (см. {@code AppModel#persist}), поэтому обрыв процесса ровно в
+     *  этот момент (зависшее на I/O приложение, снятое пользователем через диспетчер
+     *  задач) оставлял {@code workspace.json} ПУСТЫМ — весь рабочий стол пользователя
+     *  оказался потерян именно так. Временный файл + {@link Files#move} с {@code
+     *  ATOMIC_MOVE} гарантируют, что на диске в любой момент лежит либо полная старая
+     *  версия, либо полная новая — никогда пустой/оборванный файл между ними. */
     public void save(Workspace workspace) {
         try {
             File dir = workspaceFile.getParentFile();
             if (dir != null && !dir.exists() && !dir.mkdirs()) {
                 throw new IOException("не удалось создать каталог " + dir);
             }
-            mapper.writeValue(workspaceFile, workspace);
+            File tmp = new File(dir, workspaceFile.getName() + ".tmp");
+            mapper.writeValue(tmp, workspace);
+            moveAtomicallyIfPossible(tmp, workspaceFile);
         } catch (IOException e) {
             throw new RuntimeException("Не удалось сохранить данные в " + workspaceFile + ": " + e.getMessage(), e);
+        }
+    }
+
+    private static void moveAtomicallyIfPossible(File from, File to) throws IOException {
+        try {
+            java.nio.file.Files.move(from.toPath(), to.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+            // Не все файловые системы (напр. некоторые сетевые шары) поддерживают
+            // атомарную замену -- обычное переименование всё ещё безопаснее прямой
+            // записи (файл подменяется одной операцией ОС, не байт-за-байтом).
+            java.nio.file.Files.move(from.toPath(), to.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         }
     }
 

@@ -6,6 +6,7 @@ import com.vjstb.ledscheme.settings.SettingsManager;
 import com.vjstb.ledscheme.settings.SettingsStore;
 import com.vjstb.ledscheme.settings.UserProfile;
 import com.vjstb.ledscheme.store.WorkspaceStore;
+import com.vjstb.ledscheme.sync.ClientBackupSync;
 import com.vjstb.ledscheme.sync.LibrarySyncClient;
 import com.vjstb.ledscheme.ui.LafStyle;
 import com.vjstb.ledscheme.ui.MainFrame;
@@ -137,6 +138,7 @@ public class App {
                     // сервер недоступен/сеть -- не мешаем работе приложения; ручная
                     // синхронизация (меню) остаётся доступна и покажет ошибку явно
                 }
+                ClientBackupSync.runInBackground(model, settings);
             }
         }.execute();
     }

@@ -180,6 +180,13 @@ public class AppModel {
         return store;
     }
 
+    /** Нужен снаружи ради пути {@code library.json} на диске (см. {@code
+     *  ClientBackupSync} — та же папка, что и у {@link #getStore()}, но отдельный
+     *  файл, см. конструктор AppModel). */
+    public LibraryStore getLibraryStore() {
+        return libraryStore;
+    }
+
     /** Общая библиотека ("GTO") ++ личная (Task #135/v2.0) — см. class-javadoc
      *  Library про разделение. Личная свободно редактируется через add/update/delete
      *  ниже (всегда пишут только в workspace.getCabinetTypes()), общая — только
@@ -5273,9 +5280,20 @@ public class AppModel {
      *  chains}, касающихся одного экрана, по владеющему контроллеру — несколько
      *  экранов нередко делят один контроллер (например, соседние маленькие экраны на
      *  свободных портах контроллера более крупного соседа), поэтому группировка именно
-     *  по контроллеру, а не предположение "один экран — один контроллер". */
+     *  по контроллеру, а не предположение "один экран — один контроллер". Внутри
+     *  контроллера — ЕЩЁ по отдающей карте/пулу нумерации Ethernet-портов (см.
+     *  {@link ControllerType#ethernetPoolLocalPort(int)}) — у модульных контроллеров
+     *  (Novastar H-серии и т.п.) с несколькими Ethernet+Fiber картами сырой сквозной
+     *  номер порта контроллера считает и fiber-порты тоже, из-за чего Ethernet-порт
+     *  №1 второй карты имел бы сырой номер вроде 17, а не 1 — баг-репорт: "легенда
+     *  портов считает неверно, начинается счёт с fiber портов", хотя сама раскладка
+     *  портов ({@code PortPickerPanel}, {@code NovaLctControllerResolver}) уже верно
+     *  переводит сквозной номер в (карта, номер В ПРЕДЕЛАХ карты) через тот же
+     *  {@code ethernetPoolLocalPort} — легенда была единственным местом, которое
+     *  этого не делало и печатало сырой номер как есть. */
     private String formatSignalPortGroups(Scene scene, List<SignalChain> chains, boolean backup) {
-        java.util.Map<ControllerInstance, List<Integer>> byController = new java.util.LinkedHashMap<>();
+        java.util.Map<ControllerInstance, java.util.Map<Integer, List<Integer>>> byControllerAndPool =
+                new java.util.LinkedHashMap<>();
         for (SignalChain c : chains) {
             Integer port = backup ? c.getBackupPortNumber() : c.getPortNumber();
             if (port == null) {
@@ -5285,11 +5303,36 @@ public class AppModel {
             if (ci == null) {
                 continue;
             }
-            byController.computeIfAbsent(ci, k -> new ArrayList<>()).add(port - portOffsetOf(scene, ci));
+            int controllerLocal = port - portOffsetOf(scene, ci);
+            ControllerType type = workspace.controllerTypeById(ci.getControllerTypeId());
+            int poolIndex = 0;
+            int poolLocal = controllerLocal;
+            if (type != null) {
+                int[] pool = type.ethernetPoolLocalPort(controllerLocal);
+                if (pool == null) {
+                    // fiber-порт или вне диапазона — сигнальная цепочка на такой порт
+                    // указывать не должна вовсе, но на всякий случай не показываем
+                    // заведомо неверный номер вместо тихого пропуска строки.
+                    continue;
+                }
+                poolIndex = pool[0];
+                poolLocal = pool[1];
+            }
+            byControllerAndPool.computeIfAbsent(ci, k -> new java.util.LinkedHashMap<>())
+                    .computeIfAbsent(poolIndex, k -> new ArrayList<>()).add(poolLocal);
         }
         List<String> parts = new ArrayList<>();
-        for (var e : byController.entrySet()) {
-            parts.add(e.getKey().getLabel() + " P" + formatPortRanges(e.getValue()));
+        for (var ciEntry : byControllerAndPool.entrySet()) {
+            java.util.Map<Integer, List<Integer>> pools = ciEntry.getValue();
+            // "Карта N" добавляется, только если у ЭТОГО экрана реально задействовано
+            // больше одного пула нумерации того же контроллера — простые (немодульные)
+            // контроллеры и однокарточные модульные остаются в прежнем компактном виде
+            // "Контроллер X PN" без лишнего уточнения.
+            boolean multiPool = pools.size() > 1;
+            for (var poolEntry : pools.entrySet()) {
+                String prefix = ciEntry.getKey().getLabel() + (multiPool ? " Карта " + (poolEntry.getKey() + 1) : "");
+                parts.add(prefix + " P" + formatPortRanges(poolEntry.getValue()));
+            }
         }
         return String.join(", ", parts);
     }
