@@ -3,15 +3,20 @@ package com.vjstb.ledscheme.ui;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.vjstb.ledscheme.model.CabinetInstance;
+import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.CardPort;
+import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.EdgeRouteMode;
 import com.vjstb.ledscheme.model.EdgeWaypoint;
 import com.vjstb.ledscheme.model.InterfaceRole;
 import com.vjstb.ledscheme.model.PortDirection;
+import com.vjstb.ledscheme.model.SchemaCard;
 import com.vjstb.ledscheme.model.SchemaEdge;
 import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.SchemaNode;
 import com.vjstb.ledscheme.model.SchemaNodeType;
+import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.settings.SchemaStylePreset;
 import com.vjstb.ledscheme.settings.SettingsManager;
@@ -68,6 +73,55 @@ class SchemaEdgeRoutingTest {
             boolean horizontal = Math.abs(p1[1] - p2[1]) < 1e-6;
             boolean vertical = Math.abs(p1[0] - p2[0]) < 1e-6;
             assertTrue(horizontal || vertical, "сегмент " + i + " не ортогонален");
+        }
+    }
+
+    /** Баг-репорт пользователя 2026-09-18: "линии не перетрассировываются по прямым
+     *  углам (выбран режим авто)" — воспроизведено на связи от гнезда-кабинета
+     *  расключения экрана (миниатюра на узле {@code SCREEN}), а не от обычного
+     *  гнезда карты. Причина была в {@code autoRoutePoints}: связи с {@code
+     *  fromCabinetInstanceId != null} безусловно откатывались на прямую линию,
+     *  T4.4 никогда их не трассировала — см. {@link SchemaCanvasPanel#
+     *  routeEndpointFor}, которая это чинит (сторона считается как ближайшая грань
+     *  рамки узла к точке кабинета на миниатюре, см. {@link SchemaCanvasPanel#
+     *  nearestSide}). */
+    @Test
+    void autoRouteFromACabinetSocketOnAScreenWiringThumbnailIsAlsoOrthogonal(@TempDir Path dir) {
+        AppModel model = model(dir);
+        CabinetType type = new CabinetType();
+        type.setName("P3 500x500");
+        type.setWidthMm(500);
+        type.setHeightMm(500);
+        type.setResolutionWidth(128);
+        type.setResolutionHeight(128);
+        type = model.addCabinetType(type);
+        Screen screen = model.addScreen("Экран", type.getId(), 2, 2, 0, 0);
+        model.selectScreen(screen);
+
+        ControllerType ct = new ControllerType();
+        ct.setName("Контроллер");
+        ct.getCards().add(new SchemaCard("Карта 1", List.of(new CardPort("RJ45", PortDirection.OUT, 4))));
+        ct = model.addControllerType(ct);
+        model.addControllerToScreen(screen, ct.getId());
+
+        List<String> cabIds = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
+        model.addSignalChain(2, false, List.of(cabIds.get(0), cabIds.get(1)));
+        model.autoPopulateSchema(SchemaMode.SIGNAL, true);
+
+        List<SchemaEdge> edges = model.schemaEdgesForCurrentScene(SchemaMode.SIGNAL);
+        SchemaEdge edge = edges.stream().filter(e -> e.getFromCabinetInstanceId() != null).findFirst()
+                .orElseThrow(() -> new IllegalStateException("автозаполнение не создало связь от гнезда-кабинета"));
+        model.setEdgeRouteMode(edge, EdgeRouteMode.AUTO);
+
+        SchemaCanvasPanel canvas = canvas(model, dir);
+        List<double[]> pts = canvas.routePointsForTest(edge);
+
+        assertTrue(pts.size() > 2, "должна появиться хотя бы одна точка излома — иначе это по-прежнему прямая");
+        for (int i = 0; i + 1 < pts.size(); i++) {
+            double[] p1 = pts.get(i), p2 = pts.get(i + 1);
+            boolean horizontal = Math.abs(p1[1] - p2[1]) < 1e-6;
+            boolean vertical = Math.abs(p1[0] - p2[0]) < 1e-6;
+            assertTrue(horizontal || vertical, "сегмент " + i + " не ортогонален (связь от гнезда-кабинета)");
         }
     }
 
