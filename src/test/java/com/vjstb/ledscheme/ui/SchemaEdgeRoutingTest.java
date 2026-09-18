@@ -214,6 +214,66 @@ class SchemaEdgeRoutingTest {
         assertTrue(lastLen >= 40 - 1e-6, "последний отрезок должен быть не короче настроенного уса (40)");
     }
 
+    /** Пожелание пользователя 2026-09-18: "чтобы этот отступ применялся к блокам
+     *  целиком" — та же настройка длины уса теперь и отступ, с которым
+     *  {@code OrthogonalRouter} огибает ЧУЖИЕ блоки (раньше был отдельной жёстко
+     *  зашитой константой в 10px, не связанной с усом вообще). Проверяем на
+     *  препятствии, которое связь обязана обогнуть — со стубом побольше обход
+     *  должен пройти заметно дальше от реальной границы препятствия, а не на том
+     *  же расстоянии, что и с маленьким. */
+    @Test
+    void detourAroundAnotherBlockGrowsWithTheConfiguredStubSetting(@TempDir Path dir) {
+        AppModel model = model(dir);
+        SchemaNode a = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "A", 0, 100, null);
+        CardPort aOut = model.addCardToNode(a, "Видео", List.of(
+                new CardPort("HDMI", PortDirection.OUT, 1))).getPorts().get(0);
+        SchemaNode b = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "B", 700, 100, null);
+        CardPort bIn = model.addCardToNode(b, "Видео", List.of(
+                new CardPort("HDMI", PortDirection.IN, 1))).getPorts().get(0);
+        SchemaEdge edge = model.addSchemaEdge(SchemaMode.SIGNAL, a.getId(), aOut.getId(), null,
+                b.getId(), bIn.getId(), null, null, EdgeRouteMode.AUTO);
+
+        SettingsManager probeSettings = new SettingsManager(new SettingsStore(new File(dir.toFile(), "probe.json")));
+        SchemaCanvasPanel probeCanvas = new SchemaCanvasPanel(model, SchemaMode.SIGNAL, probeSettings);
+        Point pinA = probeCanvas.socketPositionForTest(a, aOut.getId(), edge);
+        Point pinB = probeCanvas.socketPositionForTest(b, bIn.getId(), edge);
+        double wallTop = Math.min(pinA.y, pinB.y) - 30;
+        SchemaNode wall = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.CUSTOM, "Стена",
+                (pinA.x + pinB.x) / 2.0 - 20, wallTop, null);
+        wall.setWidth(40);
+        wall.setHeight(60);
+
+        double smallClearance = bypassClearanceAboveWall(model, dir, edge, wall, 10);
+        double bigClearance = bypassClearanceAboveWall(model, dir, edge, wall, 80);
+
+        assertTrue(bigClearance > smallClearance + 30,
+                "обход с бОльшим настроенным усом (80) должен держаться заметно дальше от стены, чем с маленьким"
+                        + " (10): " + smallClearance + " vs " + bigClearance);
+    }
+
+    /** Строит холст с {@code stubPx}, перетрассировывает {@code edge} и возвращает
+     *  расстояние по Y между горизонтальным отрезком обхода (тем, что выше стены) и
+     *  РЕАЛЬНОЙ (не раздутой) верхней границей стены — т.е. фактический зазор, а не
+     *  настроенное число само по себе (важно проверить именно результат геометрии,
+     *  не что "куда-то передалась переменная"). */
+    private static double bypassClearanceAboveWall(AppModel model, Path dir, SchemaEdge edge, SchemaNode wall,
+                                                     int stubPx) {
+        SettingsManager settings = new SettingsManager(new SettingsStore(new File(dir.toFile(), "settings-" + stubPx + ".json")));
+        settings.setSchemaRouteStubPx(stubPx);
+        SchemaCanvasPanel canvas = new SchemaCanvasPanel(model, SchemaMode.SIGNAL, settings);
+        List<double[]> pts = canvas.routePointsForTest(edge);
+        double wallTop = wall.getY();
+        double bypassY = Double.NaN;
+        for (double[] p : pts) {
+            if (p[1] < wallTop) {
+                bypassY = p[1];
+                break;
+            }
+        }
+        assertTrue(!Double.isNaN(bypassY), "маршрут должен пройти ВЫШЕ стены хотя бы одной точкой (ус " + stubPx + ")");
+        return wallTop - bypassY;
+    }
+
     @Test
     void legacyEdgeWithoutRouteModeStaysAStraightLineEvenWithConcretePorts(@TempDir Path dir) {
         // "Старый проект открывается с прежними маршрутами" (PLAN.md §2.6/T4.4) —
@@ -240,7 +300,14 @@ class SchemaEdgeRoutingTest {
         SchemaNode a = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "A", 0, 100, null);
         CardPort aOut = model.addCardToNode(a, "Видео", List.of(
                 new CardPort("HDMI", PortDirection.OUT, 1))).getPorts().get(0);
-        SchemaNode b = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "B", 300, 100, null);
+        // B заметно дальше от A, чем в остальных тестах файла (а не просто 300) —
+        // с настраиваемой длиной уса (по умолчанию 24, доводка T4.4, тоже пожелание
+        // пользователя 2026-09-18: "чтобы этот отступ применялся к блокам целиком")
+        // отступ от ЧУЖИХ препятствий вырос вместе с усом; слишком узкий зазор между
+        // гнёздами и стеной раздувал бы стену настолько, что она поглотила бы сами
+        // точки усов — вырожденный случай, гридновский поиск пути не запускается
+        // вовсе, откат на fallback-прямую (не то, что здесь проверяется).
+        SchemaNode b = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "B", 600, 100, null);
         CardPort bIn = model.addCardToNode(b, "Видео", List.of(
                 new CardPort("HDMI", PortDirection.IN, 1))).getPorts().get(0);
         SchemaEdge edge = model.addSchemaEdge(SchemaMode.SIGNAL, a.getId(), aOut.getId(), null,
@@ -253,7 +320,7 @@ class SchemaEdgeRoutingTest {
         // не будет ВНУТРЕННИХ точек и тест ничего не проверит.
         Point pinA = canvas.socketPositionForTest(a, aOut.getId(), edge);
         Point pinB = canvas.socketPositionForTest(b, bIn.getId(), edge);
-        assertTrue(pinB.x > pinA.x + 40, "фикстура должна оставлять зазор между гнёздами шире препятствия");
+        assertTrue(pinB.x > pinA.x + 200, "фикстура должна оставлять зазор между гнёздами шире препятствия и усов");
         double wallX = (pinA.x + pinB.x) / 2.0 - 20;
         SchemaNode wall = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.CUSTOM, "Стена",
                 wallX, Math.min(pinA.y, pinB.y) - 100, null);
