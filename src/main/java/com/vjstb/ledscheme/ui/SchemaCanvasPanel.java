@@ -25,6 +25,7 @@ import com.vjstb.ledscheme.service.ScreenLogic;
 import com.vjstb.ledscheme.settings.ArrowPlacement;
 import com.vjstb.ledscheme.settings.ConnectorDisplayMode;
 import com.vjstb.ledscheme.settings.SchemaRenderMode;
+import com.vjstb.ledscheme.settings.SchemaStylePreset;
 import com.vjstb.ledscheme.settings.WireHopStyle;
 import java.awt.BasicStroke;
 import java.awt.Color;
@@ -2191,6 +2192,24 @@ public class SchemaCanvasPanel extends JPanel {
         return roleColor != null ? roleColor : style.defaultEdgeColor;
     }
 
+    /** T6.1 (docs/schema-ports-rework/PLAN.md, «Печатный» пресет, §2.7): синхро на
+     *  печатном пресете рисуется не только фиолетовым, но и пунктиром — так эта
+     *  роль остаётся различимой и в чёрно-белой распечатке, где цвет теряется, а
+     *  штрих остаётся. Пользовательский переключатель связи «Пунктиром» (Task #85)
+     *  не про роль — про конкретную резервную/мониторинговую связь; тут не
+     *  подменяем его, а ДОБАВЛЯЕМ пунктир поверх, когда роль требует. Только
+     *  MODERN — в CLASSIC роли вообще не участвуют в отрисовке (см. paintClassic). */
+    private boolean autoDashedForPrintSync(SchemaEdge edge) {
+        if (classicMode() || mode != SchemaMode.SIGNAL) {
+            return false;
+        }
+        if (settings.activeProfile().getSchemaStylePreset() != SchemaStylePreset.PRINT) {
+            return false;
+        }
+        CardPort fromPort = findPort(edge.getFromNodeId(), edge.getFromPortId());
+        return roleOf(nodeById(edge.getFromNodeId()), fromPort) == InterfaceRole.SYNC;
+    }
+
     private static double distanceToSegment(double px, double py, double ax, double ay, double bx, double by) {
         double dx = bx - ax, dy = by - ay;
         double len2 = dx * dx + dy * dy;
@@ -2892,8 +2911,10 @@ public class SchemaCanvasPanel extends JPanel {
             g2.setColor(selected ? style.accent : customColor != null ? customColor : edgeDefaultColor(edge));
             float strokeWidth = selected ? 3f : 2f;
             // Пунктир — переключатель "Пунктиром" в контекстном меню связи (Task #85/v1.4),
-            // например для обходного/резервного/мониторингового пути, как в референсном PDF.
-            g2.setStroke(edge.isDashed()
+            // например для обходного/резервного/мониторингового пути, как в референсном PDF;
+            // ИЛИ автоматически для роли "Синхро" на печатном пресете (T6.1, см.
+            // autoDashedForPrintSync) — сложение, а не замена одного другим.
+            g2.setStroke(edge.isDashed() || autoDashedForPrintSync(edge)
                     ? new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 0, new float[]{7, 5}, 0)
                     : new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
             // Ломаная линия через точки излома (см. EdgeWaypoint) вместо одной прямой —
@@ -3963,6 +3984,11 @@ public class SchemaCanvasPanel extends JPanel {
      *  цвета связи без пользовательского {@code edge.getColor()}). */
     Color edgeDefaultColorForTest(SchemaEdge edge) {
         return edgeDefaultColor(edge);
+    }
+
+    /** Только для тестов — открывает {@link #autoDashedForPrintSync} (T6.1). */
+    public boolean autoDashedForPrintSyncForTest(SchemaEdge edge) {
+        return autoDashedForPrintSync(edge);
     }
 
     /** Только для тестов — открывает {@link #shouldShowEmptyLabelChip} (T4.5/D14). */
