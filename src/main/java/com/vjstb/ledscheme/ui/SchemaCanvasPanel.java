@@ -1572,14 +1572,15 @@ public class SchemaCanvasPanel extends JPanel {
      *  <p>{@link EdgeRouteMode#AUTO} (docs/schema-ports-rework/PLAN.md, задача T4.4)
      *  считается заново каждый раз через {@link #autoRoutePoints} — сохранённые
      *  {@code edge.getWaypoints()} у такой связи не используются вовсе (см. {@link
-     *  SchemaEdge#effectiveRouteMode()}); если авто-трассировка невозможна (нет
-     *  привязки к конкретному гнезду ни на одном конце — обычная связь узел-узел
-     *  без выбранного гнезда/кабинета), тихо откатывается на путь ниже (та же
-     *  прямая/по изломам линия, что и для {@link EdgeRouteMode#MANUAL}/{@link
-     *  EdgeRouteMode#STRAIGHT}). Гнёзда-кабинеты расключения экрана — тоже
-     *  полноценно трассируются с версии, закрывшей баг-репорт пользователя
-     *  2026-09-18 ("линии не перетрассировываются по прямым углам, режим авто") —
-     *  см. {@link #routeEndpointFor}. */
+     *  SchemaEdge#effectiveRouteMode()}); если авто-трассировка невозможна (узел
+     *  одного из концов исчез — не про геометрию, а про целостность данных), тихо
+     *  откатывается на путь ниже (та же прямая/по изломам линия, что и для {@link
+     *  EdgeRouteMode#MANUAL}/{@link EdgeRouteMode#STRAIGHT}). Гнёзда-кабинеты
+     *  расключения экрана И обычные связи узел-узел БЕЗ гнезда вовсе — тоже
+     *  полноценно трассируются (закрытые баг-репорты пользователя 2026-09-18:
+     *  "линии не перетрассировываются по прямым углам, режим авто" и "если
+     *  подключать линию к блоку экрана без режима кабинеты-тоже гнёзда, то линия
+     *  не трассируется под углом") — см. {@link #routeEndpointFor}. */
     private List<double[]> routePoints(SchemaEdge edge) {
         // CLASSIC (docs/schema-ports-rework/PLAN.md, задача T5.5) никогда не
         // трассирует через OrthogonalRouter — до этого плана EdgeRouteMode.AUTO
@@ -1606,9 +1607,9 @@ public class SchemaCanvasPanel extends JPanel {
     }
 
     /** Ортогональная трассировка ОДНОЙ связи через {@code OrthogonalRouter} (T4.1) —
-     *  {@code null}, если у связи нет привязки к конкретному гнезду/кабинету ни на
-     *  одном конце (обычная связь узел-узел без выбранного гнезда просто не имеет
-     *  стороны, от которой плясать — см. {@link #routeEndpointFor}). Список препятствий — прямоугольники ВСЕХ
+     *  {@code null}, если один из узлов связи не найден (устаревшая ссылка, не
+     *  геометрия — сторона находится ВСЕГДА, см. {@link #routeEndpointFor}: у
+     *  обычного гнезда/кабинета/даже безгнездовой связи узел-узел). Список препятствий — прямоугольники ВСЕХ
      *  остальных узлов ТОГО ЖЕ режима схемы (сигнал/питание не смешиваются, как и
      *  везде в холсте), кроме двух узлов самой связи — иначе усы упирались бы в
      *  собственный же блок, у которого гнездо стоит ровно на границе (см. javadoc
@@ -1625,8 +1626,13 @@ public class SchemaCanvasPanel extends JPanel {
         }
         boolean aIsCabinetEnd = edge.getFromCabinetInstanceId() != null;
         boolean bIsCabinetEnd = edge.getToCabinetInstanceId() != null;
-        RouteEndpoint ea = routeEndpointFor(a, edge.getFromPortId(), edge.getFromCabinetInstanceId(), edge);
-        RouteEndpoint eb = routeEndpointFor(b, edge.getToPortId(), edge.getToCabinetInstanceId(), edge);
+        // Ориентировочная точка КАЖДОГО конца — используется только как "куда
+        // смотреть" для гнезда-БЕЗ-гнезда на ДРУГОМ конце (см. routeEndpointFor
+        // ниже) — тот же порядок отката, что и aSocket/bSocket в endpointsFor.
+        double[] aRef = referencePointFor(a, edge.getFromPortId(), edge.getFromCabinetInstanceId());
+        double[] bRef = referencePointFor(b, edge.getToPortId(), edge.getToCabinetInstanceId());
+        RouteEndpoint ea = routeEndpointFor(a, edge.getFromPortId(), edge.getFromCabinetInstanceId(), edge, bRef);
+        RouteEndpoint eb = routeEndpointFor(b, edge.getToPortId(), edge.getToCabinetInstanceId(), edge, aRef);
         if (ea == null || eb == null) {
             return null;
         }
@@ -1702,24 +1708,25 @@ public class SchemaCanvasPanel extends JPanel {
 
     /** Точка привязки конца связи для орто-трассировки + сторона, определяющая
      *  направление "уса" ({@link com.vjstb.ledscheme.service.schemalayout.
-     *  OrthogonalRouter}) — либо обычное гнездо ({@link #pinFor}), либо гнездо-
-     *  кабинет на миниатюре расключения экрана ({@code cabinetInstanceId != null}).
-     *  До этой правки (баг-репорт пользователя 2026-09-18: "линии не
-     *  перетрассировываются по прямым углам, выбран режим авто") кабинет-связи были
-     *  ЦЕЛИКОМ выключены из авто-трассировки (T4.4 их не покрывала, см. PLAN.md
-     *  §2.4/T4.4) — теперь трассируются как любая другая связь, сторона считается
-     *  как ближайшая грань рамки узла к точке кабинета на миниатюре ({@link
-     *  #nearestSide}), т.к. у самого гнезда-кабинета (в отличие от обычного пина) в
-     *  этой версии нет своей раскладки на рамке — оно рисуется прямо там, где
-     *  кабинет стоит на миниатюре (см. {@link #cabinetSocketPosition}), потенциально
-     *  глубоко внутри блока. Ус в этом случае просто идёт от точки кабинета наружу
-     *  по ближайшей стороне — визуально не хуже прежней прямой линии (тот же путь
-     *  внутри блока не виден за его заливкой), а с точки выхода из блока трассировка
-     *  уже полноценно огибает препятствия под 90°, как и для обычных гнёзд. */
+     *  OrthogonalRouter}) — обычное гнездо ({@link #pinFor}), гнездо-кабинет на
+     *  миниатюре расключения экрана ({@code cabinetInstanceId != null}), либо (баг-
+     *  репорт пользователя 2026-09-18: "если подключать линию к блоку экрана без
+     *  режима кабинеты-тоже гнёзда, то линия не трассируется под углом") ОБЫЧНАЯ
+     *  связь узел-узел БЕЗ гнезда вовсе ({@code portId == null}) — та же точка на
+     *  границе, что рисует {@link #endpointsFor}/{@link #clipToBorder} (луч из
+     *  центра узла к {@code aim} — грубой точке ДРУГОГО конца связи, только чтобы
+     *  знать, в какую сторону смотреть). Во всех трёх случаях, где у гнезда нет
+     *  готовой стороны из раскладки блока (кабинет, безгнездовая связь), сторона —
+     *  ближайшая грань рамки узла к точке ({@link #nearestSide}). Ус в этом случае
+     *  просто идёт от точки наружу по этой стороне — визуально не хуже прежней
+     *  прямой линии (тот же путь внутри блока не виден за его заливкой), а с точки
+     *  выхода из блока трассировка уже полноценно огибает препятствия под 90°, как
+     *  и для обычных гнёзд. */
     private record RouteEndpoint(double x, double y, NodeSide side) {
     }
 
-    private RouteEndpoint routeEndpointFor(SchemaNode node, String portId, String cabinetInstanceId, SchemaEdge forEdge) {
+    private RouteEndpoint routeEndpointFor(SchemaNode node, String portId, String cabinetInstanceId,
+                                            SchemaEdge forEdge, double[] aim) {
         if (cabinetInstanceId != null) {
             Point p = cabinetSocketPosition(node, cabinetInstanceId);
             if (p == null) {
@@ -1727,11 +1734,30 @@ public class SchemaCanvasPanel extends JPanel {
             }
             return new RouteEndpoint(p.x, p.y, nearestSide(node, p.x, p.y));
         }
+        if (portId == null) {
+            double[] center = {node.getX() + node.getWidth() / 2.0, node.getY() + node.getHeight() / 2.0};
+            double[] p = clipToBorder(node, center, aim);
+            return new RouteEndpoint(p[0], p[1], nearestSide(node, p[0], p[1]));
+        }
         var pin = pinFor(node, portId, forEdge);
         if (pin == null) {
             return null;
         }
         return new RouteEndpoint(node.getX() + pin.x(), node.getY() + pin.y(), pin.side());
+    }
+
+    /** Грубая точка конца связи для {@code aim} на ДРУГОМ конце (см.
+     *  {@link #routeEndpointFor}) — тот же порядок отката, что и aSocket/bSocket в
+     *  {@link #endpointsFor}: настоящее гнездо/кабинет, если есть, иначе просто
+     *  центр узла. Не обязана быть идеально точной — используется только чтобы
+     *  {@link #clipToBorder} знал, в какую сторону "смотреть" безгнездовым концом. */
+    private double[] referencePointFor(SchemaNode node, String portId, String cabinetInstanceId) {
+        Point p = cabinetInstanceId != null ? cabinetSocketPosition(node, cabinetInstanceId)
+                : portId != null ? socketPosition(node, portId, null) : null;
+        if (p != null) {
+            return new double[]{p.x, p.y};
+        }
+        return new double[]{node.getX() + node.getWidth() / 2.0, node.getY() + node.getHeight() / 2.0};
     }
 
     /** Ближайшая грань рамки узла {@code node} к точке {@code (px, py)} — нужна
