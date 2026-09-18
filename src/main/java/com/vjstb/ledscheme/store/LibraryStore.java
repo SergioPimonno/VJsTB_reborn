@@ -57,13 +57,25 @@ public class LibraryStore {
         }
     }
 
+    /** Атомарная подмена файла через временный (см. подробное обоснование у {@code
+     *  WorkspaceStore#save} — тот же баг-репорт и то же исправление, здесь для второго
+     *  файла хранилища). */
     public void save(Library library) {
         try {
             File dir = libraryFile.getParentFile();
             if (dir != null && !dir.exists() && !dir.mkdirs()) {
                 throw new IOException("не удалось создать каталог " + dir);
             }
-            mapper.writeValue(libraryFile, library);
+            File tmp = new File(dir, libraryFile.getName() + ".tmp");
+            mapper.writeValue(tmp, library);
+            try {
+                java.nio.file.Files.move(tmp.toPath(), libraryFile.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+                java.nio.file.Files.move(tmp.toPath(), libraryFile.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
         } catch (IOException e) {
             throw new RuntimeException("Не удалось сохранить библиотеку в " + libraryFile + ": " + e.getMessage(), e);
         }

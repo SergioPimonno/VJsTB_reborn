@@ -2,6 +2,7 @@ package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.settings.SettingsManager;
+import com.vjstb.ledscheme.sync.ClientBackupSync;
 import com.vjstb.ledscheme.sync.LibrarySyncClient;
 import java.awt.FlowLayout;
 import java.awt.Window;
@@ -98,6 +99,7 @@ public class LibrarySyncDialog extends JDialog {
                 } catch (Exception ex) {
                     status.setText("Не удалось синхронизировать: " + rootMessage(ex));
                 }
+                ClientBackupSync.runInBackground(model, settings);
             }
         }.execute();
     }
