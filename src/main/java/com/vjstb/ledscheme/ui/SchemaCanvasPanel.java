@@ -3983,15 +3983,22 @@ public class SchemaCanvasPanel extends JPanel {
             }
             double pinX = node.getX() + pin.x();
             double pinY = node.getY() + pin.y();
+            // НЕ рисуем сам ствол EdgeBundles.trunk() как отрезок — тот предполагает,
+            // что все связи и сами подходят строго по нормали стороны гнезда (как
+            // после орто-трассировки). Пока это не так для гнёзд-кабинетов расключения
+            // экрана (см. javadoc autoRoutePoints — туда OrthogonalRouter ещё не
+            // дотянулся, связи подходят под произвольным углом) — жёстко направленный
+            // отрезок создавал бы ложный "залом", не соответствующий ни одной реальной
+            // линии (баг-репорт пользователя 2026-09-18, DIALOG.md). Кружок без
+            // направления + подпись рядом читаются верно при любом угле подхода.
             var bundle = com.vjstb.ledscheme.service.schemalayout.EdgeBundles.bundleFor(pinX, pinY, pin.side(), count);
-            double[] a = bundle.trunk()[0];
-            double[] b = bundle.trunk()[1];
+            double[] labelAt = bundle.trunk()[0];
             g2.setColor(style.accent);
-            g2.setStroke(new BasicStroke(3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-            g2.drawLine((int) Math.round(a[0]), (int) Math.round(a[1]), (int) Math.round(b[0]), (int) Math.round(b[1]));
+            int dotD = PIN_DOT_D + 4;
+            g2.fillOval((int) Math.round(pinX - dotD / 2.0), (int) Math.round(pinY - dotD / 2.0), dotD, dotD);
             g2.setFont(EDGE_FONT);
             g2.setColor(style.mutedText);
-            g2.drawString(bundle.label(), (int) Math.round(a[0]) + 4, (int) Math.round(a[1]) - 3);
+            g2.drawString(bundle.label(), (int) Math.round(labelAt[0]) + 4, (int) Math.round(labelAt[1]) - 3);
         }
     }
 
