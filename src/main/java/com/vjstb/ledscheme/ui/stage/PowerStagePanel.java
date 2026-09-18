@@ -576,7 +576,7 @@ public class PowerStagePanel extends JPanel {
                 colorItem.addActionListener(ev -> {
                     java.awt.Color initial = chain.getColor() != null ? new java.awt.Color(chain.getColor()) : dot;
                     java.awt.Color chosen = UiKit.showColorChooser(PowerStagePanel.this,
-                            "Цвет цепочки питания", initial);
+                            "Цвет цепочки питания", initial, settings);
                     if (chosen != null) {
                         model.setPowerChainColor(chain, chosen.getRGB());
                     }

@@ -22,6 +22,16 @@ public class UserProfile {
     private Integer phaseNoneColor;
     private Integer accentColor;
     private List<Integer> signalColors;
+    /** «Недавние» цвета линии (см. {@code RecentColorsChooserPanel}) — ОБЩИЙ список
+     *  для всех мест, что красят "линии" (цепочки питания/сигнала, связи общей
+     *  схемы, связи сетевого менеджера), в порядке "последний выбранный — первый".
+     *  Раньше жил только в статическом поле процесса и не переживал перезапуск
+     *  (баг-репорт: "палитру нужно сохранять между перезапусками" — про
+     *  переопределение цветов линий соединений/цепочек расключения, не про типы
+     *  кабинетов) — эта утилита именно чтобы не подбирать один и тот же оттенок
+     *  заново для каждой новой линии того же типа сигнала/номинала. {@code null}
+     *  у старого профиля — то же самое, что пустой список. */
+    private List<Integer> recentLineColors;
 
     private Map<String, Double> layout = new LinkedHashMap<>();
 
@@ -154,44 +164,92 @@ public class UserProfile {
      *  само окно предпочтений своего переключателя не имеет. */
     private boolean preferencesMatrixView = false;
 
-    /** Как рисовать разъёмы на блоке узла общей схемы СИГНАЛА — группой по типу (как
-     *  было, по умолчанию) или каждый физический разъём отдельным гнездом. Отдельная
-     *  настройка от {@link #powerConnectorDisplayMode} — на практике у сигнала
-     *  отдельные разъёмы карты используют довольно часто (расключение по конкретным
-     *  Ethernet-портам), у питания — редко (обычно достаточно группы «N×разъём»).
-     *  Независимая ось от {@link #signalSocketWiringEnabled} — та решает, цепляется ли
-     *  линия связи за конкретное гнездо; эта — как гнёзда рисуются, см.
-     *  {@link ConnectorDisplayMode}. */
-    private ConnectorDisplayMode signalConnectorDisplayMode = ConnectorDisplayMode.GROUPED;
+    /** Как показываются НЕзадействованные группы разъёмов на блоке общей схемы
+     *  СИГНАЛА (docs/schema-ports-rework/PLAN.md, задача T1.5) — реальное хранимое
+     *  значение; старые {@link #getSignalConnectorDisplayMode()}/{@link
+     *  #setSignalConnectorDisplayMode(ConnectorDisplayMode)} (использует ещё не
+     *  переписанный на новую модель код — {@code PreferencesDialog}/{@code
+     *  SchemaCanvasPanel}, см. этап 3 PLAN.md) — теперь только СОВМЕСТИМЫЙ фасад над
+     *  этим полем (GROUPED↔{@link GroupDisplayMode#AUTO}, INDIVIDUAL↔{@link
+     *  GroupDisplayMode#ALWAYS_EXPANDED}). {@code null} трактуется как {@link
+     *  GroupDisplayMode#AUTO} (см. {@link #getSignalGroupDisplay()}) — прежнее
+     *  умолчание GROUPED означало «одна строка на группу», что при переходе на новую
+     *  раскладку означает именно «сворачивать незадействованные» (AUTO), а не
+     *  «всегда развёрнуто». */
+    private GroupDisplayMode signalGroupDisplay;
 
-    /** Как рисовать разъёмы на блоке узла общей схемы ПИТАНИЯ — см.
-     *  {@link #signalConnectorDisplayMode} (та же идея, отдельная настройка). */
-    private ConnectorDisplayMode powerConnectorDisplayMode = ConnectorDisplayMode.GROUPED;
+    /** То же самое для схемы ПИТАНИЯ — см. {@link #signalGroupDisplay}. */
+    private GroupDisplayMode powerGroupDisplay;
 
-    /** Ориентация разъёмов на блоке узла общей схемы СИГНАЛА (Task #2/v1.6, часть 2;
-     *  разделено на сигнал/питание позже, по явному запросу — раньше была общая
-     *  {@code connectorsVertical} на обе схемы): false (по умолчанию) — гнёзда у
-     *  левого/правого края, строки сверху вниз, как раньше; true — гнёзда у
-     *  верхнего/нижнего края, строки колонками слева направо. Независимая ось —
-     *  сочетается с любым режимом отображения разъёмов ({@link #signalConnectorDisplayMode}). */
-    private boolean signalConnectorsVertical = false;
+    /** Ориентация потока НОВЫХ узлов общей схемы СИГНАЛА по умолчанию (docs/schema-
+     *  ports-rework/PLAN.md, задача T1.5, заменяет собой Task #2/v1.6 часть 2) —
+     *  реальное хранимое значение; старые {@link #isSignalConnectorsVertical()}/
+     *  {@link #setSignalConnectorsVertical(boolean)} (использует ещё не переписанный
+     *  код, см. этап 3 PLAN.md) — теперь только СОВМЕСТИМЫЙ фасад над двумя из четырёх
+     *  состояний этого поля (RIGHT/DOWN). {@code null} трактуется как {@link
+     *  com.vjstb.ledscheme.model.NodeOrientation#RIGHT} (см. {@link
+     *  #getSignalDefaultOrientation()}) — прежнее умолчание "false" (гнёзда слева/
+     *  справа). У КОНКРЕТНОГО узла эта настройка ничего не решает, если ориентация
+     *  задана на самом узле ({@link com.vjstb.ledscheme.model.SchemaNode#getOrientation()}
+     *  — не {@code null}) — тогда используется она. */
+    private com.vjstb.ledscheme.model.NodeOrientation signalDefaultOrientation;
 
-    /** То же самое для схемы ПИТАНИЯ — см. {@link #signalConnectorsVertical}
-     *  (та же идея, отдельная настройка). */
-    private boolean powerConnectorsVertical = false;
+    /** То же самое для схемы ПИТАНИЯ — см. {@link #signalDefaultOrientation}. */
+    private com.vjstb.ledscheme.model.NodeOrientation powerDefaultOrientation;
 
     /** УСТАРЕВШЕЕ поле — единая настройка ориентации разъёмов на обе схемы,
-     *  существовавшая до разделения на {@link #signalConnectorsVertical}/
-     *  {@link #powerConnectorsVertical}. Не читается и не пишется напрямую нигде,
-     *  кроме {@link #setLegacyConnectorsVertical} — тот принимает старое имя поля
-     *  из уже сохранённого JSON (Jackson, FAIL_ON_UNKNOWN_PROPERTIES выключен, иначе
-     *  значение молча терялось бы) и переносит его на оба новых поля, чтобы у ранее
-     *  сохранённых профилей поведение не изменилось молча после обновления. */
+     *  существовавшая до разделения на сигнал/питание. Не читается и не пишется
+     *  напрямую нигде, кроме {@link #setLegacyConnectorsVertical} — тот принимает
+     *  старое имя поля из уже сохранённого JSON (Jackson, FAIL_ON_UNKNOWN_PROPERTIES
+     *  выключен, иначе значение молча терялось бы) и переносит его — теперь уже на
+     *  {@link #signalDefaultOrientation}/{@link #powerDefaultOrientation} через
+     *  публичные сеттеры (см. {@link #setSignalConnectorsVertical(boolean)}) — чтобы
+     *  у ранее сохранённых профилей поведение не изменилось молча после обновления. */
     @com.fasterxml.jackson.annotation.JsonSetter("connectorsVertical")
     private void setLegacyConnectorsVertical(boolean vertical) {
-        this.signalConnectorsVertical = vertical;
-        this.powerConnectorsVertical = vertical;
+        setSignalConnectorsVertical(vertical);
+        setPowerConnectorsVertical(vertical);
     }
+
+    /** Режим прокладки маршрута НОВЫХ связей общей схемы (docs/schema-ports-rework/
+     *  PLAN.md, задача T1.5/§2.6/D6) — {@link com.vjstb.ledscheme.model.EdgeRouteMode#MANUAL}
+     *  сюда не подходит смыслово (это состояние возникает из правки конкретной связи
+     *  пользователем, не из умолчания для новых) — сеттер понижает его до {@link
+     *  com.vjstb.ledscheme.model.EdgeRouteMode#STRAIGHT}. {@code null}/не задано —
+     *  {@link com.vjstb.ledscheme.model.EdgeRouteMode#AUTO} (см. D6/D7 PLAN.md: новые
+     *  связи по умолчанию прокладываются под 90°, как в yEd). */
+    private com.vjstb.ledscheme.model.EdgeRouteMode newEdgeRouteMode;
+
+    /** Где рисовать стрелку направления связи общей схемы (docs/schema-ports-rework/
+     *  PLAN.md, задача T1.5/D15) — {@code null} трактуется как {@link
+     *  ArrowPlacement#TARGET} (см. {@link #getSchemaArrowPlacement()}) — новое
+     *  умолчание "стрелка у приёмника", как на референсных схемах пользователя из
+     *  yEd; текущий код холста (до этапа 4 PLAN.md) стрелку по-прежнему рисует на
+     *  каждом отрезке — поле пока ничем не читается. */
+    private ArrowPlacement schemaArrowPlacement;
+
+    /** Режим «ортогональные связи» — при перемещении узла соседний излом ЕГО связей
+     *  подтягивается так, чтобы линия осталась под 90° (docs/schema-ports-rework/
+     *  PLAN.md, задача T1.5/D7/§2.6, поведение как в yEd). По умолчанию включён —
+     *  поле пока ничем не читается (реализация — этап 4 PLAN.md). */
+    private boolean orthogonalEdgeEditing = true;
+
+    /** Пресет оформления общей схемы (docs/schema-ports-rework/PLAN.md, задача
+     *  T1.5/D12) — {@code null} трактуется как {@link SchemaStylePreset#SCREEN} (см.
+     *  {@link #getSchemaStylePreset()}), текущий вид схемы на экране. Реализация
+     *  (вынос цветов холста в объект стиля, пресет "Печатный") — этап 3/6 PLAN.md,
+     *  поле пока ничем не читается. */
+    private SchemaStylePreset schemaStylePreset;
+
+    /** Режим отрисовки общей схемы (docs/schema-ports-rework/PLAN.md, задача
+     *  T5.5, D16) — {@code null} трактуется как {@link SchemaRenderMode#MODERN}
+     *  (см. {@link #getSchemaRenderMode()}), т.е. поведение по умолчанию не
+     *  меняется — сегодняшний единственный рендер и есть MODERN. Переключатель
+     *  добавлен пользователем ПОСЛЕ того, как этапы 1–4 этого же плана заменили
+     *  дорефакторинговый рендер новым без сохранения старого пути (DIALOG.md,
+     *  реплика 4). Глобально в профиле, не по проекту/сцене — прямой ответ
+     *  пользователя на вопрос координатора. */
+    private SchemaRenderMode schemaRenderMode;
 
     /** Контроль электрической/сигнальной нагрузки (Task #80/#81/#86/#87): сравнение
      *  тока цепочки/суммарной нагрузки силового узла схемы с ёмкостью разъёма/автомата,
@@ -334,6 +392,14 @@ public class UserProfile {
 
     public void setSignalColors(List<Integer> signalColors) {
         this.signalColors = signalColors;
+    }
+
+    public List<Integer> getRecentLineColors() {
+        return recentLineColors != null ? recentLineColors : new ArrayList<>();
+    }
+
+    public void setRecentLineColors(List<Integer> recentLineColors) {
+        this.recentLineColors = recentLineColors;
     }
 
     public Map<String, Double> getLayout() {
@@ -501,22 +567,52 @@ public class UserProfile {
         this.preferencesMatrixView = preferencesMatrixView;
     }
 
+    /** СОВМЕСТИМЫЙ фасад — см. javadoc {@link #signalGroupDisplay}. Новый код должен
+     *  звать {@link #getSignalGroupDisplay()}. {@code @JsonIgnore} на ОБОИХ методах —
+     *  иначе Jackson завёл бы для этой пары ЕЩЁ одно поле JSON "signalConnectorDisplayMode"
+     *  ПОВЕРХ настоящего "signalGroupDisplay", и при следующей загрузке порядок разбора
+     *  двух полей одного смысла был бы не гарантирован — то самое, что раньше сломало
+     *  круговое сохранение ориентации (см. {@link #setLegacySignalConnectorsVertical}).
+     *  Чтение СТАРОГО JSON с ключом "signalConnectorDisplayMode" — отдельным приватным
+     *  сеттером ниже, тем же приёмом, что и {@link #setLegacyConnectorsVertical}. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
     public ConnectorDisplayMode getSignalConnectorDisplayMode() {
-        return signalConnectorDisplayMode != null ? signalConnectorDisplayMode : ConnectorDisplayMode.GROUPED;
+        return getSignalGroupDisplay() == GroupDisplayMode.ALWAYS_EXPANDED
+                ? ConnectorDisplayMode.INDIVIDUAL : ConnectorDisplayMode.GROUPED;
     }
 
-    public void setSignalConnectorDisplayMode(ConnectorDisplayMode signalConnectorDisplayMode) {
-        this.signalConnectorDisplayMode = signalConnectorDisplayMode != null
-                ? signalConnectorDisplayMode : ConnectorDisplayMode.GROUPED;
+    /** GROUPED → {@link GroupDisplayMode#ALWAYS_COLLAPSED}, НЕ {@code AUTO} — старый
+     *  режим GROUPED буквально означал "одна строка «N×Тип» всегда", без учёта
+     *  занятости связями, ровно как {@code ALWAYS_COLLAPSED} сейчас (см. его
+     *  javadoc) — открытие старого проекта должно выглядеть как раньше. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public void setSignalConnectorDisplayMode(ConnectorDisplayMode mode) {
+        setSignalGroupDisplay(mode == ConnectorDisplayMode.INDIVIDUAL
+                ? GroupDisplayMode.ALWAYS_EXPANDED : GroupDisplayMode.ALWAYS_COLLAPSED);
     }
 
+    @com.fasterxml.jackson.annotation.JsonSetter("signalConnectorDisplayMode")
+    private void setLegacySignalConnectorDisplayMode(ConnectorDisplayMode mode) {
+        setSignalConnectorDisplayMode(mode);
+    }
+
+    @com.fasterxml.jackson.annotation.JsonIgnore
     public ConnectorDisplayMode getPowerConnectorDisplayMode() {
-        return powerConnectorDisplayMode != null ? powerConnectorDisplayMode : ConnectorDisplayMode.GROUPED;
+        return getPowerGroupDisplay() == GroupDisplayMode.ALWAYS_EXPANDED
+                ? ConnectorDisplayMode.INDIVIDUAL : ConnectorDisplayMode.GROUPED;
     }
 
-    public void setPowerConnectorDisplayMode(ConnectorDisplayMode powerConnectorDisplayMode) {
-        this.powerConnectorDisplayMode = powerConnectorDisplayMode != null
-                ? powerConnectorDisplayMode : ConnectorDisplayMode.GROUPED;
+    /** GROUPED → {@link GroupDisplayMode#ALWAYS_COLLAPSED} — см. javadoc {@link
+     *  #setSignalConnectorDisplayMode}. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public void setPowerConnectorDisplayMode(ConnectorDisplayMode mode) {
+        setPowerGroupDisplay(mode == ConnectorDisplayMode.INDIVIDUAL
+                ? GroupDisplayMode.ALWAYS_EXPANDED : GroupDisplayMode.ALWAYS_COLLAPSED);
+    }
+
+    @com.fasterxml.jackson.annotation.JsonSetter("powerConnectorDisplayMode")
+    private void setLegacyPowerConnectorDisplayMode(ConnectorDisplayMode mode) {
+        setPowerConnectorDisplayMode(mode);
     }
 
     /** Режим отображения разъёмов для {@code mode} — удобный маршрутизатор для
@@ -527,20 +623,66 @@ public class UserProfile {
                 ? getPowerConnectorDisplayMode() : getSignalConnectorDisplayMode();
     }
 
+    public GroupDisplayMode getSignalGroupDisplay() {
+        return signalGroupDisplay != null ? signalGroupDisplay : GroupDisplayMode.ALWAYS_COLLAPSED;
+    }
+
+    public void setSignalGroupDisplay(GroupDisplayMode signalGroupDisplay) {
+        this.signalGroupDisplay = signalGroupDisplay != null ? signalGroupDisplay : GroupDisplayMode.ALWAYS_COLLAPSED;
+    }
+
+    public GroupDisplayMode getPowerGroupDisplay() {
+        return powerGroupDisplay != null ? powerGroupDisplay : GroupDisplayMode.ALWAYS_COLLAPSED;
+    }
+
+    public void setPowerGroupDisplay(GroupDisplayMode powerGroupDisplay) {
+        this.powerGroupDisplay = powerGroupDisplay != null ? powerGroupDisplay : GroupDisplayMode.ALWAYS_COLLAPSED;
+    }
+
+    /** Как показываются незадействованные группы гнёзд для {@code mode} —
+     *  маршрутизатор, тот же приём, что и {@link #getConnectorDisplayMode}. */
+    public GroupDisplayMode getGroupDisplay(com.vjstb.ledscheme.model.SchemaMode mode) {
+        return mode == com.vjstb.ledscheme.model.SchemaMode.POWER ? getPowerGroupDisplay() : getSignalGroupDisplay();
+    }
+
+    /** СОВМЕСТИМЫЙ фасад — см. javadoc {@link #signalDefaultOrientation}. Новый код
+     *  должен звать {@link #getSignalDefaultOrientation()} (различает все четыре
+     *  ориентации, не только "гнёзда сбоку/сверху-снизу"). {@code @JsonIgnore} на
+     *  ОБОИХ методах по той же причине, что и у {@link #getSignalConnectorDisplayMode()}
+     *  выше — иначе эта пара завела бы конкурирующее с {@link #signalDefaultOrientation}
+     *  поле JSON "signalConnectorsVertical", и порядок разбора двух полей одного
+     *  смысла при следующей загрузке был бы не гарантирован. Чтение СТАРОГО JSON —
+     *  отдельным приватным сеттером ниже. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
     public boolean isSignalConnectorsVertical() {
-        return signalConnectorsVertical;
+        return getSignalDefaultOrientation() == com.vjstb.ledscheme.model.NodeOrientation.DOWN;
     }
 
-    public void setSignalConnectorsVertical(boolean signalConnectorsVertical) {
-        this.signalConnectorsVertical = signalConnectorsVertical;
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public void setSignalConnectorsVertical(boolean vertical) {
+        setSignalDefaultOrientation(vertical
+                ? com.vjstb.ledscheme.model.NodeOrientation.DOWN : com.vjstb.ledscheme.model.NodeOrientation.RIGHT);
     }
 
+    @com.fasterxml.jackson.annotation.JsonSetter("signalConnectorsVertical")
+    private void setLegacySignalConnectorsVertical(boolean vertical) {
+        setSignalConnectorsVertical(vertical);
+    }
+
+    @com.fasterxml.jackson.annotation.JsonIgnore
     public boolean isPowerConnectorsVertical() {
-        return powerConnectorsVertical;
+        return getPowerDefaultOrientation() == com.vjstb.ledscheme.model.NodeOrientation.DOWN;
     }
 
-    public void setPowerConnectorsVertical(boolean powerConnectorsVertical) {
-        this.powerConnectorsVertical = powerConnectorsVertical;
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public void setPowerConnectorsVertical(boolean vertical) {
+        setPowerDefaultOrientation(vertical
+                ? com.vjstb.ledscheme.model.NodeOrientation.DOWN : com.vjstb.ledscheme.model.NodeOrientation.RIGHT);
+    }
+
+    @com.fasterxml.jackson.annotation.JsonSetter("powerConnectorsVertical")
+    private void setLegacyPowerConnectorsVertical(boolean vertical) {
+        setPowerConnectorsVertical(vertical);
     }
 
     /** Ориентация разъёмов для {@code mode} — маршрутизатор, см.
@@ -549,6 +691,72 @@ public class UserProfile {
     public boolean isConnectorsVertical(com.vjstb.ledscheme.model.SchemaMode mode) {
         return mode == com.vjstb.ledscheme.model.SchemaMode.POWER
                 ? isPowerConnectorsVertical() : isSignalConnectorsVertical();
+    }
+
+    public com.vjstb.ledscheme.model.NodeOrientation getSignalDefaultOrientation() {
+        return signalDefaultOrientation != null ? signalDefaultOrientation : com.vjstb.ledscheme.model.NodeOrientation.RIGHT;
+    }
+
+    public void setSignalDefaultOrientation(com.vjstb.ledscheme.model.NodeOrientation orientation) {
+        this.signalDefaultOrientation = orientation != null
+                ? orientation : com.vjstb.ledscheme.model.NodeOrientation.RIGHT;
+    }
+
+    public com.vjstb.ledscheme.model.NodeOrientation getPowerDefaultOrientation() {
+        return powerDefaultOrientation != null ? powerDefaultOrientation : com.vjstb.ledscheme.model.NodeOrientation.RIGHT;
+    }
+
+    public void setPowerDefaultOrientation(com.vjstb.ledscheme.model.NodeOrientation orientation) {
+        this.powerDefaultOrientation = orientation != null
+                ? orientation : com.vjstb.ledscheme.model.NodeOrientation.RIGHT;
+    }
+
+    /** Ориентация НОВЫХ узлов по умолчанию для {@code mode} — маршрутизатор, тот же
+     *  приём, что и {@link #getConnectorDisplayMode}. */
+    public com.vjstb.ledscheme.model.NodeOrientation getDefaultOrientation(com.vjstb.ledscheme.model.SchemaMode mode) {
+        return mode == com.vjstb.ledscheme.model.SchemaMode.POWER
+                ? getPowerDefaultOrientation() : getSignalDefaultOrientation();
+    }
+
+    public com.vjstb.ledscheme.model.EdgeRouteMode getNewEdgeRouteMode() {
+        return newEdgeRouteMode != null ? newEdgeRouteMode : com.vjstb.ledscheme.model.EdgeRouteMode.AUTO;
+    }
+
+    public void setNewEdgeRouteMode(com.vjstb.ledscheme.model.EdgeRouteMode mode) {
+        this.newEdgeRouteMode = mode == com.vjstb.ledscheme.model.EdgeRouteMode.MANUAL
+                ? com.vjstb.ledscheme.model.EdgeRouteMode.STRAIGHT : mode;
+    }
+
+    public ArrowPlacement getSchemaArrowPlacement() {
+        return schemaArrowPlacement != null ? schemaArrowPlacement : ArrowPlacement.TARGET;
+    }
+
+    public void setSchemaArrowPlacement(ArrowPlacement placement) {
+        this.schemaArrowPlacement = placement != null ? placement : ArrowPlacement.TARGET;
+    }
+
+    public boolean isOrthogonalEdgeEditing() {
+        return orthogonalEdgeEditing;
+    }
+
+    public void setOrthogonalEdgeEditing(boolean orthogonalEdgeEditing) {
+        this.orthogonalEdgeEditing = orthogonalEdgeEditing;
+    }
+
+    public SchemaStylePreset getSchemaStylePreset() {
+        return schemaStylePreset != null ? schemaStylePreset : SchemaStylePreset.SCREEN;
+    }
+
+    public void setSchemaStylePreset(SchemaStylePreset preset) {
+        this.schemaStylePreset = preset != null ? preset : SchemaStylePreset.SCREEN;
+    }
+
+    public SchemaRenderMode getSchemaRenderMode() {
+        return schemaRenderMode != null ? schemaRenderMode : SchemaRenderMode.MODERN;
+    }
+
+    public void setSchemaRenderMode(SchemaRenderMode mode) {
+        this.schemaRenderMode = mode != null ? mode : SchemaRenderMode.MODERN;
     }
 
     public boolean isLoadTrackingEnabled() {
@@ -670,6 +878,7 @@ public class UserProfile {
         p.phaseNoneColor = phaseNoneColor;
         p.accentColor = accentColor;
         p.signalColors = signalColors != null ? new ArrayList<>(signalColors) : null;
+        p.recentLineColors = recentLineColors != null ? new ArrayList<>(recentLineColors) : null;
         p.layout = new LinkedHashMap<>(layout);
         p.previewWidgetEnabled = previewWidgetEnabled;
         p.inspectorDocked = inspectorDocked;
@@ -687,10 +896,15 @@ public class UserProfile {
         p.schemaWireHops = schemaWireHops;
         p.schemaWireHopStyle = schemaWireHopStyle;
         p.preferencesMatrixView = preferencesMatrixView;
-        p.signalConnectorDisplayMode = signalConnectorDisplayMode;
-        p.powerConnectorDisplayMode = powerConnectorDisplayMode;
-        p.signalConnectorsVertical = signalConnectorsVertical;
-        p.powerConnectorsVertical = powerConnectorsVertical;
+        p.signalGroupDisplay = signalGroupDisplay;
+        p.powerGroupDisplay = powerGroupDisplay;
+        p.signalDefaultOrientation = signalDefaultOrientation;
+        p.powerDefaultOrientation = powerDefaultOrientation;
+        p.newEdgeRouteMode = newEdgeRouteMode;
+        p.schemaArrowPlacement = schemaArrowPlacement;
+        p.orthogonalEdgeEditing = orthogonalEdgeEditing;
+        p.schemaStylePreset = schemaStylePreset;
+        p.schemaRenderMode = schemaRenderMode;
         p.loadTrackingEnabled = loadTrackingEnabled;
         p.powerUnitKw = powerUnitKw;
         p.maskLogoImagePath = maskLogoImagePath;

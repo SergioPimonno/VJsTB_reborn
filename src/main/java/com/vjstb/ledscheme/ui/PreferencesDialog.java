@@ -1,6 +1,6 @@
 package com.vjstb.ledscheme.ui;
 
-import com.vjstb.ledscheme.settings.ConnectorDisplayMode;
+import com.vjstb.ledscheme.settings.SchemaStylePreset;
 import com.vjstb.ledscheme.settings.SettingsManager;
 import com.vjstb.ledscheme.settings.WireHopStyle;
 import java.awt.BorderLayout;
@@ -83,16 +83,21 @@ public class PreferencesDialog extends JDialog {
      *  настроек (у {@code JComboBox}, в отличие от {@code JCheckBox.setSelected},
      *  это событие летит). */
     private boolean refreshingWireHop;
+    private JComboBox<SchemaStylePreset> schemaStylePresetCombo;
+    /** Тот же приём, что {@link #refreshingWireHop} — гасит слушатель на время
+     *  программной установки значения в {@link #refresh()} (docs/schema-ports-
+     *  rework/PLAN.md, задача T3.1). */
+    private boolean refreshingSchemaStylePreset;
+    private JComboBox<com.vjstb.ledscheme.settings.SchemaRenderMode> schemaRenderModeCombo;
+    /** Тот же приём, что {@link #refreshingSchemaStylePreset} (docs/schema-ports-
+     *  rework/PLAN.md, задача T5.5). */
+    private boolean refreshingSchemaRenderMode;
     private JLabel exportRootFolderLabel;
     private JCheckBox signalSocketWiringCheck;
-    private JCheckBox signalConnectorDisplayModeCheck;
-    private JCheckBox signalConnectorsVerticalCheck;
     private JCheckBox signalChainEndpointSocketsCheck;
     private JCheckBox signalSchemaAutoPopulateCheck;
     private JCheckBox signalSceneStatsCheck;
     private JCheckBox powerSocketWiringCheck;
-    private JCheckBox powerConnectorDisplayModeCheck;
-    private JCheckBox powerConnectorsVerticalCheck;
     private JCheckBox powerChainEndpointSocketsCheck;
     private JCheckBox powerSchemaAutoPopulateCheck;
     private JCheckBox powerSceneStatsCheck;
@@ -101,9 +106,20 @@ public class PreferencesDialog extends JDialog {
     private JLabel maskLogoPathLabel;
     private JTextField syncServerUrlField;
 
+    // Ориентация узла по умолчанию/раскрытие незанятых групп (docs/schema-ports-
+    // rework/PLAN.md, задача T3.3) — заменяют собой прежние signalConnectorsVertical
+    // Check/signalConnectorDisplayModeCheck (см. UserProfile — те теперь только
+    // СОВМЕСТИМЫЙ фасад поверх этих настоящих полей, читать/писать напрямую).
+    private JComboBox<com.vjstb.ledscheme.model.NodeOrientation> signalOrientationCombo;
+    private JComboBox<com.vjstb.ledscheme.model.NodeOrientation> powerOrientationCombo;
+    private JComboBox<com.vjstb.ledscheme.settings.GroupDisplayMode> signalGroupDisplayCombo;
+    private JComboBox<com.vjstb.ledscheme.settings.GroupDisplayMode> powerGroupDisplayCombo;
+
     // Строки-панели (кнопки/спиннеры/поле/дропдаун) — тоже общие для обеих раскладок.
     private JPanel snapRow;
     private JPanel wireHopRow;
+    private JPanel schemaStylePresetRow;
+    private JPanel schemaRenderModeRow;
     private JPanel exportRow;
     private JPanel logoRow;
     private JPanel syncRow;
@@ -212,6 +228,42 @@ public class PreferencesDialog extends JDialog {
         });
         wireHopRow.add(wireHopStyleCombo);
 
+        schemaStylePresetRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        schemaStylePresetRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        schemaStylePresetRow.setToolTipText("«Экранный» — обычный вид схемы, следует теме интерфейса (тёмная/светлая)."
+                + " «Печатный» — белый фон, жёлтые блоки, номинальные цвета линий, для печати/PDF. Действует на"
+                + " сигнал и питание сразу; пользовательский цвет отдельной связи важнее пресета.");
+        schemaStylePresetRow.add(new JLabel("Оформление общей схемы:"));
+        schemaStylePresetCombo = new JComboBox<>(SchemaStylePreset.values());
+        schemaStylePresetCombo.setSelectedItem(settings.activeProfile().getSchemaStylePreset());
+        schemaStylePresetCombo.addActionListener(e -> {
+            if (!refreshingSchemaStylePreset) {
+                settings.setSchemaStylePreset((SchemaStylePreset) schemaStylePresetCombo.getSelectedItem());
+            }
+        });
+        schemaStylePresetRow.add(schemaStylePresetCombo);
+
+        // Переключатель «старый способ рисования» (docs/schema-ports-rework/
+        // PLAN.md, задача T5.5, D16) — рядом с «Оформление общей схемы» (D12),
+        // тот же паттерн ряда/комбобокса, что и у неё.
+        schemaRenderModeRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        schemaRenderModeRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        schemaRenderModeRow.setToolTipText("«Современный» — гнёзда на рамке блока, роли интерфейсов, ориентация"
+                + " блока, ортогональные связи, перетаскивание групп гнёзд (по умолчанию). «Классический» —"
+                + " прежний вид схемы (до появления этих возможностей): гнёзда строкой у одного из краёв блока,"
+                + " без ролей/ориентации/орто-трассировки/перетаскивания групп/сетевых блоков-устройств."
+                + " Действует на сигнал и питание сразу, глобально для всех проектов этого профиля.");
+        schemaRenderModeRow.add(new JLabel("Способ отрисовки общей схемы:"));
+        schemaRenderModeCombo = new JComboBox<>(com.vjstb.ledscheme.settings.SchemaRenderMode.values());
+        schemaRenderModeCombo.setSelectedItem(settings.activeProfile().getSchemaRenderMode());
+        schemaRenderModeCombo.addActionListener(e -> {
+            if (!refreshingSchemaRenderMode) {
+                settings.setSchemaRenderMode(
+                        (com.vjstb.ledscheme.settings.SchemaRenderMode) schemaRenderModeCombo.getSelectedItem());
+            }
+        });
+        schemaRenderModeRow.add(schemaRenderModeCombo);
+
         exportRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         exportRow.setAlignmentX(Component.LEFT_ALIGNMENT);
         exportRow.setToolTipText("Папка, в которую по умолчанию сохраняются экспортированные схемы/маски/пресеты"
@@ -249,24 +301,17 @@ public class PreferencesDialog extends JDialog {
                     applySocketDependentEnablement();
                 });
 
-        signalConnectorDisplayModeCheck = check(
-                "Показывать каждый разъём карты отдельным гнездом (не группой по типу)",
-                settings.activeProfile().getSignalConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL,
-                "Выключено — разъёмы одного типа на карте показаны одной строкой «N×Тип» (как раньше). Включено —"
-                        + " та же группа рисуется N отдельными строками-гнёздами, каждое — своя точка подключения, для"
-                        + " наглядного расключения многоканального оборудования по отдельным линиям. У питания — своя"
-                        + " отдельная копия. Независимо от «линия цепляется за конкретный разъём» — та решает, ЧТО"
-                        + " соединяет линия, эта — КАК разъёмы нарисованы.",
-                v -> settings.setSignalConnectorDisplayMode(
-                        v ? ConnectorDisplayMode.INDIVIDUAL : ConnectorDisplayMode.GROUPED));
-
-        signalConnectorsVerticalCheck = check(
-                "Гнёзда разъёмов у верхнего/нижнего края блока (не у левого/правого)",
-                settings.activeProfile().isSignalConnectorsVertical(),
-                "Выключено — гнёзда идут строками сверху вниз у левого (вход) и правого (выход) края блока, как"
-                        + " раньше. Включено — гнёзда идут колонками слева направо, у верхнего (вход) и нижнего (выход)"
-                        + " края блока, подписи разъёмов повёрнуты вертикально. Отдельная настройка от питания.",
-                settings::setSignalConnectorsVertical);
+        signalOrientationCombo = orientationCombo(settings.activeProfile().getSignalDefaultOrientation(),
+                "Ориентация блоков по умолчанию для схемы СИГНАЛА (→/↓/←/↑, как поворот блока в yEd/Simulink) —"
+                        + " каждый блок можно дополнительно повернуть отдельно (меню блока/Ctrl+R), это умолчание"
+                        + " только для новых/непереопределённых. Заменяет собой прежнее «гнёзда сверху/снизу».",
+                settings::setSignalDefaultOrientation);
+        signalGroupDisplayCombo = groupDisplayCombo(settings.activeProfile().getSignalGroupDisplay(),
+                "«Авто» — незанятая группа разъёмов сворачивается в одно гнездо «N×Тип», как только на неё"
+                        + " подводят связь — разворачивается в отдельные пронумерованные гнёзда. «Всегда развёрнуты» —"
+                        + " все группы держатся развёрнутыми независимо от занятости. Отдельную группу можно"
+                        + " дополнительно принудительно свернуть/развернуть (меню группы, ПКМ по гнезду).",
+                settings::setSignalGroupDisplay);
 
         signalChainEndpointSocketsCheck = check(
                 "Вводные кабинеты цепочек — тоже гнёзда подключения",
@@ -308,19 +353,12 @@ public class PreferencesDialog extends JDialog {
                     applySocketDependentEnablement();
                 });
 
-        powerConnectorDisplayModeCheck = check(
-                "Показывать каждый разъём щита отдельным гнездом (не группой по типу)",
-                settings.activeProfile().getPowerConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL,
-                "То же самое, но для схемы питания — отдельная настройка (см. группу «Сигнал»), т.к. для питания"
-                        + " отдельные вводные используют редко (обычно хватает группы «N×разъём»).",
-                v -> settings.setPowerConnectorDisplayMode(
-                        v ? ConnectorDisplayMode.INDIVIDUAL : ConnectorDisplayMode.GROUPED));
-
-        powerConnectorsVerticalCheck = check(
-                "Гнёзда разъёмов у верхнего/нижнего края блока (не у левого/правого)",
-                settings.activeProfile().isPowerConnectorsVertical(),
+        powerOrientationCombo = orientationCombo(settings.activeProfile().getPowerDefaultOrientation(),
                 "То же самое, но для схемы питания — отдельная настройка (см. группу «Сигнал»).",
-                settings::setPowerConnectorsVertical);
+                settings::setPowerDefaultOrientation);
+        powerGroupDisplayCombo = groupDisplayCombo(settings.activeProfile().getPowerGroupDisplay(),
+                "То же самое, но для схемы питания — отдельная настройка (см. группу «Сигнал»).",
+                settings::setPowerGroupDisplay);
 
         powerChainEndpointSocketsCheck = check(
                 "Вводные кабинеты цепочек — тоже гнёзда подключения",
@@ -414,9 +452,9 @@ public class PreferencesDialog extends JDialog {
         allChecks = new JCheckBox[] {
                 previewWidgetCheck, canvasSnapToCenterCheck, foolProofWiringCheck, schemaScreensAsWiringCheck,
                 signalSocketWiringCheck,
-                signalConnectorDisplayModeCheck, signalConnectorsVerticalCheck, signalChainEndpointSocketsCheck,
+                signalChainEndpointSocketsCheck,
                 signalSchemaAutoPopulateCheck, signalSceneStatsCheck, powerSocketWiringCheck,
-                powerConnectorDisplayModeCheck, powerConnectorsVerticalCheck, powerChainEndpointSocketsCheck,
+                powerChainEndpointSocketsCheck,
                 powerSchemaAutoPopulateCheck, powerSceneStatsCheck, loadTrackingCheck, powerUnitKwCheck,
         };
     }
@@ -431,6 +469,60 @@ public class PreferencesDialog extends JDialog {
         c.putClientProperty("fullText", text);
         c.addActionListener(e -> apply.accept(c.isSelected()));
         return c;
+    }
+
+    /** Тот же приём гашения слушателя на программную установку, что {@link
+     *  #refreshingWireHop}/{@link #refreshingSchemaStylePreset} — один общий флаг на
+     *  все четыре новых дропдауна ({@link #signalOrientationCombo}/{@link
+     *  #powerOrientationCombo}/{@link #signalGroupDisplayCombo}/{@link
+     *  #powerGroupDisplayCombo}), т.к. {@link #refresh()} всегда переустанавливает
+     *  их все разом (docs/schema-ports-rework/PLAN.md, задача T3.3). */
+    private boolean refreshingSchemaLayoutCombos;
+
+    private JComboBox<com.vjstb.ledscheme.model.NodeOrientation> orientationCombo(
+            com.vjstb.ledscheme.model.NodeOrientation selected, String tooltip,
+            Consumer<com.vjstb.ledscheme.model.NodeOrientation> apply) {
+        JComboBox<com.vjstb.ledscheme.model.NodeOrientation> combo =
+                new JComboBox<>(com.vjstb.ledscheme.model.NodeOrientation.values());
+        combo.setSelectedItem(selected);
+        combo.setToolTipText(tooltip);
+        combo.setAlignmentX(Component.LEFT_ALIGNMENT);
+        combo.addActionListener(e -> {
+            if (!refreshingSchemaLayoutCombos) {
+                apply.accept((com.vjstb.ledscheme.model.NodeOrientation) combo.getSelectedItem());
+            }
+        });
+        return combo;
+    }
+
+    private JComboBox<com.vjstb.ledscheme.settings.GroupDisplayMode> groupDisplayCombo(
+            com.vjstb.ledscheme.settings.GroupDisplayMode selected, String tooltip,
+            Consumer<com.vjstb.ledscheme.settings.GroupDisplayMode> apply) {
+        JComboBox<com.vjstb.ledscheme.settings.GroupDisplayMode> combo =
+                new JComboBox<>(com.vjstb.ledscheme.settings.GroupDisplayMode.values());
+        combo.setSelectedItem(selected);
+        combo.setToolTipText(tooltip);
+        combo.setAlignmentX(Component.LEFT_ALIGNMENT);
+        combo.addActionListener(e -> {
+            if (!refreshingSchemaLayoutCombos) {
+                apply.accept((com.vjstb.ledscheme.settings.GroupDisplayMode) combo.getSelectedItem());
+            }
+        });
+        return combo;
+    }
+
+    /** Строка «подпись + дропдаун» для списка по этапам — сам дропдаун (см. {@link
+     *  #orientationCombo}/{@link #groupDisplayCombo}) переиспользуется и в матрице
+     *  ({@link #buildMatrixBody()}), там БЕЗ подписи (у ячейки уже есть своя, см.
+     *  {@link #triple}) — тот же приём, что {@link #wireHopRow}/{@link
+     *  #schemaStylePresetRow}, только строится заново при каждой пересборке списка,
+     *  а не хранится полем, т.к. подпись тут не нужна матрице. */
+    private JPanel comboRow(String label, JComponent combo) {
+        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.add(new JLabel(label));
+        row.add(combo);
+        return row;
     }
 
     private void restoreLabels() {
@@ -477,15 +569,19 @@ public class PreferencesDialog extends JDialog {
         content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
 
         content.add(UiKit.section("Общие", stack(previewWidgetCheck, canvasSnapToCenterCheck, snapRow,
-                foolProofWiringCheck, schemaScreensAsWiringCheck, wireHopRow,
-                exportRow)));
+                foolProofWiringCheck, schemaScreensAsWiringCheck, wireHopRow, schemaStylePresetRow,
+                schemaRenderModeRow, exportRow)));
         content.add(Box.createVerticalStrut(8));
-        content.add(UiKit.section("Сигнал", stack(signalSocketWiringCheck, signalConnectorDisplayModeCheck,
-                signalConnectorsVerticalCheck, signalChainEndpointSocketsCheck, signalSchemaAutoPopulateCheck,
+        content.add(UiKit.section("Сигнал", stack(signalSocketWiringCheck,
+                comboRow("Ориентация блоков по умолчанию:", signalOrientationCombo),
+                comboRow("Незанятые группы гнёзд:", signalGroupDisplayCombo),
+                signalChainEndpointSocketsCheck, signalSchemaAutoPopulateCheck,
                 signalSceneStatsCheck)));
         content.add(Box.createVerticalStrut(8));
-        content.add(UiKit.section("Питание", stack(powerSocketWiringCheck, powerConnectorDisplayModeCheck,
-                powerConnectorsVerticalCheck, powerChainEndpointSocketsCheck, powerSchemaAutoPopulateCheck,
+        content.add(UiKit.section("Питание", stack(powerSocketWiringCheck,
+                comboRow("Ориентация блоков по умолчанию:", powerOrientationCombo),
+                comboRow("Незанятые группы гнёзд:", powerGroupDisplayCombo),
+                powerChainEndpointSocketsCheck, powerSchemaAutoPopulateCheck,
                 powerSceneStatsCheck, loadTrackingCheck, powerUnitKwCheck)));
         content.add(Box.createVerticalStrut(8));
         content.add(UiKit.section("Генерация масок", stack(logoRow)));
@@ -535,14 +631,16 @@ public class PreferencesDialog extends JDialog {
         span(g, row, "«Защита от дурака»: нельзя вход↔вход и выход↔выход", foolProofWiringCheck);
         span(g, row, "Узел экрана = мини-схема расключения его кабинетов", schemaScreensAsWiringCheck);
         span(g, row, "«Мостики» на пересечениях линий связи (обход, как в ГОСТ)", wireHopRow);
+        span(g, row, "Оформление общей схемы (экранное/печатное)", schemaStylePresetRow);
+        span(g, row, "Способ отрисовки общей схемы (современный/классический)", schemaRenderModeRow);
 
         category(g, row, "Коммутация через гнёзда разъёмов");
         triple(g, row, "Линия цепляется за конкретный разъём, а не за блок", "мастер-переключатель для строк ниже",
                 DASH, signalSocketWiringCheck, powerSocketWiringCheck);
-        triple(g, row, "Каждый разъём — отдельное гнездо (не группой по типу)", null,
-                DASH, signalConnectorDisplayModeCheck, powerConnectorDisplayModeCheck);
-        triple(g, row, "Гнёзда у верхнего/нижнего края блока (не левого/правого)", null,
-                DASH, signalConnectorsVerticalCheck, powerConnectorsVerticalCheck);
+        triple(g, row, "Ориентация блоков по умолчанию", null,
+                DASH, signalOrientationCombo, powerOrientationCombo);
+        triple(g, row, "Незанятые группы гнёзд", null,
+                DASH, signalGroupDisplayCombo, powerGroupDisplayCombo);
         triple(g, row, "Вводные кабинеты цепочек — тоже гнёзда подключения", null,
                 DASH, signalChainEndpointSocketsCheck, powerChainEndpointSocketsCheck);
         triple(g, row, "Автозаполнение схемы при переходе с расключения", null,
@@ -724,6 +822,12 @@ public class PreferencesDialog extends JDialog {
         refreshingWireHop = true;
         wireHopStyleCombo.setSelectedItem(settings.activeProfile().getSchemaWireHopStyle());
         refreshingWireHop = false;
+        refreshingSchemaStylePreset = true;
+        schemaStylePresetCombo.setSelectedItem(settings.activeProfile().getSchemaStylePreset());
+        refreshingSchemaStylePreset = false;
+        refreshingSchemaRenderMode = true;
+        schemaRenderModeCombo.setSelectedItem(settings.activeProfile().getSchemaRenderMode());
+        refreshingSchemaRenderMode = false;
         signalSocketWiringCheck.setSelected(settings.activeProfile().isSignalSocketWiringEnabled());
         powerSocketWiringCheck.setSelected(settings.activeProfile().isPowerSocketWiringEnabled());
         signalChainEndpointSocketsCheck.setSelected(settings.activeProfile().isSignalChainEndpointSocketsEnabled());
@@ -731,12 +835,12 @@ public class PreferencesDialog extends JDialog {
         signalSchemaAutoPopulateCheck.setSelected(settings.activeProfile().isSignalSchemaAutoPopulateEnabled());
         powerSchemaAutoPopulateCheck.setSelected(settings.activeProfile().isPowerSchemaAutoPopulateEnabled());
         applySocketDependentEnablement();
-        signalConnectorDisplayModeCheck.setSelected(
-                settings.activeProfile().getSignalConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL);
-        powerConnectorDisplayModeCheck.setSelected(
-                settings.activeProfile().getPowerConnectorDisplayMode() == ConnectorDisplayMode.INDIVIDUAL);
-        signalConnectorsVerticalCheck.setSelected(settings.activeProfile().isSignalConnectorsVertical());
-        powerConnectorsVerticalCheck.setSelected(settings.activeProfile().isPowerConnectorsVertical());
+        refreshingSchemaLayoutCombos = true;
+        signalOrientationCombo.setSelectedItem(settings.activeProfile().getSignalDefaultOrientation());
+        powerOrientationCombo.setSelectedItem(settings.activeProfile().getPowerDefaultOrientation());
+        signalGroupDisplayCombo.setSelectedItem(settings.activeProfile().getSignalGroupDisplay());
+        powerGroupDisplayCombo.setSelectedItem(settings.activeProfile().getPowerGroupDisplay());
+        refreshingSchemaLayoutCombos = false;
         signalSceneStatsCheck.setSelected(settings.activeProfile().isSignalSceneStatsEnabled());
         powerSceneStatsCheck.setSelected(settings.activeProfile().isPowerSceneStatsEnabled());
         loadTrackingCheck.setSelected(settings.activeProfile().isLoadTrackingEnabled());

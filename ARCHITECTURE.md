@@ -163,6 +163,75 @@ NovaLCT, что подтверждено реальной загрузкой, ч
 сигнала (4 отдельных пары полей в `UserProfile`, у каждой свой setter в
 `SettingsManager` и роутер-метод `xxx(SchemaMode)`).
 
+### Раскладка и трассировка общей схемы (`service.schemalayout.*`, `SchemaCanvasPanel`)
+
+Переработка гнёзд/связей общей схемы (`docs/schema-ports-rework/`, ветка
+`claude/schema-ports-rework`, обоснование — `DIALOG.md`, план для агентов —
+`PLAN.md`). Полная спецификация — в `PLAN.md` §2, здесь только карта того, что
+где лежит и как это соотносится друг с другом.
+
+- **`InterfaceRole`** (`ledscheme-model`) — смысловая роль гнезда (VIDEO,
+  LED_DATA, SYNC, NETWORK, CONTROL, AUDIO, POWER, OTHER). Источник для
+  конкретного гнезда — `service.schemalayout.PortRoleResolver`, порядок
+  приоритета `PortPlacement.roleOverride` → `CardPort.role` →
+  `InterfaceType.defaultRole` (совпадение начала `connectorType`) → эвристика
+  по regex на `connectorType` (таблица — PLAN.md §2.3). Роль всегда решает, на
+  какой стороне блока рисуется группа гнёзд (`SideRules`, PLAN.md §2.2) и каким
+  цветом рисуется линия связи (`SchemaStyle.roleLineColor`, D9 — пользовательский
+  цвет связи важнее роли, роль важнее цвета по умолчанию).
+- **`ThruResolver`** — аналогичная резолюция для транзита (`CardPort.thru`):
+  явное значение важнее авто-детекции (ровно одна пара IN/OUT одного
+  `connectorType` с `count == 1` в пределах карты/списка разъёмов питания).
+- **`NodePortLayout`** — чистая функция (без Swing) «узел + библиотека + правила
+  сторон → прямоугольники гнёзд и подписи», используется и живым холстом, и
+  экспортом. Тестируется `NodePortLayoutTest` headless через
+  `TextMeasure`/`AwtTextMeasure` (обёртка `FontRenderContext`, не требует
+  дисплея). Раскладка знает про 4 ориентации блока (`NodeOrientation`),
+  свёртку незадействованных групп (`GroupDisplayMode`), ручную сторону/порядок
+  группы (`PortPlacement`, не поворачивается сменой ориентации — «пользователь
+  поставил руками»).
+- **`OrthogonalRouter`/`LaneNudger`/`EdgeBundles`** — трассировка связей под
+  90° (алгоритм Wybrow et al. 2009, ссылка — `DIALOG.md` «Источники»),
+  разнесение коллинеарных параллельных связей на канал, общий ствол пучка на
+  одно свёрнутое гнездо. Применяется только к рёбрам с `SchemaEdge.routeMode ==
+  AUTO`; `MANUAL` (сохранённые изломы, старые схемы после открытия — legacy-
+  резолв `routeMode == null` → ломаная непуста → `MANUAL`) и `STRAIGHT` считаются
+  напрямую в `SchemaCanvasPanel`, роутер не участвует.
+- **Сетевое оборудование на схеме (D11)** — блоки из библиотеки
+  `NetworkDeviceType` (`AppModel.addSchemaNodeFromNetworkDevice`) — обычный
+  `SchemaNode(CUSTOM)` с картой «Сеть» (Ethernet/Fiber, `IN_OUT`, роль всегда
+  `NETWORK`) и `networkDeviceTypeId` для «Обновить порты из библиотеки»
+  (`refreshNetworkDevicePorts`). «Защита от дурака» (направление IN/OUT) не
+  проверяется, если у любого конца роль `NETWORK`. Автосборка сетевой карты из
+  этих блоков — вне этой переработки, только заготовка API:
+  `AppModel.networkGraphFromScene(scene)` возвращает устройства (блоки с
+  задействованной NETWORK-связью), связи (только NETWORK-рёбра сигнала) и
+  коммутаторы (все блоки с `networkDeviceTypeId`, независимо от подключения) —
+  без какого-либо UI сетевого менеджера поверх этого графа.
+- **«Легенда линий»** (`AppModel.addLineLegendNode`/`lineLegendRoles`/
+  `lineLegendPowerNominals`) — авто-блок (`SchemaNode.autoLineLegend`, тот же
+  паттерн, что «Легенда портов»/`autoPortLegend`) со списком РЕАЛЬНО
+  используемых на текущей сцене ролей (сигнал) или номиналов разъёма (питание)
+  и их цветов из активного `SchemaStyle` — не статический список всех
+  возможных ролей.
+- **`SchemaRenderMode` (`MODERN`/`CLASSIC`, `UserProfile.schemaRenderMode`,
+  глобально в профиле, по умолчанию `MODERN`)** — переключатель «Предпочтения →
+  Способ отрисовки общей схемы» (добавлен пользователем 2026-09-18 уже ПОСЛЕ
+  замены старого рендера новым, DIALOG.md реплика 4, PLAN.md D16/T5.5).
+  `CLASSIC` — дорефакторинговые приватные методы `SchemaCanvasPanel` (суффикс
+  `Classic`: `computeSocketRectsClassic`, `drawConnectorRowsClassic`,
+  `socketPositionClassic`/`socketAtClassic` и т.д.), восстановленные из версии
+  `master` до начала этого плана — своя раскладка (строка гнёзд у края блока,
+  без ролей/ориентации/орто-трассировки/перетаскивания групп/сетевых блоков) и
+  свой хит-тестинг, полностью параллельные `NodePortLayout`/`OrthogonalRouter`,
+  а не косметическая перекраска одного и того же геометрического пути.
+  Диспетчеризация — `SchemaCanvasPanel.classicMode()`, одна проверка в каждой
+  точке входа (`paint`, `socketPosition`, `socketAt`, обработчики мыши).
+  Известный пробел: `AppModel.autoFitNodeToPorts` считает авто-размер НОВОГО
+  узла через `NodePortLayout` независимо от режима — в `CLASSIC` это может дать
+  чуть неоптимальный размер для новых блоков (существующие проекты не
+  затронуты, у них уже сохранённый размер).
+
 ### Проверка обновлений (`update.*`, `ui.UpdateNoticeDialog`)
 
 `VersionManifest.fetch()` читает JSON синглтона `VERSION_MANIFEST` с сервера (не
