@@ -265,7 +265,8 @@ public class SchemaPanel extends JPanel {
         // сохранённые изломы (см. AppModel#rerouteEdges).
         body.add(UiKit.vgap());
         rerouteSelectedBtn = new JButton("Перетрассировать выделенные");
-        rerouteSelectedBtn.setToolTipText("Выделенную связь (или все связи выделенных узлов) — под 90°, автоматически");
+        rerouteSelectedBtn.setToolTipText(
+                "Выделенные связи (Shift/Ctrl+клик по связи — несколько; или все связи выделенных узлов) — под 90°, автоматически");
         rerouteSelectedBtn.addActionListener(e -> canvas.rerouteSelected());
         body.add(rerouteSelectedBtn);
         body.add(UiKit.vgap());
@@ -483,11 +484,14 @@ public class SchemaPanel extends JPanel {
         }
 
         int selectedCount = canvas.getSelectedNodes().size();
+        int selectedEdgeCount = canvas.getSelectedEdges().size();
         if (selectedCount > 1) {
             selectionHint.setText("Выбрано узлов: " + selectedCount
                     + " (Shift/Ctrl+клик или протяжка по пустому месту — изменить выделение)");
         } else if (canvas.getSelectedNode() != null) {
             selectionHint.setText("Выбран узел: " + safeLabel(canvas.getSelectedNode().getLabel()));
+        } else if (selectedEdgeCount > 1) {
+            selectionHint.setText("Выбрано связей: " + selectedEdgeCount + " (Shift/Ctrl+клик — изменить выделение)");
         } else if (canvas.getSelectedEdge() != null) {
             selectionHint.setText("Выбрана связь");
         } else {
