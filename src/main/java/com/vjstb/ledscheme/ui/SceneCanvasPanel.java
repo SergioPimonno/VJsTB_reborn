@@ -51,6 +51,13 @@ public class SceneCanvasPanel extends JPanel {
     private boolean detailPower;
     private boolean detailFit;
     private double detailZoom = 1.0;
+    // По умолчанию true (Питание/Сигнал/Вывод должны видеть прописанные цепочки в
+    // detailMode) — но этап Сетап использует эту же панель только для перестановки/
+    // масштабирования отдельных кабинетов (см. SetupStagePanel), а рендер цепочек
+    // приходил "бесплатно" вместе с paintScheme, скопированным с этапа Питание —
+    // баг-репорт 2026-09-16 "в сетапе режим кабинетов по отдельности не должен
+    // показывать цепочки расключения".
+    private boolean showChains = true;
     /** Если задан — детальный режим ("Показать все экраны сцены") становится
      *  интерактивным: клик/протяжка по кабинету АКТИВНОГО экрана прописывает
      *  цепочку через тот же контроллер, что и одиночный CanvasPanel, — раньше
@@ -206,7 +213,17 @@ public class SceneCanvasPanel extends JPanel {
                             Screen s = (Screen) hit[0];
                             CabinetInstance cab = (CabinetInstance) hit[1];
                             model.selectScreen(s);
-                            if (cab != null) {
+                            if (cab != null && cab.isHidden()) {
+                                // Скрытый ("удалённый") кабинет невидим — левой кнопкой его
+                                // не таскаем (ни его самого, ни, раз клик всё же попал именно
+                                // в его ячейку, а не мимо — экран целиком): иначе клик по
+                                // пустому на вид месту молча двигал бы offsetXMm/offsetYMm
+                                // невидимого кабинета, и тот появлялся бы сдвинутым при
+                                // восстановлении (баг-репорт: "удалённые кабинеты не должны
+                                // перемещаться"). ПКМ по этой же точке по-прежнему находит
+                                // его (см. screenAndCabinetAt без фильтра по isHidden) —
+                                // «Восстановить кабинет» в радиальном меню остаётся доступен.
+                            } else if (cab != null) {
                                 draggingCabinetScreen = s;
                                 draggingCabinet = cab;
                                 dragCabStartOffX = cab.getOffsetXMm();
@@ -435,6 +452,11 @@ public class SceneCanvasPanel extends JPanel {
         setFocusable(controller != null);
     }
 
+    /** См. javadoc поля {@link #showChains}. */
+    public void setShowChains(boolean show) {
+        this.showChains = show;
+    }
+
     /** Экран и (если попали внутрь его сетки) конкретный кабинет под точкой — для
      *  интерактивной прописки из общего обзора сцены. Кабинет в результате может
      *  быть null (попали на экран, но не на кабинет — паддинг сетки/ячейка скрыта). */
@@ -482,7 +504,18 @@ public class SceneCanvasPanel extends JPanel {
         for (CabinetInstance cab : s.getCabinets()) {
             int cx = cabX(cab, t, cellW, offX);
             int cy = cabY(cab, t, cellH, offY);
-            if (px >= cx && px < cx + cellW && py >= cy && py < cy + cellH) {
+            // Хит-тест — по ФАКТИЧЕСКОМУ (уменьшенному, если тип переопределён на
+            // ячейке) размеру, а не номинальному cellW/cellH — иначе после починки
+            // визуального уменьшения (баг-репорт: "поменял размер типа в библиотеке —
+            // кабинет не уменьшился") клик по пустому месту РЯДОМ с уже маленьким
+            // кабинетом (в оставшейся от номинальной ячейки области) продолжал бы
+            // попадать в него же, а сам он не хватался бы под курсором, если сосед
+            // визуально придвинут ближе (баг-репорт: "привязки для уменьшенных
+            // кабинетов сломались"). См. те же effW/effH, что и у drawCabinetOverrideMarks/
+            // drawChainBuildingOverlay.
+            int ew = effW(cab, t, cellW);
+            int eh = effH(cab, t, cellH);
+            if (px >= cx && px < cx + ew && py >= cy && py < cy + eh) {
                 return cab;
             }
         }
@@ -577,7 +610,7 @@ public class SceneCanvasPanel extends JPanel {
         for (CabinetType t : types) {
             // Тот же typeColor(...), что и при отрисовке ячеек в detailMode — иначе
             // цвет пункта меню и итоговый цвет закрашенной ячейки расходятся.
-            items.add(RadialMenu.Item.leaf(t.getName(), typeColorFor(types, t), () -> applyType(cabId, t.getId())));
+            items.add(RadialMenu.Item.leaf(t.getName(), typeColorFor(t), () -> applyType(cabId, t.getId())));
         }
         return items;
     }
@@ -595,11 +628,15 @@ public class SceneCanvasPanel extends JPanel {
         model.setCabinetShapeOverride(cabId, shape);
     }
 
-    /** Стабильный цвет по позиции типа в библиотеке — та же палитра, что и в самом
-     *  радиальном меню, чтобы цвет пункта совпадал с цветом соответствующего типа. */
-    private static Color typeColorFor(List<CabinetType> types, CabinetType type) {
-        int idx = types.indexOf(type);
-        return Palette.signalColor(Math.max(0, idx));
+    /** Цвет типа кабинета для подсветки/легенды и пункта радиального меню «Тип» —
+     *  по ХЕШУ id типа, а не по его позиции в библиотеке (баг-репорт: "палитру нужно
+     *  сохранять между перезапусками" — при индексе по позиции цвет ЛЮБОГО типа
+     *  сдвигался, стоило добавить/удалить в библиотеке любой ДРУГОЙ тип раньше него
+     *  по списку, и мог отличаться между запусками, если порядок слияния личной и
+     *  общей библиотеки менялся). Хеш детерминирован для одного и того же id — тот
+     *  же приём, что уже даёт {@code SchemaStyle#connectorDotColor}. */
+    private static Color typeColorFor(CabinetType type) {
+        return Palette.stableColorFor(type.getId());
     }
 
     /** Подсветка кабинетов с переопределением типа (см. {@link #showCabinetRadialMenu}
@@ -607,10 +644,19 @@ public class SceneCanvasPanel extends JPanel {
      *  paintScheme}, и переопределения формы (→ "Форма"/"Угол") — реальный контур
      *  формы, а не декоративная метка. Только в {@code detailMode}: тот же принцип,
      *  что был у убранного {@code ShapeEditorPanel} — переопределение должно быть
-     *  видно СРАЗУ, не только через тултип/диалог параметров. */
+     *  видно СРАЗУ, не только через тултип/диалог параметров.
+     *  <p>Разбит на два прохода ({@code fillPass}) — раньше вся подсветка (и заливка,
+     *  и контур) рисовалась ОДНИМ проходом ПОСЛЕ {@code paintScheme} целиком, включая
+     *  линии цепочек, и сплошная заливка молча перекрывала уже нарисованную линию
+     *  цепочки — баг-репорт 2026-09-16 «синяя заливка кабинетов нестандартного типа/
+     *  формы перекрывает цепочку расключения, а должна быть под цепочкой» (и для
+     *  питания, и для сигнала). Теперь вызывающий код (см. {@code paint}) кладёт
+     *  {@code fillPass=true} МЕЖДУ {@link SchemeRenderer#paintSchemeGrid} и {@link
+     *  SchemeRenderer#paintSchemeChains} (заливка ложится под цепочку), а {@code
+     *  fillPass=false} — уже ПОСЛЕ цепочек (контур подсветки/формы остаётся чётким
+     *  поверх линии, это не тот же баг — контур не закрашивает цепочку целиком). */
     private void drawCabinetOverrideMarks(Graphics2D g2, Screen s, CabinetType defaultType,
-                                           int cellW, int cellH, int offX, int offY) {
-        List<CabinetType> types = model.getCabinetTypes();
+                                           int cellW, int cellH, int offX, int offY, boolean fillPass) {
         for (CabinetInstance c : s.getCabinets()) {
             if (c.isHidden()) {
                 continue;
@@ -627,21 +673,38 @@ public class SceneCanvasPanel extends JPanel {
             com.vjstb.ledscheme.model.CabinetShape effectiveShape = c.getShapeOverride() != null
                     ? c.getShapeOverride() : (effective != null ? effective.getShape() : null);
             double rotationDeg = SchemeRenderer.effectiveRotationDeg(c, effective);
+            // Подсветка должна занимать РОВНО ту же площадь, что и реальный контур
+            // ячейки в paintScheme, а не номинальную cellW/cellH — иначе для ячейки с
+            // переопределённым типом ДРУГОГО физического размера (например, замена на
+            // кабинет 250×500мм в сетке 500×500) сама ячейка на схеме уже рисуется
+            // уменьшенной, а эта заливка/контур поверх неё — по-старому, нарисованной
+            // во весь номинальный размер, и визуально маскирует уменьшение (баг-репорт:
+            // "поменял размер типа в библиотеке — на схеме кабинет не уменьшился").
+            // effW/effH — тот же расчёт (ScreenLogic.effectiveCellW/H), что уже
+            // применяется рядом в drawChainBuildingOverlay.
+            int ew = effW(c, defaultType, cellW);
+            int eh = effH(c, defaultType, cellH);
             if (c.getCabinetTypeId() != null) {
-                CabinetType override = model.getWorkspace().cabinetTypeById(c.getCabinetTypeId());
-                Color typeColor = override != null ? typeColorFor(types, override) : Palette.ACCENT;
-                g2.setColor(blend(Palette.PHASE_NONE, typeColor, 0.55f));
-                SchemeRenderer.fillCabinetShape(g2, x + 1, y + 1, cellW - 2, cellH - 2, effectiveShape, rotationDeg);
-                g2.setColor(Palette.ACCENT);
-                SchemeRenderer.outlineCabinetShape(g2, x + 1, y + 1, cellW - 2, cellH - 2, effectiveShape, rotationDeg);
-                // Заливка выше рисуется ПОВЕРХ paintScheme (см. javadoc метода) и без этого
-                // молча перекрывала подпись «строка,столбец» — баг-репорт 2026-09-14.
-                SchemeRenderer.drawCabinetIndexLabel(g2, c, x, y, cellW, cellH);
+                if (fillPass) {
+                    CabinetType override = model.getWorkspace().cabinetTypeById(c.getCabinetTypeId());
+                    Color typeColor = override != null ? typeColorFor(override) : Palette.ACCENT;
+                    g2.setColor(blend(Palette.PHASE_NONE, typeColor, 0.55f));
+                    SchemeRenderer.fillCabinetShape(g2, x + 1, y + 1, ew - 2, eh - 2, effectiveShape, rotationDeg);
+                    // Заливка кладётся между сеткой и цепочками (см. javadoc метода) и без
+                    // этого молча перекрывала бы подпись «строка,столбец» — баг-репорт
+                    // 2026-09-14.
+                    SchemeRenderer.drawCabinetIndexLabel(g2, c, x, y, ew, eh);
+                } else {
+                    g2.setColor(Palette.ACCENT);
+                    SchemeRenderer.outlineCabinetShape(g2, x + 1, y + 1, ew - 2, eh - 2, effectiveShape, rotationDeg);
+                }
             }
-            com.vjstb.ledscheme.model.CabinetShape shape = c.getShapeOverride();
-            if (shape != null && shape != com.vjstb.ledscheme.model.CabinetShape.RECTANGLE) {
-                g2.setColor(Palette.TEXT);
-                SchemeRenderer.outlineCabinetShape(g2, x + 1, y + 1, cellW - 2, cellH - 2, shape, rotationDeg);
+            if (!fillPass) {
+                com.vjstb.ledscheme.model.CabinetShape shape = c.getShapeOverride();
+                if (shape != null && shape != com.vjstb.ledscheme.model.CabinetShape.RECTANGLE) {
+                    g2.setColor(Palette.TEXT);
+                    SchemeRenderer.outlineCabinetShape(g2, x + 1, y + 1, ew - 2, eh - 2, shape, rotationDeg);
+                }
             }
         }
     }
@@ -839,6 +902,15 @@ public class SceneCanvasPanel extends JPanel {
         return (showRiggingPoints && !detailMode) ? RIG_TOP_HEADROOM_PX : 0;
     }
 
+    /** Только для тестов — открывает {@link #screenAndCabinetAt} (хит-тест клика по
+     *  кабинету в detailMode, баг-репорт: "привязки/хитбоксы для уменьшенных
+     *  кабинетов сломались"). Возвращает {@code {Screen, CabinetInstance}} (второй
+     *  элемент может быть {@code null}), либо {@code null} целиком мимо любого
+     *  экрана. */
+    public Object[] screenAndCabinetAtForTest(int px, int py) {
+        return screenAndCabinetAt(px, py);
+    }
+
     /** Рендерит текущий вид в изображение заданного размера (для экспорта). */
     public BufferedImage renderImage(int width, int height) {
         return renderImage(width, height, 1.0);
@@ -988,30 +1060,41 @@ public class SceneCanvasPanel extends JPanel {
                     if (overlapped) {
                         Graphics2D go = (Graphics2D) g2.create();
                         go.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.55f));
-                        SchemeRenderer.paintScheme(go, s, t, detailPower, cellW, cellH, gridX, gridY, model.getWorkspace(),
-                                scenePowerChains, sceneSignalChains, model.controllersInScene(scene),
-                                settings.activeProfile().isPowerUnitKw());
+                        SchemeRenderer.paintSchemeGrid(go, s, t, cellW, cellH, gridX, gridY, model.getWorkspace());
+                        drawCabinetOverrideMarks(go, s, t, cellW, cellH, gridX, gridY, true);
+                        if (showChains) {
+                            SchemeRenderer.paintSchemeChains(go, s, detailPower, cellW, cellH, gridX, gridY, t,
+                                    model.getWorkspace(), scenePowerChains, sceneSignalChains,
+                                    model.controllersInScene(scene));
+                        }
                         if (chainController != null && chainController.isChainBuilding()) {
                             drawChainBuildingOverlay(go, s, cellW, cellH, gridX, gridY);
                         }
+                        drawCabinetOverrideMarks(go, s, t, cellW, cellH, gridX, gridY, false);
                         go.dispose();
                     } else {
-                        SchemeRenderer.paintScheme(g2, s, t, detailPower, cellW, cellH, gridX, gridY, model.getWorkspace(),
-                                scenePowerChains, sceneSignalChains, model.controllersInScene(scene),
-                                settings.activeProfile().isPowerUnitKw());
+                        SchemeRenderer.paintSchemeGrid(g2, s, t, cellW, cellH, gridX, gridY, model.getWorkspace());
+                        // v3.0: подсветка кабинетов с переопределением типа/формы — раньше
+                        // это рисовал сам ShapeEditorPanel в своей отдельной упрощённой сетке
+                        // (баг-репорт 2026-09-14: "поправь отображение изменённых кабинетов" —
+                        // после переноса правки в этот, общий, рендер сетки типа/формы
+                        // визуально никак не выделялись, хотя переопределение реально
+                        // применялось). Заливка (fillPass=true) кладётся между сеткой и
+                        // цепочками — см. javadoc drawCabinetOverrideMarks про баг-репорт
+                        // 2026-09-16 (заливка перекрывала цепочку). Этот весь блок целиком
+                        // общий с реальным холстом расключения (CanvasPanel), туда эту
+                        // подсветку добавлять не нужно.
+                        drawCabinetOverrideMarks(g2, s, t, cellW, cellH, gridX, gridY, true);
+                        if (showChains) {
+                            SchemeRenderer.paintSchemeChains(g2, s, detailPower, cellW, cellH, gridX, gridY, t,
+                                    model.getWorkspace(), scenePowerChains, sceneSignalChains,
+                                    model.controllersInScene(scene));
+                        }
                         if (chainController != null && chainController.isChainBuilding()) {
                             drawChainBuildingOverlay(g2, s, cellW, cellH, gridX, gridY);
                         }
+                        drawCabinetOverrideMarks(g2, s, t, cellW, cellH, gridX, gridY, false);
                     }
-                    // v3.0: подсветка кабинетов с переопределением типа/формы — раньше
-                    // это рисовал сам ShapeEditorPanel в своей отдельной упрощённой сетке
-                    // (баг-репорт 2026-09-14: "поправь отображение изменённых кабинетов" —
-                    // после переноса правки в этот, общий, рендер сетки типа/формы
-                    // визуально никак не выделялись, хотя переопределение реально
-                    // применялось). Отдельным проходом ПОВЕРХ paintScheme — тот целиком
-                    // общий с реальным холстом расключения (CanvasPanel), туда эту
-                    // подсветку добавлять не нужно.
-                    drawCabinetOverrideMarks(g2, s, t, cellW, cellH, gridX, gridY);
                     // NB: НОМИНАЛЬНОЕ начало сетки (gridX/gridY), не расширенный бокс x/y —
                     // locateCabinet ниже вызывает cabX/cabY, которые сами уже прибавляют
                     // (возможно отрицательное) мм-смещение конкретного кабинета поверх
@@ -1057,7 +1140,9 @@ public class SceneCanvasPanel extends JPanel {
         // по-прежнему нужно рисовать отдельно, и для питания тоже (раньше не рисовался
         // вовсе). Только для РЕЖИМА, который сейчас показан (detailPower) — иначе
         // мост чужого режима протекал бы поверх текущего вида (см. Task #78 follow-up).
-        if (detailMode) {
+        // showChains=false (см. javadoc поля) — Сетап вообще не должен рисовать цепочки,
+        // включая переход через границу экранов.
+        if (detailMode && showChains) {
             if (detailPower) {
                 drawCrossScreenBridges(g2, scene, scenePowerChains, List.of(), screenBoxes);
             } else {
@@ -1081,9 +1166,65 @@ public class SceneCanvasPanel extends JPanel {
                     padding, height - 10);
         }
 
+        if (detailMode) {
+            drawCabinetTypeOverrideLegend(g2, scene, width, height);
+        }
+
         drawSnapGuides(g2, screenBoxes, b, sc, padding, width, height);
 
         g2.dispose();
+    }
+
+    /** Легенда цветов подсветки переопределённого типа кабинета (см. {@link
+     *  #drawCabinetOverrideMarks}/{@link #typeColorFor}) — какой цвет какой ТИП
+     *  означает, иначе цвет на схеме ничего не говорит без открытия радиального
+     *  меню каждой ячейки (баг-репорт: "показывать в табличке к какой категории
+     *  применялся конкретный цвет"). Только типы, РЕАЛЬНО использованные как
+     *  переопределение хотя бы одной НЕскрытой ячейки этой сцены — не вся
+     *  библиотека целиком (иначе легенда была бы бесполезно длинной и не отвечала
+     *  бы на вопрос "что вот ЭТОТ цвет на схеме значит"). Ничего не рисует, если
+     *  переопределений в сцене нет вовсе. */
+    private void drawCabinetTypeOverrideLegend(Graphics2D g2, Scene scene, int width, int height) {
+        java.util.LinkedHashSet<String> usedTypeIds = new java.util.LinkedHashSet<>();
+        for (Screen s : scene.getScreens()) {
+            for (CabinetInstance c : s.getCabinets()) {
+                if (!c.isHidden() && c.getCabinetTypeId() != null) {
+                    usedTypeIds.add(c.getCabinetTypeId());
+                }
+            }
+        }
+        if (usedTypeIds.isEmpty()) {
+            return;
+        }
+        List<CabinetType> types = new ArrayList<>();
+        for (String id : usedTypeIds) {
+            CabinetType t = model.getWorkspace().cabinetTypeById(id);
+            if (t != null) {
+                types.add(t);
+            }
+        }
+        if (types.isEmpty()) {
+            return;
+        }
+        g2.setFont(getFont().deriveFont(Font.PLAIN, 11f));
+        java.awt.FontMetrics fm = g2.getFontMetrics();
+        int swatch = 10, gap = 6, rowH = fm.getHeight() + 4;
+        int legendW = 0;
+        for (CabinetType t : types) {
+            legendW = Math.max(legendW, swatch + gap + fm.stringWidth(t.getName()));
+        }
+        int legendH = types.size() * rowH + 8;
+        int lx = width - legendW - 28, ly = height - legendH - 12;
+        g2.setColor(new Color(0, 0, 0, 170));
+        g2.fillRoundRect(lx - 6, ly - 4, legendW + 24, legendH, 8, 8);
+        int y = ly + rowH - 4;
+        for (CabinetType t : types) {
+            g2.setColor(typeColorFor(t));
+            g2.fillRect(lx, y - swatch + 2, swatch, swatch);
+            g2.setColor(Color.WHITE);
+            g2.drawString(t.getName(), lx + swatch + gap, y);
+            y += rowH;
+        }
     }
 
     /** Направляющие линии Shift-прилипания кабинета (см. snapCabinetOffset) — тот же
@@ -1397,7 +1538,16 @@ public class SceneCanvasPanel extends JPanel {
             com.vjstb.ledscheme.model.CabinetShape shape = cab.getShapeOverride() != null ? cab.getShapeOverride()
                     : (effective != null ? effective.getShape() : null);
             double rotationDeg = SchemeRenderer.effectiveRotationDeg(cab, effective);
-            java.awt.Point p = SchemeRenderer.cabinetConnectionAnchor(x, y, box[2], box[3], shape, rotationDeg);
+            // box[2]/box[3] — НОМИНАЛЬНЫЙ размер ячейки экрана, тот же баг, что и в
+            // cabinetAtPoint/drawCabinetOverrideMarks: для кабинета с переопределённым
+            // типом другого физического размера точка моста между экранами должна
+            // сходиться на ФАКТИЧЕСКОМ (уменьшенном) контуре, иначе после починки
+            // визуального размера этот мост стал бы визуально утыкаться не в кабинет,
+            // а в пустоту рядом с ним (баг-репорт: "привязки для уменьшенных
+            // кабинетов сломались").
+            int ew = effW(cab, defaultType, box[2]);
+            int eh = effH(cab, defaultType, box[3]);
+            java.awt.Point p = SchemeRenderer.cabinetConnectionAnchor(x, y, ew, eh, shape, rotationDeg);
             return new CabinetLoc(s, p.x, p.y);
         }
         return null;

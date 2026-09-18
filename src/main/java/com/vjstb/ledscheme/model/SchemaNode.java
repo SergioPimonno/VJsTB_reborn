@@ -51,6 +51,40 @@ public class SchemaNode {
      *  это чисто клиентская фишка холста общей схемы, незачем тянуть правку в
      *  ledscheme-model (SchemaNode, в отличие от SchemaNodeType, туда не вынесен). */
     private boolean autoPortLegend = false;
+    /** true — узел не оборудование, а АВТО-блок легенды линий (docs/schema-ports-
+     *  rework/PLAN.md, задача T5.4) — таблица "роль → цвет" (сигнал) или "номинал →
+     *  цвет" (питание) по факту цветов, реально используемых связями текущей схемы
+     *  (см. {@code AppModel#lineLegendRoles}/{@code lineLegendPowerNominals}),
+     *  пересчитываемая на каждой отрисовке, а не хранимая в узле — как и {@link
+     *  #autoPortLegend}, только для type == CUSTOM, тоже чисто клиентская фишка
+     *  холста (не вынесена в ledscheme-model). */
+    private boolean autoLineLegend = false;
+    /** Ориентация потока узла (docs/schema-ports-rework/PLAN.md, задача T1.2) —
+     *  {@code null} значит «взять умолчание профиля по режиму схемы» (см. настройки
+     *  персонализации {@code signal/powerDefaultOrientation}), а не жёстко {@link
+     *  NodeOrientation#RIGHT} — так смена умолчания профиля продолжает менять вид
+     *  уже существующих узлов, у которых ориентацию не задавали вручную (как раньше
+     *  вела себя галочка «Гнёзда у верхнего/нижнего края блока»). Задаётся вручную
+     *  через меню узла «Ориентация»/Ctrl+R (см. PLAN.md, задача T3.3). */
+    private NodeOrientation orientation;
+    /** Ручные переопределения раскладки отдельных групп разъёмов этого узла (сторона,
+     *  порядок, свёрнута ли, роль/транзит в этом проекте) — см. {@link PortPlacement}.
+     *  Пусто по умолчанию: раскладка целиком автоматическая (роль → сторона по
+     *  таблице, свёртка по занятости). Порядок элементов списка не имеет значения —
+     *  ключ каждой записи это {@link PortPlacement#getPortId()}. */
+    private List<PortPlacement> portPlacements = new ArrayList<>();
+    /** true — на блоке показываются только гнёзда/карты, к которым подведена хотя бы
+     *  одна связь (PLAN.md §2.4, «только задействованные»); незадействованные группы/
+     *  карты сворачиваются в одну итоговую строку "ещё N карт". Ёмкость и проверки
+     *  по-прежнему учитывают ВСЕ гнёзда, скрытые — только визуально. */
+    private boolean onlyUsedPorts = false;
+    /** Для узла, добавленного из библиотеки сетевого оборудования (см.
+     *  {@code NetworkDeviceType}, PLAN.md D11/задача T3.4) — id этого типа: гнёзда
+     *  узла ("Ethernet"/"Fiber", роль {@link InterfaceRole#NETWORK}, двусторонние)
+     *  заводятся и обновляются по факту {@code ethernetPortCount}/{@code
+     *  opticalPortCount} этого типа. {@code null} — обычный узел, не связан с
+     *  библиотекой сетевого оборудования (в т.ч. ЛЮБОЙ узел из старого проекта). */
+    private String networkDeviceTypeId;
 
     public SchemaNode() {
     }
@@ -176,6 +210,57 @@ public class SchemaNode {
         this.autoPortLegend = autoPortLegend;
     }
 
+    public boolean isAutoLineLegend() {
+        return autoLineLegend;
+    }
+
+    public void setAutoLineLegend(boolean autoLineLegend) {
+        this.autoLineLegend = autoLineLegend;
+    }
+
+    public NodeOrientation getOrientation() {
+        return orientation;
+    }
+
+    public void setOrientation(NodeOrientation orientation) {
+        this.orientation = orientation;
+    }
+
+    public List<PortPlacement> getPortPlacements() {
+        return portPlacements;
+    }
+
+    public void setPortPlacements(List<PortPlacement> portPlacements) {
+        this.portPlacements = portPlacements != null ? portPlacements : new ArrayList<>();
+    }
+
+    /** Раскладка конкретной группы разъёмов ({@link CardPort#getId()}) этого узла —
+     *  {@code null}, если группа не переопределена (раскладка полностью автоматическая). */
+    public PortPlacement findPortPlacement(String portId) {
+        for (PortPlacement p : portPlacements) {
+            if (p.getPortId().equals(portId)) {
+                return p;
+            }
+        }
+        return null;
+    }
+
+    public boolean isOnlyUsedPorts() {
+        return onlyUsedPorts;
+    }
+
+    public void setOnlyUsedPorts(boolean onlyUsedPorts) {
+        this.onlyUsedPorts = onlyUsedPorts;
+    }
+
+    public String getNetworkDeviceTypeId() {
+        return networkDeviceTypeId;
+    }
+
+    public void setNetworkDeviceTypeId(String networkDeviceTypeId) {
+        this.networkDeviceTypeId = networkDeviceTypeId;
+    }
+
     public SchemaNode copy() {
         SchemaNode n = new SchemaNode();
         n.id = id;
@@ -198,6 +283,14 @@ public class SchemaNode {
         }
         n.loadDeratingPercent = loadDeratingPercent;
         n.autoPortLegend = autoPortLegend;
+        n.autoLineLegend = autoLineLegend;
+        n.orientation = orientation;
+        n.portPlacements = new ArrayList<>();
+        for (PortPlacement p : portPlacements) {
+            n.portPlacements.add(p.copy());
+        }
+        n.onlyUsedPorts = onlyUsedPorts;
+        n.networkDeviceTypeId = networkDeviceTypeId;
         return n;
     }
 }
