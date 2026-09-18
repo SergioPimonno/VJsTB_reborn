@@ -1491,10 +1491,13 @@ public class SchemaCanvasPanel extends JPanel {
      *  считается заново каждый раз через {@link #autoRoutePoints} — сохранённые
      *  {@code edge.getWaypoints()} у такой связи не используются вовсе (см. {@link
      *  SchemaEdge#effectiveRouteMode()}); если авто-трассировка невозможна (нет
-     *  привязки к конкретному гнезду хотя бы на одном конце — обычная связь узел-
-     *  узел, или конец — кабинет расключения экрана, не входит в объём T4.4), тихо
-     *  откатывается на путь ниже (та же прямая/по изломам линия, что и для {@link
-     *  EdgeRouteMode#MANUAL}/{@link EdgeRouteMode#STRAIGHT}). */
+     *  привязки к конкретному гнезду ни на одном конце — обычная связь узел-узел
+     *  без выбранного гнезда/кабинета), тихо откатывается на путь ниже (та же
+     *  прямая/по изломам линия, что и для {@link EdgeRouteMode#MANUAL}/{@link
+     *  EdgeRouteMode#STRAIGHT}). Гнёзда-кабинеты расключения экрана — тоже
+     *  полноценно трассируются с версии, закрывшей баг-репорт пользователя
+     *  2026-09-18 ("линии не перетрассировываются по прямым углам, режим авто") —
+     *  см. {@link #routeEndpointFor}. */
     private List<double[]> routePoints(SchemaEdge edge) {
         // CLASSIC (docs/schema-ports-rework/PLAN.md, задача T5.5) никогда не
         // трассирует через OrthogonalRouter — до этого плана EdgeRouteMode.AUTO
@@ -1526,30 +1529,24 @@ public class SchemaCanvasPanel extends JPanel {
     private static final double ROUTE_OBSTACLE_MARGIN = 10;
 
     /** Ортогональная трассировка ОДНОЙ связи через {@code OrthogonalRouter} (T4.1) —
-     *  {@code null}, если у связи нет привязки к конкретному гнезду хотя бы на одном
-     *  конце (гнездо кабинета расключения экрана в объём T4.4 не входит — см. javadoc
-     *  {@link #routePoints}, обычная связь узел-узел без выбранного гнезда просто не
-     *  имеет стороны, от которой плясать). Список препятствий — прямоугольники ВСЕХ
+     *  {@code null}, если у связи нет привязки к конкретному гнезду/кабинету ни на
+     *  одном конце (обычная связь узел-узел без выбранного гнезда просто не имеет
+     *  стороны, от которой плясать — см. {@link #routeEndpointFor}). Список препятствий — прямоугольники ВСЕХ
      *  остальных узлов ТОГО ЖЕ режима схемы (сигнал/питание не смешиваются, как и
      *  везде в холсте), кроме двух узлов самой связи — иначе усы упирались бы в
      *  собственный же блок, у которого гнездо стоит ровно на границе (см. javadoc
      *  {@code OrthogonalRouter}). */
     private List<double[]> autoRoutePoints(SchemaEdge edge) {
-        if (edge.getFromCabinetInstanceId() != null || edge.getToCabinetInstanceId() != null) {
-            return null;
-        }
         SchemaNode a = nodeById(edge.getFromNodeId());
         SchemaNode b = nodeById(edge.getToNodeId());
         if (a == null || b == null) {
             return null;
         }
-        var pinA = pinFor(a, edge.getFromPortId(), edge);
-        var pinB = pinFor(b, edge.getToPortId(), edge);
-        if (pinA == null || pinB == null) {
+        RouteEndpoint ea = routeEndpointFor(a, edge.getFromPortId(), edge.getFromCabinetInstanceId(), edge);
+        RouteEndpoint eb = routeEndpointFor(b, edge.getToPortId(), edge.getToCabinetInstanceId(), edge);
+        if (ea == null || eb == null) {
             return null;
         }
-        double ax = a.getX() + pinA.x(), ay = a.getY() + pinA.y();
-        double bx = b.getX() + pinB.x(), by = b.getY() + pinB.y();
         List<com.vjstb.ledscheme.service.schemalayout.OrthogonalRouter.Obstacle> obstacles = new ArrayList<>();
         for (SchemaNode n : nodes()) {
             if (n == a || n == b) {
@@ -1560,8 +1557,60 @@ public class SchemaCanvasPanel extends JPanel {
                     n.getWidth() + 2 * ROUTE_OBSTACLE_MARGIN, n.getHeight() + 2 * ROUTE_OBSTACLE_MARGIN));
         }
         var result = com.vjstb.ledscheme.service.schemalayout.OrthogonalRouter.route(
-                ax, ay, pinA.side(), bx, by, pinB.side(), obstacles);
+                ea.x(), ea.y(), ea.side(), eb.x(), eb.y(), eb.side(), obstacles);
         return result.points();
+    }
+
+    /** Точка привязки конца связи для орто-трассировки + сторона, определяющая
+     *  направление "уса" ({@link com.vjstb.ledscheme.service.schemalayout.
+     *  OrthogonalRouter}) — либо обычное гнездо ({@link #pinFor}), либо гнездо-
+     *  кабинет на миниатюре расключения экрана ({@code cabinetInstanceId != null}).
+     *  До этой правки (баг-репорт пользователя 2026-09-18: "линии не
+     *  перетрассировываются по прямым углам, выбран режим авто") кабинет-связи были
+     *  ЦЕЛИКОМ выключены из авто-трассировки (T4.4 их не покрывала, см. PLAN.md
+     *  §2.4/T4.4) — теперь трассируются как любая другая связь, сторона считается
+     *  как ближайшая грань рамки узла к точке кабинета на миниатюре ({@link
+     *  #nearestSide}), т.к. у самого гнезда-кабинета (в отличие от обычного пина) в
+     *  этой версии нет своей раскладки на рамке — оно рисуется прямо там, где
+     *  кабинет стоит на миниатюре (см. {@link #cabinetSocketPosition}), потенциально
+     *  глубоко внутри блока. Ус в этом случае просто идёт от точки кабинета наружу
+     *  по ближайшей стороне — визуально не хуже прежней прямой линии (тот же путь
+     *  внутри блока не виден за его заливкой), а с точки выхода из блока трассировка
+     *  уже полноценно огибает препятствия под 90°, как и для обычных гнёзд. */
+    private record RouteEndpoint(double x, double y, NodeSide side) {
+    }
+
+    private RouteEndpoint routeEndpointFor(SchemaNode node, String portId, String cabinetInstanceId, SchemaEdge forEdge) {
+        if (cabinetInstanceId != null) {
+            Point p = cabinetSocketPosition(node, cabinetInstanceId);
+            if (p == null) {
+                return null;
+            }
+            return new RouteEndpoint(p.x, p.y, nearestSide(node, p.x, p.y));
+        }
+        var pin = pinFor(node, portId, forEdge);
+        if (pin == null) {
+            return null;
+        }
+        return new RouteEndpoint(node.getX() + pin.x(), node.getY() + pin.y(), pin.side());
+    }
+
+    /** Ближайшая грань рамки узла {@code node} к точке {@code (px, py)} — нужна
+     *  гнёздам-кабинетам (см. {@link #routeEndpointFor}), у которых нет собственной
+     *  стороны из раскладки {@link com.vjstb.ledscheme.service.schemalayout.NodePortLayout}. */
+    private static NodeSide nearestSide(SchemaNode node, double px, double py) {
+        double left = px - node.getX();
+        double right = node.getX() + node.getWidth() - px;
+        double top = py - node.getY();
+        double bottom = node.getY() + node.getHeight() - py;
+        double min = Math.min(Math.min(left, right), Math.min(top, bottom));
+        if (min == left) {
+            return NodeSide.LEFT;
+        }
+        if (min == right) {
+            return NodeSide.RIGHT;
+        }
+        return min == top ? NodeSide.TOP : NodeSide.BOTTOM;
     }
 
     /** Радиус полукруглого «мостика»-обхода на пересечении линий (логические px,
