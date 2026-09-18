@@ -3,15 +3,19 @@ package com.vjstb.ledscheme.ui;
 import com.vjstb.ledscheme.model.ContentSection;
 import com.vjstb.ledscheme.service.AppModel;
 import java.awt.BorderLayout;
+import java.awt.Dimension;
 import java.awt.Window;
 import java.util.List;
 import javax.swing.BorderFactory;
+import javax.swing.DefaultListModel;
 import javax.swing.JButton;
 import javax.swing.JDialog;
-import javax.swing.JLabel;
+import javax.swing.JEditorPane;
+import javax.swing.JList;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
-import javax.swing.JTabbedPane;
+import javax.swing.JSplitPane;
+import javax.swing.ListSelectionModel;
 
 /**
  * «Руководство» — единое место для пояснений, как пользоваться приложением.
@@ -21,6 +25,15 @@ import javax.swing.JTabbedPane;
  * отдельную админ-консоль (ledscheme-admin) — здесь только просмотр. Пока с
  * сервера ничего не синхронизировано — показывается встроенный текст по
  * умолчанию ({@link #DEFAULT_SECTIONS}).
+ * <p>Список тем слева + панель содержимого справа (классический вид программы
+ * «Справка»), а не {@code JTabbedPane} — раньше каждый раздел был отдельной
+ * вкладкой, и при разросшемся числе разделов (17) полоса вкладок либо не
+ * помещалась в разумную ширину окна, либо переносилась на несколько рядов
+ * (баг-репорт «руководство неудобно листать»). Содержимое — {@link JEditorPane}
+ * с {@code text/html}, а не {@link javax.swing.JLabel}: он сам переносит текст
+ * по фактической ширине панели при изменении размера окна, без ручной
+ * перепривязки через {@link UiKit#bindHtmlWrapWidth}, которая существует именно
+ * потому, что у {@code JLabel} такого поведения нет.
  */
 public class GuideDialog extends JDialog {
 
@@ -310,16 +323,38 @@ public class GuideDialog extends JDialog {
                     + "привычку или другую раскладку клавиатуры."));
 
     private final AppModel model;
-    private final JTabbedPane tabs = new JTabbedPane();
+    private final DefaultListModel<String> topicListModel = new DefaultListModel<>();
+    private final JList<String> topicList = new JList<>(topicListModel);
+    private final JEditorPane content = new JEditorPane();
 
     public GuideDialog(Window owner, AppModel model) {
         super(owner, "Руководство", ModalityType.MODELESS);
         this.model = model;
 
-        rebuildTabs();
+        topicList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        topicList.addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) {
+                showSelectedTopic();
+            }
+        });
 
-        JPanel content = new JPanel(new BorderLayout());
-        content.add(tabs, BorderLayout.CENTER);
+        content.setContentType("text/html");
+        content.setEditable(false);
+        content.setBorder(BorderFactory.createEmptyBorder(12, 16, 12, 16));
+
+        rebuildTopics();
+
+        JScrollPane listScroll = new JScrollPane(topicList);
+        listScroll.setPreferredSize(new Dimension(260, 480));
+        JScrollPane contentScroll = new JScrollPane(content);
+        contentScroll.getVerticalScrollBar().setUnitIncrement(16);
+
+        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, listScroll, contentScroll);
+        split.setDividerLocation(260);
+        split.setResizeWeight(0);
+
+        JPanel root = new JPanel(new BorderLayout());
+        root.add(split, BorderLayout.CENTER);
         JPanel bottom = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT));
         JButton scenarios = new JButton("Интерактивные примеры…");
         scenarios.addActionListener(e ->
@@ -328,10 +363,10 @@ public class GuideDialog extends JDialog {
         close.addActionListener(e -> dispose());
         bottom.add(scenarios);
         bottom.add(close);
-        content.add(bottom, BorderLayout.SOUTH);
+        root.add(bottom, BorderLayout.SOUTH);
 
-        setContentPane(content);
-        setSize(660, 520);
+        setContentPane(root);
+        setSize(860, 560);
         setLocationRelativeTo(owner);
     }
 
@@ -340,26 +375,25 @@ public class GuideDialog extends JDialog {
         return synced != null && !synced.isEmpty() ? synced : DEFAULT_SECTIONS;
     }
 
-    private void rebuildTabs() {
-        int selected = tabs.getSelectedIndex();
-        tabs.removeAll();
+    private void rebuildTopics() {
+        String previousTitle = topicList.getSelectedValue();
+        topicListModel.clear();
         for (ContentSection s : sections()) {
-            tabs.addTab(s.getTitle(), section(s.getBodyHtml()));
+            topicListModel.addElement(s.getTitle());
         }
-        if (selected >= 0 && selected < tabs.getTabCount()) {
-            tabs.setSelectedIndex(selected);
-        }
+        int idx = previousTitle != null ? topicListModel.indexOf(previousTitle) : -1;
+        topicList.setSelectedIndex(idx >= 0 ? idx : (topicListModel.isEmpty() ? -1 : 0));
+        showSelectedTopic();
     }
 
-    private JScrollPane section(String html) {
-        JPanel body = new JPanel(new BorderLayout());
-        body.setBorder(BorderFactory.createEmptyBorder(12, 14, 12, 14));
-        JLabel label = new JLabel();
-        body.add(label, BorderLayout.NORTH);
-        JScrollPane scroll = new JScrollPane(body);
-        scroll.setBorder(BorderFactory.createEmptyBorder());
-        scroll.getVerticalScrollBar().setUnitIncrement(16);
-        UiKit.bindHtmlWrapWidth(label, scroll, () -> html);
-        return scroll;
+    private void showSelectedTopic() {
+        int idx = topicList.getSelectedIndex();
+        List<ContentSection> secs = sections();
+        content.setText(idx >= 0 && idx < secs.size() ? wrap(secs.get(idx).getBodyHtml()) : "");
+        content.setCaretPosition(0);
+    }
+
+    private static String wrap(String bodyHtml) {
+        return "<html><body>" + bodyHtml + "</body></html>";
     }
 }

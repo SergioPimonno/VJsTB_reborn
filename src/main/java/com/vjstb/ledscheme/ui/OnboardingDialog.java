@@ -220,8 +220,7 @@ public class OnboardingDialog extends JDialog {
      *  {@code cardsPanel} — шаг «Остальная персонализация» (несколько абзацев +
      *  список) при фиксированном размере диалога {@code setSize(480, 360)}
      *  обрезался снизу без скролла (баг-репорт: обрезанный текст в приветствии).
-     *  {@link GuideDialog#section} уже решает это так же для своих вкладок — тот
-     *  же приём здесь, отдельным шагом от {@link #step}, чтобы {@link #buildThemeStep}
+     *  Отдельным шагом от {@link #step}, чтобы {@link #buildThemeStep}
      *  по-прежнему мог дозаполнять возвращённую {@link JPanel} (радиокнопки темы)
      *  до оборачивания. */
     private javax.swing.JScrollPane scrollWrap(JPanel p) {
