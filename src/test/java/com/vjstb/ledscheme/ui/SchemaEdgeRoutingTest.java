@@ -1,6 +1,7 @@
 package com.vjstb.ledscheme.ui;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.vjstb.ledscheme.model.CabinetInstance;
@@ -10,6 +11,7 @@ import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.EdgeRouteMode;
 import com.vjstb.ledscheme.model.EdgeWaypoint;
 import com.vjstb.ledscheme.model.InterfaceRole;
+import com.vjstb.ledscheme.model.NodeOrientation;
 import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.SchemaCard;
 import com.vjstb.ledscheme.model.SchemaEdge;
@@ -123,6 +125,93 @@ class SchemaEdgeRoutingTest {
             boolean vertical = Math.abs(p1[0] - p2[0]) < 1e-6;
             assertTrue(horizontal || vertical, "сегмент " + i + " не ортогонален (связь от гнезда-кабинета)");
         }
+    }
+
+    /** Баг-репорт пользователя 2026-09-18: "если гнездо слева, а линия идёт справа
+     *  или снизу, то она заходит под блок и заходит напрямую в гнездо, это
+     *  некрасиво". Причина: свой же узел одного из концов связи был ЦЕЛИКОМ
+     *  исключён из препятствий (иначе раздутие на {@code ROUTE_OBSTACLE_MARGIN}
+     *  затянуло бы гнездо, лежащее РОВНО на его границе, "внутрь" препятствия) —
+     *  но это же позволяло связующему участку маршрута срезать прямо ЧЕРЕЗ тело
+     *  этого узла, если гнездо на одной стороне, а сосед — с другой. Фикс — свой
+     *  же узел тоже препятствие, просто без внешнего раздутия и с небольшим
+     *  внутренним отступом ({@code SchemaCanvasPanel.SELF_OBSTACLE_INSET}) для
+     *  страховки от double-погрешности. */
+    @Test
+    void autoRouteNeverCutsThroughTheOwnBodyOfEitherEndpointNode(@TempDir Path dir) {
+        AppModel model = model(dir);
+        SchemaNode a = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "A", 300, 300, null);
+        CardPort aIn = model.addCardToNode(a, "Видео", List.of(
+                new CardPort("HDMI", PortDirection.IN, 1))).getPorts().get(0);
+        a.setWidth(200);
+        a.setHeight(120);
+
+        // B — правее и на той же высоте, что и A: гнездо A смотрит ВЛЕВО, но чтобы
+        // добраться до B, маршруту нужно уйти вправо ЗА пределы A — если A не
+        // считается препятствием, кратчайший путь просто идёт по прямой на высоте
+        // пина A, прямо через тело A, а не в обход сверху/снизу.
+        SchemaNode b = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "B", 700, 340, null);
+        b.setOrientation(NodeOrientation.LEFT);
+        CardPort bOut = model.addCardToNode(b, "Видео", List.of(
+                new CardPort("HDMI", PortDirection.OUT, 1))).getPorts().get(0);
+
+        SchemaEdge edge = model.addSchemaEdge(SchemaMode.SIGNAL, b.getId(), bOut.getId(), null,
+                a.getId(), aIn.getId(), null, null, EdgeRouteMode.AUTO);
+
+        SchemaCanvasPanel canvas = canvas(model, dir);
+        List<double[]> pts = canvas.routePointsForTest(edge);
+
+        assertTrue(pts.size() > 2, "фикстура должна вынуждать обход — иначе тест ничего не проверяет");
+        for (int i = 0; i + 1 < pts.size(); i++) {
+            assertFalse(crossesInterior(pts.get(i), pts.get(i + 1), a),
+                    "сегмент " + i + " проходит через тело узла A — гнездо этого же узла");
+        }
+    }
+
+    private static boolean crossesInterior(double[] p1, double[] p2, SchemaNode n) {
+        double left = n.getX(), right = n.getX() + n.getWidth();
+        double top = n.getY(), bottom = n.getY() + n.getHeight();
+        double midX = (p1[0] + p2[0]) / 2, midY = (p1[1] + p2[1]) / 2;
+        boolean midInside = midX > left && midX < right && midY > top && midY < bottom;
+        boolean p1Inside = p1[0] > left && p1[0] < right && p1[1] > top && p1[1] < bottom;
+        boolean p2Inside = p2[0] > left && p2[0] < right && p2[1] > top && p2[1] < bottom;
+        return midInside || p1Inside || p2Inside;
+    }
+
+    /** Пожелание пользователя 2026-09-18: "красивее, когда у последнего отрезка
+     *  есть определённая длина, зафиксированная (можно вынести в настройки)" —
+     *  раньше ус был жёстко зашит в {@code OrthogonalRouter.STUB = 12},
+     *  независимо от настроек; теперь длина берётся из {@code
+     *  UserProfile.getSchemaRouteStubPx()}. */
+    @Test
+    void firstAndLastSegmentLengthMatchesTheConfiguredStubSetting(@TempDir Path dir) {
+        // Точная длина проверена на уровне чистой функции — OrthogonalRouterTest
+        // .customStubLengthOverloadRespectsTheConfiguredMinimum (там же объяснение,
+        // почему "не короче", а не "равно": simplify() сливает ус со следующим
+        // коллинеарным отрезком грид-пути, если тот продолжает то же направление —
+        // это не баг, а как раз то, что убирает лишние технические точки излома).
+        // Здесь — что настройка ДЕЙСТВИТЕЛЬНО доходит от UserProfile до вызова
+        // OrthogonalRouter, а не игнорируется по пути.
+        AppModel model = model(dir);
+        SchemaNode a = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "A", 0, 200, null);
+        CardPort aOut = model.addCardToNode(a, "Видео", List.of(
+                new CardPort("HDMI", PortDirection.OUT, 1))).getPorts().get(0);
+        SchemaNode b = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "B", 500, 0, null);
+        CardPort bIn = model.addCardToNode(b, "Видео", List.of(
+                new CardPort("HDMI", PortDirection.IN, 1))).getPorts().get(0);
+        SchemaEdge edge = model.addSchemaEdge(SchemaMode.SIGNAL, a.getId(), aOut.getId(), null,
+                b.getId(), bIn.getId(), null, null, EdgeRouteMode.AUTO);
+
+        SettingsManager settings = new SettingsManager(new SettingsStore(new File(dir.toFile(), "settings.json")));
+        settings.setSchemaRouteStubPx(40);
+        SchemaCanvasPanel canvas = new SchemaCanvasPanel(model, SchemaMode.SIGNAL, settings);
+        List<double[]> pts = canvas.routePointsForTest(edge);
+
+        double firstLen = Math.hypot(pts.get(1)[0] - pts.get(0)[0], pts.get(1)[1] - pts.get(0)[1]);
+        double lastLen = Math.hypot(pts.get(pts.size() - 1)[0] - pts.get(pts.size() - 2)[0],
+                pts.get(pts.size() - 1)[1] - pts.get(pts.size() - 2)[1]);
+        assertTrue(firstLen >= 40 - 1e-6, "первый отрезок должен быть не короче настроенного уса (40)");
+        assertTrue(lastLen >= 40 - 1e-6, "последний отрезок должен быть не короче настроенного уса (40)");
     }
 
     @Test

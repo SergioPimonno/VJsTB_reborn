@@ -255,6 +255,13 @@ public class SettingsManager {
         persist();
     }
 
+    /** Длина уса связи общей схемы (px) — доводка T4.4 (пожелание пользователя
+     *  2026-09-18), см. {@link UserProfile#getSchemaRouteStubPx()}. */
+    public void setSchemaRouteStubPx(int px) {
+        activeProfile().setSchemaRouteStubPx(px);
+        persist();
+    }
+
     public void setLoadTrackingEnabled(boolean enabled) {
         activeProfile().setLoadTrackingEnabled(enabled);
         persist();

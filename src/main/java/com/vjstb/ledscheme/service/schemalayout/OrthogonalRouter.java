@@ -101,10 +101,25 @@ public final class OrthogonalRouter {
     public static RouteResult route(double sourceX, double sourceY, NodeSide sourceSide,
                                      double targetX, double targetY, NodeSide targetSide,
                                      List<Obstacle> obstacles) {
+        return route(sourceX, sourceY, sourceSide, targetX, targetY, targetSide, obstacles, STUB);
+    }
+
+    /** Как {@link #route(double, double, NodeSide, double, double, NodeSide, List)},
+     *  но с настраиваемой длиной уса вместо жёстко зашитой {@link #STUB} (docs/schema-
+     *  ports-rework/PLAN.md доводка, пожелание пользователя 2026-09-18: "красивее,
+     *  когда у последнего отрезка есть определённая длина, зафиксированная (можно
+     *  вынести в настройки)" — раньше ус всегда был 12px независимо ни от чего, из-за
+     *  чего последний поворот перед гнездом визуально "жался" к самому блоку; длина
+     *  теперь приходит из {@code UserProfile.getSchemaRouteStubPx()}, см. {@code
+     *  SchemaCanvasPanel#autoRoutePoints}). Значение ожидается неотрицательным —
+     *  вызывающий код (настройка) сам ограничивает его снизу до 0. */
+    public static RouteResult route(double sourceX, double sourceY, NodeSide sourceSide,
+                                     double targetX, double targetY, NodeSide targetSide,
+                                     List<Obstacle> obstacles, double stubLength) {
         double[] sourceDir = outward(sourceSide);
         double[] targetDir = outward(targetSide);
-        double sourceStubX = sourceX + sourceDir[0] * STUB, sourceStubY = sourceY + sourceDir[1] * STUB;
-        double targetStubX = targetX + targetDir[0] * STUB, targetStubY = targetY + targetDir[1] * STUB;
+        double sourceStubX = sourceX + sourceDir[0] * stubLength, sourceStubY = sourceY + sourceDir[1] * stubLength;
+        double targetStubX = targetX + targetDir[0] * stubLength, targetStubY = targetY + targetDir[1] * stubLength;
 
         double corrX0 = Math.min(sourceStubX, targetStubX) - CORRIDOR_PADDING;
         double corrX1 = Math.max(sourceStubX, targetStubX) + CORRIDOR_PADDING;

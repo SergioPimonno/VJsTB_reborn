@@ -92,6 +92,7 @@ public class PreferencesDialog extends JDialog {
     /** Тот же приём, что {@link #refreshingSchemaStylePreset} (docs/schema-ports-
      *  rework/PLAN.md, задача T5.5). */
     private boolean refreshingSchemaRenderMode;
+    private JSpinner schemaRouteStubSpinner;
     private JLabel exportRootFolderLabel;
     private JCheckBox signalSocketWiringCheck;
     private JCheckBox signalChainEndpointSocketsCheck;
@@ -120,6 +121,7 @@ public class PreferencesDialog extends JDialog {
     private JPanel wireHopRow;
     private JPanel schemaStylePresetRow;
     private JPanel schemaRenderModeRow;
+    private JPanel schemaRouteStubRow;
     private JPanel exportRow;
     private JPanel logoRow;
     private JPanel syncRow;
@@ -263,6 +265,23 @@ public class PreferencesDialog extends JDialog {
             }
         });
         schemaRenderModeRow.add(schemaRenderModeCombo);
+
+        // Длина уса связи общей схемы (пожелание пользователя 2026-09-18: раньше
+        // была жёстко зашита в OrthogonalRouter (12px), из-за чего последний
+        // поворот перед гнездом визуально "жался" к самому блоку) — тот же паттерн
+        // спиннера, что и snapRow выше.
+        schemaRouteStubRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        schemaRouteStubRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        schemaRouteStubRow.setToolTipText("Длина прямого отрезка перед первым/последним поворотом ортогональной"
+                + " связи (режим маршрута «Авто под 90°») — больше значение, тем заметнее отступ линии от блока"
+                + " перед поворотом, вместо того чтобы поворот жался вплотную к рамке.");
+        schemaRouteStubRow.add(new JLabel("Длина уса связи общей схемы (px):"));
+        schemaRouteStubSpinner = new JSpinner(
+                new SpinnerNumberModel(settings.activeProfile().getSchemaRouteStubPx(), 0, 200, 2));
+        schemaRouteStubSpinner.addChangeListener(e ->
+                settings.setSchemaRouteStubPx((Integer) schemaRouteStubSpinner.getValue()));
+        MathFields.enableExpressions(schemaRouteStubSpinner);
+        schemaRouteStubRow.add(schemaRouteStubSpinner);
 
         exportRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         exportRow.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -570,7 +589,7 @@ public class PreferencesDialog extends JDialog {
 
         content.add(UiKit.section("Общие", stack(previewWidgetCheck, canvasSnapToCenterCheck, snapRow,
                 foolProofWiringCheck, schemaScreensAsWiringCheck, wireHopRow, schemaStylePresetRow,
-                schemaRenderModeRow, exportRow)));
+                schemaRenderModeRow, schemaRouteStubRow, exportRow)));
         content.add(Box.createVerticalStrut(8));
         content.add(UiKit.section("Сигнал", stack(signalSocketWiringCheck,
                 comboRow("Ориентация блоков по умолчанию:", signalOrientationCombo),
@@ -633,6 +652,7 @@ public class PreferencesDialog extends JDialog {
         span(g, row, "«Мостики» на пересечениях линий связи (обход, как в ГОСТ)", wireHopRow);
         span(g, row, "Оформление общей схемы (экранное/печатное)", schemaStylePresetRow);
         span(g, row, "Способ отрисовки общей схемы (современный/классический)", schemaRenderModeRow);
+        span(g, row, "Длина уса связи общей схемы (px)", schemaRouteStubRow);
 
         category(g, row, "Коммутация через гнёзда разъёмов");
         triple(g, row, "Линия цепляется за конкретный разъём, а не за блок", "мастер-переключатель для строк ниже",
@@ -828,6 +848,7 @@ public class PreferencesDialog extends JDialog {
         refreshingSchemaRenderMode = true;
         schemaRenderModeCombo.setSelectedItem(settings.activeProfile().getSchemaRenderMode());
         refreshingSchemaRenderMode = false;
+        schemaRouteStubSpinner.setValue(settings.activeProfile().getSchemaRouteStubPx());
         signalSocketWiringCheck.setSelected(settings.activeProfile().isSignalSocketWiringEnabled());
         powerSocketWiringCheck.setSelected(settings.activeProfile().isPowerSocketWiringEnabled());
         signalChainEndpointSocketsCheck.setSelected(settings.activeProfile().isSignalChainEndpointSocketsEnabled());

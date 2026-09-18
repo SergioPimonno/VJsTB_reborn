@@ -49,6 +49,24 @@ class OrthogonalRouterTest {
         assertTrue(target[0] - beforeTarget[0] >= 12 - 1e-6, "длина уса не короче 12");
     }
 
+    /** Пожелание пользователя 2026-09-18: "красивее, когда у последнего отрезка
+     *  есть определённая длина, зафиксированная (можно вынести в настройки)" —
+     *  перегрузка {@link OrthogonalRouter#route(double, double, NodeSide, double,
+     *  double, NodeSide, List, double)} с настраиваемой длиной уса вместо жёстко
+     *  зашитых 12px (см. {@code UserProfile.getSchemaRouteStubPx()}). */
+    @Test
+    void customStubLengthOverloadRespectsTheConfiguredMinimum() {
+        OrthogonalRouter.RouteResult r = OrthogonalRouter.route(
+                0, 100, NodeSide.RIGHT, 400, 300, NodeSide.LEFT, List.of(), 40);
+
+        List<double[]> pts = r.points();
+        double[] source = pts.get(0), afterSource = pts.get(1);
+        assertTrue(afterSource[0] - source[0] >= 40 - 1e-6, "длина уса должна быть не короче настроенных 40");
+
+        double[] target = pts.get(pts.size() - 1), beforeTarget = pts.get(pts.size() - 2);
+        assertTrue(target[0] - beforeTarget[0] >= 40 - 1e-6, "длина уса должна быть не короче настроенных 40");
+    }
+
     @Test
     void routeDoesNotCrossObstacleInteriorWhenNotInFallback() {
         // Препятствие ровно на прямой линии между гнёздами — прямой путь невозможен,

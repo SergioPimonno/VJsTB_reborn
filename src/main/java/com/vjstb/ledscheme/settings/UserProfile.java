@@ -251,6 +251,16 @@ public class UserProfile {
      *  пользователя на вопрос координатора. */
     private SchemaRenderMode schemaRenderMode;
 
+    /** Длина "уса" связи общей схемы (px) — прямого отрезка строго перпендикулярно
+     *  стороне гнезда перед первым/последним поворотом маршрута (docs/schema-ports-
+     *  rework/PLAN.md доводка, пожелание пользователя 2026-09-18: раньше был жёстко
+     *  зашит в {@code OrthogonalRouter.STUB = 12} — последний поворот перед гнездом
+     *  визуально "жался" вплотную к блоку; теперь настраиваемо, по умолчанию
+     *  заметно больше прежних 12). Действует только на {@link
+     *  com.vjstb.ledscheme.model.EdgeRouteMode#AUTO}-связи в MODERN — см. {@code
+     *  SchemaCanvasPanel#autoRoutePoints}. */
+    private int schemaRouteStubPx = 24;
+
     /** Контроль электрической/сигнальной нагрузки (Task #80/#81/#86/#87): сравнение
      *  тока цепочки/суммарной нагрузки силового узла схемы с ёмкостью разъёма/автомата,
      *  предупреждения в списке цепочек и на схеме, блокировка экспорта при
@@ -759,6 +769,14 @@ public class UserProfile {
         this.schemaRenderMode = mode != null ? mode : SchemaRenderMode.MODERN;
     }
 
+    public int getSchemaRouteStubPx() {
+        return schemaRouteStubPx;
+    }
+
+    public void setSchemaRouteStubPx(int px) {
+        this.schemaRouteStubPx = Math.max(0, px);
+    }
+
     public boolean isLoadTrackingEnabled() {
         return loadTrackingEnabled;
     }
@@ -905,6 +923,7 @@ public class UserProfile {
         p.orthogonalEdgeEditing = orthogonalEdgeEditing;
         p.schemaStylePreset = schemaStylePreset;
         p.schemaRenderMode = schemaRenderMode;
+        p.schemaRouteStubPx = schemaRouteStubPx;
         p.loadTrackingEnabled = loadTrackingEnabled;
         p.powerUnitKw = powerUnitKw;
         p.maskLogoImagePath = maskLogoImagePath;
