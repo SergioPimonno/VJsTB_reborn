@@ -1,6 +1,7 @@
 package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.model.EquipmentPreset;
+import com.vjstb.ledscheme.model.NetworkDeviceType;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.SchemaNodeType;
@@ -45,11 +46,24 @@ public class SchemaPanel extends JPanel {
     /** Для не-SCREEN типов: сначала пресеты библиотеки этой категории, затем OTHER_SENTINEL. */
     private final JComboBox<Object> presetCombo = new JComboBox<>();
     private final JComboBox<Screen> screenCombo = new JComboBox<>();
+    /** Только для {@code SchemaMode.SIGNAL} — «Сетевое оборудование» из библиотеки
+     *  {@link NetworkDeviceType} (docs/schema-ports-rework/PLAN.md, D11/T3.4): свитчи/
+     *  роутеры/прочее сетевое оборудование ставятся на схему сигнала как обычные
+     *  блоки, отдельно от пресетов {@link EquipmentPreset} выше — своя, более узкая
+     *  библиотека, не годится смешивать с общим списком пресетов категории. */
+    private final JComboBox<NetworkDeviceType> networkDeviceCombo = new JComboBox<>();
     private final JTextField labelField = new JTextField();
     private final JButton saveAsPresetBtn = new JButton("💾 Сохранить как пресет");
     private final JToggleButton moveBtn = new JToggleButton("Перемещение", true);
     private final JToggleButton connectBtn = new JToggleButton("Соединение");
     private final JLabel selectionHint = new JLabel(" ");
+    /** «Перетрассировать выделенные/все» — переводят связи в {@code
+     *  EdgeRouteMode.AUTO} (ортогональная трассировка через {@code
+     *  OrthogonalRouter}), которой в CLASSIC не существует (docs/schema-ports-
+     *  rework/PLAN.md, задача T5.5) — скрываются в этом режиме, а не показываются
+     *  неработающими, см. {@link #updateRenderModeControls()}. */
+    private JButton rerouteSelectedBtn;
+    private JButton rerouteAllBtn;
 
     public SchemaPanel(AppModel model, SchemaMode mode, com.vjstb.ledscheme.settings.SettingsManager settings) {
         this.model = model;
@@ -75,7 +89,27 @@ public class SchemaPanel extends JPanel {
         add(split, BorderLayout.CENTER);
 
         model.addListener(this::refresh);
+        // Переключатель «способ отрисовки схемы» (docs/schema-ports-rework/
+        // PLAN.md, задача T5.5) применяется без перезапуска — панель должна сразу
+        // скрыть/показать кнопки перетрассировки, а не только на следующем открытии.
+        settings.addListener(this::updateRenderModeControls);
         refresh();
+        updateRenderModeControls();
+    }
+
+    /** Скрывает элементы управления, которых не было до переработки гнёзд/связей
+     *  (docs/schema-ports-rework/PLAN.md, задача T5.5) — сейчас это только кнопки
+     *  перетрассировки ({@code EdgeRouteMode.AUTO}/{@code OrthogonalRouter}).
+     *  Ориентация блока/«только задействованные»/перетаскивание групп — пункты
+     *  контекстного меню самого холста, скрываются там же ({@link
+     *  SchemaCanvasPanel#classicMode()}), сюда не относятся. */
+    private void updateRenderModeControls() {
+        boolean classic = settings.activeProfile().getSchemaRenderMode()
+                == com.vjstb.ledscheme.settings.SchemaRenderMode.CLASSIC;
+        rerouteSelectedBtn.setVisible(!classic);
+        rerouteAllBtn.setVisible(!classic);
+        rerouteSelectedBtn.revalidate();
+        rerouteAllBtn.revalidate();
     }
 
     public void setOnScreenActivated(Consumer<Screen> listener) {
@@ -161,6 +195,14 @@ public class SchemaPanel extends JPanel {
         body.add(UiKit.dynamicSection("Добавить узел", addBody));
         body.add(UiKit.vgap());
 
+        JButton lineLegendBtn = new JButton("+ Легенда линий");
+        lineLegendBtn.setToolTipText("Автоблок: цвет — " + (mode == SchemaMode.SIGNAL ? "роль" : "номинал разъёма")
+                + " для линий, реально присутствующих на этой схеме. Содержимое пересчитывается само,"
+                + " перетаскивается и масштабируется как любой узел.");
+        lineLegendBtn.addActionListener(e -> addLineLegendNode());
+        body.add(lineLegendBtn);
+        body.add(UiKit.vgap());
+
         if (mode == SchemaMode.SIGNAL) {
             JButton legendBtn = new JButton("+ Легенда портов");
             legendBtn.setToolTipText("Автоблок: по каждому экрану — основной и резервный контроллер/порты."
@@ -174,6 +216,26 @@ public class SchemaPanel extends JPanel {
                     + " — для передачи заказчику/монтажникам без открытия программы");
             exportLegendBtn.addActionListener(e -> exportPortLegend());
             body.add(exportLegendBtn);
+            body.add(UiKit.vgap());
+
+            JPanel netBody = UiKit.vbox();
+            networkDeviceCombo.setRenderer(new javax.swing.DefaultListCellRenderer() {
+                @Override
+                public java.awt.Component getListCellRendererComponent(javax.swing.JList<?> list, Object value,
+                        int index, boolean isSelected, boolean cellHasFocus) {
+                    super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                    if (value instanceof NetworkDeviceType t) {
+                        setText(t.getName() + " (" + t.getCategory().getLabel() + ")");
+                    }
+                    return this;
+                }
+            });
+            netBody.add(networkDeviceCombo);
+            netBody.add(UiKit.vgap());
+            JButton addNetworkBtn = new JButton("+ Добавить из библиотеки");
+            addNetworkBtn.addActionListener(e -> addNetworkDeviceNode());
+            netBody.add(addNetworkBtn);
+            body.add(UiKit.dynamicSection("Сетевое оборудование", netBody));
             body.add(UiKit.vgap());
         }
 
@@ -197,6 +259,21 @@ public class SchemaPanel extends JPanel {
         UiKit.bindDeleteKey(canvas, canvas::deleteSelected);
         body.add(UiKit.vgap());
         body.add(delSelected);
+
+        // «Перетрассировать выделенные/все» (docs/schema-ports-rework/PLAN.md,
+        // задача T4.4/§2.6) — переводит связи в EdgeRouteMode.AUTO, стирает
+        // сохранённые изломы (см. AppModel#rerouteEdges).
+        body.add(UiKit.vgap());
+        rerouteSelectedBtn = new JButton("Перетрассировать выделенные");
+        rerouteSelectedBtn.setToolTipText("Выделенную связь (или все связи выделенных узлов) — под 90°, автоматически");
+        rerouteSelectedBtn.addActionListener(e -> canvas.rerouteSelected());
+        body.add(rerouteSelectedBtn);
+        body.add(UiKit.vgap());
+        rerouteAllBtn = new JButton("Перетрассировать все");
+        rerouteAllBtn.setToolTipText("Все связи этой схемы (" + (mode == SchemaMode.POWER ? "питание" : "сигнал")
+                + ") — под 90°, автоматически");
+        rerouteAllBtn.addActionListener(e -> canvas.rerouteAll());
+        body.add(rerouteAllBtn);
 
         JButton clear = new JButton("Очистить схему");
         clear.addActionListener(e -> {
@@ -291,6 +368,25 @@ public class SchemaPanel extends JPanel {
         labelField.setText("");
     }
 
+    /** «+ Добавить из библиотеки» в разделе «Сетевое оборудование» (D11/T3.4) —
+     *  тот же расчёт позиции по счётчику узлов, что и {@link #addNode()}/{@link
+     *  #addPortLegendNode()}, чтобы новые блоки не накладывались друг на друга. */
+    private void addNetworkDeviceNode() {
+        Scene scene = model.getCurrentScene();
+        if (scene == null) {
+            JOptionPane.showMessageDialog(this, "Сначала выберите сцену", "Нет сцены", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        NetworkDeviceType type = (NetworkDeviceType) networkDeviceCombo.getSelectedItem();
+        if (type == null) {
+            JOptionPane.showMessageDialog(this, "В библиотеке нет сетевого оборудования — добавьте его на"
+                    + " вкладке «Библиотеки»", "Библиотека пуста", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        int count = model.schemaNodesForCurrentScene(mode).size();
+        model.addSchemaNodeFromNetworkDevice(type, 40 + (count % 6) * 170, 40 + (count / 6) * 100);
+    }
+
     private void addPortLegendNode() {
         Scene scene = model.getCurrentScene();
         if (scene == null) {
@@ -299,6 +395,16 @@ public class SchemaPanel extends JPanel {
         }
         int count = model.schemaNodesForCurrentScene(mode).size();
         model.addSignalPortLegendNode(40 + (count % 6) * 170, 40 + (count / 6) * 100);
+    }
+
+    private void addLineLegendNode() {
+        Scene scene = model.getCurrentScene();
+        if (scene == null) {
+            JOptionPane.showMessageDialog(this, "Сначала выберите сцену", "Нет сцены", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        int count = model.schemaNodesForCurrentScene(mode).size();
+        model.addLineLegendNode(mode, 40 + (count % 6) * 170, 40 + (count / 6) * 100);
     }
 
     /** Сохраняет ТУ ЖЕ таблицу, что рисует авто-блок «Легенда портов» на холсте (см.
@@ -359,6 +465,22 @@ public class SchemaPanel extends JPanel {
         screenCombo.setModel(screenModel);
         refreshPresetCombo();
         updateAddFormEnablement();
+        if (mode == SchemaMode.SIGNAL) {
+            Object prevDevice = networkDeviceCombo.getSelectedItem();
+            DefaultComboBoxModel<NetworkDeviceType> deviceModel = new DefaultComboBoxModel<>();
+            for (NetworkDeviceType t : model.getNetworkDeviceTypes()) {
+                deviceModel.addElement(t);
+            }
+            networkDeviceCombo.setModel(deviceModel);
+            if (prevDevice instanceof NetworkDeviceType prevType) {
+                for (int i = 0; i < deviceModel.getSize(); i++) {
+                    if (deviceModel.getElementAt(i).getId().equals(prevType.getId())) {
+                        networkDeviceCombo.setSelectedIndex(i);
+                        break;
+                    }
+                }
+            }
+        }
 
         int selectedCount = canvas.getSelectedNodes().size();
         if (selectedCount > 1) {

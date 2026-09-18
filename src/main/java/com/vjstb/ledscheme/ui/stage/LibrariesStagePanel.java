@@ -6,6 +6,7 @@ import com.vjstb.ledscheme.model.CableLengthProfile;
 import com.vjstb.ledscheme.model.CableType;
 import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.EquipmentPreset;
+import com.vjstb.ledscheme.model.InterfaceRole;
 import com.vjstb.ledscheme.model.InterfaceType;
 import com.vjstb.ledscheme.model.NetworkDeviceType;
 import com.vjstb.ledscheme.model.SchemaCard;
@@ -33,6 +34,7 @@ import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
+import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JOptionPane;
@@ -730,11 +732,24 @@ public class LibrariesStagePanel extends JPanel {
     //      (Task #135/v2.0); отсюда — просмотр, удаление СВОИХ личных записей
     //      (например, дублей/черновиков) и предложить новый вид ----
 
+    /** Сентинел «роль не задана» в комбобоксе — сам JComboBox<InterfaceRole> с
+     *  {@code null}-элементом работает штатно (см. renderer ниже), выделять
+     *  отдельную строку-заглушку не нужно, в отличие от {@code NO_SUBCATEGORY}
+     *  в EquipmentPresetDialog (там список — String, а не enum). */
+    private static final InterfaceRole[] ROLE_OPTIONS_WITH_NONE;
+    static {
+        InterfaceRole[] values = InterfaceRole.values();
+        ROLE_OPTIONS_WITH_NONE = new InterfaceRole[values.length + 1];
+        System.arraycopy(values, 0, ROLE_OPTIONS_WITH_NONE, 1, values.length);
+        // [0] остаётся null — «не задана».
+    }
+
     private JPanel buildInterfaceTypeSection() {
         interfaceTypeList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         interfaceTypeRenderer = new NamedRenderer<InterfaceType>(
                 InterfaceType::getName,
-                t -> t.getVersions().isEmpty() ? "" : String.join(", ", t.getVersions()),
+                t -> (t.getVersions().isEmpty() ? "" : String.join(", ", t.getVersions()) + " · ")
+                        + "Роль по умолчанию: " + (t.getDefaultRole() == null ? "не задана" : t.getDefaultRole().getLabel()),
                 t -> model.isSharedInterfaceType(t.getId()));
         interfaceTypeList.setCellRenderer(interfaceTypeRenderer);
 
@@ -753,6 +768,36 @@ public class LibrariesStagePanel extends JPanel {
             InterfaceType sel = interfaceTypeList.getSelectedValue();
             if (sel != null) ProposeDialog.show(topWindow(), settings, "INTERFACE", sel.getName(), sel);
         });
+
+        // Роль по умолчанию (docs/schema-ports-rework/PLAN.md, задача T5.1) — единственное
+        // новое поле InterfaceType, которое стоит дать проставить прямо здесь, БЕЗ
+        // отдельного диалога: у видов интерфейса в клиенте вообще нет полноценного
+        // редактора — имя/версии добавляются/переименовываются ТОЛЬКО через
+        // админ-консоль (Task #135/v2.0, см. комментарий у секции ниже) и полноценный
+        // редактор роли по умолчанию для ОБЩЕЙ библиотеки — тоже её забота (T5.2). Но
+        // ждать этого не нужно: личные (несинхронизированные) записи можно пометить
+        // сразу же здесь — например, до предложения нового вида в общую библиотеку.
+        JComboBox<InterfaceRole> defaultRoleCombo = new JComboBox<>(ROLE_OPTIONS_WITH_NONE);
+        defaultRoleCombo.setRenderer(new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public java.awt.Component getListCellRendererComponent(JList<?> l, Object value, int index,
+                    boolean isSelected, boolean cellHasFocus) {
+                super.getListCellRendererComponent(l, value, index, isSelected, cellHasFocus);
+                setText(value == null ? "не задана" : ((InterfaceRole) value).getLabel());
+                return this;
+            }
+        });
+        JButton applyRole = new JButton("Применить роль");
+        applyRole.addActionListener(e -> {
+            InterfaceType sel = interfaceTypeList.getSelectedValue();
+            if (sel == null || model.isSharedInterfaceType(sel.getId())) {
+                return;
+            }
+            applyInterfaceTypeDefaultRole(sel, (InterfaceRole) defaultRoleCombo.getSelectedItem());
+        });
+        addRow.add(new JLabel("Роль по умолчанию:"));
+        addRow.add(defaultRoleCombo);
+        addRow.add(applyRole);
         addRow.add(del);
         addRow.add(propose);
         String sharedTip = "Общие элементы редактируются только через админ-консоль";
@@ -761,11 +806,38 @@ public class LibrariesStagePanel extends JPanel {
             boolean shared = sel != null && model.isSharedInterfaceType(sel.getId());
             del.setEnabled(sel != null && !shared);
             propose.setEnabled(sel != null && !shared);
+            defaultRoleCombo.setEnabled(sel != null && !shared);
+            applyRole.setEnabled(sel != null && !shared);
+            if (sel != null) {
+                defaultRoleCombo.setSelectedItem(sel.getDefaultRole());
+            }
             String tip = shared ? sharedTip : null;
             del.setToolTipText(tip);
             propose.setToolTipText(shared ? "Уже входит в общую библиотеку" : null);
+            defaultRoleCombo.setToolTipText(tip);
+            applyRole.setToolTipText(tip);
         });
         return (JPanel) UiKit.dynamicSection("Виды интерфейса", listSectionBody(interfaceTypeScroll, addRow));
+    }
+
+    /** Проставляет роль по умолчанию НАПРЯМУЮ на объект вида интерфейса и сохраняет
+     *  личную библиотеку тем же способом, что {@code AppModel.persist()} делает под
+     *  капотом — {@code AppModel} на момент задачи T5.1 «горячий» файл (правит
+     *  параллельный агент этапов 2-4 схемы, PLAN.md §0 правило 10) и добавлять туда
+     *  новый мутатор нельзя, а готового метода для этого поля там ещё нет ({@code
+     *  InterfaceType} в клиенте вообще не имеет ни одного add/update-метода — виды
+     *  интерфейса добавляются/переименовываются только через админ-консоль). {@code
+     *  sel} — живая ссылка на элемент {@code workspace.getLibrary().getInterfaceTypes()}
+     *  (см. {@code AppModel.getInterfaceTypes()}), а не копия, поэтому прямая мутация
+     *  поля корректна; {@code LibraryStore} с тем же путём к файлу, что использует
+     *  {@code AppModel} (родительская папка workspace-файла, см. конструктор AppModel),
+     *  замыкает сохранение на диск. Когда AppModel перестанет быть «горячим» — стоит
+     *  завести туда обычный updateInterfaceTypeDefaultRole(...) и убрать этот обход. */
+    private void applyInterfaceTypeDefaultRole(InterfaceType type, InterfaceRole role) {
+        type.setDefaultRole(role);
+        java.io.File libraryFile = new java.io.File(model.getStore().getWorkspaceFile().getParentFile(), "library.json");
+        new com.vjstb.ledscheme.store.LibraryStore(libraryFile).save(model.getWorkspace().getLibrary());
+        refresh();
     }
 
     // ---- сетевое оборудование (каталог для Сетевого менеджера, ui.NetworkManagerPanel) ----

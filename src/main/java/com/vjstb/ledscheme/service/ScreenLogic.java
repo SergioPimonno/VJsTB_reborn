@@ -634,6 +634,7 @@ public final class ScreenLogic {
         live.setRiggingNotes(snapshot.getRiggingNotes());
         live.setRiggingSafetyFactorMin(snapshot.getRiggingSafetyFactorMin());
         live.setRiggingHoistCapacityKg(snapshot.getRiggingHoistCapacityKg());
+        live.setNotes(snapshot.getNotes());
 
         List<CabinetInstance> cabs = new ArrayList<>();
         for (CabinetInstance c : snapshot.getCabinets()) {
