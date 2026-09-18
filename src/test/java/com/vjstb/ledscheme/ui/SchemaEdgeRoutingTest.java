@@ -54,6 +54,35 @@ class SchemaEdgeRoutingTest {
         return new SchemaCanvasPanel(model, SchemaMode.SIGNAL, settings);
     }
 
+    /** Баг-репорт пользователя 2026-09-18: "если подключать линию к блоку экрана
+     *  без режима кабинеты-тоже гнёзда, то линия не трассируется под углом. если
+     *  включить режим гнёзд — то трассировка работает" — обычная связь узел-узел
+     *  БЕЗ гнезда вовсе ({@code fromPortId}/{@code toPortId} оба {@code null},
+     *  ровно так соединяются узлы, когда у них нет привязки к конкретному
+     *  разъёму/кабинету) раньше была ЦЕЛИКОМ выключена из авто-трассировки — та же
+     *  причина, что и у уже исправленного гнезда-кабинета (T4.4 не покрывала этот
+     *  случай, см. {@link #routeEndpointFor}, который это чинит через {@link
+     *  #clipToBorder}). */
+    @Test
+    void autoRouteWorksForAPlainNodeToNodeEdgeWithoutAnySocketAtAll(@TempDir Path dir) {
+        AppModel model = model(dir);
+        SchemaNode a = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "A", 0, 200, null);
+        SchemaNode b = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "B", 500, 0, null);
+        SchemaEdge edge = model.addSchemaEdge(SchemaMode.SIGNAL, a.getId(), b.getId(), null);
+        model.setEdgeRouteMode(edge, EdgeRouteMode.AUTO);
+
+        SchemaCanvasPanel canvas = canvas(model, dir);
+        List<double[]> pts = canvas.routePointsForTest(edge);
+
+        assertTrue(pts.size() > 2, "A и B по диагонали друг от друга — авто-маршрут обязан свернуть под 90°");
+        for (int i = 0; i + 1 < pts.size(); i++) {
+            double[] p1 = pts.get(i), p2 = pts.get(i + 1);
+            boolean horizontal = Math.abs(p1[1] - p2[1]) < 1e-6;
+            boolean vertical = Math.abs(p1[0] - p2[0]) < 1e-6;
+            assertTrue(horizontal || vertical, "сегмент " + i + " не ортогонален — связь без гнёзд не трассируется");
+        }
+    }
+
     @Test
     void autoRouteModeProducesAnAxisAlignedOrthogonalPath(@TempDir Path dir) {
         AppModel model = model(dir);
