@@ -273,9 +273,10 @@ public class PreferencesDialog extends JDialog {
         schemaRouteStubRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         schemaRouteStubRow.setAlignmentX(Component.LEFT_ALIGNMENT);
         schemaRouteStubRow.setToolTipText("Длина прямого отрезка перед первым/последним поворотом ортогональной"
-                + " связи (режим маршрута «Авто под 90°») — больше значение, тем заметнее отступ линии от блока"
-                + " перед поворотом, вместо того чтобы поворот жался вплотную к рамке.");
-        schemaRouteStubRow.add(new JLabel("Длина уса связи общей схемы (px):"));
+                + " связи (режим маршрута «Авто под 90°») — та же величина и отступ, с которым линия обходит"
+                + " ЧУЖИЕ блоки на своём пути, а не только точку входа в своё гнездо. Больше значение — заметнее"
+                + " отступ от блоков по всему маршруту, вместо линий, жмущихся вплотную к рамкам.");
+        schemaRouteStubRow.add(new JLabel("Отступ связей общей схемы от блоков (px):"));
         schemaRouteStubSpinner = new JSpinner(
                 new SpinnerNumberModel(settings.activeProfile().getSchemaRouteStubPx(), 0, 200, 2));
         schemaRouteStubSpinner.addChangeListener(e ->
@@ -652,7 +653,7 @@ public class PreferencesDialog extends JDialog {
         span(g, row, "«Мостики» на пересечениях линий связи (обход, как в ГОСТ)", wireHopRow);
         span(g, row, "Оформление общей схемы (экранное/печатное)", schemaStylePresetRow);
         span(g, row, "Способ отрисовки общей схемы (современный/классический)", schemaRenderModeRow);
-        span(g, row, "Длина уса связи общей схемы (px)", schemaRouteStubRow);
+        span(g, row, "Отступ связей общей схемы от блоков (px)", schemaRouteStubRow);
 
         category(g, row, "Коммутация через гнёзда разъёмов");
         triple(g, row, "Линия цепляется за конкретный разъём, а не за блок", "мастер-переключатель для строк ниже",

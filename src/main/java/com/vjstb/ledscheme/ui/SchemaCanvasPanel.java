@@ -1605,11 +1605,6 @@ public class SchemaCanvasPanel extends JPanel {
         return pts;
     }
 
-    /** Отступ вокруг прямоугольника КАЖДОГО постороннего узла, которым {@code
-     *  OrthogonalRouter} трактует его как препятствие (PLAN.md §2.5: "margin = 10") —
-     *  линия проходит не впритык к чужому блоку, а с небольшим зазором. */
-    private static final double ROUTE_OBSTACLE_MARGIN = 10;
-
     /** Ортогональная трассировка ОДНОЙ связи через {@code OrthogonalRouter} (T4.1) —
      *  {@code null}, если у связи нет привязки к конкретному гнезду/кабинету ни на
      *  одном конце (обычная связь узел-узел без выбранного гнезда просто не имеет
@@ -1617,7 +1612,11 @@ public class SchemaCanvasPanel extends JPanel {
      *  остальных узлов ТОГО ЖЕ режима схемы (сигнал/питание не смешиваются, как и
      *  везде в холсте), кроме двух узлов самой связи — иначе усы упирались бы в
      *  собственный же блок, у которого гнездо стоит ровно на границе (см. javadoc
-     *  {@code OrthogonalRouter}). */
+     *  {@code OrthogonalRouter}). Отступ от ЧУЖИХ блоков — та же настройка длины
+     *  уса ({@code UserProfile.getSchemaRouteStubPx()}), что и у самого гнезда
+     *  (пожелание пользователя 2026-09-18: "чтобы этот отступ применялся к блокам
+     *  целиком", а не только к точке входа в гнездо) — раньше был отдельной жёстко
+     *  зашитой константой (10px), несвязанной с настройкой уса. */
     private List<double[]> autoRoutePoints(SchemaEdge edge) {
         SchemaNode a = nodeById(edge.getFromNodeId());
         SchemaNode b = nodeById(edge.getToNodeId());
@@ -1631,6 +1630,7 @@ public class SchemaCanvasPanel extends JPanel {
         if (ea == null || eb == null) {
             return null;
         }
+        double stub = settings.activeProfile().getSchemaRouteStubPx();
         List<com.vjstb.ledscheme.service.schemalayout.OrthogonalRouter.Obstacle> obstacles = new ArrayList<>();
         for (SchemaNode n : nodes()) {
             // Гнездо-кабинет (см. routeEndpointFor) может лежать ГЛУБОКО внутри
@@ -1643,19 +1643,19 @@ public class SchemaCanvasPanel extends JPanel {
             }
             if (n == a || n == b) {
                 // Обычное гнездо лежит РОВНО на границе узла — раньше свой же узел
-                // исключался из препятствий ЦЕЛИКОМ (иначе раздутие на
-                // ROUTE_OBSTACLE_MARGIN затянуло бы гнездо, лежащее на НЕраздутой
-                // границе, "внутрь" препятствия). Но полное исключение позволяло
-                // связующему участку маршрута срезать напрямую ЧЕРЕЗ/ПОД телом
-                // своего же узла, если гнездо на одной стороне, а маршрут удобнее
-                // вести с другой (баг-репорт пользователя 2026-09-18: "если гнездо
-                // слева, а линия идёт справа или снизу, то она заходит под блок").
-                // Вместо полного исключения — свой же узел ТОЖЕ препятствие, но
-                // без внешнего раздутия и с небольшим ВНУТРЕННИМ отступом
-                // (SELF_OBSTACLE_INSET) для страховки от погрешности double —
-                // гнездо и его ус (см. routeEndpointFor/OrthogonalRouter.outward)
-                // всегда лежат НА границе или СНАРУЖИ узла, а не внутри нового,
-                // чуть уменьшенного прямоугольника.
+                // исключался из препятствий ЦЕЛИКОМ (иначе внешнее раздутие
+                // затянуло бы гнездо, лежащее на НЕраздутой границе, "внутрь"
+                // препятствия). Но полное исключение позволяло связующему участку
+                // маршрута срезать напрямую ЧЕРЕЗ/ПОД телом своего же узла, если
+                // гнездо на одной стороне, а маршрут удобнее вести с другой (баг-
+                // репорт пользователя 2026-09-18: "если гнездо слева, а линия идёт
+                // справа или снизу, то она заходит под блок"). Вместо полного
+                // исключения — свой же узел ТОЖЕ препятствие, но без внешнего
+                // раздутия и с небольшим ВНУТРЕННИМ отступом (SELF_OBSTACLE_INSET)
+                // для страховки от погрешности double — гнездо и его ус (см.
+                // routeEndpointFor/OrthogonalRouter.outward) всегда лежат НА
+                // границе или СНАРУЖИ узла, а не внутри нового, чуть уменьшенного
+                // прямоугольника.
                 double inset = SELF_OBSTACLE_INSET;
                 obstacles.add(new com.vjstb.ledscheme.service.schemalayout.OrthogonalRouter.Obstacle(
                         n.getX() + inset, n.getY() + inset,
@@ -1663,19 +1663,17 @@ public class SchemaCanvasPanel extends JPanel {
                 continue;
             }
             obstacles.add(new com.vjstb.ledscheme.service.schemalayout.OrthogonalRouter.Obstacle(
-                    n.getX() - ROUTE_OBSTACLE_MARGIN, n.getY() - ROUTE_OBSTACLE_MARGIN,
-                    n.getWidth() + 2 * ROUTE_OBSTACLE_MARGIN, n.getHeight() + 2 * ROUTE_OBSTACLE_MARGIN));
+                    n.getX() - stub, n.getY() - stub, n.getWidth() + 2 * stub, n.getHeight() + 2 * stub));
         }
-        double stub = settings.activeProfile().getSchemaRouteStubPx();
         var result = com.vjstb.ledscheme.service.schemalayout.OrthogonalRouter.route(
                 ea.x(), ea.y(), ea.side(), eb.x(), eb.y(), eb.side(), obstacles, stub);
         return result.points();
     }
 
     /** Внутренний отступ прямоугольника СВОЕГО ЖЕ узла, когда тот всё же считается
-     *  препятствием (см. {@link #autoRoutePoints}) — намеренно 0 (не {@link
-     *  #ROUTE_OBSTACLE_MARGIN}, тот раздувает НАРУЖУ и как раз ломает гнездо,
-     *  сидящее ровно на границе). {@code Obstacle.containsInterior} использует
+     *  препятствием (см. {@link #autoRoutePoints}) — намеренно 0, а не отступ
+     *  наружу (тот как раз ломает гнездо, сидящее ровно на границе). {@code
+     *  Obstacle.containsInterior} использует
      *  строгое неравенство, так что точка РОВНО на границе (гнездо) или дальше
      *  (ус, уходящий наружу) и без отступа не считается "внутри" — держим
      *  константу ради самодокументирования, а не потому что число обязано быть
