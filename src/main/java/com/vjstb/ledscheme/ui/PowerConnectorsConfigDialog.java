@@ -5,6 +5,7 @@ import com.vjstb.ledscheme.model.EquipmentPreset;
 import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.SchemaNode;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.service.schemalayout.ThruResolver;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
@@ -159,6 +160,12 @@ public class PowerConnectorsConfigDialog extends JDialog {
     /** Номинал автомата, А — если ниже номинала самого разъёма (Task #86); пусто —
      *  берётся номинал разъёма как есть. */
     private final javax.swing.JTextField breakerField = new javax.swing.JTextField();
+    /** Три состояния транзита (docs/schema-ports-rework/PLAN.md, задача T5.1) —
+     *  роль здесь НЕ редактируется (в схеме питания роль всегда {@code POWER},
+     *  см. class-javadoc PortRoleResolver §"Питание"), только транзит: "авто"
+     *  (угадывается по составу ВСЕГО списка разъёмов узла — у силового оборудования
+     *  нет карт, см. {@link ThruResolver} class-javadoc), "да"/"нет" — явно. */
+    private final JComboBox<Boolean> thruCombo = new JComboBox<>(new Boolean[]{null, Boolean.TRUE, Boolean.FALSE});
     private javax.swing.JTextField deratingField;
     private final AppModel model;
     /** id разъёма, редактируемого сейчас (см. editSelected/addOrSaveConnector) —
@@ -185,6 +192,15 @@ public class PowerConnectorsConfigDialog extends JDialog {
         }
         connectorCombo.setModel(new javax.swing.DefaultComboBoxModel<>(types.toArray(new String[0])));
         connectorCombo.setEditable(true);
+        thruCombo.setRenderer(new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public Component getListCellRendererComponent(JList<?> l, Object value, int index,
+                    boolean isSelected, boolean cellHasFocus) {
+                super.getListCellRendererComponent(l, value, index, isSelected, cellHasFocus);
+                setText(value == null ? "авто" : Boolean.TRUE.equals(value) ? "да" : "нет");
+                return this;
+            }
+        });
 
         JPanel content = new JPanel(new BorderLayout(8, 8));
         content.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
@@ -196,7 +212,7 @@ public class PowerConnectorsConfigDialog extends JDialog {
                     boolean isSelected, boolean cellHasFocus) {
                 super.getListCellRendererComponent(l, value, index, isSelected, cellHasFocus);
                 if (value instanceof CardPort p) {
-                    StringBuilder sb = new StringBuilder();
+                    StringBuilder sb = new StringBuilder("<html>");
                     sb.append(p.getCount()).append("× ").append(escape(p.getConnectorType())).append(" (")
                             .append(p.getDirection().getLabel().toLowerCase()).append(')');
                     if (p.getPhaseCount() > 1) {
@@ -205,6 +221,17 @@ public class PowerConnectorsConfigDialog extends JDialog {
                     if (p.getBreakerAmps() != null) {
                         sb.append(", автомат ").append(UiKit.fmt(p.getBreakerAmps())).append('А');
                     }
+                    // Транзит имеет смысл только для OUT (см. ThruResolver class-javadoc) —
+                    // для IN/IN_OUT не показываем вовсе, а не бессмысленное "нет".
+                    if (p.getDirection() == PortDirection.OUT) {
+                        boolean thru = ThruResolver.isThru(p, host.getConnectors(), null);
+                        if (p.getThru() != null) {
+                            sb.append(" · Транзит: ").append(thru ? "да" : "нет");
+                        } else {
+                            sb.append(" · <i>Транзит: ").append(thru ? "да" : "нет").append(" (авто)</i>");
+                        }
+                    }
+                    sb.append("</html>");
                     setText(sb.toString());
                 }
                 return this;
@@ -232,6 +259,8 @@ public class PowerConnectorsConfigDialog extends JDialog {
         form.add(phaseCombo);
         form.add(new JLabel("Автомат, А (необязательно)"));
         form.add(breakerField);
+        form.add(new JLabel("Транзит"));
+        form.add(thruCombo);
         mid.add(form);
 
         JPanel addRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
@@ -355,6 +384,7 @@ public class PowerConnectorsConfigDialog extends JDialog {
         countSpinner.setValue(sel.getCount());
         setPhaseCountField(sel.getPhaseCount());
         breakerField.setText(sel.getBreakerAmps() != null ? UiKit.fmt(sel.getBreakerAmps()) : "");
+        thruCombo.setSelectedItem(sel.getThru());
         addOrSaveButton.setText("💾 Сохранить изменения");
         editButton.setText("✖ Отменить редактирование");
     }
@@ -363,6 +393,7 @@ public class PowerConnectorsConfigDialog extends JDialog {
         editingPortId = null;
         connectorCombo.getEditor().setItem("");
         breakerField.setText("");
+        thruCombo.setSelectedItem(null);
         addOrSaveButton.setText("+ Добавить разъём");
         editButton.setText("✎ Редактировать выбранный разъём");
     }
@@ -387,8 +418,23 @@ public class PowerConnectorsConfigDialog extends JDialog {
         PortDirection dir = (PortDirection) directionCombo.getSelectedItem();
         int count = (Integer) countSpinner.getValue();
         int phases = selectedPhaseCount();
+        Boolean thru = (Boolean) thruCombo.getSelectedItem();
         if (editingPortId != null) {
             String portId = editingPortId;
+            // AppModel в задаче T5.1 (docs/schema-ports-rework/PLAN.md) — "горячий"
+            // файл (правит параллельный агент этапов 2-4 схемы, PLAN.md §0 правило
+            // 10), а updatePowerConnectorOnNode/Preset ещё не принимают транзит
+            // параметром. port — ЖИВАЯ ссылка на объект из host.getConnectors() (не
+            // копия), поэтому мутируем поле НАПРЯМУЮ здесь же, одним действием
+            // редактирования вместе с остальными полями формы, и полагаемся на
+            // host.updateConnector() ниже, чтобы получить обычные pushUndo()/
+            // changed() (сохранение на диск + уведомление слушателей) — как и для
+            // остальных полей этой формы. Когда AppModel перестанет быть "горячим" —
+            // стоит добавить туда параметр thru и убрать этот обход.
+            CardPort port = findConnectorById(portId);
+            if (port != null) {
+                port.setThru(thru);
+            }
             try {
                 host.updateConnector(portId, connector, dir, count, phases, breakerAmps);
             } catch (RuntimeException ex) {
@@ -397,10 +443,28 @@ public class PowerConnectorsConfigDialog extends JDialog {
             }
             cancelEdit();
         } else {
-            host.addConnector(connector, dir, count, phases, breakerAmps);
+            CardPort created = host.addConnector(connector, dir, count, phases, breakerAmps);
+            created.setThru(thru);
+            // addConnector() уже сохранил разъём БЕЗ транзита (changed() внутри
+            // сработал раньше, чем мы успели проставить поле) — "трогаем" тот же
+            // разъём ещё раз теми же значениями остальных полей, чтобы получить
+            // второй changed()/persist() и гарантированно сохранить thru на диск
+            // (см. комментарий выше про то же самое в ветке редактирования); лишняя
+            // запись в истории отмены — известный побочный эффект этого обхода.
+            host.updateConnector(created.getId(), connector, dir, count, phases, breakerAmps);
             breakerField.setText("");
+            thruCombo.setSelectedItem(null);
         }
         refresh();
+    }
+
+    private CardPort findConnectorById(String portId) {
+        for (CardPort p : host.getConnectors()) {
+            if (p.getId().equals(portId)) {
+                return p;
+            }
+        }
+        return null;
     }
 
     private void applyDerating() {

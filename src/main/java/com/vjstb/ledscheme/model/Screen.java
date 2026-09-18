@@ -43,6 +43,14 @@ public class Screen {
 
     /** Способ монтажа — влияет на применимость расчёта точек подвеса. */
     private ScreenMountType mountType = ScreenMountType.RIGGED;
+    /** Свободные примечания к экрану — НЕ привязаны к способу монтажа (в отличие
+     *  от {@link #riggingNotes}/{@link #structureNotes}, которые видны только при
+     *  соответствующем {@link #mountType} и относятся к расчёту подвеса/наземного
+     *  конструктива конкретно) — общее поле для чего угодно другого (баг-репорт:
+     *  "для экранов сейчас негде писать примечания" — если экран смонтирован НЕ
+     *  подвесом и не на конструктиве, писать было прямо некуда). Показывается в
+     *  «Параметрах экрана» всегда, отдельно от точек подвеса/наземного конструктива. */
+    private String notes;
     /** Количество точек подвеса — авторасчёт см. {@code service.RiggingCalc}/
      *  {@code ScreenLogic#suggestRiggingPoints}, либо вручную скорректировано
      *  пользователем под конкретную ферму/траверс. */
@@ -269,6 +277,14 @@ public class Screen {
 
     public void setMountType(ScreenMountType mountType) {
         this.mountType = mountType;
+    }
+
+    public String getNotes() {
+        return notes;
+    }
+
+    public void setNotes(String notes) {
+        this.notes = notes;
     }
 
     public int getRiggingPointsCount() {
@@ -548,6 +564,7 @@ public class Screen {
         s.background = background;
         s.tagColor = tagColor;
         s.mountType = mountType;
+        s.notes = notes;
         s.riggingPointsCount = riggingPointsCount;
         s.riggingNotes = riggingNotes;
         s.riggingSafetyFactorMin = riggingSafetyFactorMin;

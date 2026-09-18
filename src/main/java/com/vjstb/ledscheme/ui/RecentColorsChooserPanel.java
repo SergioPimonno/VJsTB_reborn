@@ -43,7 +43,10 @@ public class RecentColorsChooserPanel extends AbstractColorChooserPanel {
     /** Регистрирует цвет как «недавно использованный» — вызывать ПОСЛЕ того, как
      *  пользователь подтвердил выбор (OK диалога), а не при каждом промежуточном
      *  клике по палитре. Повторный выбор того же цвета переносит его в начало
-     *  списка, а не дублирует запись. */
+     *  списка, а не дублирует запись. Только в памяти процесса — см. {@link
+     *  #remember(Color, com.vjstb.ledscheme.settings.SettingsManager)} для
+     *  персистентной версии; эта перегрузка оставлена ради теста и на случай
+     *  вызова без доступа к настройкам. */
     public static void remember(Color c) {
         if (c == null) {
             return;
@@ -52,6 +55,32 @@ public class RecentColorsChooserPanel extends AbstractColorChooserPanel {
         RECENT.add(0, c);
         while (RECENT.size() > MAX_RECENT) {
             RECENT.remove(RECENT.size() - 1);
+        }
+    }
+
+    /** Как {@link #remember(Color)}, но ещё и сохраняет список на диск через
+     *  {@code settings} (баг-репорт: "палитру нужно сохранять между
+     *  перезапусками" — про цвета линий соединений/цепочек расключения, не про
+     *  типы кабинетов) — вызывающий код ({@link UiKit#showColorChooser}) всегда
+     *  использует эту версию, у него settings под рукой. */
+    public static void remember(Color c, com.vjstb.ledscheme.settings.SettingsManager settings) {
+        remember(c);
+        if (c != null) {
+            settings.rememberRecentLineColor(c.getRGB());
+        }
+    }
+
+    /** Подмешивает в память процесса цвета, ранее сохранённые в профиле — только
+     *  если общий {@code RECENT} сейчас пуст (первое обращение за эту сессию
+     *  приложения): иначе уже накопленные за сессию цвета молча перетёрлись бы
+     *  списком из профиля при каждом вызове диалога. Вызывать ПЕРЕД показом
+     *  диалога (см. {@link UiKit#showColorChooser}). */
+    public static void loadPersisted(com.vjstb.ledscheme.settings.SettingsManager settings) {
+        if (!RECENT.isEmpty()) {
+            return;
+        }
+        for (Integer rgb : settings.activeProfile().getRecentLineColors()) {
+            RECENT.add(new Color(rgb));
         }
     }
 

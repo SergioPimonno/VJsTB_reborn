@@ -60,6 +60,11 @@ public class SchemaEdge {
      *  чипа подписи в редакторе схемы (Task #3). */
     private double labelDx;
     private double labelDy;
+    /** Режим прокладки маршрута (docs/schema-ports-rework/PLAN.md, задача T1.2/этап 4) —
+     *  см. {@link EdgeRouteMode}. {@code null} у связи из старого проекта — см. {@link
+     *  #effectiveRouteMode()} для legacy-резолва: открытие старого проекта не меняет
+     *  уже нарисованные маршруты (Золотое решение D6). */
+    private EdgeRouteMode routeMode;
 
     public SchemaEdge() {
     }
@@ -207,6 +212,28 @@ public class SchemaEdge {
         this.labelDy = labelDy;
     }
 
+    public EdgeRouteMode getRouteMode() {
+        return routeMode;
+    }
+
+    public void setRouteMode(EdgeRouteMode routeMode) {
+        this.routeMode = routeMode;
+    }
+
+    /** {@link #getRouteMode()}, разрешённый для связи БЕЗ явного режима (старый
+     *  проект, PLAN.md §2.1): непустые {@link #waypoints} — {@link EdgeRouteMode#MANUAL}
+     *  (пользователь уже провёл линию точками излома, менять её самовольно нельзя),
+     *  иначе {@link EdgeRouteMode#STRAIGHT} (была и остаётся прямой). Никогда не
+     *  возвращает {@link EdgeRouteMode#AUTO} для связи без явного режима — в авто-
+     *  трассировку попадают только НОВЫЕ связи (по умолчанию профиля) или связи,
+     *  явно переведённые в этот режим командой «Перетрассировать» (PLAN.md, T4.4). */
+    public EdgeRouteMode effectiveRouteMode() {
+        if (routeMode != null) {
+            return routeMode;
+        }
+        return waypoints.isEmpty() ? EdgeRouteMode.STRAIGHT : EdgeRouteMode.MANUAL;
+    }
+
     /** true, если подпись задана структурированно (N×тип) — только такие связи
      *  попадают в автоматическую спецификацию коммутации на этапе «Вывод». */
     public boolean hasStructuredWire() {
@@ -251,6 +278,7 @@ public class SchemaEdge {
         e.color = color;
         e.labelDx = labelDx;
         e.labelDy = labelDy;
+        e.routeMode = routeMode;
         return e;
     }
 }
