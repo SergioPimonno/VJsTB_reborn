@@ -496,7 +496,7 @@ public class NetworkManagerPanel extends JPanel {
             return;
         }
         Color chosen = UiKit.showColorChooser(this, "Цвет линий связи сети «" + selected.getName() + "»",
-                networkColor(selected));
+                networkColor(selected), settings);
         if (chosen == null) {
             return;
         }

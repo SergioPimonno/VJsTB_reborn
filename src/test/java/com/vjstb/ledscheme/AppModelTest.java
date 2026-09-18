@@ -16,6 +16,7 @@ import com.vjstb.ledscheme.model.CardPort;
 import com.vjstb.ledscheme.model.ContentCanvas;
 import com.vjstb.ledscheme.model.ControllerInstance;
 import com.vjstb.ledscheme.model.ControllerType;
+import com.vjstb.ledscheme.model.InterfaceRole;
 import com.vjstb.ledscheme.model.InterfaceType;
 import com.vjstb.ledscheme.model.Network;
 import com.vjstb.ledscheme.model.NetworkAttachment;
@@ -25,7 +26,10 @@ import com.vjstb.ledscheme.model.NetworkDeviceType;
 import com.vjstb.ledscheme.model.NetworkLink;
 import com.vjstb.ledscheme.model.NetworkLinkWaypoint;
 import com.vjstb.ledscheme.model.NetworkManagerPlan;
+import com.vjstb.ledscheme.model.NodeOrientation;
+import com.vjstb.ledscheme.model.NodeSide;
 import com.vjstb.ledscheme.model.PortDirection;
+import com.vjstb.ledscheme.model.PortPlacement;
 import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.Project;
 import com.vjstb.ledscheme.model.ProjectorInstance;
@@ -129,6 +133,32 @@ class AppModelTest {
         model.updateScreenSignalSpec(after, 60, 12);
         assertEquals(60, after.getRefreshRateHz());
         assertEquals(12, after.getColorBitDepth());
+    }
+
+    /** {@code updateScreenNotes} — общее поле {@code Screen.notes}, не зависящее от
+     *  типа монтажа (в отличие от {@code riggingNotes}/{@code structureNotes}) —
+     *  баг-репорт: "для экранов сейчас негде писать примечания". Требует
+     *  {@code selectScreen} ДО правки — {@code pushUndo} снимает
+     *  {@code currentScreen}, только если экран выбран (см. {@code
+     *  AppModel.pushUndo}/{@code ScreenLogic.snapshot}), иначе снимка экрана нет и
+     *  отмена его не касается. Экран восстанавливается ПО МЕСТУ, той же ссылкой
+     *  (см. {@code ScreenLogic.restore} — вызывает сеттеры на {@code live}, не
+     *  подменяет объект, в отличие от цепочек/узлов схемы сцены). */
+    @Test
+    void updateScreenNotesPersistsAndSupportsUndo(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+        model.selectScreen(screen);
+        assertNull(screen.getNotes());
+
+        model.updateScreenNotes(screen, "Смещать только со страховкой, см. договор");
+        assertEquals("Смещать только со страховкой, см. договор", screen.getNotes());
+
+        model.undo();
+        assertNull(screen.getNotes());
     }
 
     @Test
@@ -1775,6 +1805,142 @@ class AppModelTest {
         assertEquals(3, model.schemaNodesForCurrentScene(SchemaMode.POWER).size(),
                 "Ctrl+Z должен вернуть ОБА узла и обе связи одним шагом");
         assertEquals(2, model.schemaEdgesForCurrentScene(SchemaMode.POWER).size());
+    }
+
+    // ---- T3.3: ориентация/раскладка гнёзд узла (docs/schema-ports-rework/PLAN.md) ----
+
+    private SchemaNode nodeByLabel(AppModel model, SchemaMode mode, String label) {
+        return model.schemaNodesForCurrentScene(mode).stream()
+                .filter(n -> label.equals(n.getLabel())).findFirst().orElseThrow();
+    }
+
+    @Test
+    void setSchemaNodesOrientationSetsAllAndUndoesAsOneStep(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        SchemaNode a = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "A", 0, 0, null);
+        SchemaNode b = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "B", 200, 0, null);
+
+        model.setSchemaNodesOrientation(List.of(a, b), NodeOrientation.DOWN);
+        assertEquals(NodeOrientation.DOWN, a.getOrientation());
+        assertEquals(NodeOrientation.DOWN, b.getOrientation());
+
+        model.undo();
+        assertNull(nodeByLabel(model, SchemaMode.SIGNAL, "A").getOrientation(),
+                "Ctrl+Z должен вернуть ОБА узла одним шагом");
+        assertNull(nodeByLabel(model, SchemaMode.SIGNAL, "B").getOrientation());
+    }
+
+    @Test
+    void rotateSchemaNodesCyclesThroughAllFourStartingFromRightBaseline(@TempDir Path dir) {
+        // Узел без явной ориентации поворачивается от базовой RIGHT — тот же базис,
+        // что autoFitNodeToPorts (docs/schema-ports-rework/PLAN.md, задача T2.2).
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        SchemaNode a = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "A", 0, 0, null);
+        assertNull(a.getOrientation());
+
+        model.rotateSchemaNodes(List.of(a));
+        assertEquals(NodeOrientation.DOWN, a.getOrientation());
+        model.rotateSchemaNodes(List.of(a));
+        assertEquals(NodeOrientation.LEFT, a.getOrientation());
+        model.rotateSchemaNodes(List.of(a));
+        assertEquals(NodeOrientation.UP, a.getOrientation());
+        model.rotateSchemaNodes(List.of(a));
+        assertEquals(NodeOrientation.RIGHT, a.getOrientation(), "после UP цикл возвращается к RIGHT");
+    }
+
+    @Test
+    void setOnlyUsedPortsUndoesAsOneStepForMultipleNodes(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        SchemaNode a = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "A", 0, 0, null);
+        SchemaNode b = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "B", 200, 0, null);
+
+        model.setOnlyUsedPorts(List.of(a, b), true);
+        assertTrue(a.isOnlyUsedPorts());
+        assertTrue(b.isOnlyUsedPorts());
+
+        model.undo();
+        assertFalse(nodeByLabel(model, SchemaMode.SIGNAL, "A").isOnlyUsedPorts());
+        assertFalse(nodeByLabel(model, SchemaMode.SIGNAL, "B").isOnlyUsedPorts());
+    }
+
+    @Test
+    void resetPortPlacementsClearsAllOverridesAndSkipsNodesWithNone(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        SchemaNode a = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "A", 0, 0, null);
+        SchemaNode b = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "B", 200, 0, null);
+        SchemaCard card = model.addCardToNode(a, "Card",
+                List.of(new CardPort("HDMI", PortDirection.OUT, 1)));
+        String portId = card.getPorts().get(0).getId();
+        model.setPortPlacement(a, portId, NodeSide.LEFT, 1.0);
+        assertFalse(a.getPortPlacements().isEmpty());
+
+        // B не имеет ни одной записи — не должен создать лишнюю запись в истории отмены.
+        model.resetPortPlacements(List.of(a, b));
+        assertTrue(a.getPortPlacements().isEmpty());
+        assertTrue(b.getPortPlacements().isEmpty());
+
+        model.undo();
+        SchemaNode aAfter = nodeByLabel(model, SchemaMode.SIGNAL, "A");
+        assertFalse(aAfter.getPortPlacements().isEmpty(), "Ctrl+Z должен вернуть раскладку");
+        assertEquals(NodeSide.LEFT, aAfter.getPortPlacements().get(0).getSide());
+    }
+
+    @Test
+    void setPortPlacementCreatesUpdatesAndPrunesEmptyRecord(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        SchemaNode a = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "A", 0, 0, null);
+        SchemaCard card = model.addCardToNode(a, "Card",
+                List.of(new CardPort("HDMI", PortDirection.OUT, 1)));
+        String portId = card.getPorts().get(0).getId();
+
+        model.setPortPlacement(a, portId, NodeSide.BOTTOM, 2.0);
+        PortPlacement p = a.findPortPlacement(portId);
+        assertNotNull(p);
+        assertEquals(NodeSide.BOTTOM, p.getSide());
+        assertEquals(2.0, p.getOrder());
+
+        // Возврат обоих полей на null должен убрать запись целиком (PortPlacement#isEmpty).
+        model.setPortPlacement(a, portId, null, null);
+        assertNull(a.findPortPlacement(portId));
+    }
+
+    @Test
+    void setGroupCollapsedRoleAndThruOverridesRoundTripAndUndo(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        SchemaNode a = model.addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.SOURCE, "A", 0, 0, null);
+        SchemaCard card = model.addCardToNode(a, "Card",
+                List.of(new CardPort("Ethernet", PortDirection.OUT, 4)));
+        String portId = card.getPorts().get(0).getId();
+
+        model.setGroupCollapsed(a, portId, Boolean.TRUE);
+        assertEquals(Boolean.TRUE, a.findPortPlacement(portId).getCollapsed());
+
+        model.setPortRoleOverride(a, portId, InterfaceRole.LED_DATA);
+        assertEquals(InterfaceRole.LED_DATA, a.findPortPlacement(portId).getRoleOverride());
+
+        model.setPortThruOverride(a, portId, Boolean.TRUE);
+        assertEquals(Boolean.TRUE, a.findPortPlacement(portId).getThruOverride());
+
+        model.undo();
+        assertNull(nodeByLabel(model, SchemaMode.SIGNAL, "A").findPortPlacement(portId).getThruOverride(),
+                "Ctrl+Z должен отменить только транзит — последнее действие");
+
+        model.undo();
+        model.undo();
+        assertNull(nodeByLabel(model, SchemaMode.SIGNAL, "A").findPortPlacement(portId),
+                "три отдельных Ctrl+Z должны вернуть узел к отсутствию записи вовсе");
     }
 
     @Test

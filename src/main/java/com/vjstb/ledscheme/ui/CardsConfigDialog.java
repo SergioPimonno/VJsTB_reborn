@@ -2,10 +2,14 @@ package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.model.CardPort;
 import com.vjstb.ledscheme.model.ControllerType;
+import com.vjstb.ledscheme.model.InterfaceRole;
 import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.SchemaCard;
 import com.vjstb.ledscheme.model.SchemaNode;
+import com.vjstb.ledscheme.model.SchemaNodeType;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.service.schemalayout.PortRoleResolver;
+import com.vjstb.ledscheme.service.schemalayout.ThruResolver;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
@@ -19,11 +23,14 @@ import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
+import javax.swing.JComboBox;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JList;
+import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.JTextField;
@@ -50,6 +57,19 @@ public class CardsConfigDialog extends JDialog {
          *  потерял бы соединение (см. PowerConnectorsConfigDialog.updateConnector). */
         void updateCard(String cardId, String name, List<CardPort> ports);
         void removeCard(String cardId);
+
+        /** Тип узла-владельца карты — нужен только для "угадывания" роли гнёзд
+         *  БЕЗ явного {@link CardPort#getRole()}/{@link
+         *  com.vjstb.ledscheme.model.InterfaceType#getDefaultRole()} (см.
+         *  {@link PortRoleResolver#resolveForLibrary}, docs/schema-ports-rework/
+         *  PLAN.md, задача T5.1): один и тот же тип интерфейса (Ethernet/Fiber)
+         *  означает LED-данные на контроллере/конвертере/экране и обычную IP-сеть
+         *  везде остальном. {@code null} по умолчанию — тип узла неизвестен
+         *  (например, "Прочее оборудование"), эвристика тогда просто не отличает
+         *  LED-данные от обычной сети, откатываясь на сетевой/видео вариант. */
+        default SchemaNodeType nodeTypeOrNull() {
+            return null;
+        }
     }
 
     public static CardsHost forNode(AppModel model, SchemaNode node) {
@@ -72,6 +92,11 @@ public class CardsConfigDialog extends JDialog {
             @Override
             public void removeCard(String cardId) {
                 model.removeCardFromNode(node, cardId);
+            }
+
+            @Override
+            public SchemaNodeType nodeTypeOrNull() {
+                return node.getType();
             }
         };
     }
@@ -97,6 +122,14 @@ public class CardsConfigDialog extends JDialog {
             public void removeCard(String cardId) {
                 model.removeCardFromController(controllerType, cardId);
             }
+
+            @Override
+            public SchemaNodeType nodeTypeOrNull() {
+                // Библиотека контроллеров (SmartLCT-аналог) существует только для
+                // узлов-контроллеров — в отличие от пресетов, у ControllerType нет
+                // отдельного поля категории.
+                return SchemaNodeType.CONTROLLER;
+            }
         };
     }
 
@@ -121,23 +154,56 @@ public class CardsConfigDialog extends JDialog {
             public void removeCard(String cardId) {
                 model.removeCardFromPreset(preset, cardId);
             }
+
+            @Override
+            public SchemaNodeType nodeTypeOrNull() {
+                return preset.getCategory();
+            }
         };
     }
 
+    /** Сентинел «роль по умолчанию (из библиотеки/эвристика)» в комбобоксе — {@code
+     *  null}, чтобы не проставлять {@link CardPort#setRole} лишний раз без нужды
+     *  (см. addPendingPort/applyRoleToSelectedPending ниже). */
+    private static final InterfaceRole[] ROLE_OPTIONS_WITH_DEFAULT;
+    static {
+        InterfaceRole[] values = InterfaceRole.values();
+        ROLE_OPTIONS_WITH_DEFAULT = new InterfaceRole[values.length + 1];
+        System.arraycopy(values, 0, ROLE_OPTIONS_WITH_DEFAULT, 1, values.length);
+    }
+
+    /** Три состояния транзита в комбобоксе — см. {@link CardPort#getThru()} и
+     *  {@link ThruResolver}: {@code null} элемент = "авто" (угадывается по составу
+     *  карты), TRUE/FALSE — явно "да"/"нет". */
+    private static final Boolean[] THRU_OPTIONS = {null, Boolean.TRUE, Boolean.FALSE};
+
     private final CardsHost host;
+    private final AppModel model;
     private final DefaultListModel<SchemaCard> listModel = new DefaultListModel<>();
     private final JList<SchemaCard> list = new JList<>(listModel);
     private final JLabel totalsLabel = new JLabel();
 
     private final JTextField nameField = new JTextField();
-    private final InterfaceTypeVersionPicker connectorPicker;
-    private final javax.swing.JComboBox<PortDirection> directionCombo = new javax.swing.JComboBox<>(PortDirection.values());
-    private final JSpinner countSpinner = new JSpinner(new SpinnerNumberModel(1, 1, 64, 1));
+    final InterfaceTypeVersionPicker connectorPicker;
+    final javax.swing.JComboBox<PortDirection> directionCombo = new javax.swing.JComboBox<>(PortDirection.values());
+    final JSpinner countSpinner = new JSpinner(new SpinnerNumberModel(1, 1, 64, 1));
+    /** Роль и транзит добавляемой ПРЯМО СЕЙЧАС группы разъёмов (docs/schema-ports-
+     *  rework/PLAN.md, задача T5.1) — по умолчанию "не задана"/"авто", т.е. группа
+     *  наследует роль из вида интерфейса библиотеки/эвристики (см.
+     *  {@link PortRoleResolver#resolveForLibrary}) и авто-угадывание транзита (см.
+     *  {@link ThruResolver}), как и до появления этих полей. */
+    // Пакетная видимость (не private) — только для CardsConfigDialogRoleThruTest
+    // (тот же пакет, docs/schema-ports-rework/PLAN.md задача T5.1): дымовой Swing-тест
+    // ведёт диалог через его реальные комбобоксы/список набора карты, как
+    // PowerStagePanelChainRowClickTest ведёт реальные компоненты через dispatchEvent,
+    // а не проверяет вручную вынесенную "чистую" копию логики массового назначения.
+    final JComboBox<InterfaceRole> roleCombo = new JComboBox<>(ROLE_OPTIONS_WITH_DEFAULT);
+    final JComboBox<Boolean> thruCombo = new JComboBox<>(THRU_OPTIONS);
 
     /** Группы разъёмов набираемой (ещё не сохранённой) карты. */
-    private final List<CardPort> pendingPorts = new ArrayList<>();
+    final List<CardPort> pendingPorts = new ArrayList<>();
     private final DefaultListModel<CardPort> pendingModel = new DefaultListModel<>();
-    private final JList<CardPort> pendingList = new JList<>(pendingModel);
+    final JList<CardPort> pendingList = new JList<>(pendingModel);
 
     /** id карты, редактируемой сейчас (см. toggleEditSelected/addCard) — null
      *  означает обычный режим «набрать и сохранить новую карту». */
@@ -152,6 +218,7 @@ public class CardsConfigDialog extends JDialog {
     public CardsConfigDialog(Window owner, String title, CardsHost host, AppModel model) {
         super(owner, "Комплектация карт — " + title, ModalityType.APPLICATION_MODAL);
         this.host = host;
+        this.model = model;
         this.connectorPicker = new InterfaceTypeVersionPicker(model);
 
         JPanel content = new JPanel(new BorderLayout(8, 8));
@@ -176,6 +243,25 @@ public class CardsConfigDialog extends JDialog {
         JPanel mid = new JPanel();
         mid.setLayout(new BoxLayout(mid, BoxLayout.Y_AXIS));
 
+        roleCombo.setRenderer(new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public Component getListCellRendererComponent(JList<?> l, Object value, int index,
+                    boolean isSelected, boolean cellHasFocus) {
+                super.getListCellRendererComponent(l, value, index, isSelected, cellHasFocus);
+                setText(value == null ? "по умолчанию (из библиотеки)" : ((InterfaceRole) value).getLabel());
+                return this;
+            }
+        });
+        thruCombo.setRenderer(new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public Component getListCellRendererComponent(JList<?> l, Object value, int index,
+                    boolean isSelected, boolean cellHasFocus) {
+                super.getListCellRendererComponent(l, value, index, isSelected, cellHasFocus);
+                setText(value == null ? "авто" : Boolean.TRUE.equals(value) ? "да" : "нет");
+                return this;
+            }
+        });
+
         JPanel portForm = new JPanel(new GridLayout(0, 2, 6, 4));
         portForm.setBorder(BorderFactory.createTitledBorder("Добавить группу разъёмов в карту"));
         portForm.add(new JLabel("Разъём"));
@@ -185,6 +271,10 @@ public class CardsConfigDialog extends JDialog {
         portForm.add(new JLabel("Количество"));
         portForm.add(countSpinner);
         MathFields.enableExpressions(countSpinner);
+        portForm.add(new JLabel("Роль"));
+        portForm.add(roleCombo);
+        portForm.add(new JLabel("Транзит"));
+        portForm.add(thruCombo);
         mid.add(portForm);
 
         JButton addPort = new JButton("+ Добавить группу разъёмов");
@@ -192,14 +282,18 @@ public class CardsConfigDialog extends JDialog {
         mid.add(Box.createVerticalStrut(4));
         mid.add(addPort);
 
-        pendingList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        // Множественное выделение — нужно для массового назначения роли/транзита
+        // сразу нескольким группам (docs/schema-ports-rework/PLAN.md, задача T5.1),
+        // а не по одной; "Убрать выбранную группу"/Delete ниже тоже работают по
+        // всему выделению не хуже прежнего (JList сам поддерживает это в обоих режимах).
+        pendingList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         pendingList.setCellRenderer(new javax.swing.DefaultListCellRenderer() {
             @Override
             public Component getListCellRendererComponent(JList<?> l, Object value, int index,
                     boolean isSelected, boolean cellHasFocus) {
                 super.getListCellRendererComponent(l, value, index, isSelected, cellHasFocus);
                 if (value instanceof CardPort p) {
-                    setText(p.getCount() + "× " + p.getConnectorType() + " (" + p.getDirection().getLabel().toLowerCase() + ")");
+                    setText(pendingPortLabel(p));
                 }
                 return this;
             }
@@ -213,6 +307,16 @@ public class CardsConfigDialog extends JDialog {
         UiKit.bindDeleteKey(pendingList, this::removePendingPort);
         mid.add(Box.createVerticalStrut(4));
         mid.add(removePort);
+
+        JButton assignRoleBtn = new JButton("Назначить роль выделенным ▸");
+        assignRoleBtn.addActionListener(e -> showAssignRoleMenu(assignRoleBtn));
+        JButton assignThruBtn = new JButton("Транзит выделенным ▸");
+        assignThruBtn.addActionListener(e -> showAssignThruMenu(assignThruBtn));
+        JPanel massAssignRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        massAssignRow.add(assignRoleBtn);
+        massAssignRow.add(assignThruBtn);
+        mid.add(Box.createVerticalStrut(2));
+        mid.add(massAssignRow);
 
         JPanel nameForm = new JPanel(new GridLayout(0, 2, 6, 4));
         nameForm.setBorder(BorderFactory.createTitledBorder("Название и сохранение карты"));
@@ -252,7 +356,7 @@ public class CardsConfigDialog extends JDialog {
         setLocationRelativeTo(owner);
     }
 
-    private void addPendingPort() {
+    void addPendingPort() {
         String connector = connectorPicker.getValue();
         if (connector.isEmpty()) {
             JOptionPane.showMessageDialog(this, "Укажите тип разъёма", "Проверка данных", JOptionPane.WARNING_MESSAGE);
@@ -260,16 +364,28 @@ public class CardsConfigDialog extends JDialog {
         }
         PortDirection dir = (PortDirection) directionCombo.getSelectedItem();
         int count = (Integer) countSpinner.getValue();
-        pendingPorts.add(new CardPort(connector, dir, count));
+        CardPort port = new CardPort(connector, dir, count);
+        // null остаётся null (роль/транзит по умолчанию — из библиотеки/эвристики/
+        // авто-угадывания), не подставляем какое-то значение просто потому, что
+        // комбобокс сейчас на сентинеле — иначе КАЖДАЯ добавленная группа получала
+        // бы "явный" thru=false вместо настоящего null (docs/schema-ports-rework/
+        // PLAN.md, задача T5.1: авто-угадывание должно оставаться доступным).
+        port.setRole((InterfaceRole) roleCombo.getSelectedItem());
+        port.setThru((Boolean) thruCombo.getSelectedItem());
+        pendingPorts.add(port);
         refreshPending();
     }
 
-    private void removePendingPort() {
-        int idx = pendingList.getSelectedIndex();
-        if (idx >= 0) {
-            pendingPorts.remove(idx);
-            refreshPending();
+    void removePendingPort() {
+        int[] indices = pendingList.getSelectedIndices();
+        if (indices.length == 0) {
+            return;
         }
+        // В обратном порядке — иначе индексы "уезжают" после первого же remove().
+        for (int i = indices.length - 1; i >= 0; i--) {
+            pendingPorts.remove(indices[i]);
+        }
+        refreshPending();
     }
 
     private void refreshPending() {
@@ -277,6 +393,95 @@ public class CardsConfigDialog extends JDialog {
         for (CardPort p : pendingPorts) {
             pendingModel.addElement(p);
         }
+    }
+
+    /** Подпись строки в списке набираемой карты: явная роль/транзит — обычным
+     *  шрифтом, УГАДАННые (когда {@link CardPort#getRole()}/{@link
+     *  CardPort#getThru()} ещё {@code null}) — курсивом с пометкой, чтобы было видно,
+     *  что это не сохранённое в библиотеке значение, а вычисленное на лету (docs/
+     *  schema-ports-rework/PLAN.md, задача T5.1). Транзит имеет смысл только для
+     *  OUT-групп (см. {@link ThruResolver} class-javadoc) — для IN/IN_OUT не
+     *  показывается вовсе, а не выводится бессмысленное "нет". */
+    String pendingPortLabel(CardPort p) {
+        StringBuilder sb = new StringBuilder("<html>");
+        sb.append(p.getCount()).append("× ").append(escape(p.getConnectorType()))
+                .append(" (").append(p.getDirection().getLabel().toLowerCase()).append(')');
+        InterfaceRole role = PortRoleResolver.resolveForLibrary(p, host.nodeTypeOrNull(), model.getInterfaceTypes());
+        if (p.getRole() != null) {
+            sb.append(" · Роль: ").append(role.getLabel());
+        } else {
+            sb.append(" · <i>Роль: ").append(role.getLabel()).append(" (угадано)</i>");
+        }
+        if (p.getDirection() == PortDirection.OUT) {
+            boolean thru = ThruResolver.isThru(p, pendingPorts, null);
+            if (p.getThru() != null) {
+                sb.append(" · Транзит: ").append(thru ? "да" : "нет");
+            } else {
+                sb.append(" · <i>Транзит: ").append(thru ? "да" : "нет").append(" (авто)</i>");
+            }
+        }
+        sb.append("</html>");
+        return sb.toString();
+    }
+
+    /** Меню массового назначения роли (docs/schema-ports-rework/PLAN.md, задача
+     *  T5.1) — применяется КО ВСЕМ группам, выделенным в pendingList сейчас; пустое
+     *  выделение — предупреждение вместо тихого бездействия (легко забыть выделить
+     *  хоть что-то, кнопка при этом остаётся активной всегда). */
+    void showAssignRoleMenu(Component invoker) {
+        List<CardPort> selected = pendingList.getSelectedValuesList();
+        if (selected.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Сначала выделите группы разъёмов в списке выше",
+                    "Назначение роли", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        JPopupMenu menu = new JPopupMenu();
+        JMenuItem byDefault = new JMenuItem("по умолчанию (из библиотеки)");
+        byDefault.addActionListener(e -> applyRoleToSelectedPending(selected, null));
+        menu.add(byDefault);
+        menu.addSeparator();
+        for (InterfaceRole role : InterfaceRole.values()) {
+            JMenuItem item = new JMenuItem(role.getLabel());
+            item.addActionListener(e -> applyRoleToSelectedPending(selected, role));
+            menu.add(item);
+        }
+        menu.show(invoker, 0, invoker.getHeight());
+    }
+
+    void applyRoleToSelectedPending(List<CardPort> selected, InterfaceRole role) {
+        for (CardPort p : selected) {
+            p.setRole(role);
+        }
+        refreshPending();
+    }
+
+    /** Меню массового назначения транзита — та же логика, что {@link
+     *  #showAssignRoleMenu}, но всего три варианта (см. {@link #THRU_OPTIONS}). */
+    void showAssignThruMenu(Component invoker) {
+        List<CardPort> selected = pendingList.getSelectedValuesList();
+        if (selected.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Сначала выделите группы разъёмов в списке выше",
+                    "Назначение транзита", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        JPopupMenu menu = new JPopupMenu();
+        JMenuItem auto = new JMenuItem("авто");
+        auto.addActionListener(e -> applyThruToSelectedPending(selected, null));
+        JMenuItem yes = new JMenuItem("да");
+        yes.addActionListener(e -> applyThruToSelectedPending(selected, Boolean.TRUE));
+        JMenuItem no = new JMenuItem("нет");
+        no.addActionListener(e -> applyThruToSelectedPending(selected, Boolean.FALSE));
+        menu.add(auto);
+        menu.add(yes);
+        menu.add(no);
+        menu.show(invoker, 0, invoker.getHeight());
+    }
+
+    void applyThruToSelectedPending(List<CardPort> selected, Boolean thru) {
+        for (CardPort p : selected) {
+            p.setThru(thru);
+        }
+        refreshPending();
     }
 
     private void addCard() {

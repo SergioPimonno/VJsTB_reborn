@@ -17,7 +17,9 @@ import com.vjstb.ledscheme.model.CardPort;
 import com.vjstb.ledscheme.model.ContentCanvas;
 import com.vjstb.ledscheme.model.ControllerInstance;
 import com.vjstb.ledscheme.model.ControllerType;
+import com.vjstb.ledscheme.model.EdgeRouteMode;
 import com.vjstb.ledscheme.model.EquipmentPreset;
+import com.vjstb.ledscheme.model.InterfaceRole;
 import com.vjstb.ledscheme.model.InterfaceType;
 import com.vjstb.ledscheme.model.ContentSection;
 import com.vjstb.ledscheme.model.Scenario;
@@ -26,7 +28,10 @@ import com.vjstb.ledscheme.model.LibraryBundle;
 import com.vjstb.ledscheme.model.MaskColorPreset;
 import com.vjstb.ledscheme.model.NetworkDeviceType;
 import com.vjstb.ledscheme.model.NetworkManagerPlan;
+import com.vjstb.ledscheme.model.NodeOrientation;
+import com.vjstb.ledscheme.model.NodeSide;
 import com.vjstb.ledscheme.model.PortDirection;
+import com.vjstb.ledscheme.model.PortPlacement;
 import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.Project;
 import com.vjstb.ledscheme.model.ProjectorInstance;
@@ -48,6 +53,7 @@ import com.vjstb.ledscheme.sync.LibrarySyncClient;
 import java.io.File;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -1198,6 +1204,17 @@ public class AppModel {
         changed();
     }
 
+    /** Свободные примечания к экрану (см. {@link Screen#getNotes()}) — независимо
+     *  от способа монтажа, в отличие от {@link #updateScreenMount}/{@link
+     *  #updateScreenStructure}, чьи заметки видны только при соответствующем
+     *  {@code mountType} (баг-репорт: "для экранов сейчас негде писать
+     *  примечания"). */
+    public void updateScreenNotes(Screen screen, String notes) {
+        pushUndo("Примечания к экрану");
+        screen.setNotes(notes);
+        changed();
+    }
+
     /** Способ монтажа + количество/заметки точек подвеса (см. {@link RiggingCalc}
      *  для авторасчёта распределения нагрузки) + требуемый минимальный коэффициент
      *  запаса прочности сертификации оборудования и грузоподъёмность (WLL, кг)
@@ -1551,47 +1568,54 @@ public class AppModel {
         changed();
     }
 
-    /** Геометрия построчной отрисовки гнёзд разъёмов — те же числа, что и в
-     *  SchemaCanvasPanel.computeSocketRects, продублированы здесь намеренно (модель
-     *  не должна зависеть от UI-класса) для расчёта минимальной высоты под все порты. */
-    private static final int PORT_ROW_H = 13;
-    private static final int PORT_ROWS_TOP_OFFSET = 38;
-    private static final int PORT_ROWS_BOTTOM_PAD = 6;
-    /** Разъёмы карт теперь рисуются каждый в своём рамка-блоке с шапкой (см.
-     *  SchemaCanvasPanel.CARD_HEADER_H/CARD_BLOCK_PAD/CARD_BLOCK_GAP, продублировано
-     *  здесь по той же причине, что и PORT_ROW_H выше) — авто-высота узла должна
-     *  учитывать место под эти шапки/отступы, иначе блоки карт обрезаются. У
-     *  разъёмов питания (без карт) рамки не рисуются — на них эта надбавка не
-     *  распространяется. */
-    private static final int CARD_HEADER_H = 14;
-    private static final int CARD_BLOCK_PAD = 3;
-    private static final int CARD_BLOCK_GAP = 6;
-
-    /** Растягивает высоту узла так, чтобы были видны ВСЕ его порты (карты сигнала
-     *  или разъёмы питания), не обрезаясь в «+N ещё» — вызывается при создании узла
-     *  из пресета и при добавлении карты/разъёма к уже существующему узлу. Только
-     *  РАСТЯГИВАЕТ, когда узел ниже нужного — не уменьшает то, что пользователь уже
-     *  подстроил вручную крупнее необходимого. */
+    /** Растягивает узел так, чтобы были видны ВСЕ его гнёзда (карты сигнала или
+     *  разъёмы питания) без наложений и без обрезки в overflow — вызывается при
+     *  создании узла из пресета и при добавлении карты/разъёма к уже существующему
+     *  узлу. Только РАСТЯГИВАЕТ по ОБЕИМ осям (docs/schema-ports-rework/PLAN.md,
+     *  задача T2.2 — раньше растягивала только высоту, что и было одной из причин
+     *  неудобного вертикального режима, см. DIALOG.md реплика 1, п.5), не уменьшает
+     *  то, что пользователь уже подстроил вручную крупнее необходимого.
+     *
+     *  <p>Геометрия — целиком в {@link com.vjstb.ledscheme.service.schemalayout.NodePortLayout}
+     *  (раньше числа шага строки/шапки карты были продублированы здесь И в {@code
+     *  SchemaCanvasPanel} и незаметно разошлись — 13 и 14, см. DIALOG.md). Ориентация
+     *  берётся с самого узла ({@code null} — как {@link
+     *  com.vjstb.ledscheme.model.NodeOrientation#RIGHT}, у {@code AppModel} нет
+     *  доступа к умолчанию профиля — та настройка живёт в {@code SettingsManager}
+     *  на стороне UI). Свёртка незадействованных групп считается как БЫ ВСЕГДА
+     *  развёрнутой ({@code defaultCollapsed=Boolean.FALSE}, см. {@code
+     *  GroupDisplayMode#ALWAYS_EXPANDED}) — это заведомо не МЕНЬШИЙ размер, чем при
+     *  любом ДРУГОМ режиме отображения групп ({@code ALWAYS_COLLAPSED}/{@code AUTO}
+     *  всегда дают ту же или меньшую ширину/высоту, развёрнутая группа не бывает
+     *  занимает меньше места, чем свёрнутая), поэтому блок гарантированно не
+     *  окажется тесным ни при каком реальном режиме. */
     public void autoFitNodeToPorts(SchemaNode node) {
-        int portCount = 0;
-        int cardCount = 0;
+        List<com.vjstb.ledscheme.service.schemalayout.NodePortLayout.CardGroup> cardGroups = new ArrayList<>();
         for (SchemaCard c : node.getCards()) {
-            int n = c.getPorts().size();
-            portCount += n;
-            if (n > 0) {
-                cardCount++;
-            }
+            cardGroups.add(new com.vjstb.ledscheme.service.schemalayout.NodePortLayout.CardGroup(
+                    c.getId(), c.getName(), c.getPorts()));
         }
-        portCount += node.getPowerConnectors().size();
-        if (portCount == 0) {
+        if (!node.getPowerConnectors().isEmpty()) {
+            cardGroups.add(new com.vjstb.ledscheme.service.schemalayout.NodePortLayout.CardGroup(
+                    null, null, node.getPowerConnectors()));
+        }
+        if (cardGroups.isEmpty()) {
             return;
         }
-        double needed = PORT_ROWS_TOP_OFFSET + portCount * PORT_ROW_H + PORT_ROWS_BOTTOM_PAD;
-        if (cardCount > 0) {
-            needed += cardCount * (CARD_HEADER_H + CARD_BLOCK_PAD * 2) + Math.max(0, cardCount - 1) * CARD_BLOCK_GAP;
+        com.vjstb.ledscheme.model.NodeOrientation orientation = node.getOrientation() != null
+                ? node.getOrientation() : com.vjstb.ledscheme.model.NodeOrientation.RIGHT;
+        var in = new com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Input(
+                node.getMode(), node.getType(), orientation, cardGroups,
+                schemaEdgesForCurrentScene(node.getMode()), node.getPortPlacements(), node.isOnlyUsedPorts(),
+                Boolean.FALSE, getInterfaceTypes(),
+                com.vjstb.ledscheme.service.schemalayout.TextMeasure.awt());
+        com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Size size =
+                com.vjstb.ledscheme.service.schemalayout.NodePortLayout.minimumSize(in);
+        if (node.getWidth() < size.width()) {
+            node.setWidth(size.width());
         }
-        if (node.getHeight() < needed) {
-            node.setHeight(needed);
+        if (node.getHeight() < size.height()) {
+            node.setHeight(size.height());
         }
     }
 
@@ -1734,6 +1758,140 @@ public class AppModel {
         changed();
     }
 
+    // ---- T3.3: ориентация/раскладка гнёзд узла (docs/schema-ports-rework/PLAN.md) ----
+
+    /** Явная ориентация НЕСКОЛЬКИХ узлов ОДНИМ действием отмены — как {@link
+     *  #moveSchemaNodes}/{@link #deleteSchemaNodes}, меню блока может быть вызвано
+     *  на многовыделении. {@code orientation == null} возвращает узел к умолчанию
+     *  профиля (см. {@link SchemaNode#getOrientation()}). */
+    public void setSchemaNodesOrientation(Collection<SchemaNode> nodes, NodeOrientation orientation) {
+        if (nodes.isEmpty()) {
+            return;
+        }
+        pushUndo("Ориентация узла схемы");
+        for (SchemaNode n : nodes) {
+            n.setOrientation(orientation);
+        }
+        changed();
+    }
+
+    /** «Повернуть по часовой» (Ctrl+R) — на многовыделение, одна запись отмены.
+     *  Узел без явной ориентации поворачивается от базовой {@link
+     *  NodeOrientation#RIGHT} (тот же базис, что {@link #autoFitNodeToPorts}). */
+    public void rotateSchemaNodes(Collection<SchemaNode> nodes) {
+        if (nodes.isEmpty()) {
+            return;
+        }
+        pushUndo("Поворот узла схемы");
+        NodeOrientation[] values = NodeOrientation.values();
+        for (SchemaNode n : nodes) {
+            NodeOrientation current = n.getOrientation() != null ? n.getOrientation() : NodeOrientation.RIGHT;
+            n.setOrientation(values[(current.ordinal() + 1) % values.length]);
+        }
+        changed();
+    }
+
+    /** «Только задействованные гнёзда» — на многовыделение, одна запись отмены. */
+    public void setOnlyUsedPorts(Collection<SchemaNode> nodes, boolean onlyUsedPorts) {
+        if (nodes.isEmpty()) {
+            return;
+        }
+        pushUndo("Только задействованные гнёзда");
+        for (SchemaNode n : nodes) {
+            n.setOnlyUsedPorts(onlyUsedPorts);
+        }
+        changed();
+    }
+
+    /** «Вернуть раскладку гнёзд по умолчанию» — удаляет ВСЕ {@link PortPlacement}
+     *  узла (сторона/порядок/свёртка/роль/транзит), не только по одной группе;
+     *  на многовыделение, одна запись отмены. Узлы без единой записи пропускаются,
+     *  чтобы не засорять историю отмены действием, которое ничего не меняет. */
+    public void resetPortPlacements(Collection<SchemaNode> nodes) {
+        List<SchemaNode> affected = new ArrayList<>();
+        for (SchemaNode n : nodes) {
+            if (!n.getPortPlacements().isEmpty()) {
+                affected.add(n);
+            }
+        }
+        if (affected.isEmpty()) {
+            return;
+        }
+        pushUndo("Сброс раскладки гнёзд узла");
+        for (SchemaNode n : affected) {
+            n.getPortPlacements().clear();
+        }
+        changed();
+    }
+
+    /** Существующая или новая запись {@link PortPlacement} группы {@code portId} узла
+     *  {@code node} — точечные мутаторы группы ниже читают-правят-пишут через неё, а
+     *  не через отдельные поля {@link SchemaNode}, поэтому и хранится ровно так же,
+     *  как загружается из старого проекта (см. {@link PortPlacement} javadoc). */
+    private PortPlacement placementOrCreate(SchemaNode node, String portId) {
+        PortPlacement existing = node.findPortPlacement(portId);
+        if (existing != null) {
+            return existing;
+        }
+        PortPlacement created = new PortPlacement(portId);
+        node.getPortPlacements().add(created);
+        return created;
+    }
+
+    /** Запись без единого переопределения бесполезно хранить (и она пережила бы
+     *  {@link #resetPortPlacements}, если бы формально осталась в списке) — см.
+     *  {@link PortPlacement#isEmpty()}. */
+    private void prunePlacementIfEmpty(SchemaNode node, PortPlacement p) {
+        if (p.isEmpty()) {
+            node.getPortPlacements().remove(p);
+        }
+    }
+
+    /** Перенос группы {@code portId} на сторону {@code side} с позицией {@code order}
+     *  среди остальных групп той же стороны — целевой мутатор перетаскивания группы
+     *  мышью (PLAN.md, задача T3.3). {@code side == null} возвращает сторону группы
+     *  под автоматическое правило ({@code SideRules}), {@code order == null} —
+     *  под естественный порядок карт узла. */
+    public void setPortPlacement(SchemaNode node, String portId, NodeSide side, Double order) {
+        pushUndo("Перемещение группы гнёзд");
+        PortPlacement p = placementOrCreate(node, portId);
+        p.setSide(side);
+        p.setOrder(order);
+        prunePlacementIfEmpty(node, p);
+        changed();
+    }
+
+    /** «Свернуть / Развернуть / Авто» в меню группы — {@code collapsed == null}
+     *  возвращает группу под автоматическое правило (свёрнута, если не задействована,
+     *  см. {@code GroupDisplayMode}/{@code NodePortLayout}). */
+    public void setGroupCollapsed(SchemaNode node, String portId, Boolean collapsed) {
+        pushUndo("Свёртка группы гнёзд");
+        PortPlacement p = placementOrCreate(node, portId);
+        p.setCollapsed(collapsed);
+        prunePlacementIfEmpty(node, p);
+        changed();
+    }
+
+    /** «Роль в этом проекте ▸» в меню группы — {@code role == null} возвращает роль
+     *  под библиотеку/эвристику ({@code PortRoleResolver}). */
+    public void setPortRoleOverride(SchemaNode node, String portId, InterfaceRole role) {
+        pushUndo("Роль группы гнёзд в проекте");
+        PortPlacement p = placementOrCreate(node, portId);
+        p.setRoleOverride(role);
+        prunePlacementIfEmpty(node, p);
+        changed();
+    }
+
+    /** «Транзит ▸ авто / да / нет» в меню группы — {@code thru == null} возвращает
+     *  транзит под авто-угадывание ({@code ThruResolver}). */
+    public void setPortThruOverride(SchemaNode node, String portId, Boolean thru) {
+        pushUndo("Транзит группы гнёзд");
+        PortPlacement p = placementOrCreate(node, portId);
+        p.setThruOverride(thru);
+        prunePlacementIfEmpty(node, p);
+        changed();
+    }
+
     /** Баг-репорт: "удаление блока не отменяется через ctrl+Z" — см. {@link #pushUndo()}. */
     public void deleteSchemaNode(SchemaNode node) {
         if (currentScene == null) {
@@ -1822,6 +1980,18 @@ public class AppModel {
                 portIdMap.put(p.getId(), np);
                 p.setId(np);
             }
+            // Раскладка гнёзд (docs/schema-ports-rework/PLAN.md, задача T1.2) хранит
+            // ссылку на портовый id внутри самого узла (см. PortPlacement.portId) —
+            // без ремапа копия унаследовала бы записи, указывающие на СТАРЫЕ (уже не
+            // существующие в этом узле) id гнёзд, и раскладка вставленной копии тихо
+            // потерялась бы. portIdMap на этот момент уже содержит все гнёзда ЭТОГО
+            // узла (обе карты и разъёмы питания скопированы циклами выше).
+            for (PortPlacement pp : n.getPortPlacements()) {
+                String mapped = portIdMap.get(pp.getPortId());
+                if (mapped != null) {
+                    pp.setPortId(mapped);
+                }
+            }
             pastedNodeIsScreen.put(newId, n.getScreenRefId() != null);
             currentScene.getSchemaNodes().add(n);
             inserted.add(n);
@@ -1878,6 +2048,24 @@ public class AppModel {
      *  привязан к кабинету (обычный узел/разъём, как в 5-аргументной версии). */
     public SchemaEdge addSchemaEdge(SchemaMode mode, String fromNodeId, String fromPortId, String fromCabinetInstanceId,
                                      String toNodeId, String toPortId, String toCabinetInstanceId, String label) {
+        return addSchemaEdge(mode, fromNodeId, fromPortId, fromCabinetInstanceId,
+                toNodeId, toPortId, toCabinetInstanceId, label, null);
+    }
+
+    /** Как выше, но с явным начальным {@link EdgeRouteMode} — используется ТОЛЬКО при
+     *  создании связи через клик по гнёздам в редакторе схемы (docs/schema-ports-rework/
+     *  PLAN.md, задача T4.4/§2.6: "новые связи — авто под 90° (настраивается)"),
+     *  {@code initialRouteMode = settings.newEdgeRouteMode}. Установка режима — то же
+     *  мутирование СВЕЖЕГО объекта {@code edge} до возврата, что и у {@code
+     *  fromPortId}/{@code toPortId} выше: отдельного {@link #pushUndo} не требует,
+     *  попадает в ТУ ЖЕ запись отмены, что и создание связи (одно действие — одно
+     *  Ctrl+Z). {@code null} — как раньше, режим не задаётся явно (связь резолвится
+     *  как {@link EdgeRouteMode#STRAIGHT} через {@link SchemaEdge#effectiveRouteMode()},
+     *  ровно текущее поведение прочих вызывающих кодов, которые про AUTO ничего не
+     *  знают — тестов, автозаполнения и т.п.). */
+    public SchemaEdge addSchemaEdge(SchemaMode mode, String fromNodeId, String fromPortId, String fromCabinetInstanceId,
+                                     String toNodeId, String toPortId, String toCabinetInstanceId, String label,
+                                     EdgeRouteMode initialRouteMode) {
         if (currentScene == null) {
             throw new IllegalStateException("Не выбрана сцена");
         }
@@ -1890,6 +2078,9 @@ public class AppModel {
         edge.setToPortId(toPortId);
         edge.setFromCabinetInstanceId(fromCabinetInstanceId);
         edge.setToCabinetInstanceId(toCabinetInstanceId);
+        if (initialRouteMode != null) {
+            edge.setRouteMode(initialRouteMode);
+        }
         currentScene.getSchemaEdges().add(edge);
         changed();
         return edge;
@@ -1952,12 +2143,68 @@ public class AppModel {
         changed();
     }
 
+    /** Перетаскивание излома/отрезка {@link EdgeRouteMode#AUTO}-связи (docs/schema-
+     *  ports-rework/PLAN.md, задача T4.4/§2.6: "превращается в MANUAL с текущим
+     *  маршрутом в качестве изломов, одна запись отмены") — вызывается САМИМ холстом
+     *  ({@code SchemaCanvasPanel}) в момент начала перетаскивания (не при наведении:
+     *  см. его javadoc {@code materializeAutoRouteIfNeeded}), {@code waypoints} — уже
+     *  посчитанные точки текущего авто-маршрута между гнёздами, как обычные изломы. */
+    public void convertEdgeToManualWithRoute(SchemaEdge edge, List<com.vjstb.ledscheme.model.EdgeWaypoint> waypoints) {
+        pushUndo("Ручная правка маршрута");
+        edge.setRouteMode(EdgeRouteMode.MANUAL);
+        edge.setWaypoints(waypoints);
+        changed();
+    }
+
+    /** Меню связи «Маршрут ▸ Авто под 90° / Вручную / Прямая» (docs/schema-ports-
+     *  rework/PLAN.md, задача T4.4/§2.6). Переключение НА {@link EdgeRouteMode#MANUAL}
+     *  не трогает уже сохранённые {@link SchemaEdge#getWaypoints()} — если их нет
+     *  (связь только что была AUTO/STRAIGHT), маршрут станет прямой линией до первого
+     *  перетаскивания излома, как и раньше у {@link EdgeRouteMode#STRAIGHT}. */
+    public void setEdgeRouteMode(SchemaEdge edge, EdgeRouteMode mode) {
+        pushUndo("Маршрут связи");
+        edge.setRouteMode(mode);
+        changed();
+    }
+
+    /** «Перетрассировать выделенные»/«Перетрассировать все» (PLAN.md §2.6) — переводит
+     *  связи в {@link EdgeRouteMode#AUTO} и стирает сохранённые изломы (в режиме AUTO
+     *  они не используются, см. {@link SchemaEdge#effectiveRouteMode()} — оставлять их
+     *  висеть в данных незачем, следующее переключение обратно на {@link
+     *  EdgeRouteMode#MANUAL} и так начнёт с чистого места, как у только что созданной
+     *  связи). Одна запись отмены на весь набор связей, а не одна на каждую. */
+    public void rerouteEdges(Collection<SchemaEdge> edgesToReroute) {
+        if (edgesToReroute.isEmpty()) {
+            return;
+        }
+        pushUndo("Перетрассировка связей");
+        for (SchemaEdge edge : edgesToReroute) {
+            edge.setRouteMode(EdgeRouteMode.AUTO);
+            edge.setWaypoints(List.of());
+        }
+        changed();
+    }
+
     public void deleteSchemaEdge(SchemaEdge edge) {
         if (currentScene == null) {
             return;
         }
         pushUndo("Удаление связи");
         currentScene.getSchemaEdges().remove(edge);
+        changed();
+    }
+
+    /** Групповое удаление НЕСКОЛЬКИХ связей ОДНИМ действием отмены (docs/schema-
+     *  ports-rework/PLAN.md, задача T4.4 доводка, многовыделение связей — баг-
+     *  репорт пользователя 2026-09-18) — тот же приём, что {@link
+     *  #deleteSchemaNodes} для узлов: по одной {@link #deleteSchemaEdge} на связь
+     *  Ctrl+Z вернул бы только последнюю. */
+    public void deleteSchemaEdges(Collection<SchemaEdge> edgesToDelete) {
+        if (currentScene == null || edgesToDelete.isEmpty()) {
+            return;
+        }
+        pushUndo("Удаление связей");
+        currentScene.getSchemaEdges().removeAll(edgesToDelete);
         changed();
     }
 
@@ -3337,6 +3584,68 @@ public class AppModel {
         autoFitNodeToPorts(node);
         changed();
         return node;
+    }
+
+    // ---- сетевое оборудование на общей схеме (D11, docs/schema-ports-rework/PLAN.md, T3.4) ----
+
+    /** Добавляет на схему СИГНАЛА блок сетевого устройства из библиотеки
+     *  ({@link NetworkDeviceType}) — узел {@link SchemaNodeType#CUSTOM} с
+     *  {@link SchemaNode#setNetworkDeviceTypeId} и одной картой "Сеть": группа
+     *  "Ethernet" (двунаправленная, {@link PortDirection#IN_OUT}) на
+     *  {@link NetworkDeviceType#getEthernetPortCount()} гнёзд и, если задано,
+     *  "Fiber" на {@link NetworkDeviceType#getOpticalPortCount()} — обе с ролью
+     *  {@link InterfaceRole#NETWORK} (защита от дурака не проверяет направление
+     *  для этой роли, см. {@code SchemaCanvasPanel#directionError}). Свитч/
+     *  роутер на схеме — конечный блок оборудования, а не особая сущность (см.
+     *  DIALOG.md, "Свитчи") — та же {@code NetworkDevicePlacement.linkedSchemaNodeId}
+     *  впоследствии свяжет его с Менеджером сети (задача T5.4). */
+    public SchemaNode addSchemaNodeFromNetworkDevice(NetworkDeviceType type, double x, double y) {
+        SchemaNode node = addSchemaNode(SchemaMode.SIGNAL, SchemaNodeType.CUSTOM, type.getName(), x, y, null);
+        node.setNetworkDeviceTypeId(type.getId());
+        node.getCards().add(new SchemaCard(NETWORK_DEVICE_CARD_NAME, networkDevicePorts(type)));
+        autoFitNodeToPorts(node);
+        changed();
+        return node;
+    }
+
+    private static final String NETWORK_DEVICE_CARD_NAME = "Сеть";
+
+    /** Пересобирает карту "Сеть" уже существующего узла по ТЕКУЩИМ данным его
+     *  {@link NetworkDeviceType} из библиотеки (пункт меню «Обновить порты из
+     *  библиотеки», PLAN.md T3.4) — например, число портов в библиотеке
+     *  поправили УЖЕ ПОСЛЕ того, как блок поставили на схему. Карта заменяется
+     *  целиком, СВЕЖИМИ id гнёзд (как при первом добавлении) — уже нарисованные
+     *  связи на старые гнёзда этого узла осиротеют, как и при любой другой
+     *  правке количества портов карты (см. {@link #updateCardOnNode}). Бросает,
+     *  если у узла нет привязки к типу устройства, тип удалён из библиотеки или
+     *  у узла нет самой карты "Сеть" (кто-то удалил её вручную). */
+    public void refreshNetworkDevicePorts(SchemaNode node) {
+        String typeId = node.getNetworkDeviceTypeId();
+        if (typeId == null) {
+            throw new IllegalStateException("Узел не привязан к типу сетевого устройства");
+        }
+        NetworkDeviceType type = getNetworkDeviceTypes().stream()
+                .filter(t -> t.getId().equals(typeId)).findFirst()
+                .orElseThrow(() -> new IllegalStateException("Тип устройства удалён из библиотеки"));
+        SchemaCard card = node.getCards().stream()
+                .filter(c -> NETWORK_DEVICE_CARD_NAME.equals(c.getName())).findFirst()
+                .orElseThrow(() -> new IllegalStateException("У узла нет карты \"" + NETWORK_DEVICE_CARD_NAME + "\""));
+        updateCardOnNode(node, card.getId(), NETWORK_DEVICE_CARD_NAME, networkDevicePorts(type));
+    }
+
+    private static List<CardPort> networkDevicePorts(NetworkDeviceType type) {
+        List<CardPort> ports = new ArrayList<>();
+        if (type.getEthernetPortCount() > 0) {
+            CardPort eth = new CardPort("Ethernet", PortDirection.IN_OUT, type.getEthernetPortCount());
+            eth.setRole(InterfaceRole.NETWORK);
+            ports.add(eth);
+        }
+        if (type.getOpticalPortCount() > 0) {
+            CardPort fiber = new CardPort("Fiber", PortDirection.IN_OUT, type.getOpticalPortCount());
+            fiber.setRole(InterfaceRole.NETWORK);
+            ports.add(fiber);
+        }
+        return ports;
     }
 
     /** Копия карты с НОВЫМИ id (у самой карты и у каждого её разъёма) — в отличие
@@ -5374,6 +5683,192 @@ public class AppModel {
         node.setHeight(200);
         changed();
         return node;
+    }
+
+    /** Добавляет авто-блок легенды линий (docs/schema-ports-rework/PLAN.md, задача
+     *  T5.4, см. {@link SchemaNode#isAutoLineLegend()}) — таблица "цвет → роль/номинал"
+     *  по факту реально используемых схемой цветов линий, рядом по духу с {@link
+     *  #addSignalPortLegendNode} (тоже {@code CUSTOM}-узел, тоже пересчитывается на
+     *  каждой отрисовке, а не хранит содержимое). {@code mode} — на какой холст
+     *  (сигнал/питание) ставится блок; содержимое зависит от режима (см. {@link
+     *  #lineLegendRoles}/{@link #lineLegendPowerNominals}) — у питания нет понятия
+     *  "роль гнезда" (PLAN.md §2.3: "в схеме питания роль всегда POWER"), там легенда
+     *  по номиналу разъёма, а не по роли. */
+    public SchemaNode addLineLegendNode(SchemaMode mode, double x, double y) {
+        SchemaNode node = addSchemaNode(mode, SchemaNodeType.CUSTOM, "Легенда линий", x, y, null);
+        node.setAutoLineLegend(true);
+        node.setWidth(220);
+        node.setHeight(160);
+        changed();
+        return node;
+    }
+
+    /** Роли сигнальных связей, РЕАЛЬНО присутствующие на схеме сигнала сцены (для
+     *  содержимого авто-блока «Легенда линий», см. {@link #addLineLegendNode}) — не
+     *  весь {@link InterfaceRole}, а только те, что определяют цвет хотя бы одной
+     *  СУЩЕСТВУЮЩЕЙ связи (см. {@code SchemaCanvasPanel#edgeDefaultColor}: роль гнезда-
+     *  ИСТОЧНИКА связи). Порядок — по первому появлению связи в списке сцены
+     *  (детерминированно, без произвольной сортировки по enum). */
+    public List<InterfaceRole> lineLegendRoles(Scene scene) {
+        List<InterfaceRole> roles = new ArrayList<>();
+        if (scene == null) {
+            return roles;
+        }
+        List<InterfaceType> library = getInterfaceTypes();
+        java.util.Map<String, SchemaNode> byId = new java.util.LinkedHashMap<>();
+        for (SchemaNode n : scene.getSchemaNodes()) {
+            byId.put(n.getId(), n);
+        }
+        for (SchemaEdge e : scene.getSchemaEdges()) {
+            if (e.getMode() != SchemaMode.SIGNAL) {
+                continue;
+            }
+            SchemaNode fromNode = byId.get(e.getFromNodeId());
+            CardPort fromPort = fromNode != null ? findPortOnNode(fromNode, e.getFromPortId()) : null;
+            if (fromPort == null) {
+                continue;
+            }
+            InterfaceRole role = com.vjstb.ledscheme.service.schemalayout.PortRoleResolver.resolve(
+                    SchemaMode.SIGNAL, fromNode.getType(), fromPort, portPlacementFor(fromNode, e.getFromPortId()),
+                    library);
+            if (!roles.contains(role)) {
+                roles.add(role);
+            }
+        }
+        return roles;
+    }
+
+    /** Номиналы (типы разъёмов) силовых связей, РЕАЛЬНО присутствующие на схеме
+     *  питания сцены (для авто-блока «Легенда линий» в режиме питания, см. {@link
+     *  #addLineLegendNode}) — аналог {@link #lineLegendRoles}, но по {@link
+     *  CardPort#getConnectorType()} гнезда-источника (у питания цвет линии по
+     *  номиналу разъёма, не по роли, см. {@code SchemaCanvasPanel#edgeDefaultColor}). */
+    public List<String> lineLegendPowerNominals(Scene scene) {
+        List<String> nominals = new ArrayList<>();
+        if (scene == null) {
+            return nominals;
+        }
+        java.util.Map<String, SchemaNode> byId = new java.util.LinkedHashMap<>();
+        for (SchemaNode n : scene.getSchemaNodes()) {
+            byId.put(n.getId(), n);
+        }
+        for (SchemaEdge e : scene.getSchemaEdges()) {
+            if (e.getMode() != SchemaMode.POWER) {
+                continue;
+            }
+            SchemaNode fromNode = byId.get(e.getFromNodeId());
+            CardPort fromPort = fromNode != null ? findPortOnNode(fromNode, e.getFromPortId()) : null;
+            String connectorType = fromPort != null ? fromPort.getConnectorType() : null;
+            if (connectorType != null && !nominals.contains(connectorType)) {
+                nominals.add(connectorType);
+            }
+        }
+        return nominals;
+    }
+
+    private PortPlacement portPlacementFor(SchemaNode node, String portId) {
+        if (portId == null) {
+            return null;
+        }
+        for (PortPlacement p : node.getPortPlacements()) {
+            if (portId.equals(p.getPortId())) {
+                return p;
+            }
+        }
+        return null;
+    }
+
+    private CardPort findPortOnNode(SchemaNode node, String portId) {
+        if (portId == null) {
+            return null;
+        }
+        for (SchemaCard c : node.getCards()) {
+            for (CardPort p : c.getPorts()) {
+                if (p.getId().equals(portId)) {
+                    return p;
+                }
+            }
+        }
+        for (CardPort p : node.getPowerConnectors()) {
+            if (p.getId().equals(portId)) {
+                return p;
+            }
+        }
+        return null;
+    }
+
+    /** Заготовка API «сеть из схемы» (docs/schema-ports-rework/PLAN.md, D11/задача
+     *  T5.4) — без UI сетевого менеджера (это будущая работа вне этого плана), только
+     *  чистая функция для последующей автосборки: {@code devices} — блоки с хотя бы
+     *  одним ЗАДЕЙСТВОВАННЫМ (подключённым связью) гнездом роли {@link
+     *  InterfaceRole#NETWORK}; {@code switches} — блоки сетевого оборудования из
+     *  библиотеки ({@link SchemaNode#getNetworkDeviceTypeId()} задан, см. {@link
+     *  #addSchemaNodeFromNetworkDevice}), ВНЕ ЗАВИСИМОСТИ от того, подключены ли уже
+     *  их гнёзда (свитч на схеме — уже сетевое устройство, даже до прокладки кабеля);
+     *  {@code links} — сами связи. Данные LED (роль {@link InterfaceRole#LED_DATA}
+     *  контроллеров/конвертеров/экранов, PLAN.md §2.3) в граф не попадают — это другой
+     *  вид данных, не IP-сеть. */
+    public record NetworkGraphDevice(String nodeId, String label) {
+    }
+
+    public record NetworkGraphLink(String fromNodeId, String toNodeId) {
+    }
+
+    public record NetworkGraph(List<NetworkGraphDevice> devices, List<NetworkGraphLink> links,
+                                List<NetworkGraphDevice> switches) {
+    }
+
+    public NetworkGraph networkGraphFromScene(Scene scene) {
+        if (scene == null) {
+            return new NetworkGraph(List.of(), List.of(), List.of());
+        }
+        List<InterfaceType> library = getInterfaceTypes();
+        java.util.Map<String, SchemaNode> byId = new java.util.LinkedHashMap<>();
+        for (SchemaNode n : scene.getSchemaNodes()) {
+            byId.put(n.getId(), n);
+        }
+        List<NetworkGraphLink> links = new ArrayList<>();
+        java.util.LinkedHashSet<String> connectedIds = new java.util.LinkedHashSet<>();
+        for (SchemaEdge e : scene.getSchemaEdges()) {
+            if (e.getMode() != SchemaMode.SIGNAL) {
+                continue;
+            }
+            SchemaNode fromNode = byId.get(e.getFromNodeId());
+            SchemaNode toNode = byId.get(e.getToNodeId());
+            if (fromNode == null || toNode == null) {
+                continue;
+            }
+            if (!isNetworkRole(fromNode, e.getFromPortId(), library) && !isNetworkRole(toNode, e.getToPortId(), library)) {
+                continue;
+            }
+            links.add(new NetworkGraphLink(e.getFromNodeId(), e.getToNodeId()));
+            connectedIds.add(e.getFromNodeId());
+            connectedIds.add(e.getToNodeId());
+        }
+        List<NetworkGraphDevice> devices = new ArrayList<>();
+        List<NetworkGraphDevice> switches = new ArrayList<>();
+        for (SchemaNode n : scene.getSchemaNodes()) {
+            if (n.getMode() != SchemaMode.SIGNAL) {
+                continue;
+            }
+            if (n.getNetworkDeviceTypeId() != null) {
+                switches.add(new NetworkGraphDevice(n.getId(), n.getLabel()));
+            }
+            if (connectedIds.contains(n.getId())) {
+                devices.add(new NetworkGraphDevice(n.getId(), n.getLabel()));
+            }
+        }
+        return new NetworkGraph(devices, links, switches);
+    }
+
+    private boolean isNetworkRole(SchemaNode node, String portId, List<InterfaceType> library) {
+        CardPort port = findPortOnNode(node, portId);
+        if (port == null) {
+            return false;
+        }
+        InterfaceRole role = com.vjstb.ledscheme.service.schemalayout.PortRoleResolver.resolve(
+                SchemaMode.SIGNAL, node.getType(), port, portPlacementFor(node, portId), library);
+        return role == InterfaceRole.NETWORK;
     }
 
     /** Вручную привязывает узел общей схемы (обычно type == CONTROLLER) к реальному

@@ -205,6 +205,63 @@ public class SettingsManager {
         persist();
     }
 
+    // ---- переработка гнёзд/связей общей схемы (docs/schema-ports-rework/PLAN.md,
+    // задача T1.5) — новые настройки, UI пока не подключён (см. этап 3/4 PLAN.md).
+
+    public void setSignalGroupDisplay(GroupDisplayMode mode) {
+        activeProfile().setSignalGroupDisplay(mode);
+        persist();
+    }
+
+    public void setPowerGroupDisplay(GroupDisplayMode mode) {
+        activeProfile().setPowerGroupDisplay(mode);
+        persist();
+    }
+
+    public void setSignalDefaultOrientation(com.vjstb.ledscheme.model.NodeOrientation orientation) {
+        activeProfile().setSignalDefaultOrientation(orientation);
+        persist();
+    }
+
+    public void setPowerDefaultOrientation(com.vjstb.ledscheme.model.NodeOrientation orientation) {
+        activeProfile().setPowerDefaultOrientation(orientation);
+        persist();
+    }
+
+    public void setNewEdgeRouteMode(com.vjstb.ledscheme.model.EdgeRouteMode mode) {
+        activeProfile().setNewEdgeRouteMode(mode);
+        persist();
+    }
+
+    public void setSchemaArrowPlacement(ArrowPlacement placement) {
+        activeProfile().setSchemaArrowPlacement(placement);
+        persist();
+    }
+
+    public void setOrthogonalEdgeEditing(boolean enabled) {
+        activeProfile().setOrthogonalEdgeEditing(enabled);
+        persist();
+    }
+
+    public void setSchemaStylePreset(SchemaStylePreset preset) {
+        activeProfile().setSchemaStylePreset(preset);
+        persist();
+    }
+
+    /** docs/schema-ports-rework/PLAN.md, задача T5.5, D16 — переключатель
+     *  «старый способ рисования» общей схемы, глобально в профиле. */
+    public void setSchemaRenderMode(SchemaRenderMode mode) {
+        activeProfile().setSchemaRenderMode(mode);
+        persist();
+    }
+
+    /** Длина уса связи общей схемы (px) — доводка T4.4 (пожелание пользователя
+     *  2026-09-18), см. {@link UserProfile#getSchemaRouteStubPx()}. */
+    public void setSchemaRouteStubPx(int px) {
+        activeProfile().setSchemaRouteStubPx(px);
+        persist();
+    }
+
     public void setLoadTrackingEnabled(boolean enabled) {
         activeProfile().setLoadTrackingEnabled(enabled);
         persist();
@@ -312,6 +369,24 @@ public class SettingsManager {
 
     public void setArchiveFolder(String path) {
         settings.setArchiveFolder(path);
+        persist();
+    }
+
+    /** Регистрирует цвет как «недавно использованный» для линий схемы/цепочек
+     *  (см. {@code RecentColorsChooserPanel}) — вызывать ПОСЛЕ подтверждения
+     *  выбора (OK диалога), не на каждый промежуточный клик по палитре. Повторный
+     *  выбор того же цвета переносит его в начало списка, не дублирует запись;
+     *  список ограничен {@code MAX_RECENT}. Персистентно (в отличие от прежнего
+     *  чисто статического {@code RECENT} — баг-репорт: "палитру нужно сохранять
+     *  между перезапусками", про цвета ЛИНИЙ соединений/цепочек расключения). */
+    public void rememberRecentLineColor(int rgb) {
+        List<Integer> recent = new ArrayList<>(activeProfile().getRecentLineColors());
+        recent.removeIf(existing -> existing == rgb);
+        recent.add(0, rgb);
+        while (recent.size() > 24) {
+            recent.remove(recent.size() - 1);
+        }
+        activeProfile().setRecentLineColors(recent);
         persist();
     }
 

@@ -65,6 +65,7 @@ public class SetupStagePanel extends JPanel {
      *  #addContextualNode}. */
     private final JButton addNodeBtn = new JButton();
     private final JButton arrangeScreensBtn = new JButton("Расставить экраны без наложения");
+    private final JButton exportScreensOverviewBtn = new JButton("Экспорт таблицы экранов…");
     private final JButton deleteNodeBtn = new JButton("✕ Удалить");
 
     private final JPanel prerigSection;
@@ -90,6 +91,10 @@ public class SetupStagePanel extends JPanel {
             new JComboBox<>(com.vjstb.ledscheme.model.ScreenMountType.values());
     private final JComboBox<com.vjstb.ledscheme.model.ScreenTagColor> pTagColor =
             new JComboBox<>(com.vjstb.ledscheme.model.ScreenTagColor.values());
+    /** Свободные примечания к экрану (см. {@link Screen#getNotes()}) — в отличие от
+     *  {@link #pRiggingNotes} видно ВСЕГДА, не только при монтаже подвесом
+     *  (баг-репорт: "для экранов сейчас негде писать примечания"). */
+    private final javax.swing.JTextArea pScreenNotes = new javax.swing.JTextArea(3, 10);
     private final JSpinner pRiggingPoints = new JSpinner(new SpinnerNumberModel(0, 0, 500, 1));
     private final JTextField pRiggingNotes = new JTextField(10);
     private final JSpinner pRiggingSafetyFactor = new JSpinner(new SpinnerNumberModel(5.0, 1.0, 20.0, 0.5));
@@ -361,6 +366,12 @@ public class SetupStagePanel extends JPanel {
         toolbar.add(arrangeScreensBtn);
 
         toolbar.add(UiKit.vgap());
+        exportScreensOverviewBtn.setToolTipText("Картинка со всеми экранами сцены (пронумерованы) и таблицей ниже:"
+                + " номер, габариты, разрешение, вес, тип монтажа.");
+        exportScreensOverviewBtn.addActionListener(e -> exportScreensOverview());
+        toolbar.add(exportScreensOverviewBtn);
+
+        toolbar.add(UiKit.vgap());
         deleteNodeBtn.setToolTipText("Удалить выбранный в дереве узел (проект/сцену/экран) со всем содержимым.");
         deleteNodeBtn.addActionListener(e -> deleteSelectedNode());
         toolbar.add(deleteNodeBtn);
@@ -403,6 +414,27 @@ public class SetupStagePanel extends JPanel {
         if (name != null && !name.trim().isEmpty()) {
             model.selectProject(model.addProject(name.trim()));
         }
+    }
+
+    /** «Экспорт таблицы экранов…» — та же таблица, что и «Экспорт легенды портов…»
+     *  на этапе «Сигнал» (см. {@code SchemaPanel#exportPortLegend}), но со списком
+     *  экранов сцены (номер/габариты/разрешение/вес/тип монтажа) вместо портов
+     *  контроллеров, и с рядом пронумерованных прямоугольников экранов сверху. */
+    private void exportScreensOverview() {
+        Scene scene = model.getCurrentScene();
+        if (scene == null) {
+            return;
+        }
+        List<Screen> screens = scene.getScreens();
+        if (screens.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "На сцене нет экранов — нечего экспортировать",
+                    "Список пуст", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        com.vjstb.ledscheme.ui.stage.CurrentSchemeExporter.exportPng(this, model, settings,
+                scene.getName() + " — экраны",
+                dpiScale -> com.vjstb.ledscheme.ui.SchemeRenderer.renderScreensOverviewImage(
+                        scene.getName(), model, screens, dpiScale));
     }
 
     private void deleteSelectedNode() {
@@ -1941,6 +1973,14 @@ public class SetupStagePanel extends JPanel {
         body.add(UiKit.formRow("Глубина цвета, бит", pBitDepth));
         body.add(UiKit.vgap());
 
+        body.add(UiKit.vgap(10));
+        pScreenNotes.setLineWrap(true);
+        pScreenNotes.setWrapStyleWord(true);
+        pScreenNotes.setToolTipText("Свободные заметки к этому экрану — видны всегда, независимо от способа"
+                + " монтажа (в отличие от заметок по подвесу/конструктиву в соответствующих карточках).");
+        body.add(UiKit.formRow("Примечания", new JScrollPane(pScreenNotes)));
+        body.add(UiKit.vgap());
+
         // Единая кнопка «Применить» вместо 4 разных — несколько похожих кнопок
         // подряд только путали (какая из них что именно сохраняет).
         JButton apply = new JButton("Применить настройки экрана");
@@ -1959,6 +1999,7 @@ public class SetupStagePanel extends JPanel {
                         selectedHoistTypeId());
                 model.updateScreenSignalSpec(scr, (Integer) pRefreshHz.getSelectedItem(),
                         (Integer) pBitDepth.getSelectedItem());
+                model.updateScreenNotes(scr, pScreenNotes.getText());
             } catch (RuntimeException ex) {
                 JOptionPane.showMessageDialog(this, ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
             }
@@ -2301,6 +2342,7 @@ public class SetupStagePanel extends JPanel {
                 pTagColor.setSelectedItem(scr.getTagColor());
                 pRiggingPoints.setValue(scr.getRiggingPointsCount());
                 pRiggingNotes.setText(scr.getRiggingNotes() != null ? scr.getRiggingNotes() : "");
+                pScreenNotes.setText(scr.getNotes() != null ? scr.getNotes() : "");
                 pRiggingSafetyFactor.setValue(scr.getRiggingSafetyFactorMin());
                 pRiggingHoistCapacity.setText(scr.getRiggingHoistCapacityKg() != null
                         ? UiKit.fmt(scr.getRiggingHoistCapacityKg()) : "");
@@ -2538,6 +2580,8 @@ public class SetupStagePanel extends JPanel {
             addNodeBtn.setToolTipText("Создать новый проект.");
         }
         arrangeScreensBtn.setEnabled(model.getCurrentScene() != null);
+        exportScreensOverviewBtn.setEnabled(model.getCurrentScene() != null
+                && !model.getCurrentScene().getScreens().isEmpty());
         deleteNodeBtn.setEnabled(selectNode != null);
     }
 
