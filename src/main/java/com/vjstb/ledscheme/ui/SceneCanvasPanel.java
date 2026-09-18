@@ -51,6 +51,13 @@ public class SceneCanvasPanel extends JPanel {
     private boolean detailPower;
     private boolean detailFit;
     private double detailZoom = 1.0;
+    // По умолчанию true (Питание/Сигнал/Вывод должны видеть прописанные цепочки в
+    // detailMode) — но этап Сетап использует эту же панель только для перестановки/
+    // масштабирования отдельных кабинетов (см. SetupStagePanel), а рендер цепочек
+    // приходил "бесплатно" вместе с paintScheme, скопированным с этапа Питание —
+    // баг-репорт 2026-09-16 "в сетапе режим кабинетов по отдельности не должен
+    // показывать цепочки расключения".
+    private boolean showChains = true;
     /** Если задан — детальный режим ("Показать все экраны сцены") становится
      *  интерактивным: клик/протяжка по кабинету АКТИВНОГО экрана прописывает
      *  цепочку через тот же контроллер, что и одиночный CanvasPanel, — раньше
@@ -445,6 +452,11 @@ public class SceneCanvasPanel extends JPanel {
         setFocusable(controller != null);
     }
 
+    /** См. javadoc поля {@link #showChains}. */
+    public void setShowChains(boolean show) {
+        this.showChains = show;
+    }
+
     /** Экран и (если попали внутрь его сетки) конкретный кабинет под точкой — для
      *  интерактивной прописки из общего обзора сцены. Кабинет в результате может
      *  быть null (попали на экран, но не на кабинет — паддинг сетки/ячейка скрыта). */
@@ -632,9 +644,19 @@ public class SceneCanvasPanel extends JPanel {
      *  paintScheme}, и переопределения формы (→ "Форма"/"Угол") — реальный контур
      *  формы, а не декоративная метка. Только в {@code detailMode}: тот же принцип,
      *  что был у убранного {@code ShapeEditorPanel} — переопределение должно быть
-     *  видно СРАЗУ, не только через тултип/диалог параметров. */
+     *  видно СРАЗУ, не только через тултип/диалог параметров.
+     *  <p>Разбит на два прохода ({@code fillPass}) — раньше вся подсветка (и заливка,
+     *  и контур) рисовалась ОДНИМ проходом ПОСЛЕ {@code paintScheme} целиком, включая
+     *  линии цепочек, и сплошная заливка молча перекрывала уже нарисованную линию
+     *  цепочки — баг-репорт 2026-09-16 «синяя заливка кабинетов нестандартного типа/
+     *  формы перекрывает цепочку расключения, а должна быть под цепочкой» (и для
+     *  питания, и для сигнала). Теперь вызывающий код (см. {@code paint}) кладёт
+     *  {@code fillPass=true} МЕЖДУ {@link SchemeRenderer#paintSchemeGrid} и {@link
+     *  SchemeRenderer#paintSchemeChains} (заливка ложится под цепочку), а {@code
+     *  fillPass=false} — уже ПОСЛЕ цепочек (контур подсветки/формы остаётся чётким
+     *  поверх линии, это не тот же баг — контур не закрашивает цепочку целиком). */
     private void drawCabinetOverrideMarks(Graphics2D g2, Screen s, CabinetType defaultType,
-                                           int cellW, int cellH, int offX, int offY) {
+                                           int cellW, int cellH, int offX, int offY, boolean fillPass) {
         for (CabinetInstance c : s.getCabinets()) {
             if (c.isHidden()) {
                 continue;
@@ -663,20 +685,26 @@ public class SceneCanvasPanel extends JPanel {
             int ew = effW(c, defaultType, cellW);
             int eh = effH(c, defaultType, cellH);
             if (c.getCabinetTypeId() != null) {
-                CabinetType override = model.getWorkspace().cabinetTypeById(c.getCabinetTypeId());
-                Color typeColor = override != null ? typeColorFor(override) : Palette.ACCENT;
-                g2.setColor(blend(Palette.PHASE_NONE, typeColor, 0.55f));
-                SchemeRenderer.fillCabinetShape(g2, x + 1, y + 1, ew - 2, eh - 2, effectiveShape, rotationDeg);
-                g2.setColor(Palette.ACCENT);
-                SchemeRenderer.outlineCabinetShape(g2, x + 1, y + 1, ew - 2, eh - 2, effectiveShape, rotationDeg);
-                // Заливка выше рисуется ПОВЕРХ paintScheme (см. javadoc метода) и без этого
-                // молча перекрывала подпись «строка,столбец» — баг-репорт 2026-09-14.
-                SchemeRenderer.drawCabinetIndexLabel(g2, c, x, y, ew, eh);
+                if (fillPass) {
+                    CabinetType override = model.getWorkspace().cabinetTypeById(c.getCabinetTypeId());
+                    Color typeColor = override != null ? typeColorFor(override) : Palette.ACCENT;
+                    g2.setColor(blend(Palette.PHASE_NONE, typeColor, 0.55f));
+                    SchemeRenderer.fillCabinetShape(g2, x + 1, y + 1, ew - 2, eh - 2, effectiveShape, rotationDeg);
+                    // Заливка кладётся между сеткой и цепочками (см. javadoc метода) и без
+                    // этого молча перекрывала бы подпись «строка,столбец» — баг-репорт
+                    // 2026-09-14.
+                    SchemeRenderer.drawCabinetIndexLabel(g2, c, x, y, ew, eh);
+                } else {
+                    g2.setColor(Palette.ACCENT);
+                    SchemeRenderer.outlineCabinetShape(g2, x + 1, y + 1, ew - 2, eh - 2, effectiveShape, rotationDeg);
+                }
             }
-            com.vjstb.ledscheme.model.CabinetShape shape = c.getShapeOverride();
-            if (shape != null && shape != com.vjstb.ledscheme.model.CabinetShape.RECTANGLE) {
-                g2.setColor(Palette.TEXT);
-                SchemeRenderer.outlineCabinetShape(g2, x + 1, y + 1, ew - 2, eh - 2, shape, rotationDeg);
+            if (!fillPass) {
+                com.vjstb.ledscheme.model.CabinetShape shape = c.getShapeOverride();
+                if (shape != null && shape != com.vjstb.ledscheme.model.CabinetShape.RECTANGLE) {
+                    g2.setColor(Palette.TEXT);
+                    SchemeRenderer.outlineCabinetShape(g2, x + 1, y + 1, ew - 2, eh - 2, shape, rotationDeg);
+                }
             }
         }
     }
@@ -1032,30 +1060,41 @@ public class SceneCanvasPanel extends JPanel {
                     if (overlapped) {
                         Graphics2D go = (Graphics2D) g2.create();
                         go.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.55f));
-                        SchemeRenderer.paintScheme(go, s, t, detailPower, cellW, cellH, gridX, gridY, model.getWorkspace(),
-                                scenePowerChains, sceneSignalChains, model.controllersInScene(scene),
-                                settings.activeProfile().isPowerUnitKw());
+                        SchemeRenderer.paintSchemeGrid(go, s, t, cellW, cellH, gridX, gridY, model.getWorkspace());
+                        drawCabinetOverrideMarks(go, s, t, cellW, cellH, gridX, gridY, true);
+                        if (showChains) {
+                            SchemeRenderer.paintSchemeChains(go, s, detailPower, cellW, cellH, gridX, gridY, t,
+                                    model.getWorkspace(), scenePowerChains, sceneSignalChains,
+                                    model.controllersInScene(scene));
+                        }
                         if (chainController != null && chainController.isChainBuilding()) {
                             drawChainBuildingOverlay(go, s, cellW, cellH, gridX, gridY);
                         }
+                        drawCabinetOverrideMarks(go, s, t, cellW, cellH, gridX, gridY, false);
                         go.dispose();
                     } else {
-                        SchemeRenderer.paintScheme(g2, s, t, detailPower, cellW, cellH, gridX, gridY, model.getWorkspace(),
-                                scenePowerChains, sceneSignalChains, model.controllersInScene(scene),
-                                settings.activeProfile().isPowerUnitKw());
+                        SchemeRenderer.paintSchemeGrid(g2, s, t, cellW, cellH, gridX, gridY, model.getWorkspace());
+                        // v3.0: подсветка кабинетов с переопределением типа/формы — раньше
+                        // это рисовал сам ShapeEditorPanel в своей отдельной упрощённой сетке
+                        // (баг-репорт 2026-09-14: "поправь отображение изменённых кабинетов" —
+                        // после переноса правки в этот, общий, рендер сетки типа/формы
+                        // визуально никак не выделялись, хотя переопределение реально
+                        // применялось). Заливка (fillPass=true) кладётся между сеткой и
+                        // цепочками — см. javadoc drawCabinetOverrideMarks про баг-репорт
+                        // 2026-09-16 (заливка перекрывала цепочку). Этот весь блок целиком
+                        // общий с реальным холстом расключения (CanvasPanel), туда эту
+                        // подсветку добавлять не нужно.
+                        drawCabinetOverrideMarks(g2, s, t, cellW, cellH, gridX, gridY, true);
+                        if (showChains) {
+                            SchemeRenderer.paintSchemeChains(g2, s, detailPower, cellW, cellH, gridX, gridY, t,
+                                    model.getWorkspace(), scenePowerChains, sceneSignalChains,
+                                    model.controllersInScene(scene));
+                        }
                         if (chainController != null && chainController.isChainBuilding()) {
                             drawChainBuildingOverlay(g2, s, cellW, cellH, gridX, gridY);
                         }
+                        drawCabinetOverrideMarks(g2, s, t, cellW, cellH, gridX, gridY, false);
                     }
-                    // v3.0: подсветка кабинетов с переопределением типа/формы — раньше
-                    // это рисовал сам ShapeEditorPanel в своей отдельной упрощённой сетке
-                    // (баг-репорт 2026-09-14: "поправь отображение изменённых кабинетов" —
-                    // после переноса правки в этот, общий, рендер сетки типа/формы
-                    // визуально никак не выделялись, хотя переопределение реально
-                    // применялось). Отдельным проходом ПОВЕРХ paintScheme — тот целиком
-                    // общий с реальным холстом расключения (CanvasPanel), туда эту
-                    // подсветку добавлять не нужно.
-                    drawCabinetOverrideMarks(g2, s, t, cellW, cellH, gridX, gridY);
                     // NB: НОМИНАЛЬНОЕ начало сетки (gridX/gridY), не расширенный бокс x/y —
                     // locateCabinet ниже вызывает cabX/cabY, которые сами уже прибавляют
                     // (возможно отрицательное) мм-смещение конкретного кабинета поверх
@@ -1101,7 +1140,9 @@ public class SceneCanvasPanel extends JPanel {
         // по-прежнему нужно рисовать отдельно, и для питания тоже (раньше не рисовался
         // вовсе). Только для РЕЖИМА, который сейчас показан (detailPower) — иначе
         // мост чужого режима протекал бы поверх текущего вида (см. Task #78 follow-up).
-        if (detailMode) {
+        // showChains=false (см. javadoc поля) — Сетап вообще не должен рисовать цепочки,
+        // включая переход через границу экранов.
+        if (detailMode && showChains) {
             if (detailPower) {
                 drawCrossScreenBridges(g2, scene, scenePowerChains, List.of(), screenBoxes);
             } else {

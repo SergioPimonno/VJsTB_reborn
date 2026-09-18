@@ -269,6 +269,13 @@ public class SetupStagePanel extends JPanel {
         // сцены" и чем-то ещё больше не нужен — секция одна.
         prerigPreview = new com.vjstb.ledscheme.ui.SceneCanvasPanel(model, settings);
         prerigPreview.setShowRiggingPoints(true);
+        // Этап Сетап показывает сетку кабинетов только для перестановки/масштаба
+        // (режим "Кабинеты по отдельности" ниже), а не для прописи цепочек — рендер
+        // цепочек копировался "как есть" с этапа Питание (см. setDetailMode(detail,
+        // true, ...) ниже), из-за чего на этапе Сетап рисовались силовые цепочки,
+        // хотя они здесь ещё физически не расставлены осмысленно — баг-репорт
+        // 2026-09-16 "в сетапе не показывать цепочки расключения".
+        prerigPreview.setShowChains(false);
         prerigSection = buildPrerig();
 
         // Без обёртки в ещё один JScrollPane вокруг left (было — вложенный скролл
@@ -1434,8 +1441,14 @@ public class SetupStagePanel extends JPanel {
         }
 
         try {
-            java.io.File folder = com.vjstb.ledscheme.ui.OutputPaths.defaultFolder(
+            java.io.File sceneFolder = com.vjstb.ledscheme.ui.OutputPaths.defaultFolder(
                     model.getCurrentProject(), model.getCurrentScene(), settings);
+            // Отдельная подпапка, а не флат в корень сцены -- баг-репорт: схема риггинга
+            // оказывалась единственным файлом прямо в папке сцены, наравне с подпапками
+            // "Сила"/"Сигнал"/"Маски"/"Транспорт" из пакета документации (см.
+            // OutputStagePanel.generate()) вместо того, чтобы собираться так же, как они.
+            java.io.File folder = new java.io.File(sceneFolder, "Риггинг");
+            folder.mkdirs();
             java.io.File out = new java.io.File(folder,
                     "rigging_" + com.vjstb.ledscheme.ui.OutputPaths.sanitize(scr.getName()) + ".png");
             java.awt.image.BufferedImage img = com.vjstb.ledscheme.ui.RiggingSchemaImageWriter.render(

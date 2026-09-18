@@ -155,6 +155,34 @@ public final class SchemeRenderer {
                                    List<PowerChain> powerChains, List<SignalChain> signalChains,
                                    List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers,
                                    boolean powerUnitKw, boolean showCabinetIndexLabels) {
+        paintSchemeGrid(g2, scr, type, cellW, cellH, offX, offY, workspace, showCabinetIndexLabels);
+        paintSchemeChains(g2, scr, power, cellW, cellH, offX, offY, type, workspace,
+                powerChains, signalChains, sceneControllers);
+    }
+
+    /** Часть {@link #paintScheme} — только сетка кабинетов (контур ячейки + подпись
+     *  "строка,столбец"), без линий цепочек. Вынесено отдельно, чтобы вызывающий код
+     *  мог вставить свой оверлей МЕЖДУ сеткой и цепочками (см. {@link #paintSchemeChains}
+     *  и {@code SceneCanvasPanel.drawCabinetOverrideMarks}) — баг-репорт 2026-09-16:
+     *  подсветка переопределения типа/формы кабинета рисовалась одним проходом ПОСЛЕ
+     *  всего {@code paintScheme} (в т.ч. после цепочек) и своей сплошной заливкой
+     *  перекрывала уже нарисованную линию цепочки; правильный порядок — заливка ПОД
+     *  цепочкой (между сеткой и цепочками), а не над ней. Обычные вызывающие коды
+     *  (CanvasPanel, PortPickerPanel и т.п.), которым этот порядок безразличен,
+     *  по-прежнему используют единый {@link #paintScheme}. */
+    public static void paintSchemeGrid(Graphics2D g2, Screen scr, CabinetType type,
+                                        int cellW, int cellH, int offX, int offY, Workspace workspace) {
+        paintSchemeGrid(g2, scr, type, cellW, cellH, offX, offY, workspace, true);
+    }
+
+    /** {@code showCabinetIndexLabels} — см. javadoc {@link #paintScheme}'s перегрузка
+     *  с тем же параметром ({@link #renderScreensOverviewImage} — единственный
+     *  вызывающий код, которому нужен {@code false}; интерактивный холст прописи
+     *  через {@link SceneCanvasPanel} по-прежнему зовёт 8-параметровую перегрузку
+     *  выше, всегда получая подписи). */
+    public static void paintSchemeGrid(Graphics2D g2, Screen scr, CabinetType type,
+                                        int cellW, int cellH, int offX, int offY, Workspace workspace,
+                                        boolean showCabinetIndexLabels) {
         for (CabinetInstance cab : scr.getCabinets()) {
             // Деактивированная (скрытая) ячейка — по определению "не считается, не
             // рисуется, не участвует в цепочках" (см. CabinetInstance.isHidden) —
@@ -186,7 +214,14 @@ public final class SchemeRenderer {
                 drawCabinetIndexLabel(g2, cab, x, y, ew, eh);
             }
         }
+    }
 
+    /** Часть {@link #paintScheme} — только линии цепочек, см. javadoc {@link #paintSchemeGrid}. */
+    public static void paintSchemeChains(Graphics2D g2, Screen scr, boolean power,
+                                         int cellW, int cellH, int offX, int offY, CabinetType type,
+                                         Workspace workspace, List<PowerChain> powerChains,
+                                         List<SignalChain> signalChains,
+                                         List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers) {
         if (power) {
             for (PowerChain chain : powerChains) {
                 // Метка фазы — только у НАЧАЛА цепочки: питание не закольцовывается
