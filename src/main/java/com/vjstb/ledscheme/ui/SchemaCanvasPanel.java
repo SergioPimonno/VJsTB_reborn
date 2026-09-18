@@ -182,6 +182,53 @@ public class SchemaCanvasPanel extends JPanel {
      *  предсказуем при отладке. */
     private final Set<SchemaNode> selectedNodes = new LinkedHashSet<>();
     private SchemaEdge selectedEdge;
+    /** Многовыделение связей (баг-репорт пользователя 2026-09-18: "не работает
+     *  групповое выделение линий, только по одной") — Shift/Ctrl+клик по связи
+     *  добавляет/убирает её из набора, как уже работало для {@link #selectedNodes}.
+     *  {@link #selectedEdge} остаётся «главной»/последней кликнутой связью для
+     *  одиночных детальных операций, для которых многовыделение не имеет смысла —
+     *  перетаскивание ТОЧКИ ИЗЛОМА или ОТРЕЗКА, редактирование подписи (см. {@link
+     *  #waypointAt}/{@link #segmentAt}/{@link #edgeLabelChipAt} — не тронуты, как и
+     *  видимость точек излома только у {@code selectedEdge}). {@link #selectedEdges}
+     *  — источник истины для подсветки (какие связи рисуются акцентным цветом) и
+     *  групповых операций (удаление, «Перетрассировать выделенные» — см. {@link
+     *  #rerouteSelected}/{@link #getSelectedEdges}); ВСЕГДА содержит {@code
+     *  selectedEdge}, если тот не {@code null} (инвариант поддерживается на каждом
+     *  присваивании {@code selectedEdge}, а не проверяется отдельно). */
+    private final Set<SchemaEdge> selectedEdges = new LinkedHashSet<>();
+
+    /** Устанавливает ОДНУ связь как единственное выделение (обычный клик без
+     *  Shift/Ctrl, либо программное выделение) — синхронизирует {@link
+     *  #selectedEdge}/{@link #selectedEdges} одним вызовом вместо ручной
+     *  поддержки инварианта в каждом месте. {@code null} снимает выделение
+     *  связей целиком (клик попал во что-то другое — узел, гнездо, resize-хват
+     *  и т.п. — те продолжают явно вызывать {@code selectSingleEdge(null)}, а не
+     *  просто {@code selectedEdge = null}, чтобы не забыть про {@link
+     *  #selectedEdges}). */
+    private void selectSingleEdge(SchemaEdge edge) {
+        selectedEdge = edge;
+        selectedEdges.clear();
+        if (edge != null) {
+            selectedEdges.add(edge);
+        }
+    }
+
+    /** Shift/Ctrl+клик по связи — добавить/убрать её из многовыделения, без
+     *  сброса остальных (баг-репорт пользователя 2026-09-18: "не работает
+     *  групповое выделение линий, только по одной") — тот же приём, что уже был
+     *  у {@link #selectedNodes} (см. обработчик клика по узлу чуть выше). {@link
+     *  #selectedEdge} после такого клика — сама связь, если её ДОБАВИЛИ (новая
+     *  «главная» для детальных операций типа перетаскивания точки излома), иначе
+     *  (убрали) — любая оставшаяся связь набора, либо {@code null}, если набор
+     *  опустел. */
+    private void toggleEdgeSelection(SchemaEdge edge) {
+        if (!selectedEdges.remove(edge)) {
+            selectedEdges.add(edge);
+            selectedEdge = edge;
+        } else {
+            selectedEdge = selectedEdges.isEmpty() ? null : selectedEdges.iterator().next();
+        }
+    }
 
     /** Внутренний буфер обмена схемы (Ctrl+C / Ctrl+V по многовыделению) — общий
      *  для всех холстов схемы в сессии (static), поэтому скопировать можно на одной
@@ -272,7 +319,7 @@ public class SchemaCanvasPanel extends JPanel {
                     SchemaEdge chipHitConnect = edgeLabelChipAt(mp);
                     if (chipHitConnect != null) {
                         selectedNodes.clear();
-                        selectedEdge = chipHitConnect;
+                        selectSingleEdge(chipHitConnect);
                         repaint();
                         editEdgeLabel(chipHitConnect);
                         return;
@@ -388,7 +435,7 @@ public class SchemaCanvasPanel extends JPanel {
                 if (groupDragHit != null) {
                     selectedNodes.clear();
                     selectedNodes.add(groupDragHit.node());
-                    selectedEdge = null;
+                    selectSingleEdge(null);
                     draggingGroupNode = groupDragHit.node();
                     draggingGroupPort = groupDragHit.port();
                     draggingGroupPressMp = mp;
@@ -405,14 +452,14 @@ public class SchemaCanvasPanel extends JPanel {
                     // и сам resize-drag ниже, которые оперируют ровно одним resizeNode).
                     selectedNodes.clear();
                     selectedNodes.add(resizeHit);
-                    selectedEdge = null;
+                    selectSingleEdge(null);
                     resizeNode = resizeHit;
                     repaint();
                     return;
                 }
                 WaypointHit wpHit = waypointAt(mp);
                 if (wpHit != null) {
-                    selectedEdge = wpHit.edge();
+                    selectSingleEdge(wpHit.edge());
                     selectedNodes.clear();
                     materializeAutoRouteIfNeeded(wpHit.edge());
                     draggingWaypointEdge = wpHit.edge();
@@ -429,7 +476,7 @@ public class SchemaCanvasPanel extends JPanel {
                         if (!selectedNodes.remove(hit)) {
                             selectedNodes.add(hit);
                         }
-                        selectedEdge = null;
+                        selectSingleEdge(null);
                         repaint();
                         return;
                     }
@@ -440,7 +487,7 @@ public class SchemaCanvasPanel extends JPanel {
                         selectedNodes.clear();
                         selectedNodes.add(hit);
                     }
-                    selectedEdge = null;
+                    selectSingleEdge(null);
                     dragNode = hit;
                     dragOffX = mp.x - hit.getX();
                     dragOffY = mp.y - hit.getY();
@@ -454,7 +501,7 @@ public class SchemaCanvasPanel extends JPanel {
                 SchemaEdge chipHit = edgeLabelChipAt(mp);
                 if (chipHit != null) {
                     selectedNodes.clear();
-                    selectedEdge = chipHit;
+                    selectSingleEdge(chipHit);
                     // Не открываем редактор подписи сразу по нажатию — короткий клик
                     // без сдвига мыши откроет его в mouseReleased (см. draggingLabelMoved),
                     // а реальное перетаскивание сместит чип (Task #3).
@@ -472,7 +519,7 @@ public class SchemaCanvasPanel extends JPanel {
                 SegmentHit segHit = segmentAt(mp);
                 if (segHit != null) {
                     selectedNodes.clear();
-                    selectedEdge = segHit.edge();
+                    selectSingleEdge(segHit.edge());
                     materializeAutoRouteIfNeeded(segHit.edge());
                     draggingSegmentEdge = segHit.edge();
                     draggingSegmentWpA = segHit.wpA();
@@ -486,16 +533,28 @@ public class SchemaCanvasPanel extends JPanel {
                     repaint();
                     return;
                 }
-                // Пусто (не узел, не гнездо, не чип подписи, не отрезок) — Shift/Ctrl
+                // Клик прямо по связи (не узел/гнездо/чип/отрезок — те приоритетнее):
+                // Shift/Ctrl добавляет/убирает её из многовыделения БЕЗ сброса узлов
+                // (баг-репорт пользователя 2026-09-18: "не работает групповое
+                // выделение линий, только по одной") — тот же приём, что уже был у
+                // {@link #selectedNodes}. Пусто (не узел, не связь) — Shift/Ctrl
                 // добавляет к текущему выделению по завершении протяжки (см.
                 // mouseReleased), иначе выделение сбрасывается сразу (клик без
                 // движения = просто снять выделение, протяжка ниже — прямоугольник-
                 // «резинка», баг-репорт про выделение нескольких блоков).
+                SchemaEdge plainEdgeHit = edgeAt(mp);
+                if (plainEdgeHit != null && (e.isShiftDown() || e.isControlDown())) {
+                    toggleEdgeSelection(plainEdgeHit);
+                    repaint();
+                    return;
+                }
                 if (!(e.isShiftDown() || e.isControlDown())) {
                     selectedNodes.clear();
+                    selectSingleEdge(null);
                 }
-                selectedEdge = edgeAt(mp);
-                if (selectedEdge == null) {
+                if (plainEdgeHit != null) {
+                    selectSingleEdge(plainEdgeHit);
+                } else {
                     rubberBandStart = mp;
                     rubberBandCurrent = mp;
                 }
@@ -964,7 +1023,7 @@ public class SchemaCanvasPanel extends JPanel {
         List<SchemaNode> pasted = model.pasteSchemaNodes(mode, clipboardNodes, clipboardEdges, off, off);
         selectedNodes.clear();
         selectedNodes.addAll(pasted);
-        selectedEdge = null;
+        selectSingleEdge(null);
         onChanged.run();
         repaint();
     }
@@ -1006,10 +1065,28 @@ public class SchemaCanvasPanel extends JPanel {
         return selectedEdge;
     }
 
-    /** Удаляет ВСЁ текущее выделение (узлы и/или связь) — при нескольких
-     *  выделенных узлах ОДНИМ действием отмены (см. {@code AppModel
-     *  .deleteSchemaNodes}), не по одному, иначе Ctrl+Z вернул бы только
-     *  последний удалённый узел. */
+    /** Полный набор выделенных связей (см. {@link #selectedEdges}) — неизменяемый
+     *  снимок, пустой, если ничего не выделено; всегда содержит {@link
+     *  #getSelectedEdge()}, если тот не {@code null}. */
+    public Set<SchemaEdge> getSelectedEdges() {
+        return java.util.Collections.unmodifiableSet(new LinkedHashSet<>(selectedEdges));
+    }
+
+    /** Только для тестов — открывает {@link #toggleEdgeSelection} (Shift/Ctrl+клик
+     *  по связи), без необходимости эмулировать реальное {@code MouseEvent}. */
+    public void toggleEdgeSelectionForTest(SchemaEdge edge) {
+        toggleEdgeSelection(edge);
+    }
+
+    /** Только для тестов — открывает {@link #selectSingleEdge}. */
+    public void selectSingleEdgeForTest(SchemaEdge edge) {
+        selectSingleEdge(edge);
+    }
+
+    /** Удаляет ВСЁ текущее выделение (узлы и/или связи) — при нескольких
+     *  выделенных узлах/связях ОДНИМ действием отмены (см. {@code AppModel
+     *  .deleteSchemaNodes}/{@code deleteSchemaEdges}), не по одному, иначе Ctrl+Z
+     *  вернул бы только последний удалённый элемент. */
     public void deleteSelected() {
         if (selectedNodes.size() > 1) {
             model.deleteSchemaNodes(new ArrayList<>(selectedNodes));
@@ -1019,24 +1096,29 @@ public class SchemaCanvasPanel extends JPanel {
             model.deleteSchemaNode(selectedNodes.iterator().next());
             selectedNodes.clear();
             onChanged.run();
+        } else if (selectedEdges.size() > 1) {
+            model.deleteSchemaEdges(new ArrayList<>(selectedEdges));
+            selectSingleEdge(null);
+            onChanged.run();
         } else if (selectedEdge != null) {
             model.deleteSchemaEdge(selectedEdge);
-            selectedEdge = null;
+            selectSingleEdge(null);
             onChanged.run();
         }
         repaint();
     }
 
     /** «Перетрассировать выделенные» (docs/schema-ports-rework/PLAN.md, задача T4.4/
-     *  §2.6) — выделена связь: перетрассировывается она одна; выделены узлы (без
-     *  выделенной связи): все связи ЭТОЙ схемы, у которых любой из выделенных узлов
-     *  на любом конце; ничего не выделено — ничего не делает (по аналогии с {@link
-     *  #deleteSelected}, но без «нечего перетрассировывать» диалога — кнопка просто
-     *  бездействует, как и «Удалить выбранное» в этом случае). */
+     *  §2.6) — выделены связи (одна или несколько, см. {@link #selectedEdges}):
+     *  перетрассировываются они все; выделены узлы (без выделенных связей): все
+     *  связи ЭТОЙ схемы, у которых любой из выделенных узлов на любом конце; ничего
+     *  не выделено — ничего не делает (по аналогии с {@link #deleteSelected}, но
+     *  без «нечего перетрассировывать» диалога — кнопка просто бездействует, как и
+     *  «Удалить выбранное» в этом случае). */
     public void rerouteSelected() {
         List<SchemaEdge> targets = new ArrayList<>();
-        if (selectedEdge != null) {
-            targets.add(selectedEdge);
+        if (!selectedEdges.isEmpty()) {
+            targets.addAll(selectedEdges);
         } else if (!selectedNodes.isEmpty()) {
             for (SchemaEdge e : edges()) {
                 boolean touches = selectedNodes.stream()
@@ -1870,7 +1952,7 @@ public class SchemaCanvasPanel extends JPanel {
         }
         newWps.add(insertAt, new com.vjstb.ledscheme.model.EdgeWaypoint(p.x, p.y));
         model.setSchemaEdgeWaypoints(edge, newWps);
-        selectedEdge = edge;
+        selectSingleEdge(edge);
         selectedNodes.clear();
         onChanged.run();
         repaint();
@@ -2289,7 +2371,7 @@ public class SchemaCanvasPanel extends JPanel {
                 selectedNodes.clear();
                 selectedNodes.add(hitNode);
             }
-            selectedEdge = null;
+            selectSingleEdge(null);
             repaint();
             if (selectedNodes.size() > 1) {
                 showMultiNodeMenu(e.getX(), e.getY());
@@ -2309,11 +2391,40 @@ public class SchemaCanvasPanel extends JPanel {
         }
         SchemaEdge hitEdge = edgeAt(mp);
         if (hitEdge != null) {
-            selectedEdge = hitEdge;
+            // ПКМ по связи, УЖЕ входящей в многовыделение — сохраняет его целиком
+            // (меню предложит удалить/перетрассировать ВСЕ выбранные связи), иначе
+            // сужает выделение до этой одной связи и показывает подробное меню —
+            // тот же приём, что уже был у узлов (баг-репорт пользователя
+            // 2026-09-18: "не работает групповое выделение линий").
+            if (!selectedEdges.contains(hitEdge)) {
+                selectSingleEdge(hitEdge);
+            }
             selectedNodes.clear();
             repaint();
-            showEdgeMenu(hitEdge, e.getX(), e.getY());
+            if (selectedEdges.size() > 1) {
+                showMultiEdgeMenu(e.getX(), e.getY());
+            } else {
+                showEdgeMenu(hitEdge, e.getX(), e.getY());
+            }
         }
+    }
+
+    /** Контекстное меню для КЛИКА ПРАВОЙ по связи, входящей в многовыделение (см.
+     *  {@link #handleRightClick}) — только общие для группы действия (удаление,
+     *  перетрассировка), подробное меню одной связи ({@link #showEdgeMenu}) для
+     *  группы неприменимо (цвет/подпись/маршрут — свойства ОДНОЙ конкретной связи).
+     *  Тот же приём, что {@link #showMultiNodeMenu} для узлов. */
+    private void showMultiEdgeMenu(int x, int y) {
+        JPopupMenu menu = new JPopupMenu();
+        javax.swing.JMenuItem reroute = new javax.swing.JMenuItem(
+                "Перетрассировать выбранные (" + selectedEdges.size() + ")");
+        reroute.addActionListener(ev -> rerouteSelected());
+        menu.add(reroute);
+        menu.addSeparator();
+        javax.swing.JMenuItem del = new javax.swing.JMenuItem("Удалить выбранные (" + selectedEdges.size() + ")");
+        del.addActionListener(ev -> deleteSelected());
+        menu.add(del);
+        menu.show(this, x, y);
     }
 
     /** Контекстное меню для КЛИКА ПРАВОЙ по узлу, входящему в многовыделение (см.
@@ -2720,7 +2831,7 @@ public class SchemaCanvasPanel extends JPanel {
         javax.swing.JMenuItem del = new javax.swing.JMenuItem("Удалить связь");
         del.addActionListener(ev -> {
             model.deleteSchemaEdge(edge);
-            selectedEdge = null;
+            selectSingleEdge(null);
             onChanged.run();
             repaint();
         });
@@ -2955,7 +3066,11 @@ public class SchemaCanvasPanel extends JPanel {
             if (pts == null) {
                 continue;
             }
-            boolean selected = edge == selectedEdge;
+            // Подсветка — ЛЮБАЯ связь из многовыделения (docs/schema-ports-rework/
+            // PLAN.md доводка, баг-репорт пользователя 2026-09-18: "не работает
+            // групповое выделение линий"); точки излома (ниже) — только у "главной"
+            // {@link #selectedEdge}, тащить сразу несколько смысла не имеет.
+            boolean selected = selectedEdges.contains(edge);
             Color customColor = edge.getColor() != null ? new Color(edge.getColor()) : null;
             g2.setColor(selected ? style.accent : customColor != null ? customColor : edgeDefaultColor(edge));
             float strokeWidth = selected ? 3f : 2f;
@@ -2996,9 +3111,12 @@ public class SchemaCanvasPanel extends JPanel {
             for (int i : arrowSegmentIndices(rpts.size(), onArc, settings.activeProfile().getSchemaArrowPlacement())) {
                 drawArrow(g2, rpts.get(i)[0], rpts.get(i)[1], rpts.get(i + 1)[0], rpts.get(i + 1)[1]);
             }
-            // Точки излома видны и хватаются мышью только у ВЫДЕЛЕННОЙ связи — иначе
-            // маленькие кружки на каждом изломе каждой связи захламляли бы обычный вид.
-            if (selected) {
+            // Точки излома видны и хватаются мышью только у "ГЛАВНОЙ" связи
+            // ({@link #selectedEdge}, не у всего многовыделения {@link
+            // #selectedEdges}) — тащить точку излома сразу у нескольких связей не
+            // имеет смысла (у каждой свои собственные точки), да и {@link
+            // #waypointAt} ищет только среди точек ИМЕННО {@code selectedEdge}.
+            if (edge == selectedEdge) {
                 for (int i = 1; i < pts.size() - 1; i++) {
                     int wx = (int) pts.get(i)[0], wy = (int) pts.get(i)[1];
                     g2.setColor(Color.WHITE);
@@ -4556,7 +4674,10 @@ public class SchemaCanvasPanel extends JPanel {
             if (pts == null) {
                 continue;
             }
-            boolean selected = edge == selectedEdge;
+            // Подсветка — ЛЮБАЯ связь из многовыделения, точки излома (ниже) — только
+            // у "главной" {@link #selectedEdge} (см. симметричный комментарий в MODERN-
+            // пути выше, доводка T4.4, баг-репорт пользователя 2026-09-18).
+            boolean selected = selectedEdges.contains(edge);
             Color customColor = edge.getColor() != null ? new Color(edge.getColor()) : null;
             g2.setColor(selected ? style.accent : customColor != null ? customColor : style.defaultEdgeColor);
             float strokeWidth = selected ? 3f : 2f;
@@ -4587,7 +4708,7 @@ public class SchemaCanvasPanel extends JPanel {
                 }
                 drawArrow(g2, rpts.get(i)[0], rpts.get(i)[1], rpts.get(i + 1)[0], rpts.get(i + 1)[1]);
             }
-            if (selected) {
+            if (edge == selectedEdge) {
                 for (int i = 1; i < pts.size() - 1; i++) {
                     int wx = (int) pts.get(i)[0], wy = (int) pts.get(i)[1];
                     g2.setColor(Color.WHITE);

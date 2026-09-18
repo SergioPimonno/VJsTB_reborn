@@ -2187,6 +2187,20 @@ public class AppModel {
         changed();
     }
 
+    /** Групповое удаление НЕСКОЛЬКИХ связей ОДНИМ действием отмены (docs/schema-
+     *  ports-rework/PLAN.md, задача T4.4 доводка, многовыделение связей — баг-
+     *  репорт пользователя 2026-09-18) — тот же приём, что {@link
+     *  #deleteSchemaNodes} для узлов: по одной {@link #deleteSchemaEdge} на связь
+     *  Ctrl+Z вернул бы только последнюю. */
+    public void deleteSchemaEdges(Collection<SchemaEdge> edgesToDelete) {
+        if (currentScene == null || edgesToDelete.isEmpty()) {
+            return;
+        }
+        pushUndo("Удаление связей");
+        currentScene.getSchemaEdges().removeAll(edgesToDelete);
+        changed();
+    }
+
     public void clearSchema(SchemaMode mode) {
         if (currentScene == null) {
             return;
