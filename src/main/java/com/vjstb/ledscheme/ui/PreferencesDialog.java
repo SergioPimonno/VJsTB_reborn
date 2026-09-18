@@ -1,6 +1,5 @@
 package com.vjstb.ledscheme.ui;
 
-import com.vjstb.ledscheme.settings.SchemaStylePreset;
 import com.vjstb.ledscheme.settings.SettingsManager;
 import com.vjstb.ledscheme.settings.WireHopStyle;
 import java.awt.BorderLayout;
@@ -83,15 +82,6 @@ public class PreferencesDialog extends JDialog {
      *  настроек (у {@code JComboBox}, в отличие от {@code JCheckBox.setSelected},
      *  это событие летит). */
     private boolean refreshingWireHop;
-    private JComboBox<SchemaStylePreset> schemaStylePresetCombo;
-    /** Тот же приём, что {@link #refreshingWireHop} — гасит слушатель на время
-     *  программной установки значения в {@link #refresh()} (docs/schema-ports-
-     *  rework/PLAN.md, задача T3.1). */
-    private boolean refreshingSchemaStylePreset;
-    private JComboBox<com.vjstb.ledscheme.settings.SchemaRenderMode> schemaRenderModeCombo;
-    /** Тот же приём, что {@link #refreshingSchemaStylePreset} (docs/schema-ports-
-     *  rework/PLAN.md, задача T5.5). */
-    private boolean refreshingSchemaRenderMode;
     private JSpinner schemaRouteStubSpinner;
     private JLabel exportRootFolderLabel;
     private JCheckBox signalSocketWiringCheck;
@@ -119,8 +109,6 @@ public class PreferencesDialog extends JDialog {
     // Строки-панели (кнопки/спиннеры/поле/дропдаун) — тоже общие для обеих раскладок.
     private JPanel snapRow;
     private JPanel wireHopRow;
-    private JPanel schemaStylePresetRow;
-    private JPanel schemaRenderModeRow;
     private JPanel schemaRouteStubRow;
     private JPanel exportRow;
     private JPanel logoRow;
@@ -230,41 +218,12 @@ public class PreferencesDialog extends JDialog {
         });
         wireHopRow.add(wireHopStyleCombo);
 
-        schemaStylePresetRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
-        schemaStylePresetRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-        schemaStylePresetRow.setToolTipText("«Экранный» — обычный вид схемы, следует теме интерфейса (тёмная/светлая)."
-                + " «Печатный» — белый фон, жёлтые блоки, номинальные цвета линий, для печати/PDF. Действует на"
-                + " сигнал и питание сразу; пользовательский цвет отдельной связи важнее пресета.");
-        schemaStylePresetRow.add(new JLabel("Оформление общей схемы:"));
-        schemaStylePresetCombo = new JComboBox<>(SchemaStylePreset.values());
-        schemaStylePresetCombo.setSelectedItem(settings.activeProfile().getSchemaStylePreset());
-        schemaStylePresetCombo.addActionListener(e -> {
-            if (!refreshingSchemaStylePreset) {
-                settings.setSchemaStylePreset((SchemaStylePreset) schemaStylePresetCombo.getSelectedItem());
-            }
-        });
-        schemaStylePresetRow.add(schemaStylePresetCombo);
-
-        // Переключатель «старый способ рисования» (docs/schema-ports-rework/
-        // PLAN.md, задача T5.5, D16) — рядом с «Оформление общей схемы» (D12),
-        // тот же паттерн ряда/комбобокса, что и у неё.
-        schemaRenderModeRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
-        schemaRenderModeRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-        schemaRenderModeRow.setToolTipText("«Современный» — гнёзда на рамке блока, роли интерфейсов, ориентация"
-                + " блока, ортогональные связи, перетаскивание групп гнёзд (по умолчанию). «Классический» —"
-                + " прежний вид схемы (до появления этих возможностей): гнёзда строкой у одного из краёв блока,"
-                + " без ролей/ориентации/орто-трассировки/перетаскивания групп/сетевых блоков-устройств."
-                + " Действует на сигнал и питание сразу, глобально для всех проектов этого профиля.");
-        schemaRenderModeRow.add(new JLabel("Способ отрисовки общей схемы:"));
-        schemaRenderModeCombo = new JComboBox<>(com.vjstb.ledscheme.settings.SchemaRenderMode.values());
-        schemaRenderModeCombo.setSelectedItem(settings.activeProfile().getSchemaRenderMode());
-        schemaRenderModeCombo.addActionListener(e -> {
-            if (!refreshingSchemaRenderMode) {
-                settings.setSchemaRenderMode(
-                        (com.vjstb.ledscheme.settings.SchemaRenderMode) schemaRenderModeCombo.getSelectedItem());
-            }
-        });
-        schemaRenderModeRow.add(schemaRenderModeCombo);
+        // «Оформление общей схемы» и «Способ отрисовки общей схемы» переехали в
+        // Персонализация → «Цвета и профили…» (пожелание пользователя 2026-09-18)
+        // — см. PersonalizationDialog#buildSchemaAppearanceRow: это, как и цвета,
+        // выбор ВНЕШНЕГО ВИДА, логично держать рядом с остальной персонализацией
+        // профиля, а не в поведенческих переключателях. Само значение всё ещё в
+        // UserProfile (schemaStylePreset/schemaRenderMode) — переехало только окно.
 
         // Длина уса связи общей схемы (пожелание пользователя 2026-09-18: раньше
         // была жёстко зашита в OrthogonalRouter (12px), из-за чего последний
@@ -492,7 +451,7 @@ public class PreferencesDialog extends JDialog {
     }
 
     /** Тот же приём гашения слушателя на программную установку, что {@link
-     *  #refreshingWireHop}/{@link #refreshingSchemaStylePreset} — один общий флаг на
+     *  #refreshingWireHop} — один общий флаг на
      *  все четыре новых дропдауна ({@link #signalOrientationCombo}/{@link
      *  #powerOrientationCombo}/{@link #signalGroupDisplayCombo}/{@link
      *  #powerGroupDisplayCombo}), т.к. {@link #refresh()} всегда переустанавливает
@@ -534,9 +493,9 @@ public class PreferencesDialog extends JDialog {
     /** Строка «подпись + дропдаун» для списка по этапам — сам дропдаун (см. {@link
      *  #orientationCombo}/{@link #groupDisplayCombo}) переиспользуется и в матрице
      *  ({@link #buildMatrixBody()}), там БЕЗ подписи (у ячейки уже есть своя, см.
-     *  {@link #triple}) — тот же приём, что {@link #wireHopRow}/{@link
-     *  #schemaStylePresetRow}, только строится заново при каждой пересборке списка,
-     *  а не хранится полем, т.к. подпись тут не нужна матрице. */
+     *  {@link #triple}) — тот же приём, что {@link #wireHopRow}, только строится
+     *  заново при каждой пересборке списка, а не хранится полем, т.к. подпись тут
+     *  не нужна матрице. */
     private JPanel comboRow(String label, JComponent combo) {
         JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -589,8 +548,7 @@ public class PreferencesDialog extends JDialog {
         content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
 
         content.add(UiKit.section("Общие", stack(previewWidgetCheck, canvasSnapToCenterCheck, snapRow,
-                foolProofWiringCheck, schemaScreensAsWiringCheck, wireHopRow, schemaStylePresetRow,
-                schemaRenderModeRow, schemaRouteStubRow, exportRow)));
+                foolProofWiringCheck, schemaScreensAsWiringCheck, wireHopRow, schemaRouteStubRow, exportRow)));
         content.add(Box.createVerticalStrut(8));
         content.add(UiKit.section("Сигнал", stack(signalSocketWiringCheck,
                 comboRow("Ориентация блоков по умолчанию:", signalOrientationCombo),
@@ -651,8 +609,6 @@ public class PreferencesDialog extends JDialog {
         span(g, row, "«Защита от дурака»: нельзя вход↔вход и выход↔выход", foolProofWiringCheck);
         span(g, row, "Узел экрана = мини-схема расключения его кабинетов", schemaScreensAsWiringCheck);
         span(g, row, "«Мостики» на пересечениях линий связи (обход, как в ГОСТ)", wireHopRow);
-        span(g, row, "Оформление общей схемы (экранное/печатное)", schemaStylePresetRow);
-        span(g, row, "Способ отрисовки общей схемы (современный/классический)", schemaRenderModeRow);
         span(g, row, "Отступ связей общей схемы от блоков (px)", schemaRouteStubRow);
 
         category(g, row, "Коммутация через гнёзда разъёмов");
@@ -843,12 +799,6 @@ public class PreferencesDialog extends JDialog {
         refreshingWireHop = true;
         wireHopStyleCombo.setSelectedItem(settings.activeProfile().getSchemaWireHopStyle());
         refreshingWireHop = false;
-        refreshingSchemaStylePreset = true;
-        schemaStylePresetCombo.setSelectedItem(settings.activeProfile().getSchemaStylePreset());
-        refreshingSchemaStylePreset = false;
-        refreshingSchemaRenderMode = true;
-        schemaRenderModeCombo.setSelectedItem(settings.activeProfile().getSchemaRenderMode());
-        refreshingSchemaRenderMode = false;
         schemaRouteStubSpinner.setValue(settings.activeProfile().getSchemaRouteStubPx());
         signalSocketWiringCheck.setSelected(settings.activeProfile().isSignalSocketWiringEnabled());
         powerSocketWiringCheck.setSelected(settings.activeProfile().isPowerSocketWiringEnabled());

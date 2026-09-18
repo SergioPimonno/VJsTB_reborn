@@ -1,5 +1,6 @@
 package com.vjstb.ledscheme.ui;
 
+import com.vjstb.ledscheme.settings.SchemaStylePreset;
 import com.vjstb.ledscheme.settings.SettingsManager;
 import com.vjstb.ledscheme.settings.UserProfile;
 import java.awt.Color;
@@ -35,6 +36,16 @@ public class PersonalizationDialog extends javax.swing.JDialog {
     private final JComboBox<UserProfile> profileCombo = new JComboBox<>();
     private final JComboBox<String> preferencesViewCombo =
             new JComboBox<>(new String[] {"Список по этапам", "Матрица «функция × этап»"});
+    private final JComboBox<SchemaStylePreset> schemaStylePresetCombo = new JComboBox<>(SchemaStylePreset.values());
+    private final JComboBox<com.vjstb.ledscheme.settings.SchemaRenderMode> schemaRenderModeCombo =
+            new JComboBox<>(com.vjstb.ledscheme.settings.SchemaRenderMode.values());
+    /** Гасит слушатели комбобоксов схемы на время программной установки значения
+     *  при переключении профиля (см. {@link #refreshSchemaCombos()}) — тот же
+     *  приём, что уже был у них в {@code PreferencesDialog} (докуда они переехали
+     *  сюда, пожелание пользователя 2026-09-18: "оформление общей схемы и способ
+     *  отрисовки" — выбор ВНЕШНЕГО ВИДА логичнее держать рядом с цветами и
+     *  остальной персонализацией профиля, а не в поведенческих переключателях). */
+    private boolean refreshingSchemaCombos;
     private final List<JButton> signalSwatches = new ArrayList<>();
     private JButton phase1Swatch;
     private JButton phase2Swatch;
@@ -58,6 +69,8 @@ public class PersonalizationDialog extends javax.swing.JDialog {
         content.add(Box.createVerticalStrut(10));
         content.add(buildColorsPanel());
         content.add(Box.createVerticalStrut(10));
+        content.add(buildSchemaAppearancePanel());
+        content.add(Box.createVerticalStrut(10));
 
         JButton reset = new JButton("Сбросить к встроенным цветам");
         reset.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -78,6 +91,7 @@ public class PersonalizationDialog extends javax.swing.JDialog {
         setContentPane(content);
         refreshProfileCombo();
         refreshSwatches();
+        refreshSchemaCombos();
         pack();
         setLocationRelativeTo(owner);
     }
@@ -104,6 +118,7 @@ public class PersonalizationDialog extends javax.swing.JDialog {
                 Palette.applyProfile(settings.activeProfile());
                 refreshSwatches();
                 refreshPreferencesViewCombo();
+                refreshSchemaCombos();
             }
         });
         row.add(new JLabel("Профиль:"), java.awt.BorderLayout.WEST);
@@ -265,6 +280,61 @@ public class PersonalizationDialog extends javax.swing.JDialog {
         body.add(scaleRow);
 
         return (JPanel) UiKit.section("Стиль оформления", body);
+    }
+
+    /** «Оформление общей схемы» (D12, {@link SchemaStylePreset}) и «Способ
+     *  отрисовки общей схемы» (D16, {@link com.vjstb.ledscheme.settings.
+     *  SchemaRenderMode}) — переехали сюда из окна «Предпочтения» (пожелание
+     *  пользователя 2026-09-18): это выбор ВНЕШНЕГО ВИДА схемы, тот же род
+     *  настройки, что и цвета/стиль оформления чуть выше, а не поведенческий
+     *  переключатель. Оба значения по-прежнему в {@link UserProfile} как обычно —
+     *  переехало только само окно, ничего не меняется в данных/сохранении. */
+    private JPanel buildSchemaAppearancePanel() {
+        JPanel body = new JPanel();
+        body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
+        body.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JPanel styleRow = new JPanel(new java.awt.BorderLayout(8, 0));
+        styleRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        styleRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+        styleRow.setToolTipText("«Экранный» — обычный вид схемы, следует теме интерфейса (тёмная/светлая)."
+                + " «Печатный» — белый фон, жёлтые блоки, номинальные цвета линий, для печати/PDF. Действует на"
+                + " сигнал и питание сразу; пользовательский цвет отдельной связи важнее пресета.");
+        styleRow.add(new JLabel("Оформление общей схемы"), java.awt.BorderLayout.CENTER);
+        schemaStylePresetCombo.addActionListener(e -> {
+            if (!refreshingSchemaCombos) {
+                settings.setSchemaStylePreset((SchemaStylePreset) schemaStylePresetCombo.getSelectedItem());
+            }
+        });
+        styleRow.add(schemaStylePresetCombo, java.awt.BorderLayout.EAST);
+        body.add(styleRow);
+
+        JPanel modeRow = new JPanel(new java.awt.BorderLayout(8, 0));
+        modeRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        modeRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+        modeRow.setToolTipText("«Современный» — гнёзда на рамке блока, роли интерфейсов, ориентация блока,"
+                + " ортогональные связи, перетаскивание групп гнёзд (по умолчанию). «Классический» — прежний вид"
+                + " схемы (до появления этих возможностей): гнёзда строкой у одного из краёв блока, без"
+                + " ролей/ориентации/орто-трассировки/перетаскивания групп/сетевых блоков-устройств. Действует на"
+                + " сигнал и питание сразу, для этого профиля.");
+        modeRow.add(new JLabel("Способ отрисовки общей схемы"), java.awt.BorderLayout.CENTER);
+        schemaRenderModeCombo.addActionListener(e -> {
+            if (!refreshingSchemaCombos) {
+                settings.setSchemaRenderMode(
+                        (com.vjstb.ledscheme.settings.SchemaRenderMode) schemaRenderModeCombo.getSelectedItem());
+            }
+        });
+        modeRow.add(schemaRenderModeCombo, java.awt.BorderLayout.EAST);
+        body.add(modeRow);
+
+        return (JPanel) UiKit.section("Общая схема", body);
+    }
+
+    private void refreshSchemaCombos() {
+        refreshingSchemaCombos = true;
+        schemaStylePresetCombo.setSelectedItem(settings.activeProfile().getSchemaStylePreset());
+        schemaRenderModeCombo.setSelectedItem(settings.activeProfile().getSchemaRenderMode());
+        refreshingSchemaCombos = false;
     }
 
     private JPanel buildColorsPanel() {
