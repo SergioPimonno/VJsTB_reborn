@@ -3086,6 +3086,7 @@ public class SchemaCanvasPanel extends JPanel {
                 drawLineLegendContent(g2, n, nw, nh);
             } else if (hasPorts) {
                 drawNodeSockets(g2, n);
+                drawEdgeBundleMarkers(g2, n, es);
             } else {
                 drawClipped(g2, model.categoryLabel(n.getType()), (int) n.getX() + 8, (int) n.getY() + 38, nw - 16);
             }
@@ -3914,6 +3915,89 @@ public class SchemaCanvasPanel extends JPanel {
                 : usedCount(portId, null);
         ordinal = Math.max(0, Math.min(ordinal, matches.size() - 1));
         return matches.get(ordinal);
+    }
+
+    /** Число связей, сходящихся в ОДНО свёрнутое гнездо узла (docs/schema-ports-
+     *  rework/PLAN.md, D8/задача T4.3 {@link
+     *  com.vjstb.ledscheme.service.schemalayout.EdgeBundles}) — 0, если гнездо не
+     *  свёрнуто (тогда у раскладки несколько отдельных пинов на этот portId, см.
+     *  {@link #pinFor}, и сливать нечего — у каждой связи уже свой пин) либо на
+     *  него приходится меньше двух связей (пучок из одной не нужен). Найдено при
+     *  разборе вопроса пользователя 2026-09-18 (DIALOG.md, реплика 5, T6.2 —
+     *  «шина/Ring»): геометрия пучка (T4.3) была готова и покрыта тестами, но
+     *  ни разу не вызывалась из отрисовки холста (T4.4 забыл её подключить) —
+     *  этот метод и {@link #drawEdgeBundleMarkers} закрывают этот пробел, что и
+     *  снимает нужду в отдельном блоке-«шине»: слияние нескольких линий уже
+     *  визуально то же самое, что просили под именем "Ring". */
+    private int bundleCount(SchemaNode node, String portId) {
+        if (classicMode() || portId == null) {
+            return 0;
+        }
+        int pinMatches = 0;
+        for (var p : nodeLayout(node).pins()) {
+            if (p.port().getId().equals(portId)) {
+                pinMatches++;
+            }
+        }
+        if (pinMatches != 1) {
+            return 0;
+        }
+        int count = 0;
+        for (SchemaEdge e : edges()) {
+            boolean asFrom = node.getId().equals(e.getFromNodeId()) && portId.equals(e.getFromPortId());
+            boolean asTo = node.getId().equals(e.getToNodeId()) && portId.equals(e.getToPortId());
+            if (asFrom || asTo) {
+                count++;
+            }
+        }
+        return count >= 2 ? count : 0;
+    }
+
+    /** Рисует короткий общий ствол и подпись "×N" для каждого гнезда узла {@code
+     *  node}, в которое сходится 2+ связи (см. {@link #bundleCount}) — один раз на
+     *  гнездо, а не на связь (иначе подпись повторялась бы N раз друг на друге).
+     *  Индивидуальные маршруты связей при этом не меняются — они и так сходятся в
+     *  ту же самую точку (общий пин свёрнутой группы), ствол здесь только
+     *  визуально подчёркивает слияние и даёт число, которого в самих линиях нет. */
+    private void drawEdgeBundleMarkers(Graphics2D g2, SchemaNode node, List<SchemaEdge> es) {
+        if (classicMode()) {
+            return;
+        }
+        Set<String> portIds = new LinkedHashSet<>();
+        for (SchemaEdge edge : es) {
+            if (node.getId().equals(edge.getFromNodeId()) && edge.getFromPortId() != null) {
+                portIds.add(edge.getFromPortId());
+            }
+            if (node.getId().equals(edge.getToNodeId()) && edge.getToPortId() != null) {
+                portIds.add(edge.getToPortId());
+            }
+        }
+        for (String portId : portIds) {
+            int count = bundleCount(node, portId);
+            if (count < 2) {
+                continue;
+            }
+            var pin = pinFor(node, portId, null);
+            if (pin == null) {
+                continue;
+            }
+            double pinX = node.getX() + pin.x();
+            double pinY = node.getY() + pin.y();
+            var bundle = com.vjstb.ledscheme.service.schemalayout.EdgeBundles.bundleFor(pinX, pinY, pin.side(), count);
+            double[] a = bundle.trunk()[0];
+            double[] b = bundle.trunk()[1];
+            g2.setColor(style.accent);
+            g2.setStroke(new BasicStroke(3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g2.drawLine((int) Math.round(a[0]), (int) Math.round(a[1]), (int) Math.round(b[0]), (int) Math.round(b[1]));
+            g2.setFont(EDGE_FONT);
+            g2.setColor(style.mutedText);
+            g2.drawString(bundle.label(), (int) Math.round(a[0]) + 4, (int) Math.round(a[1]) - 3);
+        }
+    }
+
+    /** Только для тестов — открывает {@link #bundleCount} (T4.3/T4.4 доводка, T6.2). */
+    public int bundleSizeForTest(SchemaNode node, String portId) {
+        return bundleCount(node, portId);
     }
 
     /** Гнездо разъёма под точкой клика/курсора — учитывает только реально
