@@ -57,10 +57,11 @@ public class SettingsManager {
         persist();
     }
 
-    public void setAuthSession(String token, String username, String role) {
+    public void setAuthSession(String token, String username, String role, String teamName) {
         settings.setAuthToken(token);
         settings.setAuthUsername(username);
         settings.setAuthRole(role);
+        settings.setAuthTeamName(teamName);
         persist();
     }
 
@@ -68,6 +69,7 @@ public class SettingsManager {
         settings.setAuthToken(null);
         settings.setAuthUsername(null);
         settings.setAuthRole(null);
+        settings.setAuthTeamName(null);
         persist();
     }
 
@@ -182,6 +184,11 @@ public class SettingsManager {
 
     public void setPreferencesMatrixView(boolean matrix) {
         activeProfile().setPreferencesMatrixView(matrix);
+        persist();
+    }
+
+    public void setCabinetPaletteViewMode(CabinetPaletteViewMode mode) {
+        activeProfile().setCabinetPaletteViewMode(mode);
         persist();
     }
 

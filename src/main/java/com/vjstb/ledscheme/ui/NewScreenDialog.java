@@ -3,6 +3,7 @@ package com.vjstb.ledscheme.ui;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.ScreenDefaults;
 import com.vjstb.ledscheme.model.ScreenMountType;
+import com.vjstb.ledscheme.service.AppModel;
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
@@ -47,12 +48,15 @@ public class NewScreenDialog extends JDialog {
     private final JSpinner rowsField = new JSpinner(new SpinnerNumberModel(5, 1, 200, 1));
     private final JTextField xField = new JTextField();
     private final JTextField yField = new JTextField();
+    /** Нужна кнопке «Указать новый кабинет…» — сохранить созданный на месте тип
+     *  сразу в библиотеку (см. {@link #buildNewCabinetButton()}). */
+    private final AppModel model;
 
     private Result result;
 
-    public NewScreenDialog(Window owner, List<CabinetType> cabinetTypes, String suggestedName,
+    public NewScreenDialog(Window owner, AppModel model, List<CabinetType> cabinetTypes, String suggestedName,
                             double suggestedX, double suggestedY) {
-        this(owner, cabinetTypes, suggestedName, suggestedX, suggestedY, null);
+        this(owner, model, cabinetTypes, suggestedName, suggestedX, suggestedY, null);
     }
 
     /** {@code defaults} — «Параметры по умолчанию» текущей сцены (см. {@link
@@ -63,9 +67,10 @@ public class NewScreenDialog extends JDialog {
      *  выбрать любой другой вариант перед созданием, тот и победит (см. javadoc
      *  {@link ScreenDefaults#applyTo}: эти два поля туда сознательно не входят,
      *  ровно чтобы явный выбор в ЭТОМ диалоге всегда был окончательным). */
-    public NewScreenDialog(Window owner, List<CabinetType> cabinetTypes, String suggestedName,
+    public NewScreenDialog(Window owner, AppModel model, List<CabinetType> cabinetTypes, String suggestedName,
                             double suggestedX, double suggestedY, ScreenDefaults defaults) {
         super(owner, "Новый экран", ModalityType.APPLICATION_MODAL);
+        this.model = model;
 
         for (CabinetType t : cabinetTypes) {
             typeField.addItem(t);
@@ -97,7 +102,10 @@ public class NewScreenDialog extends JDialog {
         form.add(new JLabel("Название"));
         form.add(nameField);
         form.add(new JLabel("Кабинет"));
-        form.add(typeField);
+        JPanel typeRow = new JPanel(new BorderLayout(6, 0));
+        typeRow.add(typeField, BorderLayout.CENTER);
+        typeRow.add(buildNewCabinetButton(), BorderLayout.EAST);
+        form.add(typeRow);
         form.add(new JLabel("Способ монтажа"));
         form.add(mountTypeField);
         form.add(new JLabel("Колонны"));
@@ -130,6 +138,30 @@ public class NewScreenDialog extends JDialog {
         getRootPane().setDefaultButton(ok);
         pack();
         setLocationRelativeTo(owner);
+    }
+
+    /** Кнопка «Указать новый кабинет…» (запрос пользователя) — открывает ту же
+     *  форму, что и в окне «Библиотеки» ({@link CabinetTypeDialog}), не заставляя
+     *  прерывать создание экрана, чтобы завести отсутствующий тип отдельно.
+     *  Созданный тип сразу попадает в личную библиотеку ({@code
+     *  model.addCabinetType}) и становится выбранным в {@link #typeField}. */
+    private JButton buildNewCabinetButton() {
+        JButton btn = new JButton("Новый кабинет…");
+        btn.addActionListener(e -> {
+            CabinetType ct = new CabinetTypeDialog(this, model, null).showDialog();
+            if (ct == null) {
+                return;
+            }
+            try {
+                model.addCabinetType(ct);
+            } catch (RuntimeException ex) {
+                JOptionPane.showMessageDialog(this, ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            typeField.addItem(ct);
+            typeField.setSelectedItem(ct);
+        });
+        return btn;
     }
 
     private void onOk() {

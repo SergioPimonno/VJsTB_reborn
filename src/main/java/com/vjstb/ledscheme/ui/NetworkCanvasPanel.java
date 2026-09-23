@@ -7,6 +7,7 @@ import com.vjstb.ledscheme.model.NetworkDeviceType;
 import com.vjstb.ledscheme.model.NetworkLink;
 import com.vjstb.ledscheme.model.NetworkLinkWaypoint;
 import com.vjstb.ledscheme.model.NetworkManagerPlan;
+import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.SchemaNode;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.LocalNetworkInterfaces;
@@ -141,19 +142,6 @@ import javax.swing.SwingUtilities;
  * отдельное "неизвестное" состояние, просто остаётся цвет сети); тот же
  * статус — маленькой точкой перед строкой адреса на самом блоке.
  *
- * <p><b>Статус видео-портов Novastar (экспериментально)</b> — по запросу
- * "было бы славно, если бы контроллеры в сетевом менеджере могли показывать
- * текущий статус по портам экрана". {@link #setNovastarStatuses} передаёт
- * готовый результат опроса (ведёт {@code NetworkManagerPanel}, тот же
- * принцип, что доступность выше — канвас только рисует); на блоке с
- * включённой галочкой (см. {@code NetworkDeviceParamsDialog
- * .novastarStatusCheck}) — одна сводная строка "NovaLCT: N/M портов с
- * картами". Протокол NovaStar на TCP:5200 официально не задокументирован —
- * см. {@code service.novastar.NovastarPacket} class-javadoc за честной
- * оценкой того, что в нём подтверждено (формат кадра — байт в байт, по
- * тестовому вектору исходного проекта), а что — нет (семантика ИМЕННО этих
- * двух регистров на реальном железе).
- *
  * <p>ПКМ по блоку — {@link JPopupMenu} (Пинг/Веб-интерфейс/Параметры
  * устройства/Подключить-Параметры-Отключить по сетям/Удалить устройство).
  * «Пинг…» открывает {@link NetworkPingDialog} — живой, непрерывный, см. её
@@ -164,7 +152,23 @@ import javax.swing.SwingUtilities;
  * #SCHEMA_NODE_FLAVOR}/{@link #DEVICE_TYPE_FLAVOR}) — эта панель НЕ ставит
  * свой {@code TransferHandler} сама, только экспонирует {@link
  * #pxToCanvas}/{@link #addLinkedDeviceAt}/{@link #addCatalogDeviceAt} как
- * публичный контракт (вызывающая сторона настраивает приём drop). */
+ * публичный контракт (вызывающая сторона настраивает приём drop).
+ *
+ * <p><b>Автоперенос сетей из общей схемы</b> (запрос пользователя, после
+ * отказа от статуса портов Novastar как нерелевантной фичи — см.
+ * NETWORK_MANAGER_NOTES.md) — {@link #previewSchemaImport}/{@link
+ * #applySchemaImport}, первый потребитель заготовки {@code AppModel
+ * #networkGraphFromScene} (docs/schema-ports-rework/PLAN.md, T5.4). Группы —
+ * связные компоненты графа схемы (устройства/коммутаторы, соединённые
+ * NETWORK-связями), каждая становится отдельной {@link Network}; связи между
+ * импортированными устройствами получают автоматически ПЕРВЫЙ свободный порт
+ * с каждой стороны. Дедупликация — та же, что {@code NetworkManagerPanel
+ * #refreshSchemaPalette}: узел, для которого уже есть {@link
+ * NetworkDevicePlacement} где угодно в плане, повторно не предлагается.
+ * Однонаправленно, как и вся связь со схемой в этом классе (Round 1) —
+ * только ДОБАВЛЯЕТ новое, никогда не двигает/не переименовывает то, что уже
+ * было перенесено раньше. UI — кнопка «Перенести из схемы…» и диалог
+ * предпросмотра в {@code NetworkManagerPanel}. */
 public class NetworkCanvasPanel extends JPanel {
 
     private static final int PADDING = 24;
@@ -274,15 +278,6 @@ public class NetworkCanvasPanel extends JPanel {
      *  таймером — канвас сам никакие процессы не запускает, только рисует
      *  готовый результат), см. {@link #setAvailability}. */
     private java.util.Map<String, Boolean> availability = java.util.Map.of();
-    /** Результат последнего опроса статуса видео-портов Novastar (см. {@code
-     *  NetworkManagerPanel#pollNovastarStatuses}) — id устройства → (номер
-     *  порта 1-based → статус); отсутствие ключа устройства значит "не
-     *  опрашивалось/выключено/недоступно", тот же принцип "нет данных = не
-     *  рисуем", что {@link #availability}. Экспериментально, см. {@code
-     *  service.novastar.NovastarPacket} class-javadoc. */
-    private java.util.Map<String, java.util.Map<Integer,
-            com.vjstb.ledscheme.service.novastar.NovastarPortStatusService.PortStatus>> novastarStatuses =
-            java.util.Map.of();
     private NetworkDevicePlacement selected;
     private NetworkLink selectedLink;
     private NetworkDevicePlacement dragging;
@@ -569,15 +564,6 @@ public class NetworkCanvasPanel extends JPanel {
         repaint();
     }
 
-    /** Передаёт результат опроса статуса видео-портов Novastar (см. {@link
-     *  #novastarStatuses}) — вызывается снаружи ({@code NetworkManagerPanel})
-     *  по готовности каждого раунда опроса. */
-    public void setNovastarStatuses(java.util.Map<String, java.util.Map<Integer,
-            com.vjstb.ledscheme.service.novastar.NovastarPortStatusService.PortStatus>> novastarStatuses) {
-        this.novastarStatuses = novastarStatuses != null ? novastarStatuses : java.util.Map.of();
-        repaint();
-    }
-
     /** {@code true}, если на поле уже есть блок «Admin Laptop» — используется
      *  вызывающей стороной, чтобы не плодить второй (кнопка «+ Мой
      *  компьютер» тогда просто выделяет существующий). */
@@ -850,6 +836,185 @@ public class NetworkCanvasPanel extends JPanel {
         selected = null;
         onChanged.run();
         repaint();
+    }
+
+    // ---- Автоперенос сетей из общей схемы ----
+
+    /** Одна будущая сеть при автопереносе (запрос пользователя после отказа от
+     *  статуса портов Novastar: "собери план по автопереносу сетей из общей
+     *  схемы в менеджер") — {@code devices}/{@code switches} те же записи,
+     *  что отдаёт {@link AppModel.NetworkGraph}, {@code links} — только связи
+     *  МЕЖДУ узлами ЭТОЙ группы. Группа = связная компонента графа (устройства
+     *  и коммутаторы, соединённые NETWORK-связями схемы напрямую или через
+     *  коммутатор) — коммутатор без единого кабеля тоже своя отдельная
+     *  однонодовая группа. */
+    public record ImportGroup(String suggestedName, List<AppModel.NetworkGraphDevice> devices,
+            List<AppModel.NetworkGraphDevice> switches, List<AppModel.NetworkGraphLink> links) {
+    }
+
+    /** {@code alreadyImportedCount} — сколько узлов графа схемы отфильтровано,
+     *  т.к. уже есть в плане (см. {@code NetworkManagerPanel
+     *  #refreshSchemaPalette} — тот же принцип дедупликации "где угодно в
+     *  плане", не по одной сети) — только для текста диалога, не влияет на
+     *  {@code newGroups}. */
+    public record SchemaImportPreview(List<ImportGroup> newGroups, int alreadyImportedCount) {
+    }
+
+    /** Строит предпросмотр автопереноса — ЧИСТАЯ функция, без побочных
+     *  эффектов на план (см. {@link #applySchemaImport} за применением).
+     *  Источник графа — {@link AppModel#networkGraphFromScene} (заготовка
+     *  docs/schema-ports-rework/PLAN.md, T5.4, до этого не имела ни одного
+     *  вызывающего места в основном коде). Разбивка на группы — по связным
+     *  компонентам (решение пользователя: "по связным компонентам графа"), а
+     *  не в одну сеть и не поштучным опросом — так автоперенос отражает
+     *  физическую топологию схемы напрямую. */
+    public SchemaImportPreview previewSchemaImport() {
+        Scene scene = model.getCurrentScene();
+        if (scene == null) {
+            return new SchemaImportPreview(List.of(), 0);
+        }
+        AppModel.NetworkGraph graph = model.networkGraphFromScene(scene);
+        java.util.Set<String> usedAnywhere = plan.getDevices().stream()
+                .map(NetworkDevicePlacement::getLinkedSchemaNodeId)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
+
+        List<AppModel.NetworkGraphDevice> newDevices = graph.devices().stream()
+                .filter(d -> !usedAnywhere.contains(d.nodeId())).toList();
+        List<AppModel.NetworkGraphDevice> newSwitches = graph.switches().stream()
+                .filter(d -> !usedAnywhere.contains(d.nodeId())).toList();
+        int alreadyImportedCount = (graph.devices().size() - newDevices.size())
+                + (graph.switches().size() - newSwitches.size());
+
+        java.util.Map<String, AppModel.NetworkGraphDevice> allById = new java.util.LinkedHashMap<>();
+        newDevices.forEach(d -> allById.put(d.nodeId(), d));
+        newSwitches.forEach(d -> allById.put(d.nodeId(), d));
+        java.util.Set<String> switchIds = newSwitches.stream()
+                .map(AppModel.NetworkGraphDevice::nodeId).collect(java.util.stream.Collectors.toSet());
+
+        List<AppModel.NetworkGraphLink> relevantLinks = graph.links().stream()
+                .filter(l -> allById.containsKey(l.fromNodeId()) && allById.containsKey(l.toNodeId())).toList();
+
+        java.util.Map<String, String> parent = new java.util.LinkedHashMap<>();
+        for (String id : allById.keySet()) {
+            parent.put(id, id);
+        }
+        for (AppModel.NetworkGraphLink l : relevantLinks) {
+            unionComponents(parent, l.fromNodeId(), l.toNodeId());
+        }
+        java.util.Map<String, List<String>> components = new java.util.LinkedHashMap<>();
+        for (String id : allById.keySet()) {
+            components.computeIfAbsent(findComponent(parent, id), k -> new ArrayList<>()).add(id);
+        }
+
+        List<ImportGroup> groups = new ArrayList<>();
+        int autoIndex = 1;
+        for (List<String> ids : components.values()) {
+            List<AppModel.NetworkGraphDevice> gDevices = new ArrayList<>();
+            List<AppModel.NetworkGraphDevice> gSwitches = new ArrayList<>();
+            for (String id : ids) {
+                (switchIds.contains(id) ? gSwitches : gDevices).add(allById.get(id));
+            }
+            List<AppModel.NetworkGraphLink> gLinks = relevantLinks.stream()
+                    .filter(l -> ids.contains(l.fromNodeId()) && ids.contains(l.toNodeId())).toList();
+            String name = gSwitches.size() == 1 ? gSwitches.get(0).label() : "Импорт " + autoIndex++;
+            groups.add(new ImportGroup(name, gDevices, gSwitches, gLinks));
+        }
+        return new SchemaImportPreview(groups, alreadyImportedCount);
+    }
+
+    private static String findComponent(java.util.Map<String, String> parent, String id) {
+        String root = id;
+        while (!parent.get(root).equals(root)) {
+            root = parent.get(root);
+        }
+        while (!parent.get(id).equals(root)) {
+            String next = parent.get(id);
+            parent.put(id, root);
+            id = next;
+        }
+        return root;
+    }
+
+    private static void unionComponents(java.util.Map<String, String> parent, String a, String b) {
+        String rootA = findComponent(parent, a);
+        String rootB = findComponent(parent, b);
+        if (!rootA.equals(rootB)) {
+            parent.put(rootA, rootB);
+        }
+    }
+
+    /** Применяет ВЫБРАННЫЕ пользователем группы предпросмотра — на группу:
+     *  новая {@link Network} (цвет — {@link #defaultColorForIndex}, тот же
+     *  приём, что {@code NetworkManagerPanel#addNetwork}), устройства/
+     *  коммутаторы группы — {@link NetworkDevicePlacement} со {@link
+     *  NetworkDevicePlacement#setLinkedSchemaNodeId}, связи группы —
+     *  {@link NetworkLink} на ПЕРВЫЙ свободный порт с каждой стороны (решение
+     *  пользователя). Раскладка — {@link #nextSpotX} на добавление плюс
+     *  {@link #autoArrangeNetwork} в конце каждой группы (та же сетка, что и
+     *  кнопка «Выровнять сеть» — не новый алгоритм). Возвращает связи, для
+     *  которых не хватило свободных портов (обе стороны уже заняты) — просто
+     *  пропускаются, не создаются «за пределами видимых портов», вызывающая
+     *  сторона может показать это одной строкой статуса. */
+    public List<AppModel.NetworkGraphLink> applySchemaImport(List<ImportGroup> groups) {
+        List<AppModel.NetworkGraphLink> skippedLinks = new ArrayList<>();
+        for (ImportGroup group : groups) {
+            Network network = new Network();
+            network.setName(group.suggestedName());
+            network.setColor(defaultColorForIndex(plan.getNetworks().size()).getRGB());
+            plan.getNetworks().add(network);
+
+            java.util.Map<String, NetworkDevicePlacement> placementByNodeId = new java.util.LinkedHashMap<>();
+            for (AppModel.NetworkGraphDevice d : group.devices()) {
+                placementByNodeId.put(d.nodeId(), placeImported(d.nodeId(), network));
+            }
+            for (AppModel.NetworkGraphDevice s : group.switches()) {
+                placementByNodeId.put(s.nodeId(), placeImported(s.nodeId(), network));
+            }
+
+            for (AppModel.NetworkGraphLink link : group.links()) {
+                NetworkDevicePlacement from = placementByNodeId.get(link.fromNodeId());
+                NetworkDevicePlacement to = placementByNodeId.get(link.toNodeId());
+                if (from == null || to == null) {
+                    continue;
+                }
+                Integer fromPort = firstFreePort(from);
+                Integer toPort = firstFreePort(to);
+                if (fromPort == null || toPort == null) {
+                    skippedLinks.add(link);
+                    continue;
+                }
+                NetworkLink nl = new NetworkLink();
+                nl.setFromDeviceId(from.getId());
+                nl.setFromPort(fromPort);
+                nl.setToDeviceId(to.getId());
+                nl.setToPort(toPort);
+                plan.getLinks().add(nl);
+            }
+
+            autoArrangeNetwork(network.getId());
+        }
+        return skippedLinks;
+    }
+
+    private NetworkDevicePlacement placeImported(String schemaNodeId, Network network) {
+        NetworkDevicePlacement p = new NetworkDevicePlacement();
+        p.setLinkedSchemaNodeId(schemaNodeId);
+        p.setXMm(nextSpotX());
+        p.setYMm(0);
+        p.getAttachments().add(new NetworkAttachment(network.getId()));
+        plan.getDevices().add(p);
+        return p;
+    }
+
+    private Integer firstFreePort(NetworkDevicePlacement device) {
+        int total = effectiveTotalPortCount(device);
+        for (int port = 1; port <= total; port++) {
+            if (linkAtPort(device, port) == null) {
+                return port;
+            }
+        }
+        return null;
     }
 
     // ---- ПКМ меню устройства/связи/точки излома ----
@@ -1736,24 +1901,6 @@ public class NetworkCanvasPanel extends JPanel {
                     String text = networkNameOrPlaceholder(att.getNetworkId()) + ": " + ip + (conflict ? "  ⚠" : "");
                     g2.drawString(clip(g2, text, w - (textX - x) - 4), textX, lineY);
                 }
-                lineY += lineHeight;
-            }
-
-            // Сводный статус видео-портов Novastar (экспериментально, см. class-javadoc
-            // Round 9/12) -- только если данные РЕАЛЬНО пришли (нет ключа устройства =
-            // не опрашивалось/выключено/недоступно, ничего не рисуем вообще).
-            java.util.Map<Integer, com.vjstb.ledscheme.service.novastar.NovastarPortStatusService.PortStatus>
-                    novastar = novastarStatuses.get(p.getId());
-            if (novastar != null && !novastar.isEmpty() && lineY <= y + h - 4) {
-                int total = novastar.size();
-                int ok = 0;
-                for (var st : novastar.values()) {
-                    if (st.enabled() && st.cardCount() != null && st.cardCount() > 0) {
-                        ok++;
-                    }
-                }
-                g2.setColor(ok == total ? COLOR_STATUS_UP : COLOR_STATUS_DOWN);
-                g2.drawString(clip(g2, "NovaLCT: " + ok + "/" + total + " портов с картами", w - 8), x + 6, lineY);
                 lineY += lineHeight;
             }
 

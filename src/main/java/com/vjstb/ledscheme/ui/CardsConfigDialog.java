@@ -216,7 +216,17 @@ public class CardsConfigDialog extends JDialog {
     }
 
     public CardsConfigDialog(Window owner, String title, CardsHost host, AppModel model) {
-        super(owner, "Комплектация карт — " + title, ModalityType.APPLICATION_MODAL);
+        this(owner, title, host, model, false);
+    }
+
+    /** {@code readOnly} — только просмотр списка карт без права добавлять/менять/
+     *  удалять (используется для карт общих/расшаренных элементов библиотеки:
+     *  раньше такие элементы вообще не давали открыть этот диалог, теперь можно
+     *  хотя бы посмотреть комплектацию — правка идёт через отдельную личную копию,
+     *  см. LibrariesStagePanel — «Скопировать и править…»). */
+    public CardsConfigDialog(Window owner, String title, CardsHost host, AppModel model, boolean readOnly) {
+        super(owner, "Комплектация карт — " + title + (readOnly ? " (только просмотр)" : ""),
+                ModalityType.APPLICATION_MODAL);
         this.host = host;
         this.model = model;
         this.connectorPicker = new InterfaceTypeVersionPicker(model);
@@ -351,6 +361,21 @@ public class CardsConfigDialog extends JDialog {
         content.add(bottom, BorderLayout.SOUTH);
 
         setContentPane(content);
+        if (readOnly) {
+            connectorPicker.setEnabled(false);
+            directionCombo.setEnabled(false);
+            countSpinner.setEnabled(false);
+            roleCombo.setEnabled(false);
+            thruCombo.setEnabled(false);
+            addPort.setEnabled(false);
+            removePort.setEnabled(false);
+            assignRoleBtn.setEnabled(false);
+            assignThruBtn.setEnabled(false);
+            nameField.setEnabled(false);
+            saveButton.setEnabled(false);
+            editButton.setEnabled(false);
+            remove.setEnabled(false);
+        }
         refresh();
         pack();
         setLocationRelativeTo(owner);

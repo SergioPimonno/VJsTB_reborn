@@ -546,9 +546,20 @@ public class SceneCanvasPanel extends JPanel {
         if (effectiveShape != null && effectiveShape != com.vjstb.ledscheme.model.CabinetShape.RECTANGLE) {
             items.add(RadialMenu.Item.branch("Угол", Palette.ACCENT, rotationSubmenu(cabId, cab)));
         }
-        items.add(RadialMenu.Item.branch("Тип", Palette.ACCENT, typeSubmenu(cabId)));
-
         java.awt.Point screenPt = e.getLocationOnScreen();
+        // "Вид палитры" (радиалка/дропдаун, см. ui.PersonalizationDialog) — оба
+        // режима показывают ОДИН и тот же отфильтрованный по палитре список
+        // (typeSubmenu/paletteCabinetTypes), различается только форма выбора:
+        // вложенное кольцо этого же RadialMenu, либо обычный выпадающий список
+        // (см. showTypeDropdown) — актуально для больших библиотек, где кольцо
+        // из всех типов сразу становится нечитаемым.
+        if (settings.activeProfile().getCabinetPaletteViewMode()
+                == com.vjstb.ledscheme.settings.CabinetPaletteViewMode.DROPDOWN) {
+            items.add(RadialMenu.Item.leaf("Тип ›", Palette.ACCENT, () -> showTypeDropdown(cabId, screenPt)));
+        } else {
+            items.add(RadialMenu.Item.branch("Тип", Palette.ACCENT, typeSubmenu(cabId)));
+        }
+
         radialMenuActive = true;
         // onClose срабатывает синхронно ВНУТРИ обработки того же события мыши, что
         // его вызвало — см. class-javadoc radialMenuActive про click-through.
@@ -605,7 +616,10 @@ public class SceneCanvasPanel extends JPanel {
 
     private List<RadialMenu.Item> typeSubmenu(String cabId) {
         List<RadialMenu.Item> items = new ArrayList<>();
-        List<CabinetType> types = model.getCabinetTypes();
+        // Палитра (CabinetType.isVisibleInPalette), не вся библиотека — см.
+        // showCabinetRadialMenu javadoc про переполненное кольцо на большой
+        // библиотеке; управляется в окне «Библиотеки» (LibrariesStagePanel).
+        List<CabinetType> types = model.getPaletteCabinetTypes();
         items.add(RadialMenu.Item.leaf("По умолчанию", Palette.PHASE_NONE, () -> applyType(cabId, null)));
         for (CabinetType t : types) {
             // Тот же typeColor(...), что и при отрисовке ячеек в detailMode — иначе
@@ -613,6 +627,27 @@ public class SceneCanvasPanel extends JPanel {
             items.add(RadialMenu.Item.leaf(t.getName(), typeColorFor(t), () -> applyType(cabId, t.getId())));
         }
         return items;
+    }
+
+    /** Дропдаун-эквивалент {@link #typeSubmenu} для {@link
+     *  com.vjstb.ledscheme.settings.CabinetPaletteViewMode#DROPDOWN} — тот же
+     *  отфильтрованный по палитре список, обычным {@link javax.swing.JPopupMenu}
+     *  вместо вложенного кольца {@link RadialMenu}: при большой палитре список
+     *  пролистать проще, чем разложить по кругу. */
+    private void showTypeDropdown(String cabId, java.awt.Point screenPt) {
+        javax.swing.JPopupMenu menu = new javax.swing.JPopupMenu();
+        javax.swing.JMenuItem defaultItem = new javax.swing.JMenuItem("По умолчанию");
+        defaultItem.addActionListener(ev -> applyType(cabId, null));
+        menu.add(defaultItem);
+        menu.addSeparator();
+        for (CabinetType t : model.getPaletteCabinetTypes()) {
+            javax.swing.JMenuItem item = new javax.swing.JMenuItem(t.getName());
+            item.addActionListener(ev -> applyType(cabId, t.getId()));
+            menu.add(item);
+        }
+        java.awt.Point local = new java.awt.Point(screenPt);
+        javax.swing.SwingUtilities.convertPointFromScreen(local, this);
+        menu.show(this, local.x, local.y);
     }
 
     private void applyType(String cabId, String typeId) {

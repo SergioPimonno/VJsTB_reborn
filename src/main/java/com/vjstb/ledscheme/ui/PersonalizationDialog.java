@@ -36,6 +36,8 @@ public class PersonalizationDialog extends javax.swing.JDialog {
     private final JComboBox<UserProfile> profileCombo = new JComboBox<>();
     private final JComboBox<String> preferencesViewCombo =
             new JComboBox<>(new String[] {"Список по этапам", "Матрица «функция × этап»"});
+    private final JComboBox<com.vjstb.ledscheme.settings.CabinetPaletteViewMode> cabinetPaletteViewCombo =
+            new JComboBox<>(com.vjstb.ledscheme.settings.CabinetPaletteViewMode.values());
     private final JComboBox<SchemaStylePreset> schemaStylePresetCombo = new JComboBox<>(SchemaStylePreset.values());
     private final JComboBox<com.vjstb.ledscheme.settings.SchemaRenderMode> schemaRenderModeCombo =
             new JComboBox<>(com.vjstb.ledscheme.settings.SchemaRenderMode.values());
@@ -188,13 +190,39 @@ public class PersonalizationDialog extends javax.swing.JDialog {
                 + " предпочтений растянется под неё.");
         row.add(new JLabel("Вид окна «Предпочтения»"), java.awt.BorderLayout.CENTER);
         row.add(preferencesViewCombo, java.awt.BorderLayout.EAST);
-        return (JPanel) UiKit.section("Вид", row);
+
+        cabinetPaletteViewCombo.setSelectedItem(settings.activeProfile().getCabinetPaletteViewMode());
+        cabinetPaletteViewCombo.addActionListener(e -> {
+            var mode = (com.vjstb.ledscheme.settings.CabinetPaletteViewMode) cabinetPaletteViewCombo.getSelectedItem();
+            if (mode != settings.activeProfile().getCabinetPaletteViewMode()) {
+                settings.setCabinetPaletteViewMode(mode);
+            }
+        });
+        JPanel paletteRow = new JPanel(new java.awt.BorderLayout(8, 0));
+        paletteRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        paletteRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+        paletteRow.setToolTipText("Как показывать палитру кабинетов (см. галочку «Показывать в палитре» в окне"
+                + " «Библиотеки») при выборе типа кабинета на ячейке (ПКМ в детальном режиме этапа «Прериг сцены»):"
+                + " радиальное меню (по умолчанию) или обычный выпадающий список — удобнее для большой палитры.");
+        paletteRow.add(new JLabel("Вид палитры кабинетов"), java.awt.BorderLayout.CENTER);
+        paletteRow.add(cabinetPaletteViewCombo, java.awt.BorderLayout.EAST);
+
+        JPanel body = new JPanel();
+        body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
+        body.setAlignmentX(Component.LEFT_ALIGNMENT);
+        body.add(row);
+        body.add(Box.createVerticalStrut(6));
+        body.add(paletteRow);
+        return (JPanel) UiKit.section("Вид", body);
     }
 
     private void refreshPreferencesViewCombo() {
         int want = settings.activeProfile().isPreferencesMatrixView() ? 1 : 0;
         if (preferencesViewCombo.getSelectedIndex() != want) {
             preferencesViewCombo.setSelectedIndex(want);
+        }
+        if (cabinetPaletteViewCombo.getSelectedItem() != settings.activeProfile().getCabinetPaletteViewMode()) {
+            cabinetPaletteViewCombo.setSelectedItem(settings.activeProfile().getCabinetPaletteViewMode());
         }
     }
 

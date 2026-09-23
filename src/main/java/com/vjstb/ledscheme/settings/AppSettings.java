@@ -16,12 +16,18 @@ public class AppSettings {
      *  sync.LibrarySyncClient/AppModel.applyLibrarySyncItems) — 0 означает "ещё ни
      *  разу не синхронизировались", тогда сервер отдаёт всю библиотеку целиком. */
     private long librarySyncGlobalSeq = 0;
-    /** Сессия входа на сервер (см. sync.AuthClient/ui.AccountDialog) — все три null,
+    /** Сессия входа на сервер (см. sync.AuthClient/ui.AccountDialog) — все null,
      *  если пользователь не входил в аккаунт; нужна только для отправки предложений
      *  в общую библиотеку, чтение библиотеки анонимно и токена не требует. */
     private String authToken;
     private String authUsername;
     private String authRole;
+    /** Команда пользователя — только для отображения (см. AccountDialog), реальный
+     *  контроль доступа к облачным проектам смотрит в БД на сервере при каждом
+     *  запросе, не в это поле. {@code null} — команда не назначена администратором
+     *  (в т.ч. у всех сессий, залогиненных ДО появления этого поля — обновится при
+     *  следующем входе). */
+    private String authTeamName;
     /** Версия, для которой пользователь уже закрыл уведомление об обновлении (см.
      *  ui.UpdateNoticeDialog/App.checkForUpdatesInBackground) — не переспрашиваем
      *  снова про ЭТУ ЖЕ версию при следующих запусках, но уведомим про более новую,
@@ -95,6 +101,14 @@ public class AppSettings {
 
     public void setAuthRole(String authRole) {
         this.authRole = authRole;
+    }
+
+    public String getAuthTeamName() {
+        return authTeamName;
+    }
+
+    public void setAuthTeamName(String authTeamName) {
+        this.authTeamName = authTeamName;
     }
 
     public String getDismissedUpdateVersion() {

@@ -207,6 +207,41 @@ public class AppModel {
         return id != null && workspace.getSharedCabinetTypes().stream().anyMatch(ct -> ct.getId().equals(id));
     }
 
+    /** Подмножество {@link #getCabinetTypes()}, отмеченное «видимым в палитре»
+     *  (см. {@code CabinetType#isVisibleInPalette()}) — источник для меню выбора
+     *  типа кабинета на ячейке (радиальное/выпадающее, см. {@code
+     *  ui.SceneCanvasPanel#typeSubmenu}), а не сама библиотека целиком: при
+     *  большой библиотеке выбор из ВСЕХ типов там неудобен, палитра — ручное
+     *  сужение до реально нужных на этом проекте моделей. */
+    public List<CabinetType> getPaletteCabinetTypes() {
+        List<CabinetType> palette = new ArrayList<>();
+        for (CabinetType ct : getCabinetTypes()) {
+            if (ct.isVisibleInPalette()) {
+                palette.add(ct);
+            }
+        }
+        return palette;
+    }
+
+    /** Включает видимость в палитре для ВСЕХ личных типов кабинетов разом —
+     *  быстрый способ вернуться к «всё видно», не отмечая каждый вручную (запрос
+     *  пользователя). Общие (синхронизированные) типы не трогает — они
+     *  редактируются только через синк/админ-консоль, как и остальные поля
+     *  общей библиотеки (см. {@link #updateCabinetType}); по умолчанию они и так
+     *  видны в палитре, если админ явно не скрыл. */
+    public void enableAllInPalette() {
+        boolean anyChanged = false;
+        for (CabinetType ct : workspace.getCabinetTypes()) {
+            if (!ct.isVisibleInPalette()) {
+                ct.setVisibleInPalette(true);
+                anyChanged = true;
+            }
+        }
+        if (anyChanged) {
+            changed();
+        }
+    }
+
     /** Все уже встречавшиеся значения поля "Компания" (кабинеты/контроллеры/пресеты
      *  оборудования — физическая техника, см. class-javadoc CabinetType.company) —
      *  для автодополнения в диалогах, без отдельного управляемого справочника
@@ -2361,6 +2396,22 @@ public class AppModel {
         workspace.getEquipmentPresets().add(preset);
         changed();
         return preset;
+    }
+
+    /** Независимая личная копия пресета (в т.ч. общего/расшаренного) — карты, разъёмы
+     *  питания и комплектация по умолчанию копируются целиком через {@link
+     *  EquipmentPreset#copy()}, id и название — новые, чтобы не путать копию с
+     *  исходником (правило 4 CLAUDE.md, "Скопировать и править…" в LibrariesStagePanel
+     *  для общих элементов библиотеки — chat 2026-09-23). В отличие от {@code
+     *  addEquipmentPreset(...)} выше, которая всегда строит пресет с нуля из отдельных
+     *  полей и не умеет принять разъёмы питания, здесь нужен ИМЕННО полный дубликат. */
+    public EquipmentPreset addEquipmentPresetCopy(EquipmentPreset source, String newName) {
+        EquipmentPreset copy = source.copy();
+        copy.setId(java.util.UUID.randomUUID().toString());
+        copy.setName(newName);
+        workspace.getEquipmentPresets().add(copy);
+        changed();
+        return copy;
     }
 
     public void updateEquipmentPreset(EquipmentPreset preset, SchemaMode mode, SchemaNodeType category, String name,

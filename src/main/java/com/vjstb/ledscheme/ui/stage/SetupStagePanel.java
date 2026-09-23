@@ -536,7 +536,7 @@ public class SetupStagePanel extends JPanel {
         int n = model.getCurrentScene() != null ? model.getCurrentScene().getScreens().size() + 1 : 1;
         double[] pos = model.suggestedNextPosition(model.getCabinetTypes().get(0).getId(), 3);
         com.vjstb.ledscheme.ui.NewScreenDialog dialog = new com.vjstb.ledscheme.ui.NewScreenDialog(
-                javax.swing.SwingUtilities.getWindowAncestor(this), model.getCabinetTypes(), "Экран " + n,
+                javax.swing.SwingUtilities.getWindowAncestor(this), model, model.getCabinetTypes(), "Экран " + n,
                 pos[0], pos[1], model.getCurrentScene() != null ? model.getCurrentScene().getScreenDefaults() : null);
         com.vjstb.ledscheme.ui.NewScreenDialog.Result r = dialog.showDialog();
         if (r == null) {

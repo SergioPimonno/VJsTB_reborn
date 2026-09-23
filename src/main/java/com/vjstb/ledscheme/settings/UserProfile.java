@@ -164,6 +164,13 @@ public class UserProfile {
      *  само окно предпочтений своего переключателя не имеет. */
     private boolean preferencesMatrixView = false;
 
+    /** Как показывается палитра кабинетов в меню выбора типа на ячейке —
+     *  {@code null} (профиль сохранён до появления этой настройки) трактуется
+     *  как {@link CabinetPaletteViewMode#RADIAL} — прежнее (единственное)
+     *  поведение. Переключается дропдауном в «Цветах и профилях» ({@code
+     *  ui.PersonalizationDialog}), рядом с {@link #preferencesMatrixView}. */
+    private CabinetPaletteViewMode cabinetPaletteViewMode;
+
     /** Как показываются НЕзадействованные группы разъёмов на блоке общей схемы
      *  СИГНАЛА (docs/schema-ports-rework/PLAN.md, задача T1.5) — реальное хранимое
      *  значение; старые {@link #getSignalConnectorDisplayMode()}/{@link
@@ -580,6 +587,14 @@ public class UserProfile {
         this.preferencesMatrixView = preferencesMatrixView;
     }
 
+    public CabinetPaletteViewMode getCabinetPaletteViewMode() {
+        return cabinetPaletteViewMode != null ? cabinetPaletteViewMode : CabinetPaletteViewMode.RADIAL;
+    }
+
+    public void setCabinetPaletteViewMode(CabinetPaletteViewMode mode) {
+        this.cabinetPaletteViewMode = mode != null ? mode : CabinetPaletteViewMode.RADIAL;
+    }
+
     /** СОВМЕСТИМЫЙ фасад — см. javadoc {@link #signalGroupDisplay}. Новый код должен
      *  звать {@link #getSignalGroupDisplay()}. {@code @JsonIgnore} на ОБОИХ методах —
      *  иначе Jackson завёл бы для этой пары ЕЩЁ одно поле JSON "signalConnectorDisplayMode"
@@ -917,6 +932,7 @@ public class UserProfile {
         p.schemaWireHops = schemaWireHops;
         p.schemaWireHopStyle = schemaWireHopStyle;
         p.preferencesMatrixView = preferencesMatrixView;
+        p.cabinetPaletteViewMode = cabinetPaletteViewMode;
         p.signalGroupDisplay = signalGroupDisplay;
         p.powerGroupDisplay = powerGroupDisplay;
         p.signalDefaultOrientation = signalDefaultOrientation;
