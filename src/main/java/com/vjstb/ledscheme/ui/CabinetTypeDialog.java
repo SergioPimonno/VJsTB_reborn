@@ -71,6 +71,10 @@ public class CabinetTypeDialog extends JDialog {
     private final JTextField powerConnectorsField = new JTextField();
     private final JTextField signalConnectorsField = new JTextField();
     private final JComboBox<String> companyField = new JComboBox<>();
+    /** Видимость в палитре (см. {@code CabinetType#isVisibleInPalette()}) —
+     *  сужает выбор в радиальном/выпадающем меню типа кабинета на ячейке для
+     *  больших библиотек; отмечено по умолчанию для новых типов. */
+    private final JCheckBox visibleInPaletteCheck = new JCheckBox("Показывать в палитре (меню выбора типа кабинета)");
 
     private CabinetType result;
 
@@ -141,6 +145,8 @@ public class CabinetTypeDialog extends JDialog {
         formBottom.add(powerConnectorsField);
         formBottom.add(new JLabel("Линий сигнала на кабинет (0 = встроено)"));
         formBottom.add(signalConnectorsField);
+        formBottom.add(new JLabel("Видимость в палитре"));
+        formBottom.add(visibleInPaletteCheck);
 
         CabinetType src = existing != null ? existing : new CabinetType();
         nameField.setText(src.getName());
@@ -169,6 +175,7 @@ public class CabinetTypeDialog extends JDialog {
         refreshCustomConnectorAmpVisibility();
         powerConnectorsField.setText(String.valueOf(src.getPowerConnectorsNeeded()));
         signalConnectorsField.setText(String.valueOf(src.getSignalConnectorsNeeded()));
+        visibleInPaletteCheck.setSelected(src.isVisibleInPalette());
 
         JButton ok = new JButton("Сохранить");
         ok.addActionListener(e -> onOk(existing));
@@ -298,6 +305,7 @@ public class CabinetTypeDialog extends JDialog {
             }
             ct.setPowerConnectorsNeeded((int) parseNonNeg(powerConnectorsField.getText(), "Линий питания"));
             ct.setSignalConnectorsNeeded((int) parseNonNeg(signalConnectorsField.getText(), "Линий сигнала"));
+            ct.setVisibleInPalette(visibleInPaletteCheck.isSelected());
             result = ct;
             dispose();
         } catch (IllegalArgumentException ex) {

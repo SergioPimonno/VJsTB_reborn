@@ -1,7 +1,5 @@
 package com.vjstb.ledscheme.ui;
 
-import com.vjstb.ledscheme.model.ControllerInstance;
-import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.Network;
 import com.vjstb.ledscheme.model.NetworkDeviceType;
 import com.vjstb.ledscheme.model.NetworkManagerPlan;
@@ -11,7 +9,6 @@ import com.vjstb.ledscheme.model.SchemaNode;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.NetworkScanService;
 import com.vjstb.ledscheme.service.NetworkTopology;
-import com.vjstb.ledscheme.service.novastar.NovastarPortStatusService;
 import com.vjstb.ledscheme.model.NetworkDevicePlacement;
 import com.vjstb.ledscheme.model.SchemaNodeType;
 import com.vjstb.ledscheme.settings.SettingsManager;
@@ -210,92 +207,6 @@ public class NetworkManagerPanel extends JPanel {
         activeAvailabilityScan = NetworkScanService.scanRange(new ArrayList<>(ips),
                 r -> result.put(r.ip(), r.reachable()),
                 () -> canvas.setAvailability(new java.util.HashMap<>(result)));
-
-        pollNovastarStatuses();
-    }
-
-    /** Опрос статуса видео-портов контроллеров с включённой галочкой (см. {@code
-     *  NetworkDeviceParamsDialog#novastarStatusCheck}) — в ОТДЕЛЬНОМ фоновом
-     *  потоке (не в пуле {@link NetworkScanService}, у того своя семантика
-     *  ограниченного пула на короткие пинги; здесь на каждый порт КАЖДОГО
-     *  такого контроллера — минимум два TCP round-trip'а, суммарно может
-     *  занять заметное время — ни в коем случае не на EDT, тот же тик
-     *  таймера иначе подвесил бы весь интерфейс приложения). Результат
-     *  передаётся канвасу целиком через {@code SwingUtilities.invokeLater} —
-     *  тот же принцип, что {@link #pollAvailability}. Экспериментально, см.
-     *  {@code service.novastar.NovastarPacket} class-javadoc. */
-    private void pollNovastarStatuses() {
-        if (currentPlan == null) {
-            canvas.setNovastarStatuses(java.util.Map.of());
-            return;
-        }
-        java.util.Map<String, String> hostByDeviceId = new java.util.LinkedHashMap<>();
-        java.util.Map<String, Integer> portCountByDeviceId = new java.util.LinkedHashMap<>();
-        for (NetworkDevicePlacement d : currentPlan.getDevices()) {
-            if (!d.isNovastarStatusEnabled()) {
-                continue;
-            }
-            String ip = firstNonBlankIp(d);
-            ControllerType type = controllerTypeForDevice(d);
-            if (ip == null || type == null) {
-                continue;
-            }
-            hostByDeviceId.put(d.getId(), ip);
-            portCountByDeviceId.put(d.getId(), type.effectivePortCount());
-        }
-        if (hostByDeviceId.isEmpty()) {
-            canvas.setNovastarStatuses(java.util.Map.of());
-            return;
-        }
-        new Thread(() -> {
-            java.util.Map<String, java.util.Map<Integer, NovastarPortStatusService.PortStatus>> statuses =
-                    new java.util.HashMap<>();
-            for (var entry : hostByDeviceId.entrySet()) {
-                int portCount = portCountByDeviceId.get(entry.getKey());
-                statuses.put(entry.getKey(), NovastarPortStatusService.readAll(entry.getValue(), portCount, 800));
-            }
-            javax.swing.SwingUtilities.invokeLater(() -> canvas.setNovastarStatuses(statuses));
-        }, "novastar-port-status-poll").start();
-    }
-
-    private String firstNonBlankIp(NetworkDevicePlacement device) {
-        for (com.vjstb.ledscheme.model.NetworkAttachment a : device.getAttachments()) {
-            if (a.getIpAddress() != null && !a.getIpAddress().isBlank()) {
-                return a.getIpAddress().trim();
-            }
-        }
-        return null;
-    }
-
-    /** Резолвит {@link ControllerType} КОНТРОЛЛЕРА, с которым связан {@code
-     *  device} (через узел общей схемы → {@code ControllerInstance} →
-     *  {@code ControllerType}) — источник числа ВИДЕО-портов для {@link
-     *  NovastarPortStatusService#readAll}, независимый от {@code
-     *  device.getEthernetPortCount()} (тот — порт управления, см. javadoc
-     *  {@code NetworkDevicePlacement#isNovastarStatusEnabled}). {@code null},
-     *  если устройство не связано с узлом схемы, узел не связан с
-     *  контроллером, или тип контроллера не найден в библиотеке. */
-    private ControllerType controllerTypeForDevice(NetworkDevicePlacement device) {
-        Scene scene = model.getCurrentScene();
-        if (scene == null || device.getLinkedSchemaNodeId() == null) {
-            return null;
-        }
-        SchemaNode node = null;
-        for (SchemaNode n : scene.getSchemaNodes()) {
-            if (n.getId().equals(device.getLinkedSchemaNodeId())) {
-                node = n;
-                break;
-            }
-        }
-        if (node == null || node.getControllerInstanceRefId() == null) {
-            return null;
-        }
-        for (ControllerInstance ci : model.controllersInScene(scene)) {
-            if (ci.getId().equals(node.getControllerInstanceRefId())) {
-                return model.getWorkspace().controllerTypeById(ci.getControllerTypeId());
-            }
-        }
-        return null;
     }
 
     // ---- глобальный тулбар (не привязан к конкретной сети) ----
@@ -313,6 +224,13 @@ public class NetworkManagerPanel extends JPanel {
                 + " с неизвестным/забытым адресом. Найденное можно сразу добавить в выбранную слева сеть.");
         scan.addActionListener(e -> openScanDialog());
         row.add(scan);
+
+        JButton importFromSchema = new JButton("Перенести из схемы…");
+        importFromSchema.setToolTipText("Ищет на общей схеме сигнала устройства и коммутаторы, соединённые"
+                + " сетевыми (Ethernet/Fiber) связями, и предлагает перенести их в менеджер группами —"
+                + " по одной сети на связную группу. Уже перенесённые устройства повторно не предлагаются.");
+        importFromSchema.addActionListener(e -> openSchemaImportDialog());
+        row.add(importFromSchema);
 
         JButton adminLaptop = new JButton("+ Мой компьютер");
         adminLaptop.setToolTipText("Добавляет блок, представляющий эту машину (имя и текущий IP — живьём"
@@ -403,6 +321,40 @@ public class NetworkManagerPanel extends JPanel {
             return;
         }
         canvas.addDiscoveredDevice(ip);
+    }
+
+    /** «Перенести из схемы…» (запрос пользователя после отказа от статуса
+     *  портов Novastar: "собери план по автопереносу сетей из общей схемы в
+     *  менеджер") — {@link NetworkCanvasPanel#previewSchemaImport} строит
+     *  дифф, {@link SchemaImportDialog} даёт пользователю снять галочки/
+     *  переименовать группы ДО применения, {@link
+     *  NetworkCanvasPanel#applySchemaImport} мутирует план. В отличие от
+     *  остальных кнопок тулбара НЕ требует выбранной сети слева — импорт сам
+     *  создаёт новые сети под каждую группу. */
+    private void openSchemaImportDialog() {
+        if (currentPlan == null) {
+            JOptionPane.showMessageDialog(this, "Сначала выберите сцену", "Нет сцены",
+                    JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        NetworkCanvasPanel.SchemaImportPreview preview = canvas.previewSchemaImport();
+        SchemaImportDialog dlg = new SchemaImportDialog(
+                (java.awt.Window) javax.swing.SwingUtilities.getWindowAncestor(this), preview);
+        if (!dlg.showDialog()) {
+            return;
+        }
+        List<NetworkCanvasPanel.ImportGroup> chosen = dlg.getSelectedGroups();
+        if (chosen.isEmpty()) {
+            return;
+        }
+        List<com.vjstb.ledscheme.service.AppModel.NetworkGraphLink> skipped = canvas.applySchemaImport(chosen);
+        persistPlan();
+        if (!skipped.isEmpty()) {
+            JOptionPane.showMessageDialog(this,
+                    skipped.size() + " связей не удалось перенести — на одном из устройств не осталось"
+                            + " свободных портов. Устройства и сети перенесены, эти связи достройте вручную.",
+                    "Перенесено частично", JOptionPane.INFORMATION_MESSAGE);
+        }
     }
 
     // ---- список сетей ----

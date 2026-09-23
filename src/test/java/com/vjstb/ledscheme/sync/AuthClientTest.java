@@ -14,6 +14,14 @@ class AuthClientTest {
         AuthClient.AuthResult result = AuthClient.parseSuccess("{\"token\":\"abc.def.ghi\",\"role\":\"USER\"}");
         assertEquals("abc.def.ghi", result.token());
         assertEquals("USER", result.role());
+        assertEquals(null, result.teamName());
+    }
+
+    @Test
+    void parsesLoginResponseWithTeamName() throws Exception {
+        AuthClient.AuthResult result = AuthClient.parseSuccess(
+                "{\"token\":\"abc.def.ghi\",\"role\":\"USER\",\"teamName\":\"Монтаж\"}");
+        assertEquals("Монтаж", result.teamName());
     }
 
     @Test

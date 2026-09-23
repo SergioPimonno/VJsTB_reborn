@@ -21,7 +21,11 @@ public class AuthClient {
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
 
-    public record AuthResult(String token, String role) {
+    /** {@code teamName} — только для отображения (см. {@code AccountDialog}); может
+     *  быть {@code null}, если администратор ещё не назначил пользователю команду
+     *  (тогда облачные проекты недоступны, см. {@code ProjectArchiveController} на
+     *  сервере). */
+    public record AuthResult(String token, String role, String teamName) {
     }
 
     /** Сервер (после Части 1 этого шага) кладёт человеко-читаемую причину отказа в

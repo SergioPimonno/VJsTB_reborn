@@ -91,29 +91,6 @@ public class NetworkDevicePlacement {
      *  устройства, во всём остальном (перетаскивание, подключение к
      *  дополнительным сетям, удаление) ведёт себя как любой другой блок. */
     private boolean adminLaptop;
-    /** {@code true} — пробовать читать статус ВИДЕО-портов контроллера по
-     *  протоколу NovaStar (TCP:5200) — запрос пользователя: "было бы славно,
-     *  если бы контроллеры в сетевом менеджере могли показывать текущий
-     *  статус по портам экрана". Осмысленно ТОЛЬКО для устройств, связанных
-     *  с узлом схемы ({@link #linkedSchemaNodeId} задан) — у каталожных типов
-     *  {@code NetworkDeviceType} нет понятия "видео-порт" вообще. Опрос
-     *  ведёт {@code ui.NetworkManagerPanel} по IP первого непустого
-     *  подключения устройства, число портов резолвится живьём из {@code
-     *  ControllerType} узла схемы (см. {@code service.novastar
-     *  .NovastarPortStatusService}) — НЕ то же самое число, что {@link
-     *  #ethernetPortCount} (это порт УПРАВЛЕНИЯ самого Сетевого менеджера,
-     *  разные вещи, явное уточнение пользователя: "в контроллерах ethernet
-     *  порты для экранов и сетевой порт — это разные порты").
-     *
-     * <p><b>Экспериментально</b> — протокол NovaStar на TCP:5200 официально
-     * не задокументирован; формат кадра/контрольной суммы восстановлен из
-     * реверс-инжиниринга (проект {@code sarakusha/novastar}) и подтверждён
-     * байт в байт по его собственному тестовому вектору (см. {@code
-     * service.novastar.NovastarPacket} class-javadoc), но СЕМАНТИКА именно
-     * этих двух регистров (включён ли порт / сколько карт откликнулось) не
-     * проверялась на реальном контроллере — при недоступности/ошибке статус
-     * просто не показывается (не ломает остальную работу менеджера). */
-    private boolean novastarStatusEnabled;
     /** Подключения этого блока к сетям — см. {@link NetworkAttachment}. Адрес/
      *  маска/шлюз живут ТАМ, а не здесь: одно физическое устройство может
      *  сидеть в нескольких сетях с разными адресами (запрос пользователя, см.
@@ -212,14 +189,6 @@ public class NetworkDevicePlacement {
 
     public void setAdminLaptop(boolean adminLaptop) {
         this.adminLaptop = adminLaptop;
-    }
-
-    public boolean isNovastarStatusEnabled() {
-        return novastarStatusEnabled;
-    }
-
-    public void setNovastarStatusEnabled(boolean novastarStatusEnabled) {
-        this.novastarStatusEnabled = novastarStatusEnabled;
     }
 
     /** @deprecated Только для миграции ({@code

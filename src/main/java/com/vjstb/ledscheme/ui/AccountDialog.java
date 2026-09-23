@@ -53,9 +53,15 @@ public class AccountDialog extends JDialog {
 
         String username = settings.getSettings().getAuthUsername();
         String role = settings.getSettings().getAuthRole();
+        String teamName = settings.getSettings().getAuthTeamName();
         JLabel status = new JLabel("Вы вошли как " + username + " (" + role + ")");
         status.setAlignmentX(LEFT_ALIGNMENT);
         content.add(status);
+        JLabel teamStatus = new JLabel(teamName != null ? "Команда: " + teamName
+                : "Команда не назначена — обратитесь к администратору, чтобы получить доступ к облачным проектам.");
+        teamStatus.setForeground(Palette.MUTED);
+        teamStatus.setAlignmentX(LEFT_ALIGNMENT);
+        content.add(teamStatus);
         content.add(Box.createVerticalStrut(14));
 
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT));
@@ -69,7 +75,7 @@ public class AccountDialog extends JDialog {
         buttons.add(logout);
         buttons.add(close);
         content.add(buttons);
-        setSize(340, 150);
+        setSize(420, 170);
         return content;
     }
 
@@ -142,7 +148,7 @@ public class AccountDialog extends JDialog {
                 submit.setEnabled(true);
                 try {
                     AuthClient.AuthResult result = get();
-                    settings.setAuthSession(result.token(), username, result.role());
+                    settings.setAuthSession(result.token(), username, result.role(), result.teamName());
                     rebuild();
                 } catch (Exception ex) {
                     status.setText(rootMessage(ex));

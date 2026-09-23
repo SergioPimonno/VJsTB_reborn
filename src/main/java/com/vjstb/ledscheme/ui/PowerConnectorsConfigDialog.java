@@ -175,7 +175,15 @@ public class PowerConnectorsConfigDialog extends JDialog {
     private JButton editButton;
 
     public PowerConnectorsConfigDialog(Window owner, String title, PowerConnectorsHost host, AppModel model) {
-        super(owner, "Разъёмы питания — " + title, ModalityType.APPLICATION_MODAL);
+        this(owner, title, host, model, false);
+    }
+
+    /** {@code readOnly} — см. аналогичный параметр {@link CardsConfigDialog} (то же
+     *  для общих/расшаренных пресетов: просмотр списка разъёмов без права его менять). */
+    public PowerConnectorsConfigDialog(Window owner, String title, PowerConnectorsHost host, AppModel model,
+                                        boolean readOnly) {
+        super(owner, "Разъёмы питания — " + title + (readOnly ? " (только просмотр)" : ""),
+                ModalityType.APPLICATION_MODAL);
         this.host = host;
         this.model = model;
         // Кабели пользовательской библиотеки (см. AppModel.cableTypesForMode) —
@@ -307,6 +315,20 @@ public class PowerConnectorsConfigDialog extends JDialog {
         content.add(bottom, BorderLayout.SOUTH);
 
         setContentPane(content);
+        if (readOnly) {
+            connectorCombo.setEnabled(false);
+            directionCombo.setEnabled(false);
+            countSpinner.setEnabled(false);
+            phaseCombo.setEnabled(false);
+            breakerField.setEnabled(false);
+            thruCombo.setEnabled(false);
+            addOrSaveButton.setEnabled(false);
+            editButton.setEnabled(false);
+            remove.setEnabled(false);
+            if (deratingField != null) {
+                deratingField.setEnabled(false);
+            }
+        }
         refresh();
         pack();
         setLocationRelativeTo(owner);

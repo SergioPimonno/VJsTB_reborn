@@ -47,14 +47,7 @@ import javax.swing.SpinnerNumberModel;
  * deviceTypeId != null}) число портов — паспортная величина ТИПА, спиннеры
  * здесь только ПОКАЗЫВАЮТ значения из библиотеки и заблокированы — см. {@code
  * typeEthernetPortCount}/{@code typeOpticalPortCount} и {@link
- * NetworkCanvasPanel#editParams}, который их вычисляет.
- *
- * <p>{@link #novastarStatusCheck} (запрос пользователя: "было бы славно, если
- * бы контроллеры в сетевом менеджере могли показывать текущий статус по
- * портам экрана") — включаемо только для СВЯЗАННЫХ устройств ({@code
- * linkedSchemaNodeId != null}), экспериментально (см. {@code
- * service.novastar.NovastarPacket} class-javadoc про статус доверия к
- * протоколу). */
+ * NetworkCanvasPanel#editParams}, который их вычисляет. */
 public class NetworkDeviceParamsDialog extends JDialog {
 
     private final JTextField webUrlField = new JTextField();
@@ -62,8 +55,6 @@ public class NetworkDeviceParamsDialog extends JDialog {
     private final JTextField noteField = new JTextField();
     private final JSpinner ethernetPortSpinner = new JSpinner(new SpinnerNumberModel(4, 0, 128, 1));
     private final JSpinner opticalPortSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 128, 1));
-    private final JCheckBox novastarStatusCheck = new JCheckBox(
-            "Пробовать читать статус видео-портов (протокол NovaStar, экспериментально)");
     private final NetworkDevicePlacement device;
     private boolean saved;
 
@@ -91,16 +82,6 @@ public class NetworkDeviceParamsDialog extends JDialog {
             opticalPortSpinner.setToolTipText(tip);
         }
 
-        boolean linked = device.getLinkedSchemaNodeId() != null;
-        novastarStatusCheck.setSelected(device.isNovastarStatusEnabled());
-        novastarStatusCheck.setEnabled(linked);
-        novastarStatusCheck.setToolTipText(linked
-                ? "Опрашивает контроллер по недокументированному протоколу NovaStar (TCP:5200) —"
-                        + " формат подтверждён только частично, статус портов может не соответствовать"
-                        + " действительности на некоторых прошивках. При недоступности просто не показывает статус."
-                : "Доступно только для устройств, связанных с узлом общей схемы (контроллером) — у каталожного"
-                        + " сетевого оборудования нет видео-портов");
-
         JPanel content = new JPanel(new BorderLayout(8, 8));
         content.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
 
@@ -111,7 +92,6 @@ public class NetworkDeviceParamsDialog extends JDialog {
         top.add(row("Сетевых портов (Ethernet)", ethernetPortSpinner));
         top.add(row("Оптических портов", opticalPortSpinner));
         top.add(row("Примечание", noteField));
-        top.add(novastarStatusCheck);
         content.add(top, BorderLayout.NORTH);
 
         JButton ok = new JButton("Сохранить");
@@ -150,9 +130,6 @@ public class NetworkDeviceParamsDialog extends JDialog {
         if (ethernetPortSpinner.isEnabled()) {
             device.setEthernetPortCount((Integer) ethernetPortSpinner.getValue());
             device.setOpticalPortCount((Integer) opticalPortSpinner.getValue());
-        }
-        if (novastarStatusCheck.isEnabled()) {
-            device.setNovastarStatusEnabled(novastarStatusCheck.isSelected());
         }
         saved = true;
         dispose();
