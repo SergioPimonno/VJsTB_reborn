@@ -27,6 +27,12 @@ public class SettingsStore {
                 .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
     }
 
+    /** Каталог, где лежит settings.json — рядом с ним хранится ключ {@link CredentialCipher}. */
+    public File directory() {
+        File dir = file.getAbsoluteFile().getParentFile();
+        return dir != null ? dir : new File(".");
+    }
+
     public static File defaultSettingsFile() {
         String home = System.getProperty("user.home", ".");
         File dir = new File(home, ".led-scheme");

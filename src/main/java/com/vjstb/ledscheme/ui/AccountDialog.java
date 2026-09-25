@@ -11,6 +11,7 @@ import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -42,6 +43,7 @@ public class AccountDialog extends JDialog {
     }
 
     private void rebuild() {
+        getRootPane().setDefaultButton(null);
         setContentPane(settings.getSettings().getAuthToken() != null ? buildLoggedInPanel() : buildFormsPanel());
         pack();
     }
@@ -86,24 +88,40 @@ public class AccountDialog extends JDialog {
         tabs.addTab("Войти", buildLoginForm());
         tabs.addTab("Регистрация", buildRegisterForm());
         content.add(tabs, BorderLayout.CENTER);
-        setSize(360, 240);
+        setSize(360, 270);
         return content;
     }
 
     private JPanel buildLoginForm() {
-        JTextField username = new JTextField();
-        JPasswordField password = new JPasswordField();
+        // Сессия после перезапуска не сохраняется (см. AppSettings#authToken) — вместо неё
+        // по запросу пользователя запоминаются логин и пароль, чтобы повторный вход был
+        // одним нажатием «Войти».
+        String rememberedName = settings.getSettings().getRememberedUsername();
+        String rememberedPass = settings.rememberedPassword();
+        JTextField username = new JTextField(rememberedName != null ? rememberedName : "");
+        JPasswordField password = new JPasswordField(rememberedPass != null ? rememberedPass : "");
+        JCheckBox remember = new JCheckBox("Запомнить логин и пароль", rememberedName != null);
         JLabel status = new JLabel(" ");
         JButton submit = new JButton("Войти");
 
         JPanel form = formPanel(username, password, null, status, submit);
+        remember.setAlignmentX(LEFT_ALIGNMENT);
+        form.add(remember, 1);
         submit.addActionListener(e -> {
             String name = username.getText().trim();
+            String pass = new String(password.getPassword());
             submit.setEnabled(false);
             status.setText("Вход…");
             runAuth(status, submit, name, () -> new AuthClient(LibrarySyncClient.resolveBaseUrl(settings))
-                    .login(name, new String(password.getPassword())));
+                    .login(name, pass), () -> {
+                        if (remember.isSelected()) {
+                            settings.rememberCredentials(name, pass);
+                        } else {
+                            settings.forgetCredentials();
+                        }
+                    });
         });
+        getRootPane().setDefaultButton(submit);
         return form;
     }
 
@@ -125,7 +143,7 @@ public class AccountDialog extends JDialog {
             submit.setEnabled(false);
             status.setText("Регистрация…");
             runAuth(status, submit, name, () -> new AuthClient(LibrarySyncClient.resolveBaseUrl(settings))
-                    .register(name, pass));
+                    .register(name, pass), null);
         });
         return form;
     }
@@ -136,7 +154,7 @@ public class AccountDialog extends JDialog {
 
     /** Сервер не отдаёт логин обратно в ответе на login/register (только token+role) —
      *  {@code username} это то, что пользователь только что сам ввёл в форму. */
-    private void runAuth(JLabel status, JButton submit, String username, AuthCall call) {
+    private void runAuth(JLabel status, JButton submit, String username, AuthCall call, Runnable onSuccess) {
         new SwingWorker<AuthClient.AuthResult, Void>() {
             @Override
             protected AuthClient.AuthResult doInBackground() throws Exception {
@@ -149,6 +167,9 @@ public class AccountDialog extends JDialog {
                 try {
                     AuthClient.AuthResult result = get();
                     settings.setAuthSession(result.token(), username, result.role(), result.teamName());
+                    if (onSuccess != null) {
+                        onSuccess.run();
+                    }
                     rebuild();
                 } catch (Exception ex) {
                     status.setText(rootMessage(ex));
