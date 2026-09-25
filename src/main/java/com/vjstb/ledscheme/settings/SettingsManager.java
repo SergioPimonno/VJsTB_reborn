@@ -1,5 +1,6 @@
 package com.vjstb.ledscheme.settings;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -13,10 +14,12 @@ public class SettingsManager {
     private final SettingsStore store;
     private AppSettings settings;
     private final List<Runnable> listeners = new ArrayList<>();
+    private final CredentialCipher credentialCipher;
 
     public SettingsManager(SettingsStore store) {
         this.store = store;
         this.settings = store.load();
+        this.credentialCipher = new CredentialCipher(new File(store.directory(), "credential.key"));
     }
 
     public void addListener(Runnable r) {
@@ -71,6 +74,29 @@ public class SettingsManager {
         settings.setAuthRole(null);
         settings.setAuthTeamName(null);
         persist();
+    }
+
+    /** Запомнить учётные данные для предзаполнения формы входа (не сессию — см.
+     *  {@link AppSettings#getRememberedUsername}). */
+    public void rememberCredentials(String username, String password) {
+        settings.setRememberedUsername(username);
+        settings.setRememberedPasswordEnc(credentialCipher.encrypt(password));
+        persist();
+    }
+
+    public void forgetCredentials() {
+        if (settings.getRememberedUsername() == null && settings.getRememberedPasswordEnc() == null) {
+            return;
+        }
+        settings.setRememberedUsername(null);
+        settings.setRememberedPasswordEnc(null);
+        persist();
+    }
+
+    /** Расшифрованный запомненный пароль или {@code null}, если не запомнен/не расшифровался. */
+    public String rememberedPassword() {
+        String enc = settings.getRememberedPasswordEnc();
+        return enc == null ? null : credentialCipher.decrypt(enc);
     }
 
     public UserProfile createProfile(String name) {
