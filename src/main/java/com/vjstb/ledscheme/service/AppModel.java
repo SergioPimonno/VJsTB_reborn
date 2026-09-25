@@ -44,7 +44,9 @@ import com.vjstb.ledscheme.model.SchemaEdge;
 import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.SchemaNode;
 import com.vjstb.ledscheme.model.SchemaNodeType;
+import com.vjstb.ledscheme.model.ScreenGroup;
 import com.vjstb.ledscheme.model.ScreenMountType;
+import com.vjstb.ledscheme.model.ScreenTagColor;
 import com.vjstb.ledscheme.model.SignalChain;
 import com.vjstb.ledscheme.model.Workspace;
 import com.vjstb.ledscheme.store.LibraryStore;
@@ -105,11 +107,26 @@ public class AppModel {
      * цепочек/канвасов — с тех пор ничто технически не мешало добавить сюда и схему,
      * просто не сделали). {@code actionLabel} — человекочитаемое описание для
      *  будущего UI истории действий (по образцу лога команд grandMA) — пока не
-     *  проставляется на всех местах вызова, только там, где уже осмысленно (маски). */
+     *  проставляется на всех местах вызова, только там, где уже осмысленно (маски).
+     *
+     *  <p>СТРУКТУРНЫЙ снимок ({@code screensSnapshot != null}: удаление/дублирование/
+     *  вставка/группировка/перенос экранов, дерево навигации «Сетапа») дополнительно
+     *  хранит список экранов сцены (ссылки на сами объекты — удалённый экран
+     *  возвращается целиком, вместе с контроллерами), копии групп и группу/метку
+     *  каждого экрана; {@code screenSnapshot} у него всегда {@code null} (снимок
+     *  ОДНОГО экрана к структурной правке не относится). В отличие от снимков правок
+     *  экрана такие записи переживают смену выбранного экрана — иначе после
+     *  Ctrl+D (новый экран сразу выбирается) отменять было бы нечего, см. {@link
+     *  #selectScreen}. */
     private record UndoEntry(Screen screenSnapshot, List<PowerChain> powerChainsSnapshot,
                               List<SignalChain> signalChainsSnapshot, List<ContentCanvas> canvasesSnapshot,
                               List<SchemaNode> schemaNodesSnapshot, List<SchemaEdge> schemaEdgesSnapshot,
-                              String actionLabel) {
+                              String actionLabel, List<Screen> screensSnapshot, List<ScreenGroup> groupsSnapshot,
+                              java.util.Map<Screen, ScreenMeta> screenMetaSnapshot) {
+    }
+
+    /** Принадлежность экрана группе и цветная метка на момент структурного снимка. */
+    private record ScreenMeta(String groupId, ScreenTagColor tagColor) {
     }
 
     private final Deque<UndoEntry> undoStack = new ArrayDeque<>();
@@ -251,9 +268,6 @@ public class AppModel {
         for (CabinetType ct : getCabinetTypes()) {
             addIfNotBlank(companies, ct.getCompany());
         }
-        for (ControllerType ct : getControllerTypes()) {
-            addIfNotBlank(companies, ct.getCompany());
-        }
         for (EquipmentPreset p : getEquipmentPresets()) {
             addIfNotBlank(companies, p.getCompany());
         }
@@ -326,8 +340,14 @@ public class AppModel {
 
     public void selectScreen(Screen s) {
         currentScreen = s;
-        undoStack.clear();
+        dropScreenBoundUndo();
         fireChanged();
+    }
+
+    /** Смена выбранного экрана делает недействительными снимки правок ЭТОГО экрана,
+     *  но не структурные снимки сцены (см. javadoc {@code UndoEntry}). */
+    private void dropScreenBoundUndo() {
+        undoStack.removeIf(e -> e.screensSnapshot() == null);
     }
 
     public void setMode(Mode m) {
@@ -418,118 +438,13 @@ public class AppModel {
         store.exportList(workspace.getCabinetTypes(), file, "CABINET");
     }
 
-    // ---- controller types (библиотека контроллеров, аналог SmartLCT) ----
-
-    /** Общая ++ личная — см. getCabinetTypes(). */
-    public List<ControllerType> getControllerTypes() {
-        List<ControllerType> union = new ArrayList<>(workspace.getSharedControllerTypes());
-        union.addAll(workspace.getControllerTypes());
-        return union;
-    }
-
-    public boolean isSharedControllerType(String id) {
-        return id != null && workspace.getSharedControllerTypes().stream().anyMatch(ct -> ct.getId().equals(id));
-    }
-
-    public ControllerType addControllerType(ControllerType type) {
-        requireUniqueControllerName(type.getName(), null);
-        workspace.getControllerTypes().add(type);
-        changed();
-        return type;
-    }
-
-    public void updateControllerType(ControllerType edited) {
-        requireUniqueControllerName(edited.getName(), edited.getId());
-        ControllerType existing = workspace.controllerTypeById(edited.getId());
-        if (existing == null) {
-            throw new IllegalArgumentException("Контроллер не найден в библиотеке");
-        }
-        existing.applyEditedValues(edited);
-        changed();
-    }
-
-    public SchemaCard addCardToController(ControllerType ct, String name, List<CardPort> ports) {
-        SchemaCard card = new SchemaCard(name, ports);
-        ct.getCards().add(card);
-        changed();
-        return card;
-    }
-
-    public void removeCardFromController(ControllerType ct, String cardId) {
-        ct.getCards().removeIf(c -> c.getId().equals(cardId));
-        changed();
-    }
-
-    /** Правит уже существующую карту НА МЕСТЕ (сохраняя id карты) — см.
-     *  {@link #updatePowerConnectorOnNode} про ту же причину (не терять ссылки
-     *  на неё, если такие появятся). */
-    public void updateCardOnController(ControllerType ct, String cardId, String name, List<CardPort> ports) {
-        SchemaCard card = ct.getCards().stream().filter(c -> c.getId().equals(cardId)).findFirst().orElse(null);
-        if (card == null) {
-            throw new IllegalArgumentException("Карта не найдена");
-        }
-        card.setName(name);
-        card.setPorts(ports);
-        changed();
-    }
-
-    public void deleteControllerType(String id) {
-        if (isControllerTypeInUse(id)) {
-            throw new IllegalStateException("Контроллер назначен экрану и не может быть удалён из библиотеки");
-        }
-        workspace.getControllerTypes().removeIf(ct -> ct.getId().equals(id));
-        changed();
-    }
-
-    public boolean isControllerTypeInUse(String id) {
-        for (Project p : workspace.getProjects()) {
-            for (Scene s : p.getScenes()) {
-                for (Screen scr : s.getScreens()) {
-                    for (ControllerInstance ci : scr.getControllers()) {
-                        if (id.equals(ci.getControllerTypeId())) {
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-        return false;
-    }
-
-    private void requireUniqueControllerName(String name, String ignoreId) {
-        for (ControllerType ct : getControllerTypes()) {
-            if (ct.getName().equalsIgnoreCase(name) && !ct.getId().equals(ignoreId)) {
-                throw new IllegalStateException("Контроллер с именем \"" + name + "\" уже есть в библиотеке");
-            }
-        }
-    }
-
-    /** Импорт: существующие по имени обновляются, новые добавляются (см. importCabinetLibrary). */
-    public int importControllerLibrary(File file) {
-        List<ControllerType> incoming = store.importList(file, ControllerType.class);
-        for (ControllerType inc : incoming) {
-            ControllerType match = null;
-            for (ControllerType ct : workspace.getControllerTypes()) {
-                if (ct.getName().equalsIgnoreCase(inc.getName())) {
-                    match = ct;
-                    break;
-                }
-            }
-            if (match != null) {
-                match.applyEditedValues(inc);
-            } else {
-                workspace.getControllerTypes().add(inc);
-            }
-        }
-        changed();
-        return incoming.size();
-    }
-
-    public void exportControllerLibrary(File file) {
-        store.exportList(workspace.getControllerTypes(), file, "CONTROLLER");
-    }
-
     // ---- контроллеры, общие для СЦЕНЫ (не для одного экрана — см. Task #58) ----
+    //      Библиотека контроллеров слита в EquipmentPreset (category == CONTROLLER,
+    //      2026-09-23) — типовой CRUD (add/update/delete/import/export) живёт там же,
+    //      что и для остального оборудования. workspace.getControllerTypes()/
+    //      getSharedControllerTypes() (устаревший ControllerType) остаются только
+    //      ради десериализации старых сохранений — см. одноразовую миграцию
+    //      (migrateControllerLibraryToEquipmentPresets) ниже.
 
     /** Сцена, содержащая указанный экран — контроллеры общие для всей сцены, у
      *  Screen нет обратной ссылки на Scene, поэтому ищем по всем проектам. */
@@ -574,10 +489,18 @@ public class AppModel {
     }
 
     /** Добавляет сцене (физически — переданному экрану, см. {@link #controllersInScene})
-     *  контроллер выбранного типа. */
-    public ControllerInstance addControllerToScreen(Screen screen, String controllerTypeId) {
-        ControllerType newType = workspace.controllerTypeById(controllerTypeId);
-        if (newType == null) {
+     *  контроллер из пресета библиотеки ({@code category == CONTROLLER}). {@code
+     *  assembledCardOrder} — id карт-шаблонов пресета В ПОРЯДКЕ размещения, собранные
+     *  через {@code ui.AssembleCardsDialog} в вызывающем UI, когда у пресета больше
+     *  одного шаблона (см. {@code ui.stage.SignalStagePanel}); {@code null}/пусто —
+     *  пресет без карт или ровно с одним шаблоном (диалог сборки не показывался,
+     *  нечего выбирать) — копируются ВСЕ карты пресета как есть. Комплектация
+     *  ЗАМОРАЖИВАЕТСЯ на экземпляре контроллера в момент добавления, не резолвится
+     *  заново из библиотеки при каждом расчёте нумерации — см. class-javadoc
+     *  {@link ControllerInstance}. */
+    public ControllerInstance addControllerToScreen(Screen screen, String presetId, List<String> assembledCardOrder) {
+        EquipmentPreset preset = equipmentPresetById(presetId);
+        if (preset == null || preset.getCategory() != SchemaNodeType.CONTROLLER) {
             throw new IllegalArgumentException("Тип контроллера не найден");
         }
         pushUndo("Добавление контроллера на экран");
@@ -591,8 +514,7 @@ public class AppModel {
         int offsetBeforeInsertion = 0;
         for (Screen s : scene.getScreens()) {
             for (ControllerInstance ci : s.getControllers()) {
-                ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
-                offsetBeforeInsertion += t != null ? t.effectivePortCount() : 0;
+                offsetBeforeInsertion += ci.effectivePortCount();
             }
             if (s == screen) {
                 break;
@@ -602,15 +524,58 @@ public class AppModel {
         // плейсхолдера (баг-репорт: было "Контроллер " + size()+1, что после
         // удаления контроллера из середины списка давало дубликат номера —
         // размер списка меньше максимального выданного номера).
-        ControllerInstance ci = new ControllerInstance(controllerTypeId, "Контроллер ?");
+        ControllerInstance ci = new ControllerInstance(presetId, "Контроллер ?");
+        freezeControllerInstanceCards(ci, preset, assembledCardOrder);
         screen.getControllers().add(ci);
         // Освобождаем место под новые порты — сдвигаем уже сохранённые сквозные
         // номера портов существующих цепочек сигнала, которые оказались ПОСЛЕ
         // точки вставки (см. shiftSceneChainPorts).
-        shiftSceneChainPorts(scene, offsetBeforeInsertion, newType.effectivePortCount());
+        shiftSceneChainPorts(scene, offsetBeforeInsertion, ci.effectivePortCount());
         renumberControllers(scene);
         changed();
         return ci;
+    }
+
+    /** Резолвит пресет оборудования по id — общая ++ личная библиотека, как
+     *  {@link #cabinetTypeById}/{@code workspace.controllerTypeById} для остальных
+     *  видов. */
+    private EquipmentPreset equipmentPresetById(String id) {
+        if (id == null) {
+            return null;
+        }
+        for (EquipmentPreset p : getEquipmentPresets()) {
+            if (p.getId().equals(id)) {
+                return p;
+            }
+        }
+        return null;
+    }
+
+    /** Заполняет {@code ci} замороженной копией карт/плоских портов {@code preset} —
+     *  см. class-javadoc {@link ControllerInstance}. {@code cardOrder} пуст/{@code
+     *  null} — копирует ВСЕ карты пресета как есть; иначе резолвит id шаблонов (с
+     *  повторами) против {@code preset.getCards()}, тем же алгоритмом, что {@link
+     *  #addSchemaNodeFromPresetWithCardOrder}. */
+    private void freezeControllerInstanceCards(ControllerInstance ci, EquipmentPreset preset, List<String> cardOrder) {
+        List<SchemaCard> cards = new ArrayList<>();
+        if (cardOrder != null && !cardOrder.isEmpty()) {
+            for (String templateId : cardOrder) {
+                for (SchemaCard template : preset.getCards()) {
+                    if (template.getId().equals(templateId)) {
+                        cards.add(duplicateCardWithFreshIds(template));
+                        break;
+                    }
+                }
+            }
+        } else {
+            for (SchemaCard template : preset.getCards()) {
+                cards.add(duplicateCardWithFreshIds(template));
+            }
+        }
+        ci.setCards(cards);
+        ci.setPortCount(preset.getPortCount());
+        ci.setPortBandwidthMbps(preset.getPortBandwidthMbps());
+        ci.setInputPortCount(preset.getInputPortCount());
     }
 
     /** Удаляет контроллер из сцены — ищет его среди ВСЕХ экранов сцены (физическое
@@ -639,8 +604,7 @@ public class AppModel {
         // остаются на своих портах, а offset других контроллеров уменьшился).
         ControllerInstance removed = controllerById(scene, controllerInstanceId);
         int removedOffset = removed != null ? portOffsetOf(scene, removed) : -1;
-        ControllerType removedType = removed != null ? workspace.controllerTypeById(removed.getControllerTypeId()) : null;
-        int removedCount = removedType != null ? removedType.effectivePortCount() : 0;
+        int removedCount = removed != null ? removed.effectivePortCount() : 0;
 
         screen.getControllers().removeIf(c -> c.getId().equals(controllerInstanceId));
         // Не оставляем висячую ссылку — если удаляемый контроллер был чьим-то
@@ -838,8 +802,7 @@ public class AppModel {
         int offset = 0;
         for (ControllerInstance ci : order) {
             offsets.put(ci, offset);
-            ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
-            offset += t != null ? t.effectivePortCount() : 0;
+            offset += ci.effectivePortCount();
         }
         return offsets;
     }
@@ -850,8 +813,7 @@ public class AppModel {
             java.util.Map<ControllerInstance, Integer> oldOffsets, java.util.Map<ControllerInstance, Integer> newOffsets) {
         for (ControllerInstance ci : oldOrder) {
             int offset = oldOffsets.get(ci);
-            ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
-            int count = t != null ? t.effectivePortCount() : 0;
+            int count = ci.effectivePortCount();
             if (oldPort > offset && oldPort <= offset + count) {
                 Integer newOffset = newOffsets.get(ci);
                 return newOffset != null ? newOffset + (oldPort - offset) : oldPort;
@@ -874,8 +836,7 @@ public class AppModel {
     private ControllerInstance controllerForPortInScene(Scene scene, int port) {
         int offset = 0;
         for (ControllerInstance ci : controllersInScene(scene)) {
-            ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
-            int count = t != null ? t.effectivePortCount() : 0;
+            int count = ci.effectivePortCount();
             if (port > offset && port <= offset + count) {
                 return ci;
             }
@@ -921,8 +882,7 @@ public class AppModel {
                 throw new IllegalArgumentException("Этот контроллер уже резервирует другой — сначала снимите ту связку");
             }
             int offset = portOffsetOf(scene, backup);
-            ControllerType backupType = workspace.controllerTypeById(backup.getControllerTypeId());
-            int count = backupType != null ? backupType.effectivePortCount() : 0;
+            int count = backup.effectivePortCount();
             // По всей сцене, а не только screen.getSignalChains() — цепочка на порту
             // резервируемого контроллера могла быть построена (и физически храниться,
             // до Task #78 — привязанной к экрану, где она была ЗАВЕРШЕНА) при
@@ -939,13 +899,10 @@ public class AppModel {
         String oldBackupId = main.getBackupControllerId();
         main.setBackupControllerId(backupId);
         int mainOffset = portOffsetOf(scene, main);
-        ControllerType mainType = workspace.controllerTypeById(main.getControllerTypeId());
-        int mainCount = mainType != null ? mainType.effectivePortCount() : 0;
+        int mainCount = main.effectivePortCount();
         ControllerInstance oldBackup = oldBackupId != null ? controllerById(scene, oldBackupId) : null;
         int oldBackupOffset = oldBackup != null ? portOffsetOf(scene, oldBackup) : 0;
-        ControllerType oldBackupType = oldBackup != null
-                ? workspace.controllerTypeById(oldBackup.getControllerTypeId()) : null;
-        int oldBackupCount = oldBackupType != null ? oldBackupType.effectivePortCount() : 0;
+        int oldBackupCount = oldBackup != null ? oldBackup.effectivePortCount() : 0;
         for (SignalChain c : scene.getSignalChains()) {
             if (c.isBackup() || c.getPortNumber() == null) {
                 continue;
@@ -1001,8 +958,7 @@ public class AppModel {
             if (ci == target) {
                 return offset;
             }
-            ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
-            offset += t != null ? t.effectivePortCount() : 0;
+            offset += ci.effectivePortCount();
         }
         return offset;
     }
@@ -1036,10 +992,7 @@ public class AppModel {
         }
         int total = 0;
         for (ControllerInstance ci : all) {
-            ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
-            if (t != null) {
-                total += t.effectivePortCount();
-            }
+            total += ci.effectivePortCount();
         }
         return Math.max(total, 1);
     }
@@ -1161,12 +1114,16 @@ public class AppModel {
      *  на текущей сцене, без наложения. Используется для предзаполнения диалога
      *  создания экрана. */
     public double[] suggestedNextPosition(String cabinetTypeId, int cols) {
-        if (currentScene == null || currentScene.getScreens().isEmpty()) {
+        return suggestedNextPosition(currentScene);
+    }
+
+    private double[] suggestedNextPosition(Scene scene) {
+        if (scene == null || scene.getScreens().isEmpty()) {
             return new double[]{0, 0};
         }
         double gapMm = 200;
         double maxRight = 0;
-        for (Screen s : currentScene.getScreens()) {
+        for (Screen s : scene.getScreens()) {
             CabinetType t = workspace.cabinetTypeById(s.getCabinetTypeId());
             if (t == null) {
                 continue;
@@ -1197,13 +1154,22 @@ public class AppModel {
         if (workspace.cabinetTypeById(cabinetTypeId) == null) {
             throw new IllegalArgumentException("Не выбран тип кабинета");
         }
+        Screen scr = buildNewScreen(currentScene, name, cabinetTypeId, rows, cols, posX, posY, mountType);
+        currentScene.getScreens().add(scr);
+        changed();
+        return scr;
+    }
+
+    /** Собирает новый экран сцены (без добавления в список): стартовые значения
+     *  сцены (см. ScreenDefaults, кнопка «Параметры по умолчанию» в
+     *  SetupStagePanel) — ПЕРЕД явными параметрами ниже, чтобы конкретный выбор
+     *  диалога создания экрана (кабинет/сетка/позиция/способ монтажа) всегда
+     *  побеждал. cabinetTypeId/mountType в ScreenDefaults#applyTo намеренно не
+     *  входят — см. javadoc ScreenDefaults. */
+    private Screen buildNewScreen(Scene scene, String name, String cabinetTypeId, int rows, int cols,
+                                   double posX, double posY, ScreenMountType mountType) {
         Screen scr = new Screen();
-        // Стартовые значения сцены (см. ScreenDefaults, кнопка «Параметры по
-        // умолчанию» в SetupStagePanel) — ПЕРЕД явными параметрами ниже, чтобы
-        // конкретный выбор диалога создания экрана (кабинет/сетка/позиция/способ
-        // монтажа) всегда побеждал. cabinetTypeId/mountType сюда намеренно не
-        // входят — applyTo() их не трогает, см. javadoc ScreenDefaults.
-        ScreenDefaults defaults = currentScene.getScreenDefaults();
+        ScreenDefaults defaults = scene.getScreenDefaults();
         if (defaults != null) {
             defaults.applyTo(scr);
         }
@@ -1216,8 +1182,6 @@ public class AppModel {
         scr.setMountType(mountType != null ? mountType : ScreenMountType.RIGGED);
         ScreenLogic.buildGrid(scr);
         scr.setRiggingPointsCount(ScreenLogic.suggestRiggingPoints(scr, typeOf(scr), workspace));
-        currentScene.getScreens().add(scr);
-        changed();
         return scr;
     }
 
@@ -1419,7 +1383,7 @@ public class AppModel {
     }
 
     /** Герцовка/глубина цвета контента экрана — влияют на реальную ёмкость порта
-     *  контроллера в пикселях (см. {@link ControllerType#maxPixelsFor}). */
+     *  контроллера в пикселях (см. {@link ControllerInstance#maxPixelsFor}). */
     public void updateScreenSignalSpec(Screen screen, int refreshRateHz, int colorBitDepth) {
         if (refreshRateHz <= 0) {
             throw new IllegalArgumentException("Герцовка должна быть больше 0");
@@ -2271,7 +2235,7 @@ public class AppModel {
     }
 
     /** Правит уже существующую карту узла НА МЕСТЕ (сохраняя id карты) — см.
-     *  {@link #updateCardOnController}. */
+     *  {@link #updateCardOnPreset}. */
     public void updateCardOnNode(SchemaNode node, String cardId, String name, List<CardPort> ports) {
         SchemaCard card = node.getCards().stream().filter(c -> c.getId().equals(cardId)).findFirst().orElse(null);
         if (card == null) {
@@ -2442,6 +2406,45 @@ public class AppModel {
     public void deleteEquipmentPreset(EquipmentPreset preset) {
         workspace.getEquipmentPresets().remove(preset);
         changed();
+    }
+
+    /** Поля, значимые только для {@code category == CONTROLLER} (перенесены из
+     *  бывшего {@code ControllerType} при слиянии библиотеки контроллеров в
+     *  пресеты, 2026-09-23) — отдельный метод, а не часть {@link #updateEquipmentPreset},
+     *  чтобы редактирование ЛЮБОЙ другой категории пресета не трогало эти поля
+     *  вовсе (см. {@code ui.EquipmentPresetDialog}, вызывающий этот метод ТОЛЬКО
+     *  когда выбранная категория — CONTROLLER). */
+    public void setControllerPresetFields(EquipmentPreset preset, String vendor, int portCount,
+                                           double portBandwidthMbps, int inputPortCount, boolean loopPort) {
+        preset.setVendor(vendor);
+        preset.setPortCount(portCount);
+        preset.setPortBandwidthMbps(portBandwidthMbps);
+        preset.setInputPortCount(inputPortCount);
+        preset.setLoopPort(loopPort);
+        changed();
+    }
+
+    /** Строит и добавляет в личную библиотеку {@link EquipmentPreset} (category ==
+     *  CONTROLLER) со всеми полями сразу одним вызовом — короткий путь для кода,
+     *  которому не нужен UI-диалог (тесты, скрипты), аналог {@link
+     *  #addEquipmentPreset} для остальных видов, но сразу с контроллерными
+     *  полями/картами. */
+    public EquipmentPreset addControllerPreset(String name, String vendor, int portCount, double portBandwidthMbps,
+                                                int inputPortCount, boolean loopPort, List<SchemaCard> cards) {
+        EquipmentPreset preset = new EquipmentPreset(SchemaMode.SIGNAL, SchemaNodeType.CONTROLLER, name, "");
+        preset.setVendor(vendor);
+        preset.setPortCount(portCount);
+        preset.setPortBandwidthMbps(portBandwidthMbps);
+        preset.setInputPortCount(inputPortCount);
+        preset.setLoopPort(loopPort);
+        List<SchemaCard> copiedCards = new ArrayList<>();
+        for (SchemaCard c : cards) {
+            copiedCards.add(c.copy());
+        }
+        preset.setCards(copiedCards);
+        workspace.getEquipmentPresets().add(preset);
+        changed();
+        return preset;
     }
 
     // ---- библиотека кабелей/переходников (WireLabelDialog/PowerConnectorsConfigDialog) ----
@@ -2999,12 +3002,22 @@ public class AppModel {
                     case "CABINET" -> applyOne(workspace.getSharedCabinetTypes(), workspace.getCabinetTypes(), dto,
                             CabinetType.class, CabinetType::getId, CabinetType::setId, CabinetType::getName,
                             this::migrateCabinetTypeReferences);
-                    case "CONTROLLER" -> applyOne(workspace.getSharedControllerTypes(), workspace.getControllerTypes(),
-                            dto, ControllerType.class, ControllerType::getId, ControllerType::setId, ControllerType::getName,
-                            this::migrateControllerTypeReferences);
+                    // "CONTROLLER" больше не отдельный вид — библиотека контроллеров
+                    // слита в EQUIPMENT (category == CONTROLLER, 2026-09-23); пока сервер
+                    // не обновлён (отдельный заход), такие dto молча пропускаются веткой
+                    // default ниже — существующие локальные данные это не затрагивает,
+                    // задерживаются только БУДУЩИЕ правки ещё не мигрированных на сервере
+                    // общих записей.
+                    // referenceMigrator — migrateControllerInstanceReferences, а не
+                    // NO_REFERENCE_MIGRATION: EQUIPMENT теперь тоже вид, на id которого
+                    // ссылаются (ControllerInstance#getControllerTypeId(), см. её
+                    // class-javadoc) — тот же класс бага, что раньше был только у
+                    // CABINET/CONTROLLER (см. javadoc applyOne), promotion личного
+                    // пресета-контроллера иначе тихо оставил бы контроллеры сцены
+                    // указывающими на удалённый id.
                     case "EQUIPMENT" -> applyOne(workspace.getSharedEquipmentPresets(), workspace.getEquipmentPresets(),
                             dto, EquipmentPreset.class, EquipmentPreset::getId, EquipmentPreset::setId, EquipmentPreset::getName,
-                            NO_REFERENCE_MIGRATION);
+                            this::migrateControllerInstanceReferences);
                     case "CABLE" -> applyOne(workspace.getSharedCableTypes(), workspace.getCableTypes(), dto,
                             CableType.class, CableType::getId, CableType::setId, CableType::getLabel,
                             NO_REFERENCE_MIGRATION);
@@ -3062,9 +3075,9 @@ public class AppModel {
     }
 
     /** Обрабатывает {@code dto.deleted()==true}: удаляет запись из ОБЩЕЙ библиотеки
-     *  соответствующего вида, если она там есть. Для CABINET/CONTROLLER — только
-     *  если ни один экран/кабинет/контроллер локально на неё НЕ ссылается (см.
-     *  {@link #isCabinetTypeReferenced}/{@link #isControllerTypeReferenced}) —
+     *  соответствующего вида, если она там есть. Для CABINET — только
+     *  если ни один экран/кабинет локально на неё НЕ ссылается (см.
+     *  {@link #isCabinetTypeReferenced}) —
      *  иначе тихий фоновый синк молча обнулил бы мощность/вес живых экранов.
      *  Остальные виды (EQUIPMENT/CABLE/INTERFACE/CABLE_LENGTH_PROFILE) нигде в
      *  workspace по id не хранятся (см. migrate*References — там же обоснование),
@@ -3075,8 +3088,6 @@ public class AppModel {
         return switch (dto.kind()) {
             case "CABINET" -> removeSharedIfUnreferenced(workspace.getSharedCabinetTypes(), dto.id(),
                     CabinetType::getId, this::isCabinetTypeReferenced);
-            case "CONTROLLER" -> removeSharedIfUnreferenced(workspace.getSharedControllerTypes(), dto.id(),
-                    ControllerType::getId, this::isControllerTypeReferenced);
             case "EQUIPMENT" -> workspace.getSharedEquipmentPresets().removeIf(p -> p.getId().equals(dto.id()));
             case "CABLE" -> workspace.getSharedCableTypes().removeIf(c -> c.getId().equals(dto.id()));
             case "INTERFACE" -> workspace.getSharedInterfaceTypes().removeIf(t -> t.getId().equals(dto.id()));
@@ -3122,21 +3133,6 @@ public class AppModel {
                     }
                     for (CabinetInstance cabinet : screen.getCabinets()) {
                         if (id.equals(cabinet.getCabinetTypeId())) {
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-        return false;
-    }
-
-    private boolean isControllerTypeReferenced(String id) {
-        for (Project project : workspace.getProjects()) {
-            for (Scene scene : project.getScenes()) {
-                for (Screen screen : scene.getScreens()) {
-                    for (ControllerInstance controller : screen.getControllers()) {
-                        if (id.equals(controller.getControllerTypeId())) {
                             return true;
                         }
                     }
@@ -3199,7 +3195,7 @@ public class AppModel {
 
     /** Нет-оп для {@code referenceMigrator} у видов, на id которых нигде в
      *  workspace не ссылаются (см. {@link #migrateCabinetTypeReferences} /
-     *  {@link #migrateControllerTypeReferences} — единственные виды, где такие
+     *  {@link #migrateControllerInstanceReferences} — виды, где такие
      *  ссылки реально есть). */
     private static final java.util.function.BiConsumer<String, String> NO_REFERENCE_MIGRATION = (oldId, newId) -> {
     };
@@ -3293,10 +3289,13 @@ public class AppModel {
         }
     }
 
-    /** Переносит {@link ControllerInstance#getControllerTypeId()} по всем
-     *  проектам/сценам/экранам workspace с {@code oldId} на {@code newId} —
-     *  см. javadoc {@link #applyOne}. */
-    private void migrateControllerTypeReferences(String oldId, String newId) {
+    /** Переносит {@link ControllerInstance#getControllerTypeId()} (id пресета-
+     *  источника, см. её class-javadoc) по всем проектам/сценам/экранам workspace с
+     *  {@code oldId} на {@code newId} — см. javadoc {@link #applyOne}. Используется
+     *  ТОЛЬКО веткой "EQUIPMENT" (после слияния библиотеки контроллеров в
+     *  EquipmentPreset, 2026-09-23) — раньше была парной к отдельной ветке
+     *  "CONTROLLER". */
+    private void migrateControllerInstanceReferences(String oldId, String newId) {
         for (Project project : workspace.getProjects()) {
             for (Scene scene : project.getScenes()) {
                 for (Screen screen : scene.getScreens()) {
@@ -3442,15 +3441,24 @@ public class AppModel {
     public void exportAllLibraries(File file) {
         LibraryBundle bundle = new LibraryBundle();
         bundle.setCabinetTypes(workspace.getCabinetTypes());
-        bundle.setControllerTypes(workspace.getControllerTypes());
+        // bundle.controllerTypes НЕ заполняется больше — контроллеры экспортируются
+        // как обычные EquipmentPreset (category == CONTROLLER), вместе с остальным
+        // оборудованием, ниже; поле в LibraryBundle остаётся ради чтения СТАРЫХ
+        // файлов экспорта (см. importAllLibraries).
         bundle.setEquipmentPresets(workspace.getEquipmentPresets());
         bundle.setCableTypes(workspace.getCableTypes());
         store.exportBundle(bundle, file);
     }
 
-    /** Импортирует все 4 библиотеки из файла, сохранённого через
+    /** Импортирует все библиотеки из файла, сохранённого через
      *  {@link #exportAllLibraries}, по тем же правилам совпадения, что и у
-     *  импорта одного типа. Возвращает суммарное число обработанных записей. */
+     *  импорта одного типа. Возвращает суммарное число обработанных записей.
+     *  {@code bundle.getControllerTypes()} (старый формат, до слияния библиотеки
+     *  контроллеров в пресеты, 2026-09-23) конвертируется в {@link EquipmentPreset}
+     *  налету тем же способом, что и одноразовая миграция workspace (см. {@link
+     *  #equipmentPresetFromLegacyControllerType}) — новые файлы экспорта такого
+     *  поля уже не пишут, но старые сохранённые где-то файлы должны продолжать
+     *  импортироваться корректно. */
     public int importAllLibraries(File file) {
         LibraryBundle bundle = store.importBundle(file);
         int total = 0;
@@ -3470,22 +3478,11 @@ public class AppModel {
             }
             total++;
         }
-        for (ControllerType inc : bundle.getControllerTypes()) {
-            ControllerType match = null;
-            for (ControllerType ct : workspace.getControllerTypes()) {
-                if (ct.getName().equalsIgnoreCase(inc.getName())) {
-                    match = ct;
-                    break;
-                }
-            }
-            if (match != null) {
-                match.applyEditedValues(inc);
-            } else {
-                workspace.getControllerTypes().add(inc);
-            }
-            total++;
+        List<EquipmentPreset> incomingPresets = new ArrayList<>(bundle.getEquipmentPresets());
+        for (ControllerType legacy : bundle.getControllerTypes()) {
+            incomingPresets.add(equipmentPresetFromLegacyControllerType(legacy));
         }
-        for (EquipmentPreset inc : bundle.getEquipmentPresets()) {
+        for (EquipmentPreset inc : incomingPresets) {
             EquipmentPreset match = null;
             for (EquipmentPreset p : workspace.getEquipmentPresets()) {
                 if (p.getMode() == inc.getMode() && p.getCategory() == inc.getCategory()
@@ -3520,6 +3517,148 @@ public class AppModel {
         return total;
     }
 
+    /** Строит {@link EquipmentPreset} (mode=SIGNAL, category=CONTROLLER), эквивалентный
+     *  устаревшему {@link ControllerType} — ЕДИНАЯ точка конвертации, используется и
+     *  одноразовой миграцией библиотеки ({@link #controllerLibraryMigrationPreview()}/
+     *  {@link #migrateControllerLibraryToEquipmentPresets()}), и импортом старых
+     *  bundle-файлов ({@link #importAllLibraries}). id СОХРАНЯЕТСЯ — при миграции
+     *  workspace это позволяет существующим {@link ControllerInstance#getControllerTypeId()}
+     *  резолвиться без переноса ссылок (см. javadoc миграции ниже); при импорте
+     *  старого файла совпадение/несовпадение id неважно — импорт сопоставляет по
+     *  имени, как и остальные виды. */
+    private static EquipmentPreset equipmentPresetFromLegacyControllerType(ControllerType t) {
+        EquipmentPreset p = new EquipmentPreset(SchemaMode.SIGNAL, SchemaNodeType.CONTROLLER, t.getName(), "");
+        p.setId(t.getId());
+        p.setVendor(t.getVendor());
+        p.setPortCount(t.getPortCount());
+        p.setPortBandwidthMbps(t.getPortBandwidthMbps());
+        p.setInputPortCount(t.getInputPortCount());
+        p.setLoopPort(t.isLoopPort());
+        p.setCompany(t.getCompany());
+        List<SchemaCard> cards = new ArrayList<>();
+        for (SchemaCard c : t.getCards()) {
+            cards.add(c.copy());
+        }
+        p.setCards(cards);
+        return p;
+    }
+
+    /** Один пункт предпросмотра одноразовой миграции библиотеки контроллеров — см.
+     *  {@link #controllerLibraryMigrationPreview()}. */
+    public record ControllerMigrationPreviewItem(String name, int portCount, boolean shared) {
+    }
+
+    /** Предпросмотр для {@code ui.ControllerLibraryMigrationDialog} (по явному
+     *  требованию — миграция НЕ делается тихо в фоне, пользователь видит и
+     *  подтверждает список ДО записи, см. class-javadoc AppSettings#isControllerLibraryMigrated). */
+    public record ControllerMigrationPreview(List<ControllerMigrationPreviewItem> types,
+                                               List<String> affectedControllerLabels) {
+        public boolean isEmpty() {
+            return types.isEmpty();
+        }
+    }
+
+    /** Что покажет диалог миграции ДО применения — см. {@link ControllerMigrationPreview}. */
+    public ControllerMigrationPreview controllerLibraryMigrationPreview() {
+        List<ControllerMigrationPreviewItem> types = new ArrayList<>();
+        for (ControllerType t : workspace.getSharedControllerTypes()) {
+            types.add(new ControllerMigrationPreviewItem(t.getName(), t.effectivePortCount(), true));
+        }
+        for (ControllerType t : workspace.getControllerTypes()) {
+            types.add(new ControllerMigrationPreviewItem(t.getName(), t.effectivePortCount(), false));
+        }
+        List<String> affected = new ArrayList<>();
+        for (Project project : workspace.getProjects()) {
+            for (Scene scene : project.getScenes()) {
+                for (Screen screen : scene.getScreens()) {
+                    for (ControllerInstance ci : screen.getControllers()) {
+                        affected.add((screen.getName() == null || screen.getName().isEmpty()
+                                ? "Экран" : screen.getName()) + " — " + ci.getLabel());
+                    }
+                }
+            }
+        }
+        return new ControllerMigrationPreview(types, affected);
+    }
+
+    /** Выполняет одноразовую миграцию: библиотека контроллеров (устаревший {@link
+     *  ControllerType}) → {@link EquipmentPreset} (category=CONTROLLER). Вызывается
+     *  ТОЛЬКО из {@code ui.ControllerLibraryMigrationDialog} по явному подтверждению
+     *  пользователя ("Выполнить"), не автоматически в фоне.
+     *
+     *  <p>Шаг 1 — каждый {@link ControllerType} общей/личной библиотеки становится
+     *  {@link EquipmentPreset} С ТЕМ ЖЕ id (см. {@link #equipmentPresetFromLegacyControllerType}),
+     *  поэтому {@link ControllerInstance#getControllerTypeId()} продолжает резолвиться
+     *  без переноса ссылок (в отличие от {@link #migrateControllerInstanceReferences},
+     *  та — для ДРУГОГО случая, смены id при синхронизации).
+     *
+     *  <p>Шаг 2 — у КАЖДОГО существующего {@link ControllerInstance} замораживается
+     *  копия карт/portCount ЭТОГО ЖЕ (уже мигрированного, тот же id) пресета — см.
+     *  {@link #freezeControllerInstanceCards} — тем самым воспроизводится ТОЧНО ТО
+     *  ЖЕ значение, которое раньше давал живой резолв типа: миграция численно
+     *  НЕ меняет нумерацию портов ни одного существующего проекта. Отсутствующая
+     *  ссылка (повреждённые данные) замораживается как контроллер без портов —
+     *  тот же принцип "молча ноль", что и было при {@code t != null ? ... : 0}.
+     *
+     *  <p>Шаг 3 — старые списки {@code controllerTypes}/{@code sharedControllerTypes}
+     *  очищаются. */
+    public void migrateControllerLibraryToEquipmentPresets() {
+        for (ControllerType t : workspace.getSharedControllerTypes()) {
+            migrateOneLegacyController(t, workspace.getSharedEquipmentPresets());
+        }
+        for (ControllerType t : workspace.getControllerTypes()) {
+            migrateOneLegacyController(t, workspace.getEquipmentPresets());
+        }
+        for (Project project : workspace.getProjects()) {
+            for (Scene scene : project.getScenes()) {
+                for (Screen screen : scene.getScreens()) {
+                    for (ControllerInstance ci : screen.getControllers()) {
+                        EquipmentPreset preset = equipmentPresetById(ci.getControllerTypeId());
+                        if (preset != null) {
+                            freezeControllerInstanceCards(ci, preset, null);
+                        } else {
+                            ci.setCards(new ArrayList<>());
+                            ci.setPortCount(0);
+                            ci.setInputPortCount(0);
+                        }
+                    }
+                }
+            }
+        }
+        workspace.getControllerTypes().clear();
+        workspace.getSharedControllerTypes().clear();
+        changed();
+    }
+
+    /** Мигрирует ОДИН устаревший {@link ControllerType} в {@code targetList} — если
+     *  там УЖЕ есть пресет-контроллер (category == CONTROLLER) с тем же именем без
+     *  учёта регистра, НЕ создаёт дубликат: переносит ссылки {@link
+     *  ControllerInstance#getControllerTypeId()} на СУЩЕСТВУЮЩИЙ пресет тем же
+     *  способом, что {@link #migrateControllerInstanceReferences} (та же причина —
+     *  id меняется, ссылки должны переехать). Баг-репорт 2026-09-24: до полного
+     *  слияния библиотек CONTROLLER уже был доступной категорией у обычных
+     *  пресетов оборудования — у пользователя одновременно существовал общий
+     *  декоративный пресет "MCTRL4k" (с реальными картами, но никогда не
+     *  участвовавший в расключении) И отдельная библиотека контроллеров с "MCTRL4k"
+     *  того же названия — миграция "в лоб" создавала ВТОРОЙ пресет с тем же именем
+     *  и без карт (плоский portCount), а новые контроллеры сцены иногда
+     *  привязывались к нему — порты "терялись" (0 Ethernet, комплектация как у
+     *  болванки). Обычный случай (имя ещё не занято) — просто добавляет
+     *  мигрированный пресет с ТЕМ ЖЕ id, как и раньше. */
+    private void migrateOneLegacyController(ControllerType t, List<EquipmentPreset> targetList) {
+        String name = t.getName() == null ? "" : t.getName().trim();
+        if (!name.isEmpty()) {
+            for (EquipmentPreset existing : targetList) {
+                if (existing.getCategory() == SchemaNodeType.CONTROLLER
+                        && name.equalsIgnoreCase(existing.getName() == null ? "" : existing.getName().trim())) {
+                    migrateControllerInstanceReferences(t.getId(), existing.getId());
+                    return;
+                }
+            }
+        }
+        targetList.add(equipmentPresetFromLegacyControllerType(t));
+    }
+
     public SchemaCard addCardToPreset(EquipmentPreset preset, String name, List<CardPort> ports) {
         SchemaCard card = new SchemaCard(name, ports);
         preset.getCards().add(card);
@@ -3533,7 +3672,8 @@ public class AppModel {
     }
 
     /** Правит уже существующую карту пресета НА МЕСТЕ (сохраняя id карты) — см.
-     *  {@link #updateCardOnController}. */
+     *  {@link #updatePowerConnectorOnNode} про ту же причину (не терять ссылки на
+     *  неё, если такие появятся). */
     public void updateCardOnPreset(EquipmentPreset preset, String cardId, String name, List<CardPort> ports) {
         SchemaCard card = preset.getCards().stream().filter(c -> c.getId().equals(cardId)).findFirst().orElse(null);
         if (card == null) {
@@ -3986,10 +4126,32 @@ public class AppModel {
         if (currentScene == null) {
             return;
         }
+        pushUndo("Удаление экрана", true);
+        removeScreenNoNotify(screen);
+        pruneEmptyGroups(currentScene);
+        changed();
+    }
+
+    /** Удаляет сразу несколько экранов текущей сцены одним сохранением/уведомлением
+     *  (мультивыбор в дереве навигации — вместо N вызовов {@link #deleteScreen},
+     *  каждый из которых писал бы файл и перестраивал UI). */
+    public void deleteScreens(List<Screen> screens) {
+        if (currentScene == null || screens.isEmpty()) {
+            return;
+        }
+        pushUndo(screens.size() == 1 ? "Удаление экрана" : "Удаление экранов (" + screens.size() + ")", true);
+        for (Screen s : new ArrayList<>(screens)) {
+            removeScreenNoNotify(s);
+        }
+        pruneEmptyGroups(currentScene);
+        changed();
+    }
+
+    private void removeScreenNoNotify(Screen screen) {
         currentScene.getScreens().remove(screen);
         if (currentScreen == screen) {
             currentScreen = null;
-            undoStack.clear();
+            dropScreenBoundUndo();
         }
         // узлы схемы, ссылавшиеся на удалённый экран, тоже теряют смысл
         List<String> orphanNodeIds = new ArrayList<>();
@@ -4004,7 +4166,288 @@ public class AppModel {
         for (ContentCanvas c : currentScene.getCanvases()) {
             c.getPlacements().removeIf(p -> screen.getId().equals(p.getScreenId()));
         }
+    }
+
+    // ---- группы экранов (дерево навигации «Сетапа», см. model.ScreenGroup) ----
+    //
+    // Инвариант: члены группы идут в Scene#getScreens() ПОДРЯД — порядок строк в
+    // дереве совпадает с порядком экранов (а значит, и со сквозной нумерацией
+    // портов, см. reorderScreens). Операции ниже, которые могут этот инвариант
+    // нарушить, вызывают normalizeScreenOrder. Все они (и удаление/дублирование/
+    // вставка экранов) отменяемы через СТРУКТУРНЫЙ снимок (см. javadoc UndoEntry):
+    // он хранит и порядок экранов, и цепочки сцены с прежними номерами портов,
+    // поэтому откат возвращает расключение согласованным с прежним порядком.
+
+    /** Шаблон экрана для дублирования/вставки: только «что за экран» (тип
+     *  кабинета и сетка), остальное берётся из параметров по умолчанию сцены. */
+    public record ScreenTemplate(String cabinetTypeId, int rows, int cols) {
+        public static ScreenTemplate of(Screen s) {
+            return new ScreenTemplate(s.getCabinetTypeId(), s.getRows(), s.getCols());
+        }
+    }
+
+    /** Объединяет экраны в новую группу сцены. Экраны, уже состоявшие в других
+     *  группах, переходят в новую (опустевшие группы удаляются). Если выбранные
+     *  экраны в списке шли не подряд — группа собирается в позиции первого из них
+     *  (см. {@link #normalizeScreenOrder}). */
+    public ScreenGroup groupScreens(Scene scene, List<Screen> members, String name) {
+        if (scene == null || members.isEmpty()) {
+            throw new IllegalArgumentException("Нет экранов для группы");
+        }
+        pushUndo("Объединение экранов в группу", true, scene);
+        ScreenGroup group = new ScreenGroup(name);
+        scene.getScreenGroups().add(group);
+        for (Screen s : members) {
+            s.setGroupId(group.getId());
+        }
+        pruneEmptyGroups(scene);
+        normalizeScreenOrder(scene);
         changed();
+        return group;
+    }
+
+    /** Переносит экраны в конец существующей группы; если у группы задан цвет —
+     *  он проставляется экранам как метка. */
+    public void addScreensToGroup(Scene scene, List<Screen> screens, ScreenGroup group) {
+        if (scene == null || group == null || screens.isEmpty()) {
+            return;
+        }
+        moveScreens(scene, screens, null, group, true);
+    }
+
+    /** Выводит экраны из групп (остаются на сцене, метка цвета сохраняется). */
+    public void ungroupScreens(Scene scene, List<Screen> screens) {
+        if (scene == null) {
+            return;
+        }
+        pushUndo("Вывод экранов из группы", true, scene);
+        for (Screen s : screens) {
+            s.setGroupId(null);
+        }
+        pruneEmptyGroups(scene);
+        normalizeScreenOrder(scene);
+        changed();
+    }
+
+    /** Распускает группы целиком (экраны остаются на сцене). */
+    public void dissolveGroups(Scene scene, List<ScreenGroup> groups) {
+        if (scene == null) {
+            return;
+        }
+        pushUndo("Роспуск групп", true, scene);
+        for (ScreenGroup g : groups) {
+            for (Screen s : scene.screensOf(g)) {
+                s.setGroupId(null);
+            }
+        }
+        pruneEmptyGroups(scene);
+        changed();
+    }
+
+    public void renameGroup(ScreenGroup group, String name) {
+        pushUndo("Переименование группы", true);
+        group.setName(name);
+        changed();
+    }
+
+    /** Цвет группы = цветная метка ВСЕХ её экранов (включая {@code NONE} — снять
+     *  метку со всех); экраны, добавленные позже, получают его же. */
+    public void setGroupColor(Scene scene, ScreenGroup group, ScreenTagColor color) {
+        ScreenTagColor c = color != null ? color : ScreenTagColor.NONE;
+        pushUndo("Цвет группы", true, scene);
+        group.setTagColor(c);
+        for (Screen s : scene.screensOf(group)) {
+            s.setTagColor(c);
+        }
+        changed();
+    }
+
+    /** Сворачивание узла группы в дереве — только сохранение, без уведомления
+     *  слушателей (перестраивать дерево незачем: оно уже показывает это состояние). */
+    public void setGroupCollapsed(ScreenGroup group, boolean collapsed) {
+        if (group.isCollapsed() == collapsed) {
+            return;
+        }
+        group.setCollapsed(collapsed);
+        persist();
+    }
+
+    /** Создаёт по одному новому экрану на каждый исходный (Ctrl+D): тот же тип
+     *  кабинета и сетка, параметры по умолчанию сцены, стандартное имя со
+     *  следующим номером; новый экран встаёт в конец той же группы, что и
+     *  исходный (или в конец сцены, если исходный вне групп). */
+    public List<Screen> duplicateScreens(Scene scene, List<Screen> sources) {
+        List<Screen> created = new ArrayList<>();
+        if (scene == null) {
+            return created;
+        }
+        List<ScreenTemplate> templates = sources.stream().map(ScreenTemplate::of).toList();
+        requireTemplateTypes(templates);
+        if (!templates.isEmpty()) {
+            pushUndo("Дублирование экранов", true, scene);
+        }
+        for (Screen src : sources) {
+            created.add(addScreenLike(scene, ScreenTemplate.of(src), scene.groupOf(src)));
+        }
+        if (!created.isEmpty()) {
+            changed();
+        }
+        return created;
+    }
+
+    /** Вставка скопированных экранов (Ctrl+V) в группу {@code target} (или на
+     *  сцену без группы, если {@code null}) — те же правила, что у {@link
+     *  #duplicateScreens}. */
+    public List<Screen> pasteScreens(Scene scene, List<ScreenTemplate> templates, ScreenGroup target) {
+        List<Screen> created = new ArrayList<>();
+        if (scene == null) {
+            return created;
+        }
+        requireTemplateTypes(templates);
+        if (!templates.isEmpty()) {
+            pushUndo("Вставка экранов", true, scene);
+        }
+        for (ScreenTemplate t : templates) {
+            created.add(addScreenLike(scene, t, target));
+        }
+        if (!created.isEmpty()) {
+            changed();
+        }
+        return created;
+    }
+
+    /** Проверка ДО записи снимка отмены и до создания первого экрана — иначе при
+     *  ошибке на середине списка часть экранов уже была бы создана. */
+    private void requireTemplateTypes(List<ScreenTemplate> templates) {
+        for (ScreenTemplate t : templates) {
+            if (workspace.cabinetTypeById(t.cabinetTypeId()) == null) {
+                throw new IllegalArgumentException("Тип кабинета скопированного экрана удалён из библиотеки");
+            }
+        }
+    }
+
+    private Screen addScreenLike(Scene scene, ScreenTemplate t, ScreenGroup target) {
+        int n = scene.getScreens().size() + 1;
+        while (screenNameTaken(scene, "Экран " + n)) {
+            n++;
+        }
+        ScreenDefaults defaults = scene.getScreenDefaults();
+        double[] pos = suggestedNextPosition(scene);
+        Screen scr = buildNewScreen(scene, "Экран " + n, t.cabinetTypeId(), t.rows(), t.cols(), pos[0], pos[1],
+                defaults != null ? defaults.getMountType() : null);
+        if (target != null) {
+            scr.setGroupId(target.getId());
+            if (target.getTagColor() != ScreenTagColor.NONE) {
+                scr.setTagColor(target.getTagColor());
+            }
+        }
+        scene.getScreens().add(indexAfterGroup(scene.getScreens(), target), scr);
+        return scr;
+    }
+
+    private static boolean screenNameTaken(Scene scene, String name) {
+        for (Screen s : scene.getScreens()) {
+            if (name.equals(s.getName())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Индекс вставки «в конец группы» (после её последнего члена) либо конец
+     *  списка, если группы нет/она пуста. */
+    private static int indexAfterGroup(List<Screen> screens, ScreenGroup group) {
+        if (group != null) {
+            for (int i = screens.size() - 1; i >= 0; i--) {
+                if (group.getId().equals(screens.get(i).getGroupId())) {
+                    return i + 1;
+                }
+            }
+        }
+        return screens.size();
+    }
+
+    /** Перенос экранов drag&drop'ом в дереве навигации (и «добавить в группу»).
+     *  {@code insertBefore} — экран, ПЕРЕД которым вставить (не из {@code moving});
+     *  {@code null} — в конец контейнера: конец группы {@code targetGroup}, если
+     *  {@code changeGroup}, иначе конец сцены. {@code changeGroup} — менять ли
+     *  принадлежность к группам: {@code true} — экраны переходят в {@code
+     *  targetGroup} ({@code null} = вне групп); {@code false} — принадлежность
+     *  сохраняется (перетаскивание целых групп). */
+    public void moveScreens(Scene scene, List<Screen> moving, Screen insertBefore, ScreenGroup targetGroup,
+                            boolean changeGroup) {
+        if (scene == null || moving.isEmpty()) {
+            return;
+        }
+        pushUndo(changeGroup && targetGroup != null ? "Перенос экранов в группу" : "Перенос экранов", true, scene);
+        List<Screen> ordered = new ArrayList<>();
+        for (Screen s : scene.getScreens()) {
+            if (moving.contains(s)) {
+                ordered.add(s);
+            }
+        }
+        if (changeGroup) {
+            for (Screen s : ordered) {
+                s.setGroupId(targetGroup != null ? targetGroup.getId() : null);
+                if (targetGroup != null && targetGroup.getTagColor() != ScreenTagColor.NONE) {
+                    s.setTagColor(targetGroup.getTagColor());
+                }
+            }
+        }
+        List<Screen> rest = new ArrayList<>(scene.getScreens());
+        rest.removeAll(ordered);
+        int at = insertBefore != null && rest.contains(insertBefore) ? rest.indexOf(insertBefore)
+                : changeGroup ? indexAfterGroup(rest, targetGroup) : rest.size();
+        rest.addAll(at, ordered);
+        applyScreenOrder(scene, rest);
+        pruneEmptyGroups(scene);
+        normalizeScreenOrder(scene);
+        changed();
+    }
+
+    private void pruneEmptyGroups(Scene scene) {
+        // ссылки на несуществующие группы (например, после ручной правки файла)
+        for (Screen s : scene.getScreens()) {
+            if (s.getGroupId() != null && scene.groupById(s.getGroupId()) == null) {
+                s.setGroupId(null);
+            }
+        }
+        scene.getScreenGroups().removeIf(g -> scene.screensOf(g).isEmpty());
+    }
+
+    /** Собирает члены каждой группы в непрерывный блок на месте её первого
+     *  члена (сохраняя относительный порядок); экраны вне групп остаются как
+     *  были. Порядок в дереве == порядок в списке. */
+    private void normalizeScreenOrder(Scene scene) {
+        List<Screen> newOrder = new ArrayList<>();
+        java.util.Set<String> emitted = new java.util.HashSet<>();
+        for (Screen s : scene.getScreens()) {
+            String gid = s.getGroupId();
+            if (gid == null) {
+                newOrder.add(s);
+            } else if (emitted.add(gid)) {
+                for (Screen m : scene.getScreens()) {
+                    if (gid.equals(m.getGroupId())) {
+                        newOrder.add(m);
+                    }
+                }
+            }
+        }
+        applyScreenOrder(scene, newOrder);
+    }
+
+    /** Ставит новый порядок экранов; если он реально отличается — пересчитывает
+     *  сквозные номера портов цепочек (см. {@link #reorderScreens}); отмену
+     *  обеспечивает структурный снимок вызывающей операции. */
+    private void applyScreenOrder(Scene scene, List<Screen> newOrder) {
+        if (newOrder.equals(scene.getScreens())) {
+            return;
+        }
+        List<ControllerInstance> oldOrder = controllersInScene(scene);
+        List<Screen> target = new ArrayList<>(newOrder);
+        scene.getScreens().clear();
+        scene.getScreens().addAll(target);
+        remapSignalChainPorts(scene, oldOrder);
     }
 
     // ---- cabinet edits ----
@@ -4076,7 +4519,8 @@ public class AppModel {
                 cab.setShapeOverride(null);
             }
         }
-        autoDisableOverlapping(currentScreen, cab);
+        // Наложение (в т.ч. от нового, более крупного типа) соседей не скрывает —
+        // только подсвечивается на холсте, см. updateCabinetOffset.
         changed();
     }
 
@@ -4119,7 +4563,10 @@ public class AppModel {
         pushUndo("Сдвиг кабинета");
         cab.setOffsetXMm(offsetXMm);
         cab.setOffsetYMm(offsetYMm);
-        autoDisableOverlapping(currentScene != null ? screenOfCabinet(currentScene, cab.getId()) : null, cab);
+        // Наложение на соседей больше НЕ скрывает их (раньше — autoDisableOverlapping,
+        // баг-репорт: случайный сдвиг мышью молча отключал лежащие под кабинетом ячейки).
+        // Теперь оно только подсвечивается красным на холсте — см. ScreenLogic
+        // .overlappedCabinetIds.
         changed();
     }
 
@@ -4154,36 +4601,6 @@ public class AppModel {
             cab.setOffsetYMm(0);
         }
         changed();
-    }
-
-    /** Наложение кабинетов (Task #7 follow-up): свободное смещение (см.
-     *  updateCabinetOffset) или переопределение типа на физически другой размер
-     *  (см. setCabinetTypeOverride, Issue B/v1.6) может визуально свести ДВА
-     *  кабинета в одну и ту же область — раньше это никак не показывалось
-     *  пользователю и не разрешалось (баг-репорт). Приоритет отдаётся ПОСЛЕДНЕМУ
-     *  действию: только что подвинутый/перетипированный кабинет остаётся видимым,
-     *  а любой ДРУГОЙ кабинет экрана, чей фактический прямоугольник (см.
-     *  ScreenLogic.cabinetRectMm) пересёкся с ним — автоматически скрывается
-     *  (тот же isHidden, что и у ручного скрытия ячейки в форме экрана), а не
-     *  оставляется в виде невидимого наложения без предупреждения. */
-    private void autoDisableOverlapping(Screen scr, CabinetInstance moved) {
-        if (scr == null || moved.isHidden()) {
-            return;
-        }
-        CabinetType defaultType = typeOf(scr);
-        if (defaultType == null) {
-            return;
-        }
-        double[] rectA = ScreenLogic.cabinetRectMm(moved, defaultType, workspace);
-        for (CabinetInstance other : scr.getCabinets()) {
-            if (other == moved || other.isHidden()) {
-                continue;
-            }
-            double[] rectB = ScreenLogic.cabinetRectMm(other, defaultType, workspace);
-            if (ScreenLogic.rectsOverlap(rectA, rectB)) {
-                other.setHidden(true);
-            }
-        }
     }
 
     // ---- chains ----
@@ -4466,12 +4883,8 @@ public class AppModel {
         if (owner == null) {
             return;
         }
-        ControllerType ownerType = workspace.controllerTypeById(owner.getControllerTypeId());
-        if (ownerType == null) {
-            return;
-        }
         int controllerLocal = port - portOffsetOf(scene, owner);
-        int[] pool = ownerType.ethernetPoolLocalPort(controllerLocal);
+        int[] pool = owner.ethernetPoolLocalPort(controllerLocal);
         if (pool == null) {
             return;
         }
@@ -4483,11 +4896,7 @@ public class AppModel {
         if (backupCi == null) {
             return;
         }
-        ControllerType backupType = workspace.controllerTypeById(backupCi.getControllerTypeId());
-        if (backupType == null) {
-            return;
-        }
-        int backupControllerLocal = backupType.globalPortFor(link.getPoolIndex(), pool[1]);
+        int backupControllerLocal = backupCi.globalPortFor(link.getPoolIndex(), pool[1]);
         chain.setBackupPortNumber(portOffsetOf(scene, backupCi) + backupControllerLocal);
     }
 
@@ -4508,15 +4917,13 @@ public class AppModel {
         if (main == null) {
             throw new IllegalArgumentException("Основной контроллер не найден");
         }
-        ControllerType mainType = workspace.controllerTypeById(main.getControllerTypeId());
-        if (mainType == null || mainPoolIdx < 0 || mainPoolIdx >= mainType.ethernetPoolCount()) {
+        if (mainPoolIdx < 0 || mainPoolIdx >= main.ethernetPoolCount()) {
             throw new IllegalArgumentException("Карта основного контроллера не найдена");
         }
-        int mainPoolPorts = mainType.ethernetPortCountInPool(mainPoolIdx);
+        int mainPoolPorts = main.ethernetPortCountInPool(mainPoolIdx);
         ControllerInstance.CardBackupLink oldLink = main.getCardBackupLinks().get(mainPoolIdx);
 
         ControllerInstance backup = null;
-        ControllerType backupType = null;
         if (backupId != null) {
             if (backupPoolIdx == null) {
                 throw new IllegalArgumentException("Не выбрана резервная карта");
@@ -4528,20 +4935,19 @@ public class AppModel {
             if (backup == null) {
                 throw new IllegalArgumentException("Резервный контроллер не найден");
             }
-            backupType = workspace.controllerTypeById(backup.getControllerTypeId());
-            if (backupType == null || backupPoolIdx < 0 || backupPoolIdx >= backupType.ethernetPoolCount()) {
+            if (backupPoolIdx < 0 || backupPoolIdx >= backup.ethernetPoolCount()) {
                 throw new IllegalArgumentException("Карта резервного контроллера не найдена");
             }
             if (isCardReservedAsBackup(scene, backupId, backupPoolIdx)) {
                 throw new IllegalArgumentException("Эта карта уже резервирует другую — сначала снимите ту связку");
             }
-            int backupPoolPorts = backupType.ethernetPortCountInPool(backupPoolIdx);
+            int backupPoolPorts = backup.ethernetPortCountInPool(backupPoolIdx);
             if (backupPoolPorts < mainPoolPorts) {
                 throw new IllegalArgumentException("В резервной карте меньше портов, чем в основной — резерв невозможен");
             }
             int backupOffset = portOffsetOf(scene, backup);
             for (int local = 1; local <= mainPoolPorts; local++) {
-                int backupPort = backupOffset + backupType.globalPortFor(backupPoolIdx, local);
+                int backupPort = backupOffset + backup.globalPortFor(backupPoolIdx, local);
                 for (SignalChain c : scene.getSignalChains()) {
                     if (c.getPortNumber() != null && c.getPortNumber() == backupPort
                             && !c.getCabinetInstanceIds().isEmpty()) {
@@ -4561,20 +4967,18 @@ public class AppModel {
 
         int mainOffset = portOffsetOf(scene, main);
         ControllerInstance oldBackup = oldLink != null ? controllerById(scene, oldLink.getControllerId()) : null;
-        ControllerType oldBackupType = oldBackup != null
-                ? workspace.controllerTypeById(oldBackup.getControllerTypeId()) : null;
         int oldBackupOffset = oldBackup != null ? portOffsetOf(scene, oldBackup) : 0;
         for (int local = 1; local <= mainPoolPorts; local++) {
-            int p = mainOffset + mainType.globalPortFor(mainPoolIdx, local);
+            int p = mainOffset + main.globalPortFor(mainPoolIdx, local);
             for (SignalChain c : scene.getSignalChains()) {
                 if (c.isBackup() || c.getPortNumber() == null || c.getPortNumber() != p) {
                     continue;
                 }
                 if (backupId != null) {
                     applyCardLevelBackupPort(scene, c, p);
-                } else if (oldBackupType != null && c.getBackupPortNumber() != null) {
+                } else if (oldBackup != null && c.getBackupPortNumber() != null) {
                     int bp = c.getBackupPortNumber();
-                    int oldBackupPort = oldBackupOffset + oldBackupType.globalPortFor(oldLink.getPoolIndex(), local);
+                    int oldBackupPort = oldBackupOffset + oldBackup.globalPortFor(oldLink.getPoolIndex(), local);
                     if (bp == oldBackupPort) {
                         c.setBackupPortNumber(null);
                     }
@@ -4610,12 +5014,8 @@ public class AppModel {
         if (owner == null) {
             return false;
         }
-        ControllerType ownerType = workspace.controllerTypeById(owner.getControllerTypeId());
-        if (ownerType == null) {
-            return false;
-        }
         int controllerLocal = port - portOffsetOf(scene, owner);
-        int[] pool = ownerType.ethernetPoolLocalPort(controllerLocal);
+        int[] pool = owner.ethernetPoolLocalPort(controllerLocal);
         return pool != null && isCardReservedAsBackup(scene, owner.getId(), pool[0]);
     }
 
@@ -5081,37 +5481,50 @@ public class AppModel {
         return false;
     }
 
-    /** Строит узел общей схемы (тип CONTROLLER), зеркалящий РЕАЛЬНУЮ комплектацию
-     *  карт контроллера {@code ci} из библиотеки типов — карты копируются со свежими
-     *  id (см. {@link #duplicateCardWithFreshIds}), чтобы группы портов этого узла не
-     *  путались с группами портов другого узла того же типа. Простой (немодульный,
-     *  без карт) контроллер получает ОДНУ синтетическую выходную группу по
-     *  {@link ControllerType#getPortCount()} — иначе узлу было бы вовсе некуда
-     *  подвести связь (см. {@link #cardPortGroupForLocalPort}, зеркальный случай).
-     *  {@link SchemaNode#getControllerInstanceRefId()} хранит ссылку на исходный
-     *  экземпляр — по ней {@link #autoPopulateSchema} находит узел повторно (не
-     *  создаёт дублей) и {@link #autoConnectChainEndpoint} — узел-цель для связи. */
+    /** Строит узел общей схемы (тип CONTROLLER), зеркалящий РЕАЛЬНУЮ (уже
+     *  замороженную на экземпляре при добавлении на экран — см. class-javadoc
+     *  {@link ControllerInstance}) комплектацию карт контроллера {@code ci} — карты
+     *  копируются со свежими id (см. {@link #duplicateCardWithFreshIds}), чтобы
+     *  группы портов этого узла не путались с группами портов другого узла того же
+     *  типа. Простой (немодульный, без карт) контроллер получает ОДНУ синтетическую
+     *  выходную группу по {@link ControllerInstance#getPortCount()} — иначе узлу
+     *  было бы вовсе некуда подвести связь (см. {@link #cardPortGroupForLocalPort},
+     *  зеркальный случай). {@link SchemaNode#getControllerInstanceRefId()} хранит
+     *  ссылку на исходный экземпляр — по ней {@link #autoPopulateSchema} находит
+     *  узел повторно (не создаёт дублей) и {@link #autoConnectChainEndpoint} —
+     *  узел-цель для связи. */
     private SchemaNode addSchemaNodeForController(ControllerInstance ci, double x, double y) {
-        ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
-        String label = ci.getLabel() != null && !ci.getLabel().isEmpty()
-                ? ci.getLabel() : (t != null ? t.getName() : "Контроллер");
+        String label = ci.getLabel() != null && !ci.getLabel().isEmpty() ? ci.getLabel() : "Контроллер";
         SchemaNode node = new SchemaNode(SchemaMode.SIGNAL, SchemaNodeType.CONTROLLER, label, x, y, null);
         node.setControllerInstanceRefId(ci.getId());
-        if (t != null) {
-            if (!t.getCards().isEmpty()) {
-                for (SchemaCard c : t.getCards()) {
-                    node.getCards().add(duplicateCardWithFreshIds(c));
-                }
-            } else if (t.getPortCount() > 0) {
-                SchemaCard synthetic = new SchemaCard(t.getName(), new ArrayList<>());
-                synthetic.getPorts().add(new CardPort("Ethernet", PortDirection.OUT, t.getPortCount()));
-                node.getCards().add(synthetic);
-            }
-        }
+        mirrorControllerCardsOntoNode(node, ci, label);
         currentScene.getSchemaNodes().add(node);
         autoFitNodeToPorts(node);
         changed();
         return node;
+    }
+
+    /** Заменяет карты {@code node} копией (свежие id, см. {@link
+     *  #duplicateCardWithFreshIds}) РЕАЛЬНОЙ (уже замороженной, см. class-javadoc
+     *  {@link ControllerInstance}) комплектации {@code ci} — общая точка для
+     *  {@link #addSchemaNodeForController} (автозаполнение) и {@link
+     *  #linkSchemaNodeToController} (ручная привязка блока к контроллеру) — оба
+     *  случая должны показывать одну и ту же реальную раскладку карт, не только id
+     *  ссылку. Простой (немодульный, без карт) контроллер получает ОДНУ
+     *  синтетическую выходную группу по {@link ControllerInstance#getPortCount()} —
+     *  иначе узлу было бы вовсе некуда подвести связь (см. {@link
+     *  #cardPortGroupForLocalPort}, зеркальный случай). */
+    private void mirrorControllerCardsOntoNode(SchemaNode node, ControllerInstance ci, String fallbackCardName) {
+        node.getCards().clear();
+        if (!ci.getCards().isEmpty()) {
+            for (SchemaCard c : ci.getCards()) {
+                node.getCards().add(duplicateCardWithFreshIds(c));
+            }
+        } else if (ci.getPortCount() > 0) {
+            SchemaCard synthetic = new SchemaCard(fallbackCardName, new ArrayList<>());
+            synthetic.getPorts().add(new CardPort("Ethernet", PortDirection.OUT, ci.getPortCount()));
+            node.getCards().add(synthetic);
+        }
     }
 
     /** Проводит связь от гнезда кабинета {@code cabinetId} (узел-экран, которому он
@@ -5135,12 +5548,11 @@ public class AppModel {
             return;
         }
         SchemaNode controllerNode = controllerNodesByInstanceId.get(ci.getId());
-        ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
-        if (controllerNode == null || t == null) {
+        if (controllerNode == null) {
             return;
         }
         int localPort = globalPort - portOffsetOf(currentScene, ci);
-        int[] group = cardPortGroupForLocalPort(t, localPort);
+        int[] group = cardPortGroupForLocalPort(ci, localPort);
         if (group == null || group[0] >= controllerNode.getCards().size()) {
             return;
         }
@@ -5274,15 +5686,15 @@ public class AppModel {
     }
 
     /** Локальный (в пределах контроллера, 1-based, только среди ВЫХОДНЫХ портов — та
-     *  же нумерация, что и {@link ControllerType#isEffectivePortEthernet}) № порта →
+     *  же нумерация, что и {@link ControllerInstance#isEffectivePortEthernet}) № порта →
      *  координаты (индекс карты, индекс группы разъёмов внутри неё) в
-     *  {@link ControllerType#getCards()} — нужны, чтобы найти СООТВЕТСТВУЮЩУЮ группу
+     *  {@link ControllerInstance#getCards()} — нужны, чтобы найти СООТВЕТСТВУЮЩУЮ группу
      *  портов в узле общей схемы, зеркалящем этот контроллер (см.
      *  {@link #addSchemaNodeForController}, копирует карты в том же порядке; для
      *  контроллера без карт зеркалит единственную синтетическую группу — индекс
      *  {0,0} всегда, если порт в пределах portCount). null — порт входной или вне
      *  диапазона. */
-    private int[] cardPortGroupForLocalPort(ControllerType t, int controllerLocalPort1Based) {
+    private int[] cardPortGroupForLocalPort(ControllerInstance t, int controllerLocalPort1Based) {
         if (t.getCards().isEmpty()) {
             return controllerLocalPort1Based >= 1 && controllerLocalPort1Based <= t.getPortCount()
                     ? new int[]{0, 0} : null;
@@ -5523,10 +5935,11 @@ public class AppModel {
     }
 
     /** Ёмкость (пикселей) порта контроллера, на который заведена цепочка — по формуле
-     *  NovaStar ({@link ControllerType#maxPixelsFor}) для пропускной способности порта
-     *  назначенного контроллера при герцовке экрана ПЕРВОГО кабинета цепочки и опорной
-     *  глубине цвета (см. Task #80 — модель не хранит битность контента по цепочке).
-     *  0, если порт не назначен цепочке или не принадлежит ни одному контроллеру сцены. */
+     *  NovaStar ({@link ControllerInstance#maxPixelsFor}) для пропускной способности
+     *  порта назначенного контроллера при герцовке экрана ПЕРВОГО кабинета цепочки и
+     *  опорной глубине цвета (см. Task #80 — модель не хранит битность контента по
+     *  цепочке). 0, если порт не назначен цепочке или не принадлежит ни одному
+     *  контроллеру сцены. */
     public int signalChainPortCapacityPixels(Scene scene, SignalChain chain) {
         if (scene == null || chain.getPortNumber() == null || chain.getCabinetInstanceIds().isEmpty()) {
             return 0;
@@ -5546,12 +5959,8 @@ public class AppModel {
         if (ci == null) {
             return 0;
         }
-        ControllerType type = workspace.controllerTypeById(ci.getControllerTypeId());
-        if (type == null) {
-            return 0;
-        }
-        return ControllerType.maxPixelsFor(type.getPortBandwidthMbps(), homeScreen.getRefreshRateHz(),
-                ControllerType.REFERENCE_BIT_DEPTH);
+        return ControllerInstance.maxPixelsFor(ci.getPortBandwidthMbps(), homeScreen.getRefreshRateHz(),
+                ControllerInstance.REFERENCE_BIT_DEPTH);
     }
 
     /** Подтверждает перегрузку сигнальной цепочки (кнопка «Я знаю») — как
@@ -5642,7 +6051,7 @@ public class AppModel {
      *  свободных портах контроллера более крупного соседа), поэтому группировка именно
      *  по контроллеру, а не предположение "один экран — один контроллер". Внутри
      *  контроллера — ЕЩЁ по отдающей карте/пулу нумерации Ethernet-портов (см.
-     *  {@link ControllerType#ethernetPoolLocalPort(int)}) — у модульных контроллеров
+     *  {@link ControllerInstance#ethernetPoolLocalPort(int)}) — у модульных контроллеров
      *  (Novastar H-серии и т.п.) с несколькими Ethernet+Fiber картами сырой сквозной
      *  номер порта контроллера считает и fiber-порты тоже, из-за чего Ethernet-порт
      *  №1 второй карты имел бы сырой номер вроде 17, а не 1 — баг-репорт: "легенда
@@ -5664,20 +6073,15 @@ public class AppModel {
                 continue;
             }
             int controllerLocal = port - portOffsetOf(scene, ci);
-            ControllerType type = workspace.controllerTypeById(ci.getControllerTypeId());
-            int poolIndex = 0;
-            int poolLocal = controllerLocal;
-            if (type != null) {
-                int[] pool = type.ethernetPoolLocalPort(controllerLocal);
-                if (pool == null) {
-                    // fiber-порт или вне диапазона — сигнальная цепочка на такой порт
-                    // указывать не должна вовсе, но на всякий случай не показываем
-                    // заведомо неверный номер вместо тихого пропуска строки.
-                    continue;
-                }
-                poolIndex = pool[0];
-                poolLocal = pool[1];
+            int[] pool = ci.ethernetPoolLocalPort(controllerLocal);
+            if (pool == null) {
+                // fiber-порт или вне диапазона — сигнальная цепочка на такой порт
+                // указывать не должна вовсе, но на всякий случай не показываем
+                // заведомо неверный номер вместо тихого пропуска строки.
+                continue;
             }
+            int poolIndex = pool[0];
+            int poolLocal = pool[1];
             byControllerAndPool.computeIfAbsent(ci, k -> new java.util.LinkedHashMap<>())
                     .computeIfAbsent(poolIndex, k -> new ArrayList<>()).add(poolLocal);
         }
@@ -5929,10 +6333,27 @@ public class AppModel {
      *  привязки его подпись на холсте получает то же обозначение "(Контроллер N)",
      *  что видно в легенде портов ({@link #signalPortLegendRows}, см.
      *  {@code SchemaCanvasPanel.withControllerLegendTag}) — не заставлять пользоваться
-     *  автозаполнением только ради этой подписи. */
+     *  автозаполнением только ради этой подписи. Также подхватывает РЕАЛЬНУЮ
+     *  замороженную комплектацию карт контроллера (см. {@link
+     *  #mirrorControllerCardsOntoNode}, class-javadoc {@link ControllerInstance}) —
+     *  чтобы вручную нарисованный блок сразу показывал уже собранную при добавлении
+     *  на экран комплектацию, а не оставался с тем, что было нарисовано вручную (в
+     *  т.ч. пустым) до привязки (запрос пользователя, чат 2026-09-23: "при
+     *  добавлении контроллера в общую схему и связывании контроллера с
+     *  использованным в расключении должны автоматически применяться уже выбранные
+     *  карты"). Снятие связки ({@code controllerInstanceId == null}) карты узла НЕ
+     *  трогает — они остаются как есть, кроме привязки. */
     public void linkSchemaNodeToController(SchemaNode node, String controllerInstanceId) {
         pushUndo("Связь узла схемы с контроллером");
         node.setControllerInstanceRefId(controllerInstanceId);
+        if (controllerInstanceId != null && currentScene != null) {
+            ControllerInstance ci = controllerById(currentScene, controllerInstanceId);
+            if (ci != null) {
+                String label = node.getLabel() != null && !node.getLabel().isEmpty() ? node.getLabel() : "Контроллер";
+                mirrorControllerCardsOntoNode(node, ci, label);
+                autoFitNodeToPorts(node);
+            }
+        }
         changed();
     }
 
@@ -5949,10 +6370,20 @@ public class AppModel {
      *  (см. {@link #updatePlacementMaskConfig}/{@link #updateCanvasMaskSettings} и
      *  канвас-CRUD ниже) идёт без выбора конкретного экрана. */
     private void pushUndo(String actionLabel) {
+        pushUndo(actionLabel, false);
+    }
+
+    private void pushUndo(String actionLabel, boolean structural, Scene scene) {
+        if (scene == currentScene) {
+            pushUndo(actionLabel, structural);
+        }
+    }
+
+    private void pushUndo(String actionLabel, boolean structural) {
         if (currentScene == null) {
             return;
         }
-        Screen screenSnap = currentScreen != null ? ScreenLogic.snapshot(currentScreen) : null;
+        Screen screenSnap = !structural && currentScreen != null ? ScreenLogic.snapshot(currentScreen) : null;
         List<PowerChain> pc = new ArrayList<>();
         for (PowerChain c : currentScene.getPowerChains()) {
             pc.add(c.copy());
@@ -5973,7 +6404,21 @@ public class AppModel {
         for (SchemaEdge e : currentScene.getSchemaEdges()) {
             se.add(e.copy());
         }
-        undoStack.push(new UndoEntry(screenSnap, pc, sc, cv, sn, se, actionLabel));
+        List<Screen> screens = null;
+        List<ScreenGroup> groups = null;
+        java.util.Map<Screen, ScreenMeta> meta = null;
+        if (structural) {
+            screens = new ArrayList<>(currentScene.getScreens());
+            groups = new ArrayList<>();
+            for (ScreenGroup g : currentScene.getScreenGroups()) {
+                groups.add(g.copy());
+            }
+            meta = new java.util.IdentityHashMap<>();
+            for (Screen s : screens) {
+                meta.put(s, new ScreenMeta(s.getGroupId(), s.getTagColor()));
+            }
+        }
+        undoStack.push(new UndoEntry(screenSnap, pc, sc, cv, sn, se, actionLabel, screens, groups, meta));
         while (undoStack.size() > UNDO_LIMIT) {
             undoStack.removeLast();
         }
@@ -6003,6 +6448,18 @@ public class AppModel {
     }
 
     private void restore(UndoEntry snap) {
+        if (snap.screensSnapshot() != null) {
+            currentScene.getScreens().clear();
+            currentScene.getScreens().addAll(snap.screensSnapshot());
+            currentScene.setScreenGroups(new ArrayList<>(snap.groupsSnapshot()));
+            snap.screenMetaSnapshot().forEach((screen, m) -> {
+                screen.setGroupId(m.groupId());
+                screen.setTagColor(m.tagColor());
+            });
+            if (currentScreen != null && !currentScene.getScreens().contains(currentScreen)) {
+                currentScreen = null;
+            }
+        }
         if (snap.screenSnapshot() != null && currentScreen != null) {
             ScreenLogic.restore(currentScreen, snap.screenSnapshot());
         }

@@ -271,6 +271,17 @@ public class UserProfile {
      *  связи в MODERN — см. {@code SchemaCanvasPanel#autoRoutePoints}. */
     private int schemaRouteStubPx = 24;
 
+    /** Скорость прокрутки колесом боковой панели этапа «Сигнал» (список
+     *  контроллеров + сетка портов {@code PortPickerPanel}) — пикселей на ОДНУ
+     *  «единицу» колеса (обычный щелчок = 3 единицы, см. {@code
+     *  MouseWheelEvent#getUnitsToScroll}). Раньше не задавалась вовсе: у
+     *  {@code JScrollPane} нет своего значения, а панель — обычный {@code JPanel},
+     *  не {@code Scrollable}, поэтому Swing брал 1 px на единицу (~3 px на щелчок),
+     *  и у контроллера со многими картами (высокая сетка портов) прокрутка вниз
+     *  еле ползла (баг-репорт). По умолчанию 16 — как у остальных окон приложения
+     *  (см. {@code setUnitIncrement(16)} в LibrariesStagePanel/SetupStagePanel). */
+    private int signalSideScrollUnitPx = 16;
+
     /** Контроль электрической/сигнальной нагрузки (Task #80/#81/#86/#87): сравнение
      *  тока цепочки/суммарной нагрузки силового узла схемы с ёмкостью разъёма/автомата,
      *  предупреждения в списке цепочек и на схеме, блокировка экспорта при
@@ -337,6 +348,17 @@ public class UserProfile {
      *  размер жёстко привязан к реальному разрешению LED-панели, увеличивать его
      *  "под печать" физически бессмысленно (растянуло бы контент с панели). */
     private int docExportDpi = 72;
+
+    /** Формат схем пакета документации (окно «Параметры экспорта» этапа «Вывод»):
+     *  "JPG" (по умолчанию — прежнее поведение), "PNG", "WEBP", "PDF" — см.
+     *  {@code ui.SchemeImageWriter.Format}. Строкой, а не enum'ом, чтобы профиль из
+     *  будущей версии с новым форматом не ломал чтение (неизвестное → JPG). Маски
+     *  всегда PNG независимо от этой настройки. */
+    private String docExportFormat = "JPG";
+
+    /** Качество сжатия с потерями (JPG/WebP), 1..100; 92 — прежнее жёстко
+     *  зашитое значение {@code SchemeRenderer.writeJpeg}. */
+    private int docExportQuality = 92;
 
     /** Масштаб всего интерфейса в процентах (см. {@code App.main} — устанавливается
      *  системным свойством {@code flatlaf.uiScale} ДО создания L&F), 100 по
@@ -795,6 +817,16 @@ public class UserProfile {
         this.schemaRouteStubPx = Math.max(0, px);
     }
 
+    public int getSignalSideScrollUnitPx() {
+        // 0 (не должен встречаться — поле с инициализатором по умолчанию) на всякий
+        // случай трактуем как "не задано", а не как "прокрутка выключена".
+        return signalSideScrollUnitPx > 0 ? signalSideScrollUnitPx : 16;
+    }
+
+    public void setSignalSideScrollUnitPx(int px) {
+        this.signalSideScrollUnitPx = Math.max(1, Math.min(200, px));
+    }
+
     public boolean isLoadTrackingEnabled() {
         return loadTrackingEnabled;
     }
@@ -865,6 +897,22 @@ public class UserProfile {
 
     public void setDocExportDpi(int docExportDpi) {
         this.docExportDpi = docExportDpi > 0 ? docExportDpi : 72;
+    }
+
+    public String getDocExportFormat() {
+        return docExportFormat == null || docExportFormat.isBlank() ? "JPG" : docExportFormat;
+    }
+
+    public void setDocExportFormat(String docExportFormat) {
+        this.docExportFormat = docExportFormat;
+    }
+
+    public int getDocExportQuality() {
+        return docExportQuality >= 1 && docExportQuality <= 100 ? docExportQuality : 92;
+    }
+
+    public void setDocExportQuality(int docExportQuality) {
+        this.docExportQuality = Math.max(1, Math.min(100, docExportQuality));
     }
 
     public int getUiScalePercent() {
@@ -943,6 +991,7 @@ public class UserProfile {
         p.schemaStylePreset = schemaStylePreset;
         p.schemaRenderMode = schemaRenderMode;
         p.schemaRouteStubPx = schemaRouteStubPx;
+        p.signalSideScrollUnitPx = signalSideScrollUnitPx;
         p.loadTrackingEnabled = loadTrackingEnabled;
         p.powerUnitKw = powerUnitKw;
         p.maskLogoImagePath = maskLogoImagePath;
@@ -952,6 +1001,8 @@ public class UserProfile {
         p.lafStyle = lafStyle;
         p.fontFamily = fontFamily;
         p.docExportDpi = docExportDpi;
+        p.docExportFormat = docExportFormat;
+        p.docExportQuality = docExportQuality;
         p.uiScalePercent = uiScalePercent;
         p.keyBindings = new LinkedHashMap<>();
         for (Map.Entry<String, KeyCombo> en : keyBindings.entrySet()) {

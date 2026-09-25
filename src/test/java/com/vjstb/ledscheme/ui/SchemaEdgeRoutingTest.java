@@ -7,9 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.CardPort;
-import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.EdgeRouteMode;
 import com.vjstb.ledscheme.model.EdgeWaypoint;
+import com.vjstb.ledscheme.model.EquipmentPreset;
 import com.vjstb.ledscheme.model.InterfaceRole;
 import com.vjstb.ledscheme.model.NodeOrientation;
 import com.vjstb.ledscheme.model.PortDirection;
@@ -129,11 +129,9 @@ class SchemaEdgeRoutingTest {
         Screen screen = model.addScreen("Экран", type.getId(), 2, 2, 0, 0);
         model.selectScreen(screen);
 
-        ControllerType ct = new ControllerType();
-        ct.setName("Контроллер");
-        ct.getCards().add(new SchemaCard("Карта 1", List.of(new CardPort("RJ45", PortDirection.OUT, 4))));
-        ct = model.addControllerType(ct);
-        model.addControllerToScreen(screen, ct.getId());
+        EquipmentPreset ct = model.addControllerPreset("Контроллер", "", 0, 1000, 0, false,
+                List.of(new SchemaCard("Карта 1", List.of(new CardPort("RJ45", PortDirection.OUT, 4)))));
+        model.addControllerToScreen(screen, ct.getId(), null);
 
         List<String> cabIds = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
         model.addSignalChain(2, false, List.of(cabIds.get(0), cabIds.get(1)));

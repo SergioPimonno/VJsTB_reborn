@@ -10,7 +10,7 @@ import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.CardPort;
 import com.vjstb.ledscheme.model.ControllerInstance;
-import com.vjstb.ledscheme.model.ControllerType;
+import com.vjstb.ledscheme.model.EquipmentPreset;
 import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.SchemaCard;
@@ -52,12 +52,9 @@ class NovaLctScrWriterTest {
         return ct;
     }
 
-    private ControllerType singleCardController() {
-        ControllerType ct = new ControllerType();
-        ct.setName("Test controller");
-        ct.setPortCount(20);
-        ct.getCards().add(new SchemaCard("Карта 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 20))));
-        return ct;
+    private EquipmentPreset singleCardController(AppModel model) {
+        return model.addControllerPreset("Test controller", "", 20, 1000, 0, false,
+                List.of(new SchemaCard("Карта 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 20)))));
     }
 
     @Test
@@ -70,8 +67,8 @@ class NovaLctScrWriterTest {
         Screen screen = model.addScreen("E", type.getId(), 1, 1, 0, 0);
         model.selectScreen(screen);
 
-        ControllerType controllerType = model.addControllerType(singleCardController());
-        ControllerInstance controller = model.addControllerToScreen(screen, controllerType.getId());
+        EquipmentPreset controllerType = singleCardController(model);
+        ControllerInstance controller = model.addControllerToScreen(screen, controllerType.getId(), null);
 
         CabinetInstance origin = screen.cabinetAt(0, 0);
         model.addSignalChain(1, false, List.of(origin.getId()));
@@ -91,8 +88,8 @@ class NovaLctScrWriterTest {
         Screen screen = model.addScreen("E", type.getId(), 3, 4, 0, 0);
         model.selectScreen(screen);
 
-        ControllerType controllerType = model.addControllerType(singleCardController());
-        model.addControllerToScreen(screen, controllerType.getId());
+        EquipmentPreset controllerType = singleCardController(model);
+        model.addControllerToScreen(screen, controllerType.getId(), null);
 
         int[][] seqOrderColRow = {
                 {0, 2}, {0, 1}, {0, 0}, {1, 0}, {1, 1}, {1, 2},
@@ -147,8 +144,8 @@ class NovaLctScrWriterTest {
         Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
         model.selectScreen(screen);
 
-        ControllerType controllerType = model.addControllerType(singleCardController());
-        model.addControllerToScreen(screen, controllerType.getId());
+        EquipmentPreset controllerType = singleCardController(model);
+        model.addControllerToScreen(screen, controllerType.getId(), null);
 
         CabinetInstance origin = screen.cabinetAt(0, 0);
         CabinetInstance c01 = screen.cabinetAt(0, 1);
@@ -195,10 +192,10 @@ class NovaLctScrWriterTest {
         Screen screen1 = model.addScreen("E1", type.getId(), 1, 2, 0, 0);
         Screen screen2 = model.addScreen("E2", type.getId(), 1, 3, 2000, 0);
 
-        ControllerType controllerType = model.addControllerType(singleCardController()); // 20 портов
-        model.addControllerToScreen(screen1, controllerType.getId());                    // порты сцены 1..20
+        EquipmentPreset controllerType = singleCardController(model); // 20 портов
+        model.addControllerToScreen(screen1, controllerType.getId(), null);                    // порты сцены 1..20
         ControllerInstance controller2 =
-                model.addControllerToScreen(screen2, controllerType.getId());            // порты сцены 21..40
+                model.addControllerToScreen(screen2, controllerType.getId(), null);            // порты сцены 21..40
 
         // Цепочка второго экрана несёт scene-wide номер порта 21 — первый порт
         // второго контроллера. (addSignalChain молча выходит без выбранного экрана.)
@@ -240,8 +237,8 @@ class NovaLctScrWriterTest {
         Screen screen = model.addScreen("E", type.getId(), 3, 4, 0, 0);
         model.selectScreen(screen);
 
-        ControllerType controllerType = model.addControllerType(singleCardController());
-        ControllerInstance controller = model.addControllerToScreen(screen, controllerType.getId());
+        EquipmentPreset controllerType = singleCardController(model);
+        ControllerInstance controller = model.addControllerToScreen(screen, controllerType.getId(), null);
 
         int[][] seqOrderColRow = {
                 {0, 2}, {0, 1}, {0, 0}, {1, 0}, {1, 1}, {1, 2},
@@ -323,9 +320,9 @@ class NovaLctScrWriterTest {
         Screen screen = model.addScreen("E", type.getId(), 2, 4, 0, 0); // 2 ряда × 4 столбца
         model.selectScreen(screen);
 
-        ControllerType ctype = model.addControllerType(singleCardController()); // 20 портов
-        ControllerInstance left = model.addControllerToScreen(screen, ctype.getId());   // порты 1..20
-        ControllerInstance right = model.addControllerToScreen(screen, ctype.getId());  // порты 21..40
+        EquipmentPreset ctype = singleCardController(model); // 20 портов
+        ControllerInstance left = model.addControllerToScreen(screen, ctype.getId(), null);   // порты 1..20
+        ControllerInstance right = model.addControllerToScreen(screen, ctype.getId(), null);  // порты 21..40
 
         // Левая половина (столбцы 0..1) — на контроллере left, порт 1.
         model.addSignalChain(1, false, List.of(
@@ -390,8 +387,8 @@ class NovaLctScrWriterTest {
         Screen complexScreen = model.addScreen("CX", type.getId(), 1, 3, 0, 0);
         Screen plainScreen = model.addScreen("STD", type.getId(), 1, 3, 4000, 0);
 
-        ControllerType ctype = model.addControllerType(singleCardController());
-        ControllerInstance ctrl = model.addControllerToScreen(complexScreen, ctype.getId());
+        EquipmentPreset ctype = singleCardController(model);
+        ControllerInstance ctrl = model.addControllerToScreen(complexScreen, ctype.getId(), null);
 
         model.updateCabinetOffset(complexScreen.cabinetAt(0, 2), 10.0, 0.0); // → Complex
         model.selectScreen(complexScreen);
@@ -453,8 +450,8 @@ class NovaLctScrWriterTest {
         Screen complexScreen = model.addScreen("CX", type.getId(), 1, 3, 0, 0);
         Screen plainScreen = model.addScreen("STD", type.getId(), 1, 3, 4000, 0);
 
-        ControllerType ctype = model.addControllerType(singleCardController()); // 20 портов
-        ControllerInstance ctrl = model.addControllerToScreen(complexScreen, ctype.getId()); // порты 1..20
+        EquipmentPreset ctype = singleCardController(model); // 20 портов
+        ControllerInstance ctrl = model.addControllerToScreen(complexScreen, ctype.getId(), null); // порты 1..20
 
         // Крайний правый кабинет Complex-экрана сдвинут наружу → грид становится
         // неровным (isUniformRectangularGrid=false), но соседей он не перекрывает,
@@ -495,8 +492,8 @@ class NovaLctScrWriterTest {
         model.selectScene(scene);
         Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
         model.selectScreen(screen);
-        ControllerType ctype = model.addControllerType(singleCardController());
-        model.addControllerToScreen(screen, ctype.getId());
+        EquipmentPreset ctype = singleCardController(model);
+        model.addControllerToScreen(screen, ctype.getId(), null);
         model.addSignalChain(1, false,
                 screen.getCabinets().stream().map(CabinetInstance::getId).toList());
 
@@ -553,4 +550,178 @@ class NovaLctScrWriterTest {
             + "XeoD5wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
             + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAQAB5AAAAAAAAAAAAAAA"
             + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    private CabinetType triangle128(boolean exportAsStandard) {
+        CabinetType ct = type128();
+        ct.setName("Triangle 128x128");
+        ct.setShape(com.vjstb.ledscheme.model.CabinetShape.TRIANGLE);
+        ct.setExportAsStandardCabinet(exportAsStandard);
+        return ct;
+    }
+
+    @Test
+    void nonRectangularTypeMixedIntoScreen_goesComplexUnlessExportedAsStandard(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType rect = model.addCabinetType(type128());
+        CabinetType tri = model.addCabinetType(triangle128(false));
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("S1", rect.getId(), 1, 3, 0, 0);
+        model.selectScreen(screen);
+        model.setCabinetTypeOverride(screen.cabinetAt(0, 1).getId(), tri.getId());
+
+        assertTrue(NovaLctScrWriter.isComplexExport(screen, model.getWorkspace()),
+                "непрямоугольный тип без галочки — прежний путь через Complex");
+
+        CabinetType edited = tri.copy();
+        edited.setExportAsStandardCabinet(true);
+        model.updateCabinetType(edited);
+        assertFalse(NovaLctScrWriter.isComplexExport(screen, model.getWorkspace()),
+                "с галочкой кабинет пишется как обычный прямоугольный — экран Standard");
+
+        // Другое разрешение — Standard хранит один cabW×cabH на экран, поэтому снова Complex.
+        CabinetType wide = tri.copy();
+        wide.setResolutionWidth(256);
+        model.updateCabinetType(wide);
+        assertTrue(NovaLctScrWriter.isComplexExport(screen, model.getWorkspace()));
+    }
+
+    @Test
+    void screenOfOnlyFlaggedNonRectangularCabinets_isStandard(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType tri = model.addCabinetType(triangle128(true));
+        CabinetType tri2Src = triangle128(true);
+        tri2Src.setName("Triangle 128x128 (v2)");
+        CabinetType tri2 = model.addCabinetType(tri2Src);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("S1", tri.getId(), 1, 3, 0, 0);
+        model.selectScreen(screen);
+        model.setCabinetTypeOverride(screen.cabinetAt(0, 2).getId(), tri2.getId());
+
+        assertFalse(NovaLctScrWriter.isComplexExport(screen, model.getWorkspace()));
+    }
+
+    @Test
+    void flaggedTypeWithDifferentResolution_reportedAsSizeMismatchAndExportsComplex(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType rect = model.addCabinetType(type128());
+        CabinetType wideSrc = triangle128(true);
+        wideSrc.setResolutionHeight(64);
+        CabinetType wide = model.addCabinetType(wideSrc);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("S1", rect.getId(), 1, 3, 0, 0);
+        model.selectScreen(screen);
+
+        assertTrue(ScreenLogic.standardSizeMismatchTypeNames(screen, rect, model.getWorkspace()).isEmpty());
+
+        model.setCabinetTypeOverride(screen.cabinetAt(0, 1).getId(), wide.getId());
+        assertTrue(NovaLctScrWriter.isComplexExport(screen, model.getWorkspace()));
+        assertEquals(List.of(wide.getName()),
+                ScreenLogic.standardSizeMismatchTypeNames(screen, rect, model.getWorkspace()),
+                "причина Complex — размер кабинета с галочкой — попадает в предупреждение");
+    }
+
+    /** Реальный образец NovaLCT (Standard, экран 4×2, Sending Card 1): порт 1 — колонки
+     *  0..1, кабинеты 128×128; порт 2 — колонки 2..3, кабинеты 128×64. Размер лежит в
+     *  6-байтовом якоре (размер кабинета ПРЕДЫДУЩЕЙ записи), а не в заголовке. */
+    @Test
+    void standardScreenWithDifferentCabinetSizesPerPort_matchesRealNovaLctSample() {
+        Map<NovaLctScrWriter.CellKey, NovaLctScrWriter.Rec> cells = new HashMap<>();
+        // Rec(row, col, card, port, seq)
+        int[][] port0 = {{0, 0, 1}, {1, 0, 0}, {0, 1, 2}, {1, 1, 3}};
+        int[][] port1 = {{0, 2, 1}, {1, 2, 0}, {0, 3, 2}, {1, 3, 3}};
+        Map<NovaLctScrWriter.CellKey, int[]> sizes = new HashMap<>();
+        for (int[] c : port0) {
+            cells.put(new NovaLctScrWriter.CellKey(c[1], c[0]), new NovaLctScrWriter.Rec(c[0], c[1], 0, 0, c[2]));
+            sizes.put(new NovaLctScrWriter.CellKey(c[1], c[0]), new int[]{128, 128});
+        }
+        for (int[] c : port1) {
+            cells.put(new NovaLctScrWriter.CellKey(c[1], c[0]), new NovaLctScrWriter.Rec(c[0], c[1], 0, 1, c[2]));
+            sizes.put(new NovaLctScrWriter.CellKey(c[1], c[0]), new int[]{128, 64});
+        }
+        byte[] actual = NovaLctScrWriter.writeStandardCore(4, 2, 128, 128, 0, cells, sizes);
+        assertArrayEquals(decode(PER_PORT_SIZES_SCR_BASE64), actual);
+    }
+
+    /** То же, что образец выше, но собранное из настоящей модели: экран 4×2 типа 128×128,
+     *  колонки 2..3 переопределены непрямоугольным типом 128×64 с галочкой «прописывать как
+     *  стандартный кабинет», по одной цепочке на порт — экран остаётся Standard и файл
+     *  побайтово равен образцу NovaLCT. */
+    @Test
+    void flaggedTypeOnSeparatePort_exportsAsStandardMatchingRealSample(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType rect = model.addCabinetType(type128());
+        CabinetType halfSrc = triangle128(true);
+        halfSrc.setName("Half-height triangle");
+        halfSrc.setResolutionHeight(64);
+        CabinetType half = model.addCabinetType(halfSrc);
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("S1", rect.getId(), 2, 4, 0, 0);
+        EquipmentPreset ctype = singleCardController(model);
+        ControllerInstance ctrl = model.addControllerToScreen(screen, ctype.getId(), null);
+        model.selectScreen(screen);
+        for (int row = 0; row < 2; row++) {
+            for (int col = 2; col < 4; col++) {
+                model.setCabinetTypeOverride(screen.cabinetAt(row, col).getId(), half.getId());
+            }
+        }
+        // порядок = seq образца: порт 1 — (r1,c0),(r0,c0),(r0,c1),(r1,c1); порт 2 — (r1,c2),(r0,c2),(r0,c3),(r1,c3)
+        model.addSignalChain(1, false, List.of(
+                screen.cabinetAt(1, 0).getId(), screen.cabinetAt(0, 0).getId(),
+                screen.cabinetAt(0, 1).getId(), screen.cabinetAt(1, 1).getId()));
+        model.addSignalChain(2, false, List.of(
+                screen.cabinetAt(1, 2).getId(), screen.cabinetAt(0, 2).getId(),
+                screen.cabinetAt(0, 3).getId(), screen.cabinetAt(1, 3).getId()));
+
+        List<NovaLctControllerResolver.CabinetRec> recs = NovaLctControllerResolver.resolve(scene, ctrl, model);
+        assertFalse(NovaLctScrWriter.isComplexExport(screen, recs, model.getWorkspace()),
+                "разные размеры на РАЗНЫХ портах — по-прежнему Standard");
+        assertTrue(NovaLctScrWriter.isComplexExport(screen, model.getWorkspace()),
+                "без знания портов (мультиэкранные пути) — строгая проверка, Complex");
+        assertArrayEquals(decode(PER_PORT_SIZES_SCR_BASE64),
+                NovaLctScrWriter.writeForResolvedScreen(screen, recs, model.getWorkspace()));
+    }
+
+    /** Оба размера на ОДНОМ порту — Standard хранит размер на порт, поэтому Complex, а
+     *  виновные типы называются в предупреждении диалога экспорта. */
+    @Test
+    void differentSizesOnOnePort_goComplexAndAreReported(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType rect = model.addCabinetType(type128());
+        CabinetType halfSrc = triangle128(true);
+        halfSrc.setName("Half-height triangle");
+        halfSrc.setResolutionHeight(64);
+        CabinetType half = model.addCabinetType(halfSrc);
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("S1", rect.getId(), 1, 2, 0, 0);
+        EquipmentPreset ctype = singleCardController(model);
+        ControllerInstance ctrl = model.addControllerToScreen(screen, ctype.getId(), null);
+        model.selectScreen(screen);
+        model.setCabinetTypeOverride(screen.cabinetAt(0, 1).getId(), half.getId());
+        model.addSignalChain(1, false, List.of(screen.cabinetAt(0, 0).getId(), screen.cabinetAt(0, 1).getId()));
+
+        List<NovaLctControllerResolver.CabinetRec> recs = NovaLctControllerResolver.resolve(scene, ctrl, model);
+        assertTrue(NovaLctScrWriter.isComplexExport(screen, recs, model.getWorkspace()));
+        assertEquals(List.of("Test 128x128", "Half-height triangle"),
+                ScreenLogic.standardSizeMismatchTypeNames(screen, rect, model.getWorkspace(),
+                        NovaLctScrWriter.portKeysOf(screen, recs)));
+    }
+
+    private static final String PER_PORT_SIZES_SCR_BASE64 =
+            "RFNDSYkggAAAAF8BAACtAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA6QP8AAEBkAZgBAAAAAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADuAwYbAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGwEAAAAAAAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAABkgAAAAEAAAAAAAQAAgAAAAEAAAAAAAAAAACAAIAAAQAAAAAAAIAAAAABAIAAgAABAAACAIAAAAABAAAA"
+            + "gACAAAEAAAMAgACAAAEAAQCAAIAAAQABAQAAAQAAAgAAAIAAQAABAAEAAAABQAACAAEAgABAAAEAAQIAgAEAAAMAAACAAEAAAQAB"
+            + "AwCAAUAAAwABAIAAQAABQgBbeyJzaSI6MCwieDEiOjAsInkxIjowLCJ4MiI6MCwieTIiOjAsIngzIjowLCJ5MyI6MCwieDQiOjAs"
+            + "Ink0IjowfV3qA+cAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEAAeQAAAAA"
+            + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==";
 }

@@ -216,6 +216,47 @@ public final class SchemeRenderer {
         }
     }
 
+    /** Красная подсветка кабинетов, поверх которых наползает другой кабинет (см. {@link
+     *  ScreenLogic#overlappedCabinetIds}: по реальным формам, не по габаритам) — общая
+     *  для детального обзора сцены ({@code SceneCanvasPanel}) и основного холста
+     *  расключения ({@code CanvasPanel}): случайный сдвиг кабинета в «Сетапе» нельзя
+     *  пропустить и при расключении. Два прохода, как у {@code
+     *  SceneCanvasPanel.drawCabinetOverrideMarks}: {@code fillPass=true} (заливка +
+     *  подпись «строка,столбец», иначе заливка её перекрыла бы) кладётся МЕЖДУ
+     *  {@link #paintSchemeGrid} и {@link #paintSchemeChains}, чтобы не закрашивать линию
+     *  цепочки; {@code fillPass=false} (контур) — после цепочек. */
+    public static void paintOverlapWarnings(Graphics2D g2, Screen scr, CabinetType type, int cellW, int cellH,
+                                            int offX, int offY, Workspace workspace, boolean fillPass) {
+        java.util.Set<String> covered = ScreenLogic.overlappedCabinetIds(scr, type, workspace);
+        if (covered.isEmpty()) {
+            return;
+        }
+        java.awt.Stroke prevStroke = g2.getStroke();
+        for (CabinetInstance cab : scr.getCabinets()) {
+            if (!covered.contains(cab.getId())) {
+                continue;
+            }
+            int x = cabX(cab, type, cellW, offX);
+            int y = cabY(cab, type, cellH, offY);
+            CabinetType effective = effectiveTypeOf(cab, type, workspace);
+            CabinetShape shape = cab.getShapeOverride() != null ? cab.getShapeOverride()
+                    : (effective != null ? effective.getShape() : null);
+            double rotationDeg = effectiveRotationDeg(cab, effective);
+            int ew = (int) Math.round(ScreenLogic.effectiveCellW(effective, type, cellW));
+            int eh = (int) Math.round(ScreenLogic.effectiveCellH(effective, type, cellH));
+            if (fillPass) {
+                g2.setColor(new java.awt.Color(0xE5, 0x39, 0x35, 170));
+                fillCabinetShape(g2, x + 1, y + 1, ew - 2, eh - 2, shape, rotationDeg);
+                drawCabinetIndexLabel(g2, cab, x, y, ew, eh);
+            } else {
+                g2.setStroke(new java.awt.BasicStroke(2f));
+                g2.setColor(java.awt.Color.RED);
+                outlineCabinetShape(g2, x + 1, y + 1, ew - 2, eh - 2, shape, rotationDeg);
+            }
+        }
+        g2.setStroke(prevStroke);
+    }
+
     /** Часть {@link #paintScheme} — только линии цепочек, см. javadoc {@link #paintSchemeGrid}. */
     public static void paintSchemeChains(Graphics2D g2, Screen scr, boolean power,
                                          int cellW, int cellH, int offX, int offY, CabinetType type,
@@ -668,8 +709,7 @@ public final class SchemeRenderer {
         }
         int offset = 0;
         for (com.vjstb.ledscheme.model.ControllerInstance ci : sceneControllers) {
-            com.vjstb.ledscheme.model.ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
-            int count = t != null ? t.effectivePortCount() : 0;
+            int count = ci.effectivePortCount();
             if (port > offset && port <= offset + count) {
                 return new ControllerAndOffset(ci, offset);
             }
@@ -688,7 +728,7 @@ public final class SchemeRenderer {
      * контроллере" — сырой номер расходился с "Портом К1·N", который показывает
      * сайдбар {@code SignalStagePanel.portDisplayLabel}, ровно на число fiber-
      * портов, стоящих перед этим на той же карте), а РЕЗОЛВЛЕННЫЙ через {@link
-     * com.vjstb.ledscheme.model.ControllerType#ethernetPoolLocalPort} — тот же
+     * com.vjstb.ledscheme.model.ControllerInstance#ethernetPoolLocalPort} — тот же
      * номер, который видит пользователь в сетке портов сайдбара. Для контроллера
      * с несколькими картами/пулами Ethernet-нумерации — тот же формат
      * "К{карта}·{порт}", что и в {@code portDisplayLabel}, иначе просто номер
@@ -702,9 +742,7 @@ public final class SchemeRenderer {
                              Workspace workspace, int port) {
         ControllerAndOffset co = controllerForPort(sceneControllers, workspace, port);
         com.vjstb.ledscheme.model.ControllerInstance ci = co.controller();
-        com.vjstb.ledscheme.model.ControllerType t = ci != null && workspace != null
-                ? workspace.controllerTypeById(ci.getControllerTypeId()) : null;
-        String portPart = resolvedPortPart(t, port - co.offset(), port);
+        String portPart = resolvedPortPart(ci, port - co.offset(), port);
         if (sceneControllers.size() <= 1) {
             return "P" + portPart;
         }
@@ -714,13 +752,13 @@ public final class SchemeRenderer {
 
     /** Часть подписи ПОСЛЕ "P"/"C{n}·P" — резолвит {@code controllerLocalPort}
      *  (сырой, в пределах контроллера) через {@link com.vjstb.ledscheme.model
-     *  .ControllerType#ethernetPoolLocalPort} в "К{карта}·{порт}" (несколько
+     *  .ControllerInstance#ethernetPoolLocalPort} в "К{карта}·{порт}" (несколько
      *  Ethernet-пулов) или просто номер порта В ПРЕДЕЛАХ его пула (один пул).
      *  {@code null} от {@code ethernetPoolLocalPort} (fiber-порт или контроллер
      *  не резолвился) — защитный откат на сырой глобальный {@code rawFallbackPort},
      *  не должен встречаться для реально сохранённой цепочки (та строится только
      *  на Ethernet-годных портах), но лучше показать хоть что-то, чем ничего. */
-    private static String resolvedPortPart(com.vjstb.ledscheme.model.ControllerType t, int controllerLocalPort,
+    private static String resolvedPortPart(com.vjstb.ledscheme.model.ControllerInstance t, int controllerLocalPort,
                                             int rawFallbackPort) {
         if (t == null) {
             return String.valueOf(rawFallbackPort);
@@ -923,7 +961,7 @@ public final class SchemeRenderer {
     /** {@link java.awt.Shape} той же формы — для обрезки (clip) содержимого ячейки
      *  (например, подписи), чтобы оно не попадало в НЕзакрашенную часть ячейки у
      *  непрямоугольных форм (см. использование в paintWiringDiagram). */
-    private static java.awt.Shape cabinetShapeOutline(int x, int y, int w, int h, CabinetShape shape,
+    static java.awt.Shape cabinetShapeOutline(int x, int y, int w, int h, CabinetShape shape,
                                                         double rotationDeg) {
         if (shape == CabinetShape.TRIANGLE) {
             return trianglePolygon(x, y, w, h, rotationDeg);
@@ -1107,17 +1145,49 @@ public final class SchemeRenderer {
         return img;
     }
 
+    /** Предел стороны картинки в формате JPEG (у ImageIO — 65500, с запасом от 65535). */
+    static final int JPEG_MAX_DIMENSION = 65500;
+
+    static BufferedImage downscale(BufferedImage src, double k) {
+        int w = Math.max(1, Math.min(JPEG_MAX_DIMENSION, (int) Math.floor(src.getWidth() * k)));
+        int h = Math.max(1, Math.min(JPEG_MAX_DIMENSION, (int) Math.floor(src.getHeight() * k)));
+        BufferedImage dst = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = dst.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+        g.drawImage(src, 0, 0, w, h, null);
+        g.dispose();
+        return dst;
+    }
+
     /** Сохраняет изображение в JPEG с высоким качеством и {@code dpi} в метаданных
      *  JFIF (иначе большинство просмотрщиков/принтеров считают файл 72dpi по
      *  умолчанию — см. {@link #renderImage(Screen, CabinetType, boolean, int, Workspace,
      *  List, List, boolean, double)} про парный параметр {@code dpiScale}: этот метод
      *  только подписывает уже отрисованные пиксели, размер картинки увеличивает ТОТ). */
     public static void writeJpeg(BufferedImage img, File file, int dpi) throws IOException {
+        writeJpeg(img, file, dpi, 0.92f);
+    }
+
+    /** Как {@link #writeJpeg(BufferedImage, File, int)}, но с явным качеством сжатия
+     *  0..1 (окно «Параметры экспорта», см. {@code SchemeImageWriter}). */
+    public static void writeJpeg(BufferedImage img, File file, int dpi, float quality) throws IOException {
+        // Баг-репорт: пакет документации на 300 DPI падал с «Maximum supported image
+        // dimension is 65500 pixels» — это жёсткий предел самого формата JPEG (16 бит
+        // на сторону), длинная общая схема/сцена при ×4.17 его перерастает. Ужимаем
+        // такую картинку по месту и пропорционально снижаем DPI в метаданных — при
+        // печати физический размер схемы остаётся тем же, теряется только плотность.
+        int maxSide = Math.max(img.getWidth(), img.getHeight());
+        if (maxSide > JPEG_MAX_DIMENSION) {
+            double k = (double) JPEG_MAX_DIMENSION / maxSide;
+            img = downscale(img, k);
+            dpi = Math.max(1, (int) Math.floor(dpi * k));
+        }
         ImageWriter writer = ImageIO.getImageWritersByFormatName("jpg").next();
         try (ImageOutputStream ios = ImageIO.createImageOutputStream(file)) {
             ImageWriteParam param = writer.getDefaultWriteParam();
             param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
-            param.setCompressionQuality(0.92f);
+            param.setCompressionQuality(quality);
             writer.setOutput(ios);
             ImageTypeSpecifier typeSpecifier = ImageTypeSpecifier.createFromBufferedImageType(img.getType());
             IIOMetadata metadata = writer.getDefaultImageMetadata(typeSpecifier, param);
@@ -1389,14 +1459,17 @@ public final class SchemeRenderer {
                 int cellH = Math.max(1, (int) Math.round(type.getHeightMm() * scale));
                 int gx = pad + (int) Math.round((scr.getPosXMm() - minX) * scale);
                 int gy = screensY + (int) Math.round((scr.getPosYMm() - minY) * scale);
+                // +1 px справа/снизу: контур крайних кабинетов рисуется по x+w/y+h
+                // включительно, и раньше его «дорисовывала» общая рамка экрана.
                 Graphics2D clipped = (Graphics2D) g2.create();
-                clipped.clipRect(sx, sy, sw, sh);
+                clipped.clipRect(sx, sy, sw + 1, sh + 1);
                 paintScheme(clipped, scr, type, false, cellW, cellH, gx, gy, model.getWorkspace(),
                         List.of(), List.of(), List.of(), false, false);
                 clipped.dispose();
             }
-            g2.setColor(Palette.BORDER);
-            g2.drawRect(sx, sy, sw, sh);
+            // Рамка-габарит экрана вокруг сетки НЕ рисуется (пожелание: «только сами
+            // кабинеты») — у экранов с вырезами/треугольными кабинетами она изображала
+            // прямоугольник, которого физически нет.
             g2.setColor(Palette.TEXT);
             g2.setFont(screenNumberFont);
             String number = rows.get(i).number();

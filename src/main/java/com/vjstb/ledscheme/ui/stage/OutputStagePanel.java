@@ -18,10 +18,13 @@ import com.vjstb.ledscheme.service.SceneStats;
 import com.vjstb.ledscheme.service.ScreenLogic;
 import com.vjstb.ledscheme.service.ScreenStats;
 import com.vjstb.ledscheme.ui.ContextBar;
+import com.vjstb.ledscheme.ui.ExportProgressDialog;
+import com.vjstb.ledscheme.ui.ExportSettingsDialog;
 import com.vjstb.ledscheme.ui.OutputPaths;
 import com.vjstb.ledscheme.ui.PixelGridRenderer;
 import com.vjstb.ledscheme.ui.SceneCanvasPanel;
 import com.vjstb.ledscheme.ui.SchemaCanvasPanel;
+import com.vjstb.ledscheme.ui.SchemeImageWriter;
 import com.vjstb.ledscheme.ui.SchemeRenderer;
 import com.vjstb.ledscheme.ui.UiKit;
 import com.vjstb.ledscheme.ui.VehicleLoadSchemaImageWriter;
@@ -57,7 +60,7 @@ public class OutputStagePanel extends JPanel {
     private final AppModel model;
     private final com.vjstb.ledscheme.settings.SettingsManager settings;
     private final JTextField folderField = new JTextField();
-    private final JComboBox<Integer> dpiCombo = new JComboBox<>(new Integer[]{72, 150, 300});
+    private final JLabel exportOptionsSummary = new JLabel();
     private File chosenFolder;
 
     public OutputStagePanel(AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings) {
@@ -100,15 +103,19 @@ public class OutputStagePanel extends JPanel {
         body.add(UiKit.section("Папка вывода", folderRow));
 
         body.add(UiKit.vgap(10));
-        JPanel dpiRow = new JPanel(new BorderLayout(6, 0));
-        dpiCombo.setSelectedItem(settings.activeProfile().getDocExportDpi());
-        dpiCombo.setToolTipText("Плотность пикселей JPEG-схем (питание/сигнал экранов, блок-схема площадки,"
-                + " обзор сцены) — 72 (текущий стандарт для экрана) до 300 (стандарт для печати). НЕ влияет на"
-                + " PNG-маски — их размер жёстко привязан к реальному разрешению LED-панели.");
-        dpiCombo.addActionListener(e -> settings.setDocExportDpi((Integer) dpiCombo.getSelectedItem()));
-        dpiRow.add(new JLabel("Качество, DPI"), BorderLayout.WEST);
-        dpiRow.add(dpiCombo, BorderLayout.CENTER);
-        body.add(UiKit.section("Качество экспортируемых схем", dpiRow));
+        // Формат/DPI/сжатие — в отдельном окне «Параметры экспорта» (по запросу
+        // пользователя; раньше здесь был только выпадающий DPI). Тут — сводка.
+        JPanel optionsRow = new JPanel(new BorderLayout(6, 0));
+        JButton options = new JButton("Параметры экспорта…");
+        options.addActionListener(e -> {
+            if (ExportSettingsDialog.show(this, settings)) {
+                refreshExportOptionsSummary();
+            }
+        });
+        optionsRow.add(exportOptionsSummary, BorderLayout.CENTER);
+        optionsRow.add(options, BorderLayout.EAST);
+        refreshExportOptionsSummary();
+        body.add(UiKit.section("Параметры экспорта схем", optionsRow));
 
         body.add(UiKit.vgap(10));
         JButton generate = new JButton("Сформировать пакет документации проекта");
@@ -139,25 +146,70 @@ public class OutputStagePanel extends JPanel {
         return body;
     }
 
-    /** true, если в проекте (любой сцене) есть цепочка питания с превышением ёмкости
-     *  разъёма её кабинетов, ещё не подтверждённая кнопкой «Я знаю» (Task #81) —
-     *  блокирует «Сформировать пакет документации», пока инженер не разберётся. */
-    private boolean hasUnacknowledgedOverload(Project project) {
+    /** Цепочки проекта (любой сцены) с превышением ёмкости, ещё не подтверждённые
+     *  кнопкой «Я знаю» (Task #81) — по строке на цепочку («сцена · экран · что»);
+     *  пустой список — экспорт разрешён. Баг-репорт: раньше тут был просто boolean, и
+     *  диалог говорил лишь «проверьте цепочки, отмеченные ⚠» — а ⚠ в списке цепочек
+     *  остаётся и ПОСЛЕ «Я знаю», плюс цепочки другой сцены/экрана не видны, пока их
+     *  не выбрать. Пользователь «везде прожал», а экспорт всё равно стоял, и найти
+     *  виновника было нечем — теперь диалог называет его явно. */
+    private List<String> unacknowledgedOverloads(Project project) {
+        List<String> result = new java.util.ArrayList<>();
         for (Scene scene : project.getScenes()) {
             for (PowerChain chain : scene.getPowerChains()) {
-                if (model.powerChainLoadStatus(scene, chain).blocksExport()) {
-                    return true;
+                AppModel.ChainLoadStatus st = model.powerChainLoadStatus(scene, chain);
+                if (st.blocksExport()) {
+                    result.add(chainPlace(scene, chain.getCabinetInstanceIds()) + " · питание L" + chain.getPhase()
+                            + ", " + chain.getCabinetInstanceIds().size() + " каб. · "
+                            + UiKit.fmt(st.loadWatts()) + " Вт при допустимых " + UiKit.fmt(st.capacityWatts()) + " Вт");
                 }
             }
             // Сигнальная нагрузка на порт контроллера (Task v1.4) — тот же бэкенд, что и
             // для питания выше, просто раньше нигде не вызывался на пути экспорта.
-            for (com.vjstb.ledscheme.model.SignalChain chain : scene.getSignalChains()) {
-                if (model.signalChainLoadStatus(scene, chain).blocksExport()) {
-                    return true;
+            for (SignalChain chain : scene.getSignalChains()) {
+                AppModel.SignalChainLoadStatus st = model.signalChainLoadStatus(scene, chain);
+                if (st.blocksExport()) {
+                    result.add(chainPlace(scene, chain.getCabinetInstanceIds()) + " · сигнал, порт "
+                            + chain.getPortNumber() + (chain.isBackup() ? " (бэкап)" : "") + ", "
+                            + chain.getCabinetInstanceIds().size() + " каб. · "
+                            + UiKit.fmt(st.loadPixels()) + " px при допустимых " + UiKit.fmt(st.capacityPixels()) + " px");
                 }
             }
         }
-        return false;
+        return result;
+    }
+
+    /** «Сцена · Экран» для цепочки — экран первого её кабинета (там, где цепочку видно
+     *  в списке этапа «Питание»/«Сигнал»). */
+    private static String chainPlace(Scene scene, List<String> cabinetIds) {
+        String screenName = "?";
+        if (!cabinetIds.isEmpty()) {
+            for (Screen s : scene.getScreens()) {
+                if (s.cabinetById(cabinetIds.get(0)) != null) {
+                    screenName = s.getName();
+                    break;
+                }
+            }
+        }
+        return "«" + scene.getName() + "» · экран «" + screenName + "»";
+    }
+
+    private static String escapeHtml(String s) {
+        return s == null ? "" : s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
+    private void refreshExportOptionsSummary() {
+        var p = settings.activeProfile();
+        SchemeImageWriter.Format f = SchemeImageWriter.Format.fromId(p.getDocExportFormat());
+        exportOptionsSummary.setText("Формат: " + f.name() + " · " + p.getDocExportDpi() + " DPI"
+                + (f.lossy() ? " · сжатие " + p.getDocExportQuality() + "%" : ""));
+    }
+
+    /** Схема в выбранном формате: {@code dir/baseName.<ext>} (см. {@link SchemeImageWriter}). */
+    private void writeScheme(BufferedImage img, File dir, String baseName, int dpi) throws java.io.IOException {
+        var p = settings.activeProfile();
+        SchemeImageWriter.write(img, dir, baseName, SchemeImageWriter.Format.fromId(p.getDocExportFormat()),
+                dpi, p.getDocExportQuality());
     }
 
     private void chooseFolder() {
@@ -189,13 +241,25 @@ public class OutputStagePanel extends JPanel {
             JOptionPane.showMessageDialog(this, "Сначала выберите проект", "Нет проекта", JOptionPane.WARNING_MESSAGE);
             return null;
         }
-        if (settings.activeProfile().isLoadTrackingEnabled() && hasUnacknowledgedOverload(project)) {
+        List<String> overloads = settings.activeProfile().isLoadTrackingEnabled()
+                ? unacknowledgedOverloads(project) : List.of();
+        if (!overloads.isEmpty()) {
+            StringBuilder list = new StringBuilder();
+            int shown = Math.min(overloads.size(), 15);
+            for (int i = 0; i < shown; i++) {
+                list.append("<br>• ").append(escapeHtml(overloads.get(i)));
+            }
+            if (overloads.size() > shown) {
+                list.append("<br>… и ещё ").append(overloads.size() - shown);
+            }
             JOptionPane.showMessageDialog(this,
                     "<html>В проекте есть цепочки питания или сигнала с неподтверждённым превышением ёмкости"
-                            + " (разъёма кабинета — для питания, порта контроллера — для сигнала).<br>Откройте этап"
-                            + " «Питание»/«Сигнал» нужной сцены, проверьте цепочки, отмеченные ⚠, и подтвердите"
-                            + " кнопкой «Я знаю» (или измените коммутацию).<br>Экспорт остановлен, пока такие"
-                            + " цепочки есть.</html>",
+                            + " (разъёма кабинета — для питания, порта контроллера — для сигнала):"
+                            + list
+                            + "<br><br>Откройте этап «Питание»/«Сигнал» этой сцены, выберите указанный экран и"
+                            + " подтвердите цепочку кнопкой «Я знаю» (или измените коммутацию).<br>Экспорт"
+                            + " остановлен, пока такие цепочки есть. Проверку можно отключить в Предпочтениях"
+                            + " («Контроль электрической нагрузки»).</html>",
                     "Перегрузка цепочек", JOptionPane.WARNING_MESSAGE);
             return null;
         }
@@ -281,7 +345,7 @@ public class OutputStagePanel extends JPanel {
         }
         File folder = resolveFolder();
         // Качество JPEG-схем (питание/сигнал/блок-схема/обзор сцены), НЕ масок —
-        // см. dpiCombo/UserProfile#getDocExportDpi. 1.0 = 72dpi = прежнее поведение.
+        // см. ExportSettingsDialog/UserProfile#getDocExportDpi. 1.0 = 72dpi = прежнее поведение.
         int docExportDpi = settings.activeProfile().getDocExportDpi();
         double dpiScale = docExportDpi / 72.0;
         boolean kw = settings.activeProfile().isPowerUnitKw();
@@ -299,7 +363,17 @@ public class OutputStagePanel extends JPanel {
 
         int jpegCount = 0;
         int maskCount = 0;
+        ExportProgressDialog progress = null;
         try {
+            int total = 2; // отчёт + спецификация
+            for (Scene scene : project.getScenes()) {
+                int n = scene.getScreens().size();
+                total += n * 3 + (n > 1 ? 2 : 0) + SchemaMode.values().length + scene.getCanvases().size();
+                if (scene.getVehicleLoadPlan() != null) {
+                    total += scene.getVehicleLoadPlan().getSections().size();
+                }
+            }
+            progress = new ExportProgressDialog(this, "Формирование пакета документации", total);
             for (Scene scene : project.getScenes()) {
                 model.selectScene(scene);
 
@@ -328,20 +402,20 @@ public class OutputStagePanel extends JPanel {
 
                     List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers =
                             model.controllersInScene(scr);
+                    progress.step(scene.getName() + " · " + scr.getName() + " · схема питания");
                     BufferedImage powerImg = SchemeRenderer.renderImage(scr, type, true, 120, model.getWorkspace(),
                             scrPowerChains, scrSignalChains, sceneControllers, kw, dpiScale);
-                    SchemeRenderer.writeJpeg(powerImg,
-                            new File(powerFolder, OutputPaths.sanitize(scr.getName() + " Сила") + ".jpg"),
-                            docExportDpi);
+                    writeScheme(powerImg, powerFolder, OutputPaths.sanitize(scr.getName() + " Сила"), docExportDpi);
                     jpegCount++;
 
+                    progress.step(scene.getName() + " · " + scr.getName() + " · схема сигнала");
                     BufferedImage signalImg = SchemeRenderer.renderImage(scr, type, false, 120, model.getWorkspace(),
                             scrPowerChains, scrSignalChains, sceneControllers, kw, dpiScale);
-                    SchemeRenderer.writeJpeg(signalImg,
-                            new File(signalFolder, OutputPaths.sanitize(scr.getName() + " Сигнал") + ".jpg"),
+                    writeScheme(signalImg, signalFolder, OutputPaths.sanitize(scr.getName() + " Сигнал"),
                             docExportDpi);
                     jpegCount++;
 
+                    progress.step(scene.getName() + " · " + scr.getName() + " · маска");
                     BufferedImage maskImg = PixelGridRenderer.renderMask(scr, type, model.getWorkspace(),
                             PixelGridRenderer.GridRenderOptions.defaultForScreen(scr));
                     PixelGridRenderer.writePng(maskImg,
@@ -358,12 +432,12 @@ public class OutputStagePanel extends JPanel {
                 // не генерируем лишний файл.
                 if (scene.getScreens().size() > 1) {
                     for (boolean power : new boolean[]{true, false}) {
+                        progress.step(scene.getName() + " · все экраны сцены · " + (power ? "питание" : "сигнал"));
                         SceneCanvasPanel overview = new SceneCanvasPanel(model, settings);
                         overview.setDetailMode(true, power, false);
                         Dimension size = overview.getPreferredSize();
                         BufferedImage img = overview.renderImage(size.width, size.height, dpiScale);
-                        File target = new File(power ? powerFolder : signalFolder, "_Все экраны сцены.jpg");
-                        SchemeRenderer.writeJpeg(img, target, docExportDpi);
+                        writeScheme(img, power ? powerFolder : signalFolder, "_Все экраны сцены", docExportDpi);
                         jpegCount++;
                     }
                 }
@@ -383,17 +457,18 @@ public class OutputStagePanel extends JPanel {
                 boolean screensAsWiring = settings.activeProfile().isSchemaScreensAsWiringDiagram();
                 for (SchemaMode schemaMode : SchemaMode.values()) {
                     File modeFolder = schemaMode == SchemaMode.POWER ? powerFolder : signalFolder;
+                    progress.step(scene.getName() + " · общая схема "
+                            + (schemaMode == SchemaMode.POWER ? "питания" : "сигнала"));
                     SchemaCanvasPanel schemaCanvas = new SchemaCanvasPanel(model, schemaMode, settings);
                     Dimension size = schemaCanvas.getPreferredSize();
                     BufferedImage img = schemaCanvas.renderImage(size.width, size.height, screensAsWiring, dpiScale);
                     String modeSuffix = schemaMode == SchemaMode.POWER ? " Сила" : " Сигнал";
-                    SchemeRenderer.writeJpeg(img,
-                            new File(modeFolder, OutputPaths.sanitize(scene.getName() + modeSuffix) + ".jpg"),
-                            docExportDpi);
+                    writeScheme(img, modeFolder, OutputPaths.sanitize(scene.getName() + modeSuffix), docExportDpi);
                     jpegCount++;
                 }
 
                 for (ContentCanvas c : scene.getCanvases()) {
+                    progress.step(scene.getName() + " · маска канваса «" + c.getName() + "»");
                     BufferedImage img = PixelGridRenderer.renderCanvasMask(c, model, settings);
                     PixelGridRenderer.writePng(img,
                             new File(masksFolder, "Канвас_" + OutputPaths.sanitize(c.getName()) + "_"
@@ -413,6 +488,7 @@ public class OutputStagePanel extends JPanel {
                     int machineIndex = 0;
                     for (VehicleLoadSection section : loadPlan.getSections()) {
                         machineIndex++;
+                        progress.step(scene.getName() + " · схема загрузки машины " + machineIndex);
                         VehicleType vt = model.getWorkspace().vehicleTypeById(section.getVehicleTypeId());
                         if (vt == null || section.getPlacements().isEmpty()) {
                             continue; // машина удалена из библиотеки или пуста — рисовать нечего
@@ -432,25 +508,26 @@ public class OutputStagePanel extends JPanel {
                         transportFolder.mkdirs();
                         BufferedImage transportImg = VehicleLoadSchemaImageWriter.render(vt, resolved,
                                 "Машина " + machineIndex, dpiScale);
-                        SchemeRenderer.writeJpeg(transportImg,
-                                new File(transportFolder, OutputPaths.sanitize(scene.getName() + " Машина "
-                                        + machineIndex) + ".jpg"),
-                                docExportDpi);
+                        writeScheme(transportImg, transportFolder,
+                                OutputPaths.sanitize(scene.getName() + " Машина " + machineIndex), docExportDpi);
                         jpegCount++;
                     }
                 }
             }
 
+            progress.step("Отчёт по проекту");
             File reportFile = new File(folder, OutputPaths.sanitize(project.getName()) + "_отчёт.txt");
             Files.writeString(reportFile.toPath(), report, StandardCharsets.UTF_8);
 
+            progress.step("Спецификация оборудования");
             File specFile = new File(folder, OutputPaths.sanitize(project.getName()) + "_спецификация.xlsx");
             try (Workbook specWorkbook = buildEquipmentSpecWorkbook(project)) {
                 com.vjstb.ledscheme.service.SpecXlsxWriter.write(specWorkbook, specFile);
             }
 
+            progress.close();
             int answer = JOptionPane.showConfirmDialog(this,
-                    "Готово.\nJPEG-схем сохранено: " + jpegCount + "\nМасок сохранено: " + maskCount
+                    "Готово.\nСхем сохранено: " + jpegCount + "\nМасок сохранено: " + maskCount
                             + "\nОтчёт: " + reportFile.getName() + "\nСпецификация: " + specFile.getName()
                             + "\n\nОткрыть папку?",
                     "Пакет документации сформирован", JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE);
@@ -458,9 +535,15 @@ public class OutputStagePanel extends JPanel {
                 openFolder(folder);
             }
         } catch (Exception ex) {
+            if (progress != null) {
+                progress.close();
+            }
             JOptionPane.showMessageDialog(this, "Ошибка формирования пакета: " + ex.getMessage(), "Ошибка",
                     JOptionPane.ERROR_MESSAGE);
         } finally {
+            if (progress != null) {
+                progress.close();
+            }
             model.selectScene(origScene);
             model.selectScreen(origScreen);
         }
@@ -486,7 +569,14 @@ public class OutputStagePanel extends JPanel {
         Scene origScene = model.getCurrentScene();
         Screen origScreen = model.getCurrentScreen();
         int jpegCount = 0;
+        ExportProgressDialog progress = null;
         try {
+            int total = 0;
+            for (Scene scene : project.getScenes()) {
+                int n = scene.getScreens().size();
+                total += n + (n > 1 ? 1 : 0) + 1;
+            }
+            progress = new ExportProgressDialog(this, "Экспорт схем этапа «" + modeFolderName + "»", total);
             for (Scene scene : project.getScenes()) {
                 model.selectScene(scene);
 
@@ -500,45 +590,51 @@ public class OutputStagePanel extends JPanel {
                     List<SignalChain> scrSignalChains = model.signalChainsTouchingScreen(scr);
                     List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers =
                             model.controllersInScene(scr);
+                    progress.step(scene.getName() + " · " + scr.getName());
                     BufferedImage img = SchemeRenderer.renderImage(scr, type, power, 120, model.getWorkspace(),
                             scrPowerChains, scrSignalChains, sceneControllers, kw, dpiScale);
-                    SchemeRenderer.writeJpeg(img,
-                            new File(modeFolder, OutputPaths.sanitize(scr.getName() + modeSuffix) + ".jpg"),
-                            docExportDpi);
+                    writeScheme(img, modeFolder, OutputPaths.sanitize(scr.getName() + modeSuffix), docExportDpi);
                     jpegCount++;
                 }
 
                 if (scene.getScreens().size() > 1) {
+                    progress.step(scene.getName() + " · все экраны сцены");
                     SceneCanvasPanel overview = new SceneCanvasPanel(model, settings);
                     overview.setDetailMode(true, power, false);
                     Dimension size = overview.getPreferredSize();
                     BufferedImage img = overview.renderImage(size.width, size.height, dpiScale);
-                    SchemeRenderer.writeJpeg(img, new File(modeFolder, "_Все экраны сцены.jpg"), docExportDpi);
+                    writeScheme(img, modeFolder, "_Все экраны сцены", docExportDpi);
                     jpegCount++;
                 }
 
                 boolean screensAsWiring = settings.activeProfile().isSchemaScreensAsWiringDiagram();
                 SchemaMode schemaMode = power ? SchemaMode.POWER : SchemaMode.SIGNAL;
+                progress.step(scene.getName() + " · общая схема");
                 SchemaCanvasPanel schemaCanvas = new SchemaCanvasPanel(model, schemaMode, settings);
                 Dimension size = schemaCanvas.getPreferredSize();
                 BufferedImage img = schemaCanvas.renderImage(size.width, size.height, screensAsWiring, dpiScale);
-                SchemeRenderer.writeJpeg(img,
-                        new File(modeFolder, OutputPaths.sanitize(scene.getName() + modeSuffix) + ".jpg"),
-                        docExportDpi);
+                writeScheme(img, modeFolder, OutputPaths.sanitize(scene.getName() + modeSuffix), docExportDpi);
                 jpegCount++;
             }
 
+            progress.close();
             int answer = JOptionPane.showConfirmDialog(this,
-                    "Готово.\nJPEG-схем сохранено: " + jpegCount + "\n\nОткрыть папку?",
+                    "Готово.\nСхем сохранено: " + jpegCount + "\n\nОткрыть папку?",
                     "Схемы этапа «" + modeFolderName + "» сохранены", JOptionPane.YES_NO_OPTION,
                     JOptionPane.INFORMATION_MESSAGE);
             if (answer == JOptionPane.YES_OPTION) {
                 openFolder(folder);
             }
         } catch (Exception ex) {
+            if (progress != null) {
+                progress.close();
+            }
             JOptionPane.showMessageDialog(this, "Ошибка экспорта схем: " + ex.getMessage(), "Ошибка",
                     JOptionPane.ERROR_MESSAGE);
         } finally {
+            if (progress != null) {
+                progress.close();
+            }
             model.selectScene(origScene);
             model.selectScreen(origScreen);
         }
@@ -645,15 +741,23 @@ public class OutputStagePanel extends JPanel {
         String powerUnit = xlsxKw ? "кВт" : "Вт";
         Sheet cabinetsSheet = com.vjstb.ledscheme.service.SpecXlsxWriter.addSheet(wb, "Кабинеты",
                 "Тип", "Кол-во, шт", "Мощность, " + powerUnit + "/шт", "Мощность всего, " + powerUnit,
-                "Вес, кг/шт", "Вес всего, кг");
+                "Вес, кг/шт", "Вес всего, кг",
+                "Линий питания, шт/кабинет", "Линий питания всего", "Линий сигнала, шт/кабинет", "Линий сигнала всего");
         for (var entry : cabinets.entrySet()) {
             CabinetType t = entry.getKey();
             int qty = entry.getValue();
+            // Линии питания/сигнала на кабинет (CabinetType#powerConnectorsNeeded/
+            // signalConnectorsNeeded, 0 = встроено/сквозная коммутация) — раньше в
+            // спецификацию не попадали вообще, хотя это параметр каждого типа кабинета
+            // (баг-репорт 2026-09-25, проект «Бармицва»: все кабинеты Dicolor с 1 линией
+            // питания и 1 линией сигнала, а в спецификации про линки ни слова).
             com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(cabinetsSheet, t.getName(), qty,
                     t.getPowerConsumptionW() * powerScale, t.getPowerConsumptionW() * qty * powerScale,
-                    t.getWeightKg(), t.getWeightKg() * qty);
+                    t.getWeightKg(), t.getWeightKg() * qty,
+                    t.getPowerConnectorsNeeded(), t.getPowerConnectorsNeeded() * qty,
+                    t.getSignalConnectorsNeeded(), t.getSignalConnectorsNeeded() * qty);
         }
-        com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(cabinetsSheet, 6);
+        com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(cabinetsSheet, 10);
 
         // Оборудование общей схемы (щиты/дистрибьюторы/конвертеры/медиасерверы/
         // контроллеры/прочее) — узлы-экраны не считаются: это ссылка на уже
@@ -796,6 +900,20 @@ public class OutputStagePanel extends JPanel {
         for (var entry : cabinets.entrySet()) {
             com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Кабинеты", entry.getKey().getName(),
                     entry.getValue(), "шт");
+        }
+        // Линки кабинетов (число отдельных линий питания/сигнала, которые нужно развести
+        // на каждый тип кабинета) — по строке на тип, где они заданы (0 = встроено, не
+        // считаем); см. лист «Кабинеты».
+        for (var entry : cabinets.entrySet()) {
+            CabinetType t = entry.getKey();
+            if (t.getPowerConnectorsNeeded() > 0) {
+                com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Линки",
+                        "Линии питания: " + t.getName(), t.getPowerConnectorsNeeded() * entry.getValue(), "шт");
+            }
+            if (t.getSignalConnectorsNeeded() > 0) {
+                com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Линки",
+                        "Линии сигнала: " + t.getName(), t.getSignalConnectorsNeeded() * entry.getValue(), "шт");
+            }
         }
         for (var entry : equipmentNodes.entrySet()) {
             List<String> key = entry.getKey();

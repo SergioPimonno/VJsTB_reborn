@@ -2,7 +2,7 @@ package com.vjstb.ledscheme;
 
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.ContentCanvas;
-import com.vjstb.ledscheme.model.ControllerType;
+import com.vjstb.ledscheme.model.EquipmentPreset;
 import com.vjstb.ledscheme.model.Network;
 import com.vjstb.ledscheme.model.NetworkAttachment;
 import com.vjstb.ledscheme.model.NetworkDeviceCategory;
@@ -166,13 +166,8 @@ class ScenarioShotSpike {
         ct.setWeightKg(7.5);
         model.addCabinetType(ct);
 
-        ControllerType conType = new ControllerType();
-        conType.setName("Novastar MCTRL4K");
-        conType.setVendor("Novastar");
-        conType.setPortCount(16);
-        conType.setPortBandwidthMbps(3900);
-        conType.setInputPortCount(2);
-        model.addControllerType(conType);
+        EquipmentPreset conType = model.addControllerPreset("Novastar MCTRL4K", "Novastar", 16, 3900, 2, false,
+                List.of());
 
         model.selectProject(model.addProject("Демо-тур"));
         model.selectScene(model.addScene("Главная сцена"));
@@ -193,7 +188,7 @@ class ScenarioShotSpike {
         safe(() -> model.addPowerChain(2, List.of(cab.get(8), cab.get(9), cab.get(10))));
         safe(() -> model.addPowerChain(3, List.of(cab.get(16), cab.get(17), cab.get(18), cab.get(19))));
 
-        safe(() -> model.addControllerToScreen(model.getCurrentScreen(), conType.getId()));
+        safe(() -> model.addControllerToScreen(model.getCurrentScreen(), conType.getId(), null));
         safe(() -> model.addSignalChain(1, false, List.of(cab.get(0), cab.get(1), cab.get(2), cab.get(3), cab.get(4))));
         safe(() -> model.addSignalChain(2, false, List.of(cab.get(5), cab.get(6), cab.get(7), cab.get(8), cab.get(9))));
         safe(() -> model.addSignalChain(3, false, List.of(cab.get(10), cab.get(11), cab.get(12))));

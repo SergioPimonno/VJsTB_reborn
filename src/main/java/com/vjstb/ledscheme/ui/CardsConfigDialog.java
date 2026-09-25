@@ -1,7 +1,6 @@
 package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.model.CardPort;
-import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.InterfaceRole;
 import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.SchemaCard;
@@ -97,38 +96,6 @@ public class CardsConfigDialog extends JDialog {
             @Override
             public SchemaNodeType nodeTypeOrNull() {
                 return node.getType();
-            }
-        };
-    }
-
-    public static CardsHost forController(AppModel model, ControllerType controllerType) {
-        return new CardsHost() {
-            @Override
-            public List<SchemaCard> getCards() {
-                return controllerType.getCards();
-            }
-
-            @Override
-            public void addCard(String name, List<CardPort> ports) {
-                model.addCardToController(controllerType, name, ports);
-            }
-
-            @Override
-            public void updateCard(String cardId, String name, List<CardPort> ports) {
-                model.updateCardOnController(controllerType, cardId, name, ports);
-            }
-
-            @Override
-            public void removeCard(String cardId) {
-                model.removeCardFromController(controllerType, cardId);
-            }
-
-            @Override
-            public SchemaNodeType nodeTypeOrNull() {
-                // Библиотека контроллеров (SmartLCT-аналог) существует только для
-                // узлов-контроллеров — в отличие от пресетов, у ControllerType нет
-                // отдельного поля категории.
-                return SchemaNodeType.CONTROLLER;
             }
         };
     }

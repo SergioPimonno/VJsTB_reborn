@@ -140,6 +140,18 @@ public class MainMenuBar extends JMenuBar {
         localArchive.addActionListener(e -> LocalArchiveDialog.show(owner, model, settings));
         menu.add(localArchive);
 
+        // Обычно запускается один раз автоматически при старте (App.main), если
+        // ещё осталось что переносить — пункт меню тут ТОЛЬКО на случай, если
+        // пользователь нажал "Не сейчас" и хочет вернуться к переносу вручную,
+        // не перезапуская приложение (см. class-javadoc ControllerLibraryMigrationDialog).
+        JMenuItem controllerMigration = new JMenuItem("Перенос библиотеки контроллеров…");
+        controllerMigration.addActionListener(e -> {
+            if (new com.vjstb.ledscheme.ui.ControllerLibraryMigrationDialog(owner, model).showDialog()) {
+                settings.setControllerLibraryMigrated(true);
+            }
+        });
+        menu.add(controllerMigration);
+
         return menu;
     }
 

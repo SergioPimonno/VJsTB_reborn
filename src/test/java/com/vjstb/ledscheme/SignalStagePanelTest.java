@@ -5,7 +5,7 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
-import com.vjstb.ledscheme.model.ControllerType;
+import com.vjstb.ledscheme.model.EquipmentPreset;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SignalChain;
 import com.vjstb.ledscheme.service.AppModel;
@@ -16,6 +16,7 @@ import com.vjstb.ledscheme.ui.stage.SignalStagePanel;
 import java.awt.GraphicsEnvironment;
 import java.io.File;
 import java.nio.file.Path;
+import java.util.List;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -40,16 +41,13 @@ class SignalStagePanelTest {
             ct.setName("T 500x500");
             model.addCabinetType(ct);
 
-            ControllerType controllerType = new ControllerType();
-            controllerType.setName("VX1000");
-            controllerType.setPortCount(4);
-            model.addControllerType(controllerType);
+            EquipmentPreset controllerType = model.addControllerPreset("VX1000", "", 4, 1000, 0, false, List.of());
 
             model.selectProject(model.addProject("P"));
             model.selectScene(model.addScene("S"));
             Screen scr = model.addScreen("E", ct.getId(), 2, 2, 0, 0);
             model.selectScreen(scr);
-            model.addControllerToScreen(scr, controllerType.getId());
+            model.addControllerToScreen(scr, controllerType.getId(), null);
 
             SettingsManager settings = new SettingsManager(new SettingsStore(new File(dir.toFile(), "settings.json")));
             SignalStagePanel panel = new SignalStagePanel(model, settings);

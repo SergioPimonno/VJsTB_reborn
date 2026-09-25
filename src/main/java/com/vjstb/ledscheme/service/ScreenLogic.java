@@ -3,7 +3,6 @@ package com.vjstb.ledscheme.service;
 import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.ControllerInstance;
-import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.PowerChain;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.SchemaCard;
@@ -15,6 +14,7 @@ import com.vjstb.ledscheme.model.StructurePeremychkaCell;
 import com.vjstb.ledscheme.model.Workspace;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -94,6 +94,13 @@ public final class ScreenLogic {
      *  выбор писать которую нужно делать ДО генерации байтов, а не пытаться
      *  впихнуть неровную форму в простой формат.
      *
+     *  <p><b>Непрямоугольные типы с галочкой «прописывать как стандартный
+     *  кабинет»</b> ({@link CabinetType#isExportAsStandardCabinet}) считаются
+     *  обычными прямоугольными кабинетами того же пиксельного размера — см.
+     *  {@link #exportsAsSameStandardCabinet}: экран, где нет непрямоугольных
+     *  кабинетов «без галочки» (и нет смещений/разных разрешений), остаётся
+     *  Standard.
+     *
      *  <p><b>Скрытые ("вырезанные") ячейки НЕ форсируют Complex (2026-08-19,
      *  третий заход — см. ПОЛНУЮ историю в {@code NOVALCT_EXPORT.md})</b>. Коротко:
      *  первая попытка (тот же день) сделала ровно это же изменение БЕЗ изменения
@@ -113,6 +120,21 @@ public final class ScreenLogic {
      *  первую попытку (просто снять гейт здесь) без проверки, что blank-запись
      *  в {@code NovaLctScrWriter} тоже на месте — они правятся ТОЛЬКО ВМЕСТЕ. */
     public static boolean isUniformRectangularGrid(Screen s, CabinetType defaultType, Workspace workspace) {
+        return isUniformRectangularGrid(s, defaultType, workspace, null);
+    }
+
+    /** То же, но с учётом того, что Standard Screen хранит размер кабинета НА ПОРТ, а
+     *  не на экран (подтверждено реальным образцом NovaLCT: порт 1 — 2×2 кабинета
+     *  128×128, порт 2 — 2×2 кабинета 128×64 — в одном Standard-экране, см.
+     *  {@code NOVALCT_EXPORT.md}). {@code portKeyByCabinetId} — id кабинета → ключ порта
+     *  (карта+порт); кабинеты разных портов могут иметь разное разрешение, а на одном
+     *  порту оно обязано совпадать, иначе экран — Complex. {@code null} — порты
+     *  неизвестны/не поддержаны писателем этого пути (мультиэкранные Combine/Separate
+     *  пишут один размер на блок): прежняя строгая проверка «одно разрешение на экран». */
+    public static boolean isUniformRectangularGrid(Screen s, CabinetType defaultType, Workspace workspace,
+                                                    java.util.Map<String, String> portKeyByCabinetId) {
+        boolean perPort = portKeyByCabinetId != null;
+        java.util.Map<String, int[]> sizeByPort = new java.util.HashMap<>();
         for (CabinetInstance cab : s.getCabinets()) {
             if (cab.isHidden()) {
                 continue;
@@ -121,11 +143,122 @@ public final class ScreenLogic {
                 return false;
             }
             CabinetType eff = effectiveType(cab, defaultType, workspace);
-            if (eff != null && defaultType != null && !eff.getId().equals(defaultType.getId())) {
+            if (eff != null && defaultType != null && !eff.getId().equals(defaultType.getId())
+                    && !exportsAsSameStandardCabinet(eff, defaultType, perPort)) {
                 return false;
+            }
+            String port = perPort ? portKeyByCabinetId.get(cab.getId()) : null;
+            if (port != null) {
+                CabinetType t = eff != null ? eff : defaultType;
+                if (t != null) {
+                    int[] size = {t.getResolutionWidth(), t.getResolutionHeight()};
+                    int[] known = sizeByPort.putIfAbsent(port, size);
+                    if (known != null && (known[0] != size[0] || known[1] != size[1])) {
+                        return false;
+                    }
+                }
             }
         }
         return s.getCabinets().size() == s.getRows() * s.getCols();
+    }
+
+    /** Два РАЗНЫХ типа кабинета в NovaLCT-экспорте неотличимы — оба пишутся как
+     *  обычный прямоугольный кабинет одного и того же пиксельного размера, поэтому
+     *  их смесь не вынуждает экран уходить в Complex Screen. Условия: хотя бы у
+     *  одного из типов включено «прописывать как стандартный кабинет»
+     *  ({@link CabinetType#isExportAsStandardCabinet}), каждый из двух либо
+     *  прямоугольный, либо с этой галочкой (непрямоугольный БЕЗ галочки — прежний
+     *  путь через Complex), и разрешение (px) совпадает — Standard хранит один
+     *  cabW×cabH на весь экран. */
+    static boolean exportsAsSameStandardCabinet(CabinetType a, CabinetType b) {
+        return exportsAsSameStandardCabinet(a, b, false);
+    }
+
+    /** {@code ignoreResolution} — размер сверяется отдельно, по портам (см.
+     *  {@link #isUniformRectangularGrid(Screen, CabinetType, Workspace, java.util.Map)}). */
+    static boolean exportsAsSameStandardCabinet(CabinetType a, CabinetType b, boolean ignoreResolution) {
+        if (!a.isExportAsStandardCabinet() && !b.isExportAsStandardCabinet()) {
+            return false;
+        }
+        return isWritableAsStandard(a) && isWritableAsStandard(b)
+                && (ignoreResolution
+                || (a.getResolutionWidth() == b.getResolutionWidth()
+                && a.getResolutionHeight() == b.getResolutionHeight()));
+    }
+
+    /** Список названий типов, из-за которых экран ушёл бы в Complex ТОЛЬКО потому, что
+     *  кабинеты с галочкой «прописывать как стандартный» ({@link
+     *  CabinetType#isExportAsStandardCabinet}) отличаются по разрешению (px) от типа
+     *  экрана по умолчанию — Standard хранит один размер на порт, а не на кабинет,
+     *  так что такой экран пишется как Complex (см. {@code NOVALCT_EXPORT.md}).
+     *  Пустой список — предупреждать не о чем (в т.ч. если Complex вызван чем-то
+     *  другим: смещением, непрямоугольным типом без галочки и т.п. — это прежнее,
+     *  ожидаемое поведение). */
+    public static java.util.List<String> standardSizeMismatchTypeNames(Screen s, CabinetType defaultType,
+                                                                        Workspace workspace) {
+        return standardSizeMismatchTypeNames(s, defaultType, workspace, null);
+    }
+
+    /** С {@code portKeyByCabinetId} (см. {@link #isUniformRectangularGrid(Screen,
+     *  CabinetType, Workspace, java.util.Map)}) виноваты только типы, чьи кабинеты с
+     *  РАЗНЫМ разрешением попали на ОДИН порт; без карты — любые типы с галочкой, чьё
+     *  разрешение отличается от типа экрана. */
+    public static java.util.List<String> standardSizeMismatchTypeNames(Screen s, CabinetType defaultType,
+                                                                        Workspace workspace,
+                                                                        java.util.Map<String, String> portKeyByCabinetId) {
+        java.util.List<String> names = new ArrayList<>();
+        if (defaultType == null) {
+            return names;
+        }
+        if (portKeyByCabinetId == null) {
+            for (CabinetInstance cab : s.getCabinets()) {
+                if (cab.isHidden()) {
+                    continue;
+                }
+                CabinetType eff = effectiveType(cab, defaultType, workspace);
+                if (eff == null || eff.getId().equals(defaultType.getId()) || names.contains(eff.getName())) {
+                    continue;
+                }
+                boolean flagged = eff.isExportAsStandardCabinet() || defaultType.isExportAsStandardCabinet();
+                if (flagged && isWritableAsStandard(eff) && isWritableAsStandard(defaultType)
+                        && (eff.getResolutionWidth() != defaultType.getResolutionWidth()
+                        || eff.getResolutionHeight() != defaultType.getResolutionHeight())) {
+                    names.add(eff.getName());
+                }
+            }
+            return names;
+        }
+        java.util.Map<String, java.util.List<CabinetType>> typesByPort = new java.util.LinkedHashMap<>();
+        for (CabinetInstance cab : s.getCabinets()) {
+            String port = cab.isHidden() ? null : portKeyByCabinetId.get(cab.getId());
+            CabinetType eff = effectiveType(cab, defaultType, workspace);
+            if (port != null && eff != null) {
+                typesByPort.computeIfAbsent(port, k -> new ArrayList<>()).add(eff);
+            }
+        }
+        for (java.util.List<CabinetType> types : typesByPort.values()) {
+            CabinetType first = types.get(0);
+            boolean mixed = false;
+            for (CabinetType t : types) {
+                if (t.getResolutionWidth() != first.getResolutionWidth()
+                        || t.getResolutionHeight() != first.getResolutionHeight()) {
+                    mixed = true;
+                }
+            }
+            if (!mixed) {
+                continue;
+            }
+            for (CabinetType t : types) {
+                if ((t.isExportAsStandardCabinet() || !t.isNonRectangular()) && !names.contains(t.getName())) {
+                    names.add(t.getName());
+                }
+            }
+        }
+        return names;
+    }
+
+    private static boolean isWritableAsStandard(CabinetType t) {
+        return !t.isNonRectangular() || t.isExportAsStandardCabinet();
     }
 
     /** Эффективный размер ячейки (px) для конкретного кабинета — если у него
@@ -425,15 +558,14 @@ public final class ScreenLogic {
         }
         int offset = 0;
         for (ControllerInstance ci : scr.getControllers()) {
-            ControllerType t = workspace.controllerTypeById(ci.getControllerTypeId());
-            int count = t != null ? t.effectivePortCount() : 0;
+            int count = ci.effectivePortCount();
             if (globalPort > offset && globalPort <= offset + count) {
                 int local = globalPort - offset;
-                if (t == null || t.getCards().isEmpty()) {
+                if (ci.getCards().isEmpty()) {
                     return new int[]{0, local - 1};
                 }
                 int cardIdx = 0;
-                for (SchemaCard c : t.getCards()) {
+                for (SchemaCard c : ci.getCards()) {
                     int cardOutputs = c.totalOutputs();
                     if (local <= cardOutputs) {
                         return new int[]{cardIdx, local - 1};
@@ -470,6 +602,152 @@ public final class ScreenLogic {
      *  общей площади наложением не считается), обычный AABB-тест. */
     public static boolean rectsOverlap(double[] a, double[] b) {
         return a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3];
+    }
+
+    /** Допуск геометрии наложения (мм): касание встык/привязка с округлением наложением
+     *  не считается. */
+    private static final double OVERLAP_EPS_MM = 0.5;
+    /** Минимальная площадь пересечения ФОРМ (мм²), чтобы считать наложение реальным —
+     *  отсекает «занозы» вдоль общей гипотенузы двух комплементарных треугольников. */
+    private static final double OVERLAP_MIN_AREA_MM2 = 100;
+
+    /** Id кабинетов экрана, ПОД которыми (в порядке отрисовки) или на месте которых
+     *  наползает другой видимый кабинет — их холст подсвечивает красным (см. {@code
+     *  SchemeRenderer#paintOverlapWarnings}). Раньше такие кабинеты автоматически
+     *  скрывались (баг-репорт: «чаще всего это происходит случайно и сильно бесит»).
+     *  <p>Наложение считается по РЕАЛЬНЫМ формам (треугольник/эллипс/прямоугольник по
+     *  фактическому размеру и углу ячейки, не по габаритному прямоугольнику): два
+     *  комплементарных треугольника, сложенные в прямоугольник, — штатная раскладка, а
+     *  не наложение (баг-репорт). Касание встык и слив в пределах {@value
+     *  #OVERLAP_EPS_MM} мм тоже не считаются.
+     *  <p>Кто «пострадавший» в паре: тот, что целиком лежит в границах своей
+     *  номинальной ячейки ({@link #isWithinOwnCell}) — то есть стоит на своём месте, а
+     *  наползает на него вытащенный/увеличенный сосед. Если ОБА выползли за свои ячейки
+     *  (типично для плотных ручных раскладок с переопределёнными типами) — пострадавшим
+     *  считается тот, что лежит ниже (раньше в списке ячеек экрана = раньше рисуется).
+     *  Скрытые кабинеты не участвуют. Перебираются только пары, где хотя бы один
+     *  «выползший» — их обычно единицы на сотни ячеек. */
+    public static Set<String> overlappedCabinetIds(Screen scr, CabinetType defaultType, Workspace workspace) {
+        Set<String> result = new LinkedHashSet<>();
+        if (scr == null || defaultType == null) {
+            return result;
+        }
+        List<CabinetInstance> cabs = new ArrayList<>();
+        for (CabinetInstance c : scr.getCabinets()) {
+            if (!c.isHidden()) {
+                cabs.add(c);
+            }
+        }
+        int n = cabs.size();
+        double[][] rects = new double[n][];
+        boolean[] displaced = new boolean[n];
+        for (int i = 0; i < n; i++) {
+            rects[i] = cabinetRectMm(cabs.get(i), defaultType, workspace);
+            displaced[i] = !isWithinOwnCell(cabs.get(i), rects[i], defaultType);
+        }
+        for (int i = 0; i < n; i++) {
+            if (!displaced[i]) {
+                continue;
+            }
+            for (int j = 0; j < n; j++) {
+                if (j == i || (displaced[j] && j < i)) {
+                    continue; // пара двух выползших разбирается один раз, с меньшим индексом
+                }
+                if (!boundsOverlapMm(rects[i], rects[j])
+                        || !shapesOverlapMm(cabs.get(i), rects[i], cabs.get(j), rects[j], defaultType, workspace)) {
+                    continue;
+                }
+                // j не выползший — пострадавший он; оба выползли — i (лежит ниже, j > i)
+                result.add(cabs.get(displaced[j] ? i : j).getId());
+            }
+        }
+        return result;
+    }
+
+    /** Габаритный прямоугольник кабинета целиком внутри его номинальной ячейки сетки
+     *  (с допуском {@value #OVERLAP_EPS_MM} мм). */
+    private static boolean isWithinOwnCell(CabinetInstance cab, double[] rect, CabinetType defaultType) {
+        double cx = cab.getColIndex() * defaultType.getWidthMm();
+        double cy = cab.getRowIndex() * defaultType.getHeightMm();
+        return rect[0] >= cx - OVERLAP_EPS_MM && rect[1] >= cy - OVERLAP_EPS_MM
+                && rect[0] + rect[2] <= cx + defaultType.getWidthMm() + OVERLAP_EPS_MM
+                && rect[1] + rect[3] <= cy + defaultType.getHeightMm() + OVERLAP_EPS_MM;
+    }
+
+    /** Быстрая отбраковка по габаритам: пересечение шире допуска по обеим осям. */
+    private static boolean boundsOverlapMm(double[] a, double[] b) {
+        double ox = Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0]);
+        double oy = Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]);
+        return ox > OVERLAP_EPS_MM && oy > OVERLAP_EPS_MM;
+    }
+
+    private static boolean shapesOverlapMm(CabinetInstance a, double[] ra, CabinetInstance b, double[] rb,
+                                           CabinetType defaultType, Workspace workspace) {
+        java.awt.Shape sa = shapeMm(a, ra, defaultType, workspace);
+        java.awt.Shape sb = shapeMm(b, rb, defaultType, workspace);
+        if (sa instanceof java.awt.geom.Rectangle2D && sb instanceof java.awt.geom.Rectangle2D) {
+            return true; // оба прямоугольные — габариты уже пересеклись шире допуска
+        }
+        java.awt.geom.Area inter = new java.awt.geom.Area(sa);
+        inter.intersect(new java.awt.geom.Area(sb));
+        return !inter.isEmpty() && areaMm2(inter) > OVERLAP_MIN_AREA_MM2;
+    }
+
+    /** Реальная форма ячейки в мм (координаты экрана) — те же правила выбора формы/угла
+     *  и те же вершины треугольника (прямой угол в углу ячейки по четвертям), что у
+     *  {@code SchemeRenderer#trianglePolygon}; CORNER рисуется прямоугольником. */
+    private static java.awt.Shape shapeMm(CabinetInstance cab, double[] r, CabinetType defaultType,
+                                          Workspace workspace) {
+        CabinetType eff = effectiveType(cab, defaultType, workspace);
+        com.vjstb.ledscheme.model.CabinetShape shape = cab.getShapeOverride() != null ? cab.getShapeOverride()
+                : (eff != null ? eff.getShape() : null);
+        double rotation = cab.getRotationOverride() != null ? cab.getRotationOverride()
+                : (eff != null ? eff.getRotationDeg() : 0);
+        double x = r[0], y = r[1], w = r[2], h = r[3];
+        if (shape == com.vjstb.ledscheme.model.CabinetShape.TRIANGLE) {
+            double[][] pts = switch ((int) Math.floorMod(Math.round(rotation / 90.0), 4L)) {
+                case 1 -> new double[][]{{x, y + h}, {x + w, y}, {x, y}};
+                case 2 -> new double[][]{{x, y}, {x + w, y}, {x + w, y + h}};
+                case 3 -> new double[][]{{x + w, y}, {x, y + h}, {x + w, y + h}};
+                default -> new double[][]{{x, y}, {x + w, y + h}, {x, y + h}};
+            };
+            java.awt.geom.Path2D.Double path = new java.awt.geom.Path2D.Double();
+            path.moveTo(pts[0][0], pts[0][1]);
+            path.lineTo(pts[1][0], pts[1][1]);
+            path.lineTo(pts[2][0], pts[2][1]);
+            path.closePath();
+            return path;
+        }
+        if (shape == com.vjstb.ledscheme.model.CabinetShape.ROUND) {
+            return new java.awt.geom.Ellipse2D.Double(x, y, w, h);
+        }
+        return new java.awt.geom.Rectangle2D.Double(x, y, w, h);
+    }
+
+    /** Площадь области (формула Гаусса по выпрямленному контуру пересечения). */
+    private static double areaMm2(java.awt.geom.Area area) {
+        double sum = 0;
+        double[] c = new double[6];
+        double sx = 0, sy = 0, px = 0, py = 0;
+        java.awt.geom.PathIterator it = new java.awt.geom.FlatteningPathIterator(
+                area.getPathIterator(null), 0.1);
+        while (!it.isDone()) {
+            int seg = it.currentSegment(c);
+            if (seg == java.awt.geom.PathIterator.SEG_MOVETO) {
+                sx = px = c[0];
+                sy = py = c[1];
+            } else if (seg == java.awt.geom.PathIterator.SEG_LINETO) {
+                sum += px * c[1] - c[0] * py;
+                px = c[0];
+                py = c[1];
+            } else if (seg == java.awt.geom.PathIterator.SEG_CLOSE) {
+                sum += px * sy - sx * py;
+                px = sx;
+                py = sy;
+            }
+            it.next();
+        }
+        return Math.abs(sum) / 2;
     }
 
     private static CabinetInstance findAt(List<CabinetInstance> list, int row, int col) {

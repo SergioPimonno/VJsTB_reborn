@@ -151,6 +151,55 @@ class SchemeRendererScreensOverviewImageTest {
     }
 
     @Test
+    void noBoundingFrameIsDrawnAroundAScreen(@TempDir Path dir) {
+        // Пожелание: в экспорте экранов рисуются только кабинеты, без прямоугольной
+        // рамки-габарита. Треугольный кабинет 1×1 (прямой угол слева снизу) — верхний
+        // правый угол его габарита пуст, и без рамки верхняя строка картинки экрана
+        // содержит пиксели только у левого края (вершина и номер), а не во всю ширину.
+        AppModel model = model(dir);
+        CabinetType t = model.addCabinetType(type("P3 500x500", 500, 500, 128, 128, 12));
+        Screen s = model.addScreen("Экран 1", t.getId(), 1, 1, 0, 0);
+        s.getCabinets().get(0).setShapeOverride(com.vjstb.ledscheme.model.CabinetShape.TRIANGLE);
+        s.getCabinets().get(0).setRotationOverride(0);
+
+        BufferedImage img = SchemeRenderer.renderScreensOverviewImage("Зал", model, List.of(s), 1.0);
+        int bg = com.vjstb.ledscheme.ui.Palette.BG.getRGB();
+
+        // Полосы непустых строк сверху вниз: 0-я — заголовок, 1-я — картинка экрана.
+        java.util.List<int[]> bands = new java.util.ArrayList<>();
+        int start = -1;
+        for (int y = 0; y < img.getHeight(); y++) {
+            boolean blank = true;
+            for (int x = 0; x < img.getWidth() && blank; x++) {
+                blank = img.getRGB(x, y) == bg;
+            }
+            if (!blank && start < 0) {
+                start = y;
+            } else if (blank && start >= 0) {
+                bands.add(new int[]{start, y - 1});
+                start = -1;
+            }
+        }
+        int[] plan = bands.get(1);
+        int minX = Integer.MAX_VALUE;
+        int maxX = -1;
+        int topRowMaxX = -1;
+        for (int y = plan[0]; y <= plan[1]; y++) {
+            for (int x = 0; x < img.getWidth(); x++) {
+                if (img.getRGB(x, y) != bg) {
+                    minX = Math.min(minX, x);
+                    maxX = Math.max(maxX, x);
+                    if (y == plan[0]) {
+                        topRowMaxX = Math.max(topRowMaxX, x);
+                    }
+                }
+            }
+        }
+        assertTrue(topRowMaxX < minX + (maxX - minX) / 2,
+                "верхняя строка не должна тянуться через всю ширину — значит, рамка экрана не рисуется");
+    }
+
+    @Test
     void screenWithATypeOverrideOnOneCabinetRendersWithoutCrashing(@TempDir Path dir) {
         // Вид "кабинеты по отдельности" теперь реально рисует paintScheme — эта
         // проверка ловит регресс, если кто-то в будущем вернёт отрисовку плоскими

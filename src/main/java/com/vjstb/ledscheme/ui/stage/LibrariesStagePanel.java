@@ -3,7 +3,6 @@ package com.vjstb.ledscheme.ui.stage;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.CableLengthProfile;
 import com.vjstb.ledscheme.model.CableType;
-import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.EquipmentPreset;
 import com.vjstb.ledscheme.model.InterfaceRole;
 import com.vjstb.ledscheme.model.InterfaceType;
@@ -18,7 +17,6 @@ import com.vjstb.ledscheme.ui.CabinetTypeDialog;
 import com.vjstb.ledscheme.ui.CabinetTypeRenderer;
 import com.vjstb.ledscheme.ui.CableLengthProfileDialog;
 import com.vjstb.ledscheme.ui.CardsConfigDialog;
-import com.vjstb.ledscheme.ui.ControllerTypeDialog;
 import com.vjstb.ledscheme.ui.EquipmentPresetDialog;
 import com.vjstb.ledscheme.ui.ListSizing;
 import com.vjstb.ledscheme.ui.NamedRenderer;
@@ -62,10 +60,6 @@ public class LibrariesStagePanel extends JPanel {
     private final DefaultListModel<CabinetType> libModel = new DefaultListModel<>();
     private final JList<CabinetType> libList = new JList<>(libModel);
     private final JScrollPane libScroll = new JScrollPane(libList);
-
-    private final DefaultListModel<ControllerType> ctrlLibModel = new DefaultListModel<>();
-    private final JList<ControllerType> ctrlLibList = new JList<>(ctrlLibModel);
-    private final JScrollPane ctrlLibScroll = new JScrollPane(ctrlLibList);
 
     /** Категории пресетов оборудования — все значения SchemaNodeType, кроме SCREEN
      *  (тот зарезервирован под узел-ссылку на экран схемы, не под оборудование). */
@@ -111,7 +105,6 @@ public class LibrariesStagePanel extends JPanel {
     private final JScrollPane networkDeviceScroll = new JScrollPane(networkDeviceList);
 
     private NamedRenderer<CabinetType> libRenderer;
-    private NamedRenderer<ControllerType> ctrlLibRenderer;
     private NamedRenderer<EquipmentPreset> powerPresetRenderer;
     private NamedRenderer<CableType> cableRenderer;
     private NamedRenderer<CableLengthProfile> cableLengthProfileRenderer;
@@ -120,7 +113,6 @@ public class LibrariesStagePanel extends JPanel {
 
     private javax.swing.JComponent exportImportSection;
     private javax.swing.JComponent cabinetsSection;
-    private javax.swing.JComponent controllersSection;
     private javax.swing.JComponent powerPresetsSection;
     private javax.swing.JComponent signalEquipmentSection;
     private javax.swing.JComponent cableSection;
@@ -154,7 +146,6 @@ public class LibrariesStagePanel extends JPanel {
                 "Экспорт / импорт личных библиотек",
                 new com.vjstb.ledscheme.ui.LibraryExportImportPanel(model));
         cabinetsSection = buildLibrary();
-        controllersSection = buildControllerLibrary();
         powerPresetsSection = buildEquipmentPresetSection(SchemaMode.POWER,
                 "Оборудование питания (пресеты для схемы)", powerPresetList, powerPresetScroll,
                 powerCategoryList, powerCategoryScroll);
@@ -166,8 +157,6 @@ public class LibrariesStagePanel extends JPanel {
         body.add(exportImportSection);
         body.add(UiKit.vgap(10));
         body.add(cabinetsSection);
-        body.add(UiKit.vgap(10));
-        body.add(controllersSection);
         body.add(UiKit.vgap(10));
         body.add(powerPresetsSection);
         body.add(UiKit.vgap(10));
@@ -187,7 +176,7 @@ public class LibrariesStagePanel extends JPanel {
         scroll.getVerticalScrollBar().setUnitIncrement(16);
         add(scroll, BorderLayout.CENTER);
 
-        for (JScrollPane sp : new JScrollPane[]{libScroll, ctrlLibScroll, powerPresetScroll, cableScroll,
+        for (JScrollPane sp : new JScrollPane[]{libScroll, powerPresetScroll, cableScroll,
                 cableLengthProfileScroll, interfaceTypeScroll, networkDeviceScroll}) {
             sp.setMinimumSize(new Dimension(200, 80));
             // ВСЕГДА показывать вертикальный скроллбар (даже когда все позиции
@@ -352,7 +341,7 @@ public class LibrariesStagePanel extends JPanel {
             CabinetType sel = libList.getSelectedValue();
             if (sel == null || !model.isSharedCabinetType(sel.getId())) return;
             List<String> names = model.getCabinetTypes().stream().map(CabinetType::getName).toList();
-            CabinetType result = copySharedAndEdit(sel.getId(), "CABINET",
+            CabinetType result = copySharedAndEdit(sel.getId(), sel.getName(), "CABINET",
                     () -> {
                         CabinetType c = sel.copy();
                         c.setId(java.util.UUID.randomUUID().toString());
@@ -424,115 +413,11 @@ public class LibrariesStagePanel extends JPanel {
         }
     }
 
-    // ---- библиотека контроллеров (аналог SmartLCT) ----
-
-    private JPanel buildControllerLibrary() {
-        ctrlLibList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        ctrlLibRenderer = new NamedRenderer<ControllerType>(
-                ct -> ct.getName() + (ct.getVendor().isEmpty() ? "" : " (" + ct.getVendor() + ")"),
-                ct -> ct.effectivePortCount() + " вых. портов" + (ct.getCards().isEmpty() ? "" : " (по картам)")
-                        + " · " + UiKit.fmt(ct.getPortBandwidthMbps()) + " Мбит/с"
-                        + " (до " + ct.referencePixelsPerPort() + " px @60Гц/8бит)"
-                        + (ct.effectiveInputPortCount() > 0
-                                ? " · вх. портов: " + ct.effectiveInputPortCount()
-                                        + (ct.inputPortTypesSummary().isEmpty() ? "" : " (" + ct.inputPortTypesSummary() + ")")
-                                : "")
-                        + (ct.isLoopPort() ? " · Loop" : "")
-                        + (ct.getCompany() == null || ct.getCompany().isEmpty() ? "" : " · Компания: " + ct.getCompany()),
-                ct -> model.isSharedControllerType(ct.getId()));
-        ctrlLibList.setCellRenderer(ctrlLibRenderer);
-
-        JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
-        JButton add = new JButton("Добавить");
-        add.addActionListener(e -> {
-            ControllerType ct = new ControllerTypeDialog(topWindow(), model, null).showDialog();
-            if (ct != null) {
-                tryRun(() -> model.addControllerType(ct));
-                // refresh() (вызванный listener'ом model.changed() внутри tryRun выше)
-                // каждый раз пересобирает ctrlLibModel с нуля (см. syncList) и теряет
-                // выделение — без этой строки только что добавленный контроллер не
-                // выделялся, и «Карты…»/«Изменить» молча не работали, пока пользователь
-                // не кликнет по нему в списке сам (баг-репорт в чате 2026-09-23).
-                ctrlLibList.setSelectedValue(ct, true);
-            }
-        });
-        JButton edit = new JButton("Изменить");
-        edit.addActionListener(e -> {
-            ControllerType sel = ctrlLibList.getSelectedValue();
-            if (sel == null) return;
-            ControllerType ct = new ControllerTypeDialog(topWindow(), model, sel).showDialog();
-            if (ct != null) tryRun(() -> model.updateControllerType(ct));
-        });
-        JButton cardsBtn = new JButton("Карты…");
-        cardsBtn.addActionListener(e -> {
-            ControllerType sel = ctrlLibList.getSelectedValue();
-            if (sel == null) return;
-            boolean shared = model.isSharedControllerType(sel.getId());
-            CardsConfigDialog dlg = new CardsConfigDialog(topWindow(), sel.getName(),
-                    CardsConfigDialog.forController(model, sel), model, shared);
-            dlg.setVisible(true);
-        });
-        Runnable deleteSelectedControllerType = () -> {
-            ControllerType sel = ctrlLibList.getSelectedValue();
-            if (sel != null && confirm("Удалить контроллер из библиотеки?")) {
-                tryRun(() -> model.deleteControllerType(sel.getId()));
-            }
-        };
-        JButton del = new JButton("Удалить");
-        del.addActionListener(e -> deleteSelectedControllerType.run());
-        UiKit.bindDeleteKey(ctrlLibList, deleteSelectedControllerType);
-        JButton propose = new JButton("Предложить…");
-        propose.addActionListener(e -> {
-            ControllerType sel = ctrlLibList.getSelectedValue();
-            if (sel != null) ProposeDialog.show(topWindow(), settings, "CONTROLLER", sel.getName(), sel);
-        });
-        JButton copyEdit = new JButton("Скопировать и править…");
-        copyEdit.setToolTipText("Создать личную копию общего контроллера (включая карты) и сразу открыть её на"
-                + " редактирование — оригинал не меняется; если вы вошли в аккаунт, эти же правки заодно"
-                + " предложатся как патч общего элемента.");
-        copyEdit.addActionListener(e -> {
-            ControllerType sel = ctrlLibList.getSelectedValue();
-            if (sel == null || !model.isSharedControllerType(sel.getId())) return;
-            List<String> names = model.getControllerTypes().stream().map(ControllerType::getName).toList();
-            ControllerType result = copySharedAndEdit(sel.getId(), "CONTROLLER",
-                    () -> {
-                        ControllerType c = sel.copy();
-                        c.setId(java.util.UUID.randomUUID().toString());
-                        c.setName(uniqueCopyName(sel.getName(), names));
-                        return c;
-                    },
-                    model::addControllerType,
-                    seed -> new ControllerTypeDialog(topWindow(), model, seed).showDialog(),
-                    model::updateControllerType,
-                    ControllerType::getName);
-            ctrlLibList.setSelectedValue(result, true);
-        });
-        crud.add(add);
-        crud.add(edit);
-        crud.add(cardsBtn);
-        crud.add(del);
-        crud.add(propose);
-        crud.add(copyEdit);
-        String ctrlSharedTip = "Общие элементы редактируются только через админ-консоль";
-        ctrlLibList.addListSelectionListener(e -> {
-            ControllerType sel = ctrlLibList.getSelectedValue();
-            boolean shared = sel != null && model.isSharedControllerType(sel.getId());
-            edit.setEnabled(sel != null && !shared);
-            cardsBtn.setEnabled(sel != null);
-            del.setEnabled(sel != null && !shared);
-            propose.setEnabled(sel != null && !shared);
-            copyEdit.setEnabled(shared);
-            String tip = shared ? ctrlSharedTip : null;
-            edit.setToolTipText(tip);
-            cardsBtn.setToolTipText(shared ? "Общий элемент — только просмотр карт" : null);
-            del.setToolTipText(tip);
-            propose.setToolTipText(tip);
-            copyEdit.setToolTipText(shared ? null : "Доступно только для общих элементов");
-        });
-        return (JPanel) UiKit.dynamicSection("Библиотека контроллеров", listSectionBody(ctrlLibScroll, crud));
-    }
-
     // ---- пресеты оборудования (для схемы питания/сигнала) ----
+    //      Контроллеры (бывшая отдельная "Библиотека контроллеров") слиты сюда как
+    //      category == CONTROLLER, 2026-09-23 — см. buildSignalEquipmentSection ниже
+    //      и AppModel.migrateControllerLibraryToEquipmentPresets для миграции старых
+    //      сохранений.
 
     /** Общий рендерер категории (SchemaNodeType) — подпись через model.categoryLabel
      *  (учитывает админ-переименование встроенной категории, см. П.12), а не
@@ -593,8 +478,14 @@ public class LibrariesStagePanel extends JPanel {
             EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), model, null,
                     selectedOrFirstCategory(categoryList)).showDialog();
             if (r != null) {
-                tryRun(() -> model.addEquipmentPreset(mode, r.category(), r.name(), r.description(), null,
-                        r.customCategoryLabel(), r.company()));
+                tryRun(() -> {
+                    EquipmentPreset created = model.addEquipmentPreset(mode, r.category(), r.name(), r.description(),
+                            null, r.customCategoryLabel(), r.company());
+                    if (r.category() == SchemaNodeType.CONTROLLER) {
+                        model.setControllerPresetFields(created, r.vendor(), r.portCount(), r.portBandwidthMbps(),
+                                r.inputPortCount(), r.loopPort());
+                    }
+                });
             }
         });
         JButton edit = new JButton("Изменить");
@@ -603,8 +494,14 @@ public class LibrariesStagePanel extends JPanel {
             if (sel == null) return;
             EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), model, sel).showDialog();
             if (r != null) {
-                tryRun(() -> model.updateEquipmentPreset(sel, mode, r.category(), r.name(), r.description(),
-                        r.customCategoryLabel(), r.company()));
+                tryRun(() -> {
+                    model.updateEquipmentPreset(sel, mode, r.category(), r.name(), r.description(),
+                            r.customCategoryLabel(), r.company());
+                    if (r.category() == SchemaNodeType.CONTROLLER) {
+                        model.setControllerPresetFields(sel, r.vendor(), r.portCount(), r.portBandwidthMbps(),
+                                r.inputPortCount(), r.loopPort());
+                    }
+                });
             }
         });
         JButton cardsBtn = new JButton(mode == SchemaMode.POWER ? "Разъёмы…" : "Карты…");
@@ -612,6 +509,21 @@ public class LibrariesStagePanel extends JPanel {
             EquipmentPreset sel = presetList.getSelectedValue();
             if (sel == null) return;
             boolean shared = model.isSharedEquipmentPreset(sel.getId());
+            if (shared) {
+                Object[] options = {"Только просмотр", "Создать копию и править", "Отмена"};
+                int choice = JOptionPane.showOptionDialog(this, "«" + sel.getName() + "» — общий элемент."
+                        + " Открыть только для просмотра или сделать личную копию и править её?",
+                        "Общий элемент", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null,
+                        options, options[0]);
+                if (choice == 1) {
+                    List<String> names = model.getEquipmentPresets().stream().map(EquipmentPreset::getName).toList();
+                    sel = model.addEquipmentPresetCopy(sel, uniqueCopyName(sel.getName(), names));
+                    presetList.setSelectedValue(sel, true);
+                    shared = false;
+                } else if (choice != 0) {
+                    return;
+                }
+            }
             String dlgTitle = sel.getName().isEmpty() ? model.categoryLabel(sel.getCategory()) : sel.getName();
             if (mode == SchemaMode.POWER) {
                 PowerConnectorsConfigDialog dlg = new PowerConnectorsConfigDialog(topWindow(), dlgTitle,
@@ -646,13 +558,21 @@ public class LibrariesStagePanel extends JPanel {
             if (sel == null || !model.isSharedEquipmentPreset(sel.getId())) return;
             List<String> names = model.getEquipmentPresets().stream().map(EquipmentPreset::getName).toList();
             EquipmentPreset copy = model.addEquipmentPresetCopy(sel, uniqueCopyName(sel.getName(), names));
+            String generatedName = copy.getName();
             EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), model, copy).showDialog();
             if (r != null) {
-                tryRun(() -> model.updateEquipmentPreset(copy, mode, r.category(), r.name(), r.description(),
-                        r.customCategoryLabel(), r.company()));
+                tryRun(() -> {
+                    model.updateEquipmentPreset(copy, mode, r.category(), r.name(), r.description(),
+                            r.customCategoryLabel(), r.company());
+                    if (r.category() == SchemaNodeType.CONTROLLER) {
+                        model.setControllerPresetFields(copy, r.vendor(), r.portCount(), r.portBandwidthMbps(),
+                                r.inputPortCount(), r.loopPort());
+                    }
+                });
             }
             if (settings.getSettings().getAuthToken() != null) {
-                ProposeDialog.show(topWindow(), settings, "EQUIPMENT", copy.getName(), copy, sel.getId());
+                ProposeDialog.show(topWindow(), settings, "EQUIPMENT", copy.getName(),
+                        proposalDraft(copy, sel.getId(), generatedName, sel.getName()), sel.getId());
             }
             presetList.setSelectedValue(copy, true);
         });
@@ -808,7 +728,7 @@ public class LibrariesStagePanel extends JPanel {
             CableLengthProfile sel = cableLengthProfileList.getSelectedValue();
             if (sel == null || !model.isSharedCableLengthProfile(sel.getId())) return;
             List<String> names = model.getCableLengthProfiles().stream().map(CableLengthProfile::getName).toList();
-            CableLengthProfile result = copySharedAndEdit(sel.getId(), "CABLE_LENGTH_PROFILE",
+            CableLengthProfile result = copySharedAndEdit(sel.getId(), sel.getName(), "CABLE_LENGTH_PROFILE",
                     () -> {
                         CableLengthProfile c = sel.copy();
                         c.setId(java.util.UUID.randomUUID().toString());
@@ -1011,7 +931,7 @@ public class LibrariesStagePanel extends JPanel {
             NetworkDeviceType sel = networkDeviceList.getSelectedValue();
             if (sel == null || !model.isSharedNetworkDeviceType(sel.getId())) return;
             List<String> names = model.getNetworkDeviceTypes().stream().map(NetworkDeviceType::getName).toList();
-            NetworkDeviceType result = copySharedAndEdit(sel.getId(), "NETWORK_DEVICE",
+            NetworkDeviceType result = copySharedAndEdit(sel.getId(), sel.getName(), "NETWORK_DEVICE",
                     () -> {
                         NetworkDeviceType t = sel.copy();
                         t.setId(java.util.UUID.randomUUID().toString());
@@ -1079,8 +999,14 @@ public class LibrariesStagePanel extends JPanel {
             EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), model, null,
                     selectedOrFirstCategory(signalCategoryList)).showDialog();
             if (r != null) {
-                tryRun(() -> model.addEquipmentPreset(SchemaMode.SIGNAL, r.category(), r.name(), r.description(), null,
-                        r.customCategoryLabel(), r.company()));
+                tryRun(() -> {
+                    EquipmentPreset created = model.addEquipmentPreset(SchemaMode.SIGNAL, r.category(), r.name(),
+                            r.description(), null, r.customCategoryLabel(), r.company());
+                    if (r.category() == SchemaNodeType.CONTROLLER) {
+                        model.setControllerPresetFields(created, r.vendor(), r.portCount(), r.portBandwidthMbps(),
+                                r.inputPortCount(), r.loopPort());
+                    }
+                });
             }
         });
         JButton edit = new JButton("Изменить");
@@ -1089,8 +1015,14 @@ public class LibrariesStagePanel extends JPanel {
             if (sel == null) return;
             EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), model, sel).showDialog();
             if (r != null) {
-                tryRun(() -> model.updateEquipmentPreset(sel, SchemaMode.SIGNAL, r.category(), r.name(), r.description(),
-                        r.customCategoryLabel(), r.company()));
+                tryRun(() -> {
+                    model.updateEquipmentPreset(sel, SchemaMode.SIGNAL, r.category(), r.name(), r.description(),
+                            r.customCategoryLabel(), r.company());
+                    if (r.category() == SchemaNodeType.CONTROLLER) {
+                        model.setControllerPresetFields(sel, r.vendor(), r.portCount(), r.portBandwidthMbps(),
+                                r.inputPortCount(), r.loopPort());
+                    }
+                });
             }
         });
         Runnable deleteSelectedSignalPreset = () -> {
@@ -1116,13 +1048,21 @@ public class LibrariesStagePanel extends JPanel {
             if (sel == null || !model.isSharedEquipmentPreset(sel.getId())) return;
             List<String> names = model.getEquipmentPresets().stream().map(EquipmentPreset::getName).toList();
             EquipmentPreset copy = model.addEquipmentPresetCopy(sel, uniqueCopyName(sel.getName(), names));
+            String generatedName = copy.getName();
             EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), model, copy).showDialog();
             if (r != null) {
-                tryRun(() -> model.updateEquipmentPreset(copy, SchemaMode.SIGNAL, r.category(), r.name(),
-                        r.description(), r.customCategoryLabel(), r.company()));
+                tryRun(() -> {
+                    model.updateEquipmentPreset(copy, SchemaMode.SIGNAL, r.category(), r.name(),
+                            r.description(), r.customCategoryLabel(), r.company());
+                    if (r.category() == SchemaNodeType.CONTROLLER) {
+                        model.setControllerPresetFields(copy, r.vendor(), r.portCount(), r.portBandwidthMbps(),
+                                r.inputPortCount(), r.loopPort());
+                    }
+                });
             }
             if (settings.getSettings().getAuthToken() != null) {
-                ProposeDialog.show(topWindow(), settings, "EQUIPMENT", copy.getName(), copy, sel.getId());
+                ProposeDialog.show(topWindow(), settings, "EQUIPMENT", copy.getName(),
+                        proposalDraft(copy, sel.getId(), generatedName, sel.getName()), sel.getId());
             }
             signalPresetList.setSelectedValue(copy, true);
         });
@@ -1155,17 +1095,20 @@ public class LibrariesStagePanel extends JPanel {
                         "Карты", JOptionPane.INFORMATION_MESSAGE);
                 return;
             }
+            sel = editablePresetOrFork(sel, signalPresetList);
+            if (sel == null) return;
             CardsConfigDialog dlg = new CardsConfigDialog(topWindow(), sel.getName(),
                     CardsConfigDialog.forPreset(model, sel), model);
             dlg.setVisible(true);
         });
         Runnable deleteSelectedSignalCard = () -> {
-            EquipmentPreset sel = signalPresetList.getSelectedValue();
+            EquipmentPreset picked = signalPresetList.getSelectedValue();
             SchemaCard card = signalCardList.getSelectedValue();
-            if (sel == null || card == null) return;
-            if (confirm("Удалить карту-шаблон «" + card.getName() + "»?")) {
-                tryRun(() -> model.removeCardFromPreset(sel, card.getId()));
-            }
+            if (picked == null || card == null) return;
+            if (!confirm("Удалить карту-шаблон «" + card.getName() + "»?")) return;
+            EquipmentPreset sel = editablePresetOrFork(picked, signalPresetList);
+            if (sel == null) return;
+            tryRun(() -> model.removeCardFromPreset(sel, card.getId()));
         };
         JButton cardDel = new JButton("Удалить карту");
         cardDel.addActionListener(e -> deleteSelectedSignalCard.run());
@@ -1186,10 +1129,12 @@ public class LibrariesStagePanel extends JPanel {
                         JOptionPane.INFORMATION_MESSAGE);
                 return;
             }
-            List<String> order = new AssembleCardsDialog(topWindow(), sel, sel.getDefaultCardTemplateIds(),
-                    "Комплектация по умолчанию — " + sel.getName(), "Сохранить по умолчанию").showDialog();
+            EquipmentPreset target = editablePresetOrFork(sel, signalPresetList);
+            if (target == null) return;
+            List<String> order = new AssembleCardsDialog(topWindow(), target, target.getDefaultCardTemplateIds(),
+                    "Комплектация по умолчанию — " + target.getName(), "Сохранить по умолчанию").showDialog();
             if (order != null) {
-                tryRun(() -> model.setDefaultCardLoadout(sel, order));
+                tryRun(() -> model.setDefaultCardLoadout(target, order));
             }
         });
         rightCrud.add(cardAdd);
@@ -1209,15 +1154,19 @@ public class LibrariesStagePanel extends JPanel {
             del.setEnabled(sel != null && !shared);
             propose.setEnabled(sel != null && !shared);
             copyEdit.setEnabled(shared);
-            cardAdd.setEnabled(sel != null && !shared);
-            cardDel.setEnabled(sel != null && !shared);
-            defaultLoadoutBtn.setEnabled(sel != null && !shared);
+            cardAdd.setEnabled(sel != null);
+            cardDel.setEnabled(sel != null);
+            defaultLoadoutBtn.setEnabled(sel != null);
             String tip = shared ? signalPresetSharedTip : null;
+            String forkTip = shared ? "Общий элемент — при правке будет создана личная копия" : null;
             edit.setToolTipText(tip);
             del.setToolTipText(tip);
             propose.setToolTipText(tip);
-            cardAdd.setToolTipText(tip);
-            cardDel.setToolTipText(tip);
+            cardAdd.setToolTipText(forkTip);
+            cardDel.setToolTipText(forkTip);
+            defaultLoadoutBtn.setToolTipText(forkTip != null ? forkTip
+                    : "Задать комплектацию, с которой будет стартовать сборка узла из этого"
+                            + " пресета в общей схеме, вместо пустого списка каждый раз");
         });
 
         JSplitPane presetsAndCards = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, right);
@@ -1281,10 +1230,6 @@ public class LibrariesStagePanel extends JPanel {
         syncList(libModel, model.getCabinetTypes());
         ListSizing.fit(libList, libScroll, 2, 8, w);
         recapSection(cabinetsSection);
-        ctrlLibRenderer.setFixedWidth(rw);
-        syncList(ctrlLibModel, model.getControllerTypes());
-        ListSizing.fit(ctrlLibList, ctrlLibScroll, 2, 6, w);
-        recapSection(controllersSection);
         ListSizing.fit(powerCategoryList, powerCategoryScroll, EQUIPMENT_CATEGORIES.length,
                 EQUIPMENT_CATEGORIES.length, false);
         refreshPowerPresets();
@@ -1379,22 +1324,63 @@ public class LibrariesStagePanel extends JPanel {
      *  живую ссылку на копию (её и нужно выделить в списке — {@code editCopy} может
      *  вернуть другой объект-черновик с тем же id, но реально в библиотеке остаётся
      *  {@code copy}, отредактированный на месте через saveEdit). */
-    private <T> T copySharedAndEdit(String sharedId, String kind,
+    private <T> T copySharedAndEdit(String sharedId, String sharedName, String kind,
                                      java.util.function.Supplier<T> makeCopy,
                                      java.util.function.Consumer<T> addCopy,
                                      java.util.function.Function<T, T> editCopy,
                                      java.util.function.Consumer<T> saveEdit,
                                      java.util.function.Function<T, String> nameOf) {
         T copy = makeCopy.get();
+        String generatedName = nameOf.apply(copy);
         tryRun(() -> addCopy.accept(copy));
         T edited = editCopy.apply(copy);
         if (edited != null) {
             tryRun(() -> saveEdit.accept(edited));
         }
         if (settings.getSettings().getAuthToken() != null) {
-            ProposeDialog.show(topWindow(), settings, kind, nameOf.apply(copy), copy, sharedId);
+            ProposeDialog.show(topWindow(), settings, kind, nameOf.apply(copy),
+                    proposalDraft(copy, sharedId, generatedName, sharedName), sharedId);
         }
         return copy;
+    }
+
+    /** Общий (серверный) пресет напрямую править нельзя — после подтверждения делает
+     *  его личную копию (карты/разъёмы копируются целиком, см. {@code
+     *  AppModel#addEquipmentPresetCopy}), выделяет её в {@code list} и возвращает;
+     *  для личного пресета возвращает его же без вопросов. {@code null} — пользователь
+     *  отказался. Запрос пользователя (чат 2026-09-24): карты/комплектацию по
+     *  умолчанию/разъёмы записей с сервера нельзя было править вообще — теперь правка
+     *  общего элемента прозрачно уходит в личную копию, оригинал не меняется. */
+    private EquipmentPreset editablePresetOrFork(EquipmentPreset preset, JList<EquipmentPreset> list) {
+        if (!model.isSharedEquipmentPreset(preset.getId())) {
+            return preset;
+        }
+        int r = JOptionPane.showConfirmDialog(this, "«" + preset.getName() + "» — общий элемент, его нельзя править"
+                + " напрямую.\nСоздать личную копию и править её? Оригинал не изменится.",
+                "Общий элемент", JOptionPane.OK_CANCEL_OPTION);
+        if (r != JOptionPane.OK_OPTION) {
+            return null;
+        }
+        List<String> names = model.getEquipmentPresets().stream().map(EquipmentPreset::getName).toList();
+        EquipmentPreset copy = model.addEquipmentPresetCopy(preset, uniqueCopyName(preset.getName(), names));
+        list.setSelectedValue(copy, true);
+        return copy;
+    }
+
+    /** Черновик правки для сервера (EDIT_EXISTING заменяет payload ОБЩЕЙ записи
+     *  целиком, см. ProposalController.approve на сервере): id — оригинала, а не
+     *  личной копии, и название — оригинала, если пользователь не переименовывал
+     *  копию сам (иначе одобрение переименовало бы общую запись в "X (копия)"). */
+    private static com.fasterxml.jackson.databind.node.ObjectNode proposalDraft(Object copy, String sharedId,
+            String generatedName, String sharedName) {
+        com.fasterxml.jackson.databind.node.ObjectNode node =
+                new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(copy);
+        node.put("id", sharedId);
+        com.fasterxml.jackson.databind.JsonNode name = node.get("name");
+        if (name != null && generatedName != null && generatedName.equals(name.asText())) {
+            node.put("name", sharedName);
+        }
+        return node;
     }
 
     private void tryRun(Runnable r) {

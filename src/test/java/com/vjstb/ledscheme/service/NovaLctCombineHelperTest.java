@@ -10,7 +10,7 @@ import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.CardPort;
 import com.vjstb.ledscheme.model.ControllerInstance;
-import com.vjstb.ledscheme.model.ControllerType;
+import com.vjstb.ledscheme.model.EquipmentPreset;
 import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.SchemaCard;
@@ -50,21 +50,15 @@ class NovaLctCombineHelperTest {
         return ct;
     }
 
-    private ControllerType singleCardController() {
-        ControllerType ct = new ControllerType();
-        ct.setName("Test controller");
-        ct.setPortCount(20);
-        ct.getCards().add(new SchemaCard("Карта 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 20))));
-        return ct;
+    private EquipmentPreset singleCardController(AppModel model) {
+        return model.addControllerPreset("Test controller", "", 20, 1000, 0, false,
+                List.of(new SchemaCard("Карта 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 20)))));
     }
 
-    private ControllerType twoCardController() {
-        ControllerType ct = new ControllerType();
-        ct.setName("Test 2-card controller");
-        ct.setPortCount(8);
-        ct.getCards().add(new SchemaCard("Карта 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 4))));
-        ct.getCards().add(new SchemaCard("Карта 2", List.of(new CardPort("Ethernet", PortDirection.OUT, 4))));
-        return ct;
+    private EquipmentPreset twoCardController(AppModel model) {
+        return model.addControllerPreset("Test 2-card controller", "", 8, 1000, 0, false, List.of(
+                new SchemaCard("Карта 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 4))),
+                new SchemaCard("Карта 2", List.of(new CardPort("Ethernet", PortDirection.OUT, 4)))));
     }
 
     @Test
@@ -77,8 +71,8 @@ class NovaLctCombineHelperTest {
         Screen screen = model.addScreen("E", type.getId(), 1, 2, 0, 0); // 1 row, 2 cols
         model.selectScreen(screen);
 
-        ControllerType ct = model.addControllerType(singleCardController());
-        ControllerInstance controller = model.addControllerToScreen(screen, ct.getId());
+        EquipmentPreset ct = singleCardController(model);
+        ControllerInstance controller = model.addControllerToScreen(screen, ct.getId(), null);
 
         List<String> ids = List.of(screen.cabinetAt(0, 0).getId(), screen.cabinetAt(0, 1).getId());
         model.addSignalChain(1, false, ids);
@@ -167,9 +161,9 @@ class NovaLctCombineHelperTest {
         Screen center = model.addScreen("Center", type.getId(), 6, 10, 0, 0);
         Screen right = model.addScreen("Right", type.getId(), 8, 4, 0, 0);
 
-        ControllerType ct = model.addControllerType(singleCardController());
+        EquipmentPreset ct = singleCardController(model);
         model.selectScreen(left);
-        ControllerInstance controller = model.addControllerToScreen(left, ct.getId());
+        ControllerInstance controller = model.addControllerToScreen(left, ct.getId(), null);
 
         // Расключаем ВСЕ кабинеты всех 3 экранов одной цепочкой каждый (не важно для
         // этого теста -- нас интересует только blank-заполнение дыры).
@@ -241,8 +235,8 @@ class NovaLctCombineHelperTest {
         Screen screenB = model.addScreen("B", type.getId(), 1, 1, 0, 0);
         model.selectScreen(screenA);
 
-        ControllerType ct = model.addControllerType(singleCardController());
-        ControllerInstance controller = model.addControllerToScreen(screenA, ct.getId());
+        EquipmentPreset ct = singleCardController(model);
+        ControllerInstance controller = model.addControllerToScreen(screenA, ct.getId(), null);
 
         CabinetInstance cabA = screenA.cabinetAt(0, 0);
         CabinetInstance cabB = screenB.cabinetAt(0, 0);
@@ -273,8 +267,8 @@ class NovaLctCombineHelperTest {
         Screen b = model.addScreen("B", type.getId(), 2, 2, 0, 0);
         model.selectScreen(a);
 
-        ControllerType ct = model.addControllerType(singleCardController());
-        ControllerInstance controller = model.addControllerToScreen(a, ct.getId());
+        EquipmentPreset ct = singleCardController(model);
+        ControllerInstance controller = model.addControllerToScreen(a, ct.getId(), null);
 
         for (Screen s : List.of(a, b)) {
             List<String> ids = new java.util.ArrayList<>();
@@ -316,8 +310,8 @@ class NovaLctCombineHelperTest {
         Screen b = model.addScreen("B", type.getId(), 2, 3, 0, 0);
         model.selectScreen(a1);
 
-        ControllerType ct = model.addControllerType(singleCardController());
-        ControllerInstance controller = model.addControllerToScreen(a1, ct.getId());
+        EquipmentPreset ct = singleCardController(model);
+        ControllerInstance controller = model.addControllerToScreen(a1, ct.getId(), null);
 
         int port = 1;
         for (Screen s : List.of(a1, a2, b)) {
@@ -381,8 +375,8 @@ class NovaLctCombineHelperTest {
         Screen b = model.addScreen("B", type.getId(), 1, 2, 0, 0); // 1 row, 2 cols
         model.selectScreen(a);
 
-        ControllerType ct = model.addControllerType(twoCardController());
-        ControllerInstance controller = model.addControllerToScreen(a, ct.getId());
+        EquipmentPreset ct = twoCardController(model);
+        ControllerInstance controller = model.addControllerToScreen(a, ct.getId(), null);
 
         // Сквозной номер порта 1 -> карта 0/порт 0 (первые 4 порта -- карта 1);
         // номер 5 -> карта 1/порт 0 (первый порт следующей карты).
