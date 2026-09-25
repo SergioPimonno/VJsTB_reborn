@@ -115,7 +115,8 @@ NovaLCT для контроллера…» (`MainMenuBar.java`). Ни одна �
 - Перед каждой 17-байтовой записью кабинета и перед хвостовым JSON —
   6-байтовый «якорь»: `{0x00, cabW&0xff, 0x00, cabH&0xff, 0x00, 0x01}` —
   раньше ошибочно считался константой `00 80 00 80 00 01`, на деле это
-  пиксельные ширина/высота кабинета (однобайтовые, т.к. кабинеты <256px).
+  пиксельные ширина/высота кабинета (однобайтовые, т.к. кабинеты <256px) — и
+  размер ПОРТА, а не экрана: см. «Размер кабинета в Standard — на порт» ниже.
 - Записи кабинетов идут **в порядке столбец-за-столбцом (column-major)**,
   НЕ построчно — подтверждено сравнением с реальным сэмплом 4×3, где
   построчный порядок давал верные байты, но неверный порядок записей.
@@ -204,6 +205,40 @@ blank» — Complex категорически не годится для это
 **НЕ повторяй первую попытку** (просто снять Complex-гейт БЕЗ blank-записи в
 `writeStandard`) — они правятся ТОЛЬКО ВМЕСТЕ, см. javadoc
 `ScreenLogic.isUniformRectangularGrid` за явным предупреждением.
+
+**Размер кабинета в Standard — НА ПОРТ, в 6-байтовом якоре (2026-09-24, реальный
+образец `test.scr`)**: Standard-экран 4×2, порт 1 — колонки 0..1, кабинеты 128×128;
+порт 2 — колонки 2..3, кабинеты 128×64. Разбор: якорь перед записью N — размер
+кабинета записи N−1 (перед самой первой записью — размер кабинета (0,0), чьи поля
+лежат в заголовке), завершающий якорь перед JSON — размер последней записи; то есть
+«поля кабинета, за ними якорь с его же размером». Дублирующие X/Y записи — накопленная
+пиксельная позиция (X — сумма ширин слева, Y — сумма высот сверху; на образце совпадает
+с `col×w`/`row×h`). Заголовок от размеров не зависит. Реализовано в
+`NovaLctScrWriter.writeCabinetRecords` (карта размеров `cellSizes`), покрыто golden-тестом
+`standardScreenWithDifferentCabinetSizesPerPort_matchesRealNovaLctSample`. **Не подтверждено
+образцом**: разные ШИРИНЫ на портах (накопленный X — предположение) и якорь первой записи,
+если ячейка (0,0) не расключена (берётся размер первой записанной ячейки). Размер на
+порт умеет только одноэкранный экспорт целого экрана одним контроллером
+(`writeForResolvedScreen`/`write`); мультиэкранные Combine/Separate/Mixed и экспорт куска
+экрана пишут один размер на блок, для них по-прежнему строго «одно разрешение на экран».
+
+**«Прописывать как стандартный кабинет» (2026-09-24)** — флаг
+`CabinetType.exportAsStandardCabinet` (чекбокс в `CabinetTypeDialog` и в форме типа
+кабинета админки, доступен только у типов с непрямоугольной формой среди допустимых).
+Непрямоугольный тип без флага — прежнее поведение (смесь с другим типом → Complex). С
+флагом такой кабинет пишется как обычный прямоугольный с пиксельным размером типа, и
+экран, где нет «непрямоугольных без галочки», остаётся Standard.
+`ScreenLogic.isUniformRectangularGrid(screen, type, ws, portKeyByCabinetId)`: два разных
+типа неотличимы, если оба либо прямоугольные, либо с флагом и хотя бы у одного флаг
+стоит; разрешение (px) должно совпадать у всех кабинетов ОДНОГО порта (разные порты —
+разные размеры, см. выше), а без карты портов — у всех кабинетов экрана. Смещения
+кабинетов по-прежнему ведут в Complex. Когда экран уходит в Complex только из-за разного
+разрешения кабинетов с галочкой, диалог экспорта
+(`NovaLctControllerExportDialog.confirmStandardSizeMismatchDeclined`, список причин —
+`ScreenLogic.standardSizeMismatchTypeNames`) предупреждает и спрашивает подтверждение.
+Тесты — `NovaLctScrWriterTest` (`nonRectangularTypeMixedIntoScreen_*`,
+`screenOfOnlyFlaggedNonRectangularCabinets_*`, `flaggedTypeOnSeparatePort_*`,
+`differentSizesOnOnePort_*`).
 
 - Тот же preamble/checksum-механизм, что у Standard (это было отдельным
   открытием, не очевидно с первого взгляда), но короче — `COMPLEX_HEADER_LEN
@@ -377,10 +412,10 @@ Standard-экранов нет. Обе чек-суммы и хвостовой �
 1. `SignalChain.getPortNumber()` — **сквозной по сцене** номер порта
    (1-based по всем контроллерам сцены, в порядке `controllersInScene`).
 2. `AppModel.portOffsetOf(Scene, ControllerInstance)` — сумма
-   `ControllerType.effectivePortCount()` всех контроллеров ДО целевого в
+   `ControllerInstance.effectivePortCount()` всех контроллеров ДО целевого в
    порядке сцены → даёт офсет для перевода в локальный для контроллера
    номер порта.
-3. `ControllerType.ethernetPoolLocalPort(int controllerLocalPort1Based)` —
+3. `ControllerInstance.ethernetPoolLocalPort(int controllerLocalPort1Based)` —
    переводит локальный номер порта в пару `(индекс карты 0-based, номер в
    пуле)`, ПОЛНОСТЬЮ пропуская не-Ethernet (fiber) группы портов — fiber
    возвращает `null` и не попадает в экспорт (это магистральные линии
@@ -472,7 +507,7 @@ effort»). Собранный список:
      сортировался по пространственному `screenXPx` ("экран 0 — самый левый"),
      реальная NovaLCT требует сортировку по возрастанию (Sending Card, Port)
      первой записи экрана — иначе `LoadFromFile` отклоняет файл целиком.
-   - **Нумерация Sending Card** (`ControllerType.hasEthernetOutput` +
+   - **Нумерация Sending Card** (`ControllerInstance.hasEthernetOutput` +
      переработанные `ethernetPoolCount`/`ethernetPoolLocalPort`/`globalPortFor`)
      — карты без единого выходного Ethernet-порта (входные карты, типичны для
      Novastar H-серии) раньше всё равно занимали номер в нумерации; реальная
@@ -541,12 +576,27 @@ blank-дыры в границах группы, а не всей сетки —
 ## 11. Архитектурная граница модели — куда класть новые поля
 
 `ledscheme-model` (`C:\Development\ledscheme-model`) — только
-библиотечные/типовые классы, используемые деталями формата: `ControllerType`
-(вся логика нумерации карт/портов из секции 6 — `effectivePortCount`,
-`isEffectivePortEthernet`, `ethernetPoolCount`/`ethernetPortCountInPool`,
-`ethernetPoolLocalPort`, `globalPortFor`), `SchemaCard`/`CardPort`/
-`PortDirection`, `CabinetType` (resolutionWidth/Height → `cabW`/`cabH`;
-widthMm/heightMm → офсеты Complex Screen).
+библиотечные/типовые классы, используемые деталями формата: `SchemaCard`/
+`CardPort`/`PortDirection`, `CabinetType` (resolutionWidth/Height → `cabW`/
+`cabH`; widthMm/heightMm → офсеты Complex Screen).
+
+**2026-09-23 — вся логика нумерации карт/портов из секции 6
+(`effectivePortCount`, `isEffectivePortEthernet`,
+`ethernetPoolCount`/`ethernetPortCountInPool`, `ethernetPoolLocalPort`,
+`globalPortFor`) переехала с бывшего `ledscheme-model.ControllerType` на
+`ControllerInstance`** (`VJsTB_reborn`, `com.vjstb.ledscheme.model` —
+client-local класс, НЕ в `ledscheme-model`) — библиотека контроллеров слита в
+`EquipmentPreset` (category == CONTROLLER), а порты/карты теперь считаются по
+ЗАМОРОЖЕННОЙ на экземпляре комплектации (собирается один раз при добавлении
+контроллера на экран, см. class-javadoc `ControllerInstance` и
+`AppModel#addControllerToScreen`), а не по живому резолву библиотечного типа.
+`NovaLctScrWriter` это не затрагивает — он как и раньше не знает ни про
+`ControllerType`, ни про `ControllerInstance`, только про уже посчитанные
+`cardIndex`/`portInPool` (см. `NovaLctControllerResolver`/`ScreenLogic
+.cardAndLocalPort`, которые и читают `ControllerInstance` напрямую).
+`ControllerType` осталась в `ledscheme-model`, помечена `@Deprecated` —
+используется только для десериализации СТАРЫХ сохранений при одноразовой
+миграции (`ui.ControllerLibraryMigrationDialog`).
 
 Классы экземпляров проекта остаются в `VJsTB_reborn`'s own `model` package
 (не расшарены, это данные конкретного проекта, не библиотечный контент):

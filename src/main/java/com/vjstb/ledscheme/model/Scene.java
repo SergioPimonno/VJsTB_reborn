@@ -1,5 +1,6 @@
 package com.vjstb.ledscheme.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -62,6 +63,9 @@ public class Scene {
      *  пользователь их ни разу не задавал (тогда действуют обычные хардкод-
      *  дефолты {@link Screen}). Не затрагивает уже существующие экраны. */
     private ScreenDefaults screenDefaults;
+    /** Группы экранов этой сцены в дереве навигации (см. {@link ScreenGroup}) —
+     *  старые проекты без поля десериализуются с пустым списком. */
+    private List<ScreenGroup> screenGroups = new ArrayList<>();
 
     public Scene() {
     }
@@ -180,5 +184,49 @@ public class Scene {
 
     public void setScreenDefaults(ScreenDefaults screenDefaults) {
         this.screenDefaults = screenDefaults;
+    }
+
+    public List<ScreenGroup> getScreenGroups() {
+        return screenGroups;
+    }
+
+    public void setScreenGroups(List<ScreenGroup> screenGroups) {
+        this.screenGroups = screenGroups != null ? screenGroups : new ArrayList<>();
+    }
+
+    /** Группа с таким id или {@code null} (в том числе для {@code null}-id). */
+    @JsonIgnore
+    public ScreenGroup groupById(String groupId) {
+        if (groupId == null) {
+            return null;
+        }
+        for (ScreenGroup g : screenGroups) {
+            if (groupId.equals(g.getId())) {
+                return g;
+            }
+        }
+        return null;
+    }
+
+    /** Группа, в которую входит экран, или {@code null} — экран вне групп либо
+     *  ссылается на несуществующую группу (битый файл считается «без группы»). */
+    @JsonIgnore
+    public ScreenGroup groupOf(Screen screen) {
+        return screen == null ? null : groupById(screen.getGroupId());
+    }
+
+    /** Экраны группы в порядке списка экранов сцены. */
+    @JsonIgnore
+    public List<Screen> screensOf(ScreenGroup group) {
+        List<Screen> out = new ArrayList<>();
+        if (group == null) {
+            return out;
+        }
+        for (Screen s : screens) {
+            if (group.getId().equals(s.getGroupId())) {
+                out.add(s);
+            }
+        }
+        return out;
     }
 }

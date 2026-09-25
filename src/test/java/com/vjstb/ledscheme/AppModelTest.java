@@ -15,7 +15,7 @@ import com.vjstb.ledscheme.model.CanvasPlacement;
 import com.vjstb.ledscheme.model.CardPort;
 import com.vjstb.ledscheme.model.ContentCanvas;
 import com.vjstb.ledscheme.model.ControllerInstance;
-import com.vjstb.ledscheme.model.ControllerType;
+import com.vjstb.ledscheme.model.EquipmentPreset;
 import com.vjstb.ledscheme.model.InterfaceRole;
 import com.vjstb.ledscheme.model.InterfaceType;
 import com.vjstb.ledscheme.model.Network;
@@ -51,6 +51,7 @@ import com.vjstb.ledscheme.store.WorkspaceStore;
 import com.vjstb.ledscheme.sync.LibrarySyncClient;
 import java.io.File;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -932,24 +933,6 @@ class AppModelTest {
     }
 
     @Test
-    void updateControllerTypePreservesLoopPort(@TempDir Path dir) {
-        // Тот же класс бага, что и выше, но для библиотеки контроллеров: флажок
-        // "Есть Loop-порт" терялся при редактировании (AppModel.updateControllerType
-        // не копировал loopPort обратно в хранимый объект).
-        AppModel model = freshModel(dir);
-        com.vjstb.ledscheme.model.ControllerType original = new com.vjstb.ledscheme.model.ControllerType();
-        original.setName("MCTRL4K");
-        model.addControllerType(original);
-
-        com.vjstb.ledscheme.model.ControllerType edited = original.copy();
-        edited.setLoopPort(true);
-        model.updateControllerType(edited);
-
-        com.vjstb.ledscheme.model.ControllerType stored = model.getWorkspace().controllerTypeById(original.getId());
-        assertTrue(stored.isLoopPort());
-    }
-
-    @Test
     void cabinetLibraryExportImportRoundTripsAndUpdatesByName(@TempDir Path dir) throws Exception {
         AppModel model = freshModel(dir);
         model.addCabinetType(sampleType());
@@ -987,9 +970,10 @@ class AppModelTest {
     void allLibrariesBundleExportImportCoversEveryType(@TempDir Path dir) throws Exception {
         AppModel model = freshModel(dir);
         model.addCabinetType(sampleType());
-        com.vjstb.ledscheme.model.ControllerType controllerType = new com.vjstb.ledscheme.model.ControllerType();
-        controllerType.setName("MCTRL4K");
-        model.addControllerType(controllerType);
+        // Контроллеры — обычный EquipmentPreset (category == CONTROLLER, слияние
+        // библиотеки контроллеров, 2026-09-23), отдельного вида в бандле для них
+        // больше нет — см. AppModel#exportAllLibraries.
+        model.addControllerPreset("MCTRL4K", "", 8, 1000, 0, false, List.of());
         model.addEquipmentPreset(SchemaMode.SIGNAL, SchemaNodeType.SERVER, "Media Server", "", List.of());
         model.addCableType(SchemaMode.POWER, "CEE 32A");
 
@@ -1000,15 +984,13 @@ class AppModelTest {
         int total = other.importAllLibraries(file);
         assertEquals(4, total);
         assertEquals(1, other.getCabinetTypes().size());
-        assertEquals(1, other.getWorkspace().getControllerTypes().size());
-        assertEquals(1, other.getEquipmentPresets().size());
+        assertEquals(2, other.getEquipmentPresets().size());
         assertEquals(1, other.getCableTypes().size());
 
         // повторный импорт не плодит дубликаты
         other.importAllLibraries(file);
         assertEquals(1, other.getCabinetTypes().size());
-        assertEquals(1, other.getWorkspace().getControllerTypes().size());
-        assertEquals(1, other.getEquipmentPresets().size());
+        assertEquals(2, other.getEquipmentPresets().size());
         assertEquals(1, other.getCableTypes().size());
     }
 
@@ -1168,19 +1150,13 @@ class AppModelTest {
         model.updateSignalPortCount(screen, 8);
         assertEquals(8, model.effectiveSignalPortCount(screen));
 
-        ControllerType ctA = new ControllerType();
-        ctA.setName("MX40 Pro");
-        ctA.setPortCount(10);
-        model.addControllerType(ctA);
-        ControllerType ctB = new ControllerType();
-        ctB.setName("VX600");
-        ctB.setPortCount(6);
-        model.addControllerType(ctB);
+        EquipmentPreset ctA = model.addControllerPreset("MX40 Pro", "", 10, 1000, 0, false, List.of());
+        EquipmentPreset ctB = model.addControllerPreset("VX600", "", 6, 1000, 0, false, List.of());
 
-        model.addControllerToScreen(screen, ctA.getId());
+        model.addControllerToScreen(screen, ctA.getId(), null);
         assertEquals(10, model.effectiveSignalPortCount(screen), "Один контроллер — по числу его портов");
 
-        ControllerInstance ci2 = model.addControllerToScreen(screen, ctB.getId());
+        ControllerInstance ci2 = model.addControllerToScreen(screen, ctB.getId(), null);
         assertEquals(16, model.effectiveSignalPortCount(screen), "Несколько контроллеров — сумма портов");
 
         model.removeControllerFromScreen(screen, ci2.getId());
@@ -1199,12 +1175,9 @@ class AppModelTest {
         Screen a = model.addScreen("A", type.getId(), 2, 2, 0, 0);
         Screen b = model.addScreen("B", type.getId(), 2, 2, 1000, 0);
 
-        ControllerType ct = new ControllerType();
-        ct.setName("VX1000");
-        ct.setPortCount(4);
-        model.addControllerType(ct);
+        EquipmentPreset ct = model.addControllerPreset("VX1000", "", 4, 1000, 0, false, List.of());
 
-        ControllerInstance ci = model.addControllerToScreen(a, ct.getId());
+        ControllerInstance ci = model.addControllerToScreen(a, ct.getId(), null);
         assertEquals(4, model.effectiveSignalPortCount(a));
         assertEquals(4, model.effectiveSignalPortCount(b), "Экран B должен видеть контроллер, добавленный на A");
 
@@ -1244,14 +1217,11 @@ class AppModelTest {
         Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
         model.selectScreen(screen);
 
-        ControllerType ct = new ControllerType();
-        ct.setName("VX1000");
-        ct.setPortCount(4);
-        model.addControllerType(ct);
+        EquipmentPreset ct = model.addControllerPreset("VX1000", "", 4, 1000, 0, false, List.of());
 
-        ControllerInstance c1 = model.addControllerToScreen(screen, ct.getId());
-        ControllerInstance c2 = model.addControllerToScreen(screen, ct.getId());
-        ControllerInstance c3 = model.addControllerToScreen(screen, ct.getId());
+        ControllerInstance c1 = model.addControllerToScreen(screen, ct.getId(), null);
+        ControllerInstance c2 = model.addControllerToScreen(screen, ct.getId(), null);
+        ControllerInstance c3 = model.addControllerToScreen(screen, ct.getId(), null);
         assertEquals("Контроллер 1", c1.getLabel());
         assertEquals("Контроллер 2", c2.getLabel());
         assertEquals("Контроллер 3", c3.getLabel());
@@ -1275,7 +1245,7 @@ class AppModelTest {
         assertEquals(c3, model.controllerForPort(screen, 5));
 
         // Последующее добавление не должно повторно дублировать номер.
-        ControllerInstance c4 = model.addControllerToScreen(screen, ct.getId());
+        ControllerInstance c4 = model.addControllerToScreen(screen, ct.getId(), null);
         assertEquals("Контроллер 3", c4.getLabel());
     }
 
@@ -1293,13 +1263,10 @@ class AppModelTest {
         Screen a = model.addScreen("A", type.getId(), 2, 2, 0, 0);
         Screen b = model.addScreen("B", type.getId(), 2, 2, 1000, 0);
 
-        ControllerType ct = new ControllerType();
-        ct.setName("VX1000");
-        ct.setPortCount(4);
-        model.addControllerType(ct);
+        EquipmentPreset ct = model.addControllerPreset("VX1000", "", 4, 1000, 0, false, List.of());
 
-        model.addControllerToScreen(a, ct.getId()); // контроллер 1: сквозные порты 1-4
-        ControllerInstance cb = model.addControllerToScreen(b, ct.getId()); // контроллер 2: 5-8
+        model.addControllerToScreen(a, ct.getId(), null); // контроллер 1: сквозные порты 1-4
+        ControllerInstance cb = model.addControllerToScreen(b, ct.getId(), null); // контроллер 2: 5-8
 
         model.selectScreen(b);
         List<String> ids = b.getCabinets().stream().map(CabinetInstance::getId).limit(1).toList();
@@ -1308,7 +1275,7 @@ class AppModelTest {
 
         // Второй контроллер экрана A встаёт МЕЖДУ первым контроллером A и
         // контроллером b — offset контроллера b сдвигается с 4 на 8.
-        model.addControllerToScreen(a, ct.getId());
+        model.addControllerToScreen(a, ct.getId(), null);
 
         assertNull(model.signalChainByPort(b, 5, false), "старый сквозной номер порта контроллера b больше не должен существовать");
         SignalChain chain = model.signalChainByPort(b, 9, false);
@@ -1332,13 +1299,10 @@ class AppModelTest {
         Screen a = model.addScreen("A", type.getId(), 2, 2, 0, 0);
         Screen b = model.addScreen("B", type.getId(), 2, 2, 1000, 0);
 
-        ControllerType ct = new ControllerType();
-        ct.setName("VX1000");
-        ct.setPortCount(4);
-        model.addControllerType(ct);
+        EquipmentPreset ct = model.addControllerPreset("VX1000", "", 4, 1000, 0, false, List.of());
 
-        model.addControllerToScreen(a, ct.getId()); // контроллер A: сквозные порты 1-4
-        ControllerInstance cb = model.addControllerToScreen(b, ct.getId()); // контроллер B: 5-8
+        model.addControllerToScreen(a, ct.getId(), null); // контроллер A: сквозные порты 1-4
+        ControllerInstance cb = model.addControllerToScreen(b, ct.getId(), null); // контроллер B: 5-8
 
         model.selectScreen(b);
         List<String> idsB = b.getCabinets().stream().map(CabinetInstance::getId).limit(1).toList();
@@ -1369,13 +1333,10 @@ class AppModelTest {
         Screen a = model.addScreen("A", type.getId(), 2, 2, 0, 0);
         Screen b = model.addScreen("B", type.getId(), 2, 2, 1000, 0);
 
-        ControllerType ct = new ControllerType();
-        ct.setName("VX1000");
-        ct.setPortCount(4);
-        model.addControllerType(ct);
+        EquipmentPreset ct = model.addControllerPreset("VX1000", "", 4, 1000, 0, false, List.of());
 
-        ControllerInstance ca = model.addControllerToScreen(a, ct.getId()); // сквозные порты 1-4
-        ControllerInstance cb = model.addControllerToScreen(b, ct.getId()); // сквозные порты 5-8
+        ControllerInstance ca = model.addControllerToScreen(a, ct.getId(), null); // сквозные порты 1-4
+        ControllerInstance cb = model.addControllerToScreen(b, ct.getId(), null); // сквозные порты 5-8
 
         model.selectScreen(b);
         List<String> idsB = b.getCabinets().stream().map(CabinetInstance::getId).limit(1).toList();
@@ -1424,14 +1385,11 @@ class AppModelTest {
         Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
         model.selectScreen(screen);
 
-        ControllerType ct = new ControllerType();
-        ct.setName("VX1000");
-        ct.setPortCount(4);
-        model.addControllerType(ct);
+        EquipmentPreset ct = model.addControllerPreset("VX1000", "", 4, 1000, 0, false, List.of());
 
-        ControllerInstance main = model.addControllerToScreen(screen, ct.getId());
-        ControllerInstance backup = model.addControllerToScreen(screen, ct.getId());
-        ControllerInstance third = model.addControllerToScreen(screen, ct.getId());
+        ControllerInstance main = model.addControllerToScreen(screen, ct.getId(), null);
+        ControllerInstance backup = model.addControllerToScreen(screen, ct.getId(), null);
+        ControllerInstance third = model.addControllerToScreen(screen, ct.getId(), null);
         assertEquals(12, model.effectiveSignalPortCount(screen));
 
         assertEquals(main, model.controllerForPort(screen, 1));
@@ -1480,13 +1438,10 @@ class AppModelTest {
         Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
         model.selectScreen(screen);
 
-        ControllerType ct = new ControllerType();
-        ct.setName("VX1000");
-        ct.setPortCount(4);
-        model.addControllerType(ct);
+        EquipmentPreset ct = model.addControllerPreset("VX1000", "", 4, 1000, 0, false, List.of());
 
-        ControllerInstance main = model.addControllerToScreen(screen, ct.getId());
-        ControllerInstance backup = model.addControllerToScreen(screen, ct.getId());
+        ControllerInstance main = model.addControllerToScreen(screen, ct.getId(), null);
+        ControllerInstance backup = model.addControllerToScreen(screen, ct.getId(), null);
 
         List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).limit(1).toList();
         model.addSignalChain(1, false, ids); // цепочка ДО установки связки контроллеров
@@ -1522,14 +1477,12 @@ class AppModelTest {
         model.selectScreen(screen);
 
         // H2: две отдающие карты по 4 Ethernet-порта → пулы 0 (порты 1-4) и 1 (5-8).
-        ControllerType h = new ControllerType();
-        h.setName("H2");
-        h.getCards().add(new SchemaCard("Карта 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 4))));
-        h.getCards().add(new SchemaCard("Карта 2", List.of(new CardPort("Ethernet", PortDirection.OUT, 4))));
-        h = model.addControllerType(h);
+        EquipmentPreset h = model.addControllerPreset("H2", "", 0, 1000, 0, false, List.of(
+                new SchemaCard("Карта 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 4))),
+                new SchemaCard("Карта 2", List.of(new CardPort("Ethernet", PortDirection.OUT, 4)))));
 
-        ControllerInstance main = model.addControllerToScreen(screen, h.getId());
-        ControllerInstance backup = model.addControllerToScreen(screen, h.getId());
+        ControllerInstance main = model.addControllerToScreen(screen, h.getId(), null);
+        ControllerInstance backup = model.addControllerToScreen(screen, h.getId(), null);
         assertEquals(16, model.effectiveSignalPortCount(screen)); // 8 + 8, все Ethernet
 
         List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
@@ -1574,17 +1527,20 @@ class AppModelTest {
     @Test
     void cardBasedControllerPortCountOverridesManualCount() {
         // Novastar H-серии и подобные модульные контроллеры: если заданы карты,
-        // эффективное число портов считается по ним, а не по ручному portCount.
-        ControllerType h = new ControllerType();
-        h.setName("H2");
+        // эффективное число портов считается по ним, а не по ручному portCount —
+        // теперь на ControllerInstance (замороженная комплектация, см. её
+        // class-javadoc), а не на устаревшем ControllerType.
+        ControllerInstance h = new ControllerInstance();
         h.setPortCount(8); // ручное значение — должно игнорироваться при наличии карт
         assertEquals(8, h.effectivePortCount());
 
-        h.getCards().add(new SchemaCard("Карта вывода 1", List.of(new CardPort("RJ45", PortDirection.OUT, 4))));
-        h.getCards().add(new SchemaCard("Карта вывода 2", List.of(new CardPort("оптика", PortDirection.OUT, 2))));
+        List<SchemaCard> cards = new ArrayList<>();
+        cards.add(new SchemaCard("Карта вывода 1", List.of(new CardPort("RJ45", PortDirection.OUT, 4))));
+        cards.add(new SchemaCard("Карта вывода 2", List.of(new CardPort("оптика", PortDirection.OUT, 2))));
+        h.setCards(cards);
         assertEquals(6, h.effectivePortCount());
 
-        ControllerType copy = h.copy();
+        ControllerInstance copy = h.copy();
         assertEquals(6, copy.effectivePortCount());
         assertEquals(2, copy.getCards().size());
     }
@@ -1596,7 +1552,7 @@ class AppModelTest {
         // (начинается счёт с fiber портов)". Причина — formatSignalPortGroups
         // печатал СЫРОЙ сквозной номер порта контроллера (считает и fiber-порты
         // тоже) вместо номера В ПРЕДЕЛАХ Ethernet-пула (см. {@link
-        // ControllerType#ethernetPoolLocalPort}), которым уже пользуются
+        // ControllerInstance#ethernetPoolLocalPort}), которым уже пользуются
         // PortPickerPanel/NovaLctControllerResolver.
         AppModel model = freshModel(dir);
         CabinetType type = model.addCabinetType(sampleType());
@@ -1608,13 +1564,11 @@ class AppModelTest {
         // Карта: 4 fiber-порта ПЕРЕД 4 ethernet-портами (как у реальных карт
         // Ethernet+Fiber Output) — сырой номер 2-го ethernet-порта равен 6 (после
         // 4 fiber), правильный номер "в расключении" — 2.
-        ControllerType h2 = new ControllerType();
-        h2.setName("H2");
-        h2.getCards().add(new SchemaCard("Card 1", List.of(
-                new CardPort("Fiber", PortDirection.OUT, 4),
-                new CardPort("Ethernet", PortDirection.OUT, 4))));
-        h2 = model.addControllerType(h2);
-        ControllerInstance ci = model.addControllerToScreen(screen, h2.getId());
+        EquipmentPreset h2 = model.addControllerPreset("H2", "", 0, 1000, 0, false, List.of(
+                new SchemaCard("Card 1", List.of(
+                        new CardPort("Fiber", PortDirection.OUT, 4),
+                        new CardPort("Ethernet", PortDirection.OUT, 4)))));
+        ControllerInstance ci = model.addControllerToScreen(screen, h2.getId(), null);
 
         List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
         model.addSignalChain(6, false, List.of(ids.get(0)));
@@ -1634,12 +1588,10 @@ class AppModelTest {
         Screen screen = model.addScreen("Экран", type.getId(), 3, 3, 0, 0);
         model.selectScreen(screen);
 
-        ControllerType h2 = new ControllerType();
-        h2.setName("H2");
-        h2.getCards().add(new SchemaCard("Card 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 4))));
-        h2.getCards().add(new SchemaCard("Card 2", List.of(new CardPort("Ethernet", PortDirection.OUT, 4))));
-        h2 = model.addControllerType(h2);
-        ControllerInstance ci = model.addControllerToScreen(screen, h2.getId());
+        EquipmentPreset h2 = model.addControllerPreset("H2", "", 0, 1000, 0, false, List.of(
+                new SchemaCard("Card 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 4))),
+                new SchemaCard("Card 2", List.of(new CardPort("Ethernet", PortDirection.OUT, 4)))));
+        ControllerInstance ci = model.addControllerToScreen(screen, h2.getId(), null);
 
         List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
         // Оба порта на карте 0 (raw 1,2) — один пул задействован, без "Карта N".
@@ -2263,9 +2215,8 @@ class AppModelTest {
                 "ровная сетка без смещений обязана экспортироваться как Standard");
 
         // Сдвигаем угловой кабинет (0,0) в направлении ОТ сетки (вверх-влево), а не К
-        // соседям -- иначе сработал бы ДРУГОЙ, не связанный с этим тестом механизм
-        // (AppModel.autoDisableOverlapping прячет соседа при наложении прямоугольников,
-        // см. его javadoc), и тест проверял бы не то, что задумано.
+        // соседям, чтобы тест проверял только смещение как причину Complex-экспорта
+        // (наложение на соседей больше ничего не скрывает, но и не нужно этому тесту).
         CabinetInstance moved = screen.getCabinets().get(0);
         model.updateCabinetOffset(moved, -50.0, -50.0);
         assertTrue(com.vjstb.ledscheme.service.NovaLctScrWriter.isComplexExport(screen, model.getWorkspace()),
@@ -2336,17 +2287,17 @@ class AppModelTest {
     @Test
     void controllerPortBandwidthAndPixelsAreInterdependent() {
         // опорная точка из документации NovaStar: 1 Гбит/с @ 60Гц/8бит = 650 000 px/порт
-        assertEquals(650_000, ControllerType.maxPixelsFor(1000, 60, 8));
+        assertEquals(650_000, ControllerInstance.maxPixelsFor(1000, 60, 8));
         // при той же пропускной способности бОльшая герцовка/глубина цвета — меньше пикселей
-        assertTrue(ControllerType.maxPixelsFor(1000, 120, 8) < 650_000);
-        assertTrue(ControllerType.maxPixelsFor(1000, 60, 10) < 650_000);
+        assertTrue(ControllerInstance.maxPixelsFor(1000, 120, 8) < 650_000);
+        assertTrue(ControllerInstance.maxPixelsFor(1000, 60, 10) < 650_000);
 
-        ControllerType ct = new ControllerType();
+        ControllerInstance ct = new ControllerInstance();
         ct.setPortBandwidthMbps(1000);
         assertEquals(650_000, ct.referencePixelsPerPort());
 
         // обратный пересчёт: сколько Мбит/с нужно для 650 000 px @60/8 — снова ~1000
-        double mbps = ControllerType.bandwidthForPixels(650_000, 60, 8);
+        double mbps = ControllerInstance.bandwidthForPixels(650_000, 60, 8);
         assertEquals(1000.0, mbps, 1.0);
     }
 
@@ -2997,27 +2948,27 @@ class AppModelTest {
 
     @Test
     void librarySyncMigratesControllerInstanceReferenceWhenPersonalTypeIsPromoted(@TempDir Path dir) {
-        // Тот же перенос ссылок, но для типов контроллеров: ControllerInstance,
-        // уже подключённый к экрану через личный тип, должен остаться рабочим
-        // после того как тот же тип контроллера "продвигается" синком под новым
-        // id общей библиотеки.
+        // Тот же перенос ссылок, но для контроллеров-пресетов (библиотека
+        // контроллеров слита в EquipmentPreset, category == CONTROLLER,
+        // 2026-09-23): ControllerInstance, уже подключённый к экрану через личный
+        // пресет, должен остаться рабочим после того как тот же пресет
+        // "продвигается" синком (вид "EQUIPMENT") под новым id общей библиотеки.
         AppModel model = freshModel(dir);
         CabinetType cabinetType = model.addCabinetType(sampleType());
         model.selectProject(model.addProject("P"));
         model.selectScene(model.addScene("S"));
         Screen screen = model.addScreen("E", cabinetType.getId(), 2, 3, 0, 0);
 
-        ControllerType personal = new ControllerType();
-        personal.setName("MCTRL4k");
-        personal.setPortCount(4);
-        personal = model.addControllerType(personal);
+        EquipmentPreset personal = model.addControllerPreset("MCTRL4k", "", 4, 1000, 0, false, List.of());
         String oldId = personal.getId();
-        ControllerInstance controller = model.addControllerToScreen(screen, oldId);
+        ControllerInstance controller = model.addControllerToScreen(screen, oldId, null);
 
         model.applyLibrarySyncItems(List.of(new LibrarySyncClient.LibraryItemDto(
-                "srv-ctrl-1", "CONTROLLER", "MCTRL4k", "{\"name\":\"MCTRL4k\",\"portCount\":4}", 5, false)));
+                "srv-ctrl-1", "EQUIPMENT", "MCTRL4k",
+                "{\"mode\":\"SIGNAL\",\"category\":\"CONTROLLER\",\"name\":\"MCTRL4k\",\"portCount\":4}", 5, false)));
 
-        assertTrue(model.getWorkspace().getControllerTypes().isEmpty(), "личная запись должна быть продвинута (удалена)");
+        assertTrue(model.getEquipmentPresets().stream().noneMatch(p -> p.getId().equals(oldId)),
+                "личная запись должна быть продвинута (удалена)");
         assertEquals("srv-ctrl-1", controller.getControllerTypeId(),
                 "ссылка контроллера должна перенестись на новый id общей записи, а не остаться повисшей на старом личном id");
     }
@@ -3203,17 +3154,11 @@ class AppModelTest {
         Screen unwired = model.addScreen("Unwired", type.getId(), 2, 2, 1000, 0);
         model.selectScreen(wired);
 
-        ControllerType used = new ControllerType();
-        used.setName("Used");
-        used.setPortCount(4);
-        used = model.addControllerType(used);
-        ControllerInstance usedCi = model.addControllerToScreen(wired, used.getId());
+        EquipmentPreset used = model.addControllerPreset("Used", "", 4, 1000, 0, false, List.of());
+        ControllerInstance usedCi = model.addControllerToScreen(wired, used.getId(), null);
 
-        ControllerType unusedType = new ControllerType();
-        unusedType.setName("Unused");
-        unusedType.setPortCount(4);
-        unusedType = model.addControllerType(unusedType);
-        model.addControllerToScreen(wired, unusedType.getId());
+        EquipmentPreset unusedType = model.addControllerPreset("Unused", "", 4, 1000, 0, false, List.of());
+        model.addControllerToScreen(wired, unusedType.getId(), null);
 
         List<String> ids = wired.getCabinets().stream().map(CabinetInstance::getId).toList();
         model.addSignalChain(1, false, List.of(ids.get(0)));
@@ -3250,12 +3195,10 @@ class AppModelTest {
 
         // Модульный контроллер из 2 карт (4 + 2 порта) — резерв порта 2 (карта 1)
         // назначен на порт 5 (карта 2), проверяет попадание в РАЗНЫЕ группы портов.
-        ControllerType h = new ControllerType();
-        h.setName("H2");
-        h.getCards().add(new SchemaCard("Карта 1", List.of(new CardPort("RJ45", PortDirection.OUT, 4))));
-        h.getCards().add(new SchemaCard("Карта 2", List.of(new CardPort("RJ45", PortDirection.OUT, 2))));
-        h = model.addControllerType(h);
-        model.addControllerToScreen(screen, h.getId());
+        EquipmentPreset h = model.addControllerPreset("H2", "", 0, 1000, 0, false, List.of(
+                new SchemaCard("Карта 1", List.of(new CardPort("RJ45", PortDirection.OUT, 4))),
+                new SchemaCard("Карта 2", List.of(new CardPort("RJ45", PortDirection.OUT, 2)))));
+        model.addControllerToScreen(screen, h.getId(), null);
 
         List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
         model.addSignalChain(2, false, List.of(ids.get(0), ids.get(1)));
@@ -3292,11 +3235,8 @@ class AppModelTest {
         Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
         model.selectScreen(screen);
 
-        ControllerType ct = new ControllerType();
-        ct.setName("Any");
-        ct.setPortCount(4);
-        ct = model.addControllerType(ct);
-        model.addControllerToScreen(screen, ct.getId());
+        EquipmentPreset ct = model.addControllerPreset("Any", "", 4, 1000, 0, false, List.of());
+        model.addControllerToScreen(screen, ct.getId(), null);
 
         List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
         model.addPowerChain(1, List.of(ids.get(0)));
@@ -3423,11 +3363,8 @@ class AppModelTest {
         Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
         model.selectScreen(screen);
 
-        ControllerType ct = new ControllerType();
-        ct.setName("H2");
-        ct.setPortCount(4);
-        ct = model.addControllerType(ct);
-        model.addControllerToScreen(screen, ct.getId());
+        EquipmentPreset ct = model.addControllerPreset("H2", "", 4, 1000, 0, false, List.of());
+        model.addControllerToScreen(screen, ct.getId(), null);
 
         // Узел экрана уже добавлен на схему ВРУЧНУЮ (или предыдущим импортом) ДО
         // того, как для него провели хоть одну цепочку, — т.е. не будет "свежим"
@@ -3456,11 +3393,8 @@ class AppModelTest {
         Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
         model.selectScreen(screen);
 
-        ControllerType ct = new ControllerType();
-        ct.setName("H2");
-        ct.setPortCount(4);
-        ct = model.addControllerType(ct);
-        model.addControllerToScreen(screen, ct.getId());
+        EquipmentPreset ct = model.addControllerPreset("H2", "", 4, 1000, 0, false, List.of());
+        model.addControllerToScreen(screen, ct.getId(), null);
 
         List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
         model.addSignalChain(1, false, List.of(ids.get(0)));

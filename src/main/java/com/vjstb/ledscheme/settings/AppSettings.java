@@ -12,6 +12,15 @@ public class AppSettings {
      *  false по умолчанию (в т.ч. для старых файлов настроек, сохранённых до появления
      *  этого поля — тур покажется один раз и им же). Доступен повторно из Настроек. */
     private boolean onboardingCompleted = false;
+    /** Прошла ли одноразовая миграция библиотеки контроллеров (устаревший
+     *  ControllerType) в EquipmentPreset (category == CONTROLLER, 2026-09-23) — см.
+     *  ui.ControllerLibraryMigrationDialog/AppModel#migrateControllerLibraryToEquipmentPresets.
+     *  false по умолчанию (в т.ч. для старых файлов настроек) — диалог миграции
+     *  покажется при следующем запуске, если в workspace остались непустые
+     *  controllerTypes/sharedControllerTypes; после успешного прогона (или если
+     *  мигрировать оказалось нечего) ставится в true и диалог больше не появляется
+     *  сам — доступен повторно из меню на случай ручного повторного запуска. */
+    private boolean controllerLibraryMigrated = false;
     /** Курсор последней успешной синхронизации библиотеки с сервером (см.
      *  sync.LibrarySyncClient/AppModel.applyLibrarySyncItems) — 0 означает "ещё ни
      *  разу не синхронизировались", тогда сервер отдаёт всю библиотеку целиком. */
@@ -69,6 +78,14 @@ public class AppSettings {
 
     public void setOnboardingCompleted(boolean onboardingCompleted) {
         this.onboardingCompleted = onboardingCompleted;
+    }
+
+    public boolean isControllerLibraryMigrated() {
+        return controllerLibraryMigrated;
+    }
+
+    public void setControllerLibraryMigrated(boolean controllerLibraryMigrated) {
+        this.controllerLibraryMigrated = controllerLibraryMigrated;
     }
 
     public long getLibrarySyncGlobalSeq() {

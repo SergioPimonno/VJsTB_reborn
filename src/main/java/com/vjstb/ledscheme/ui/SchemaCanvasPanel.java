@@ -2720,7 +2720,14 @@ public class SchemaCanvasPanel extends JPanel {
             linkMenu.setEnabled(!controllers.isEmpty());
             for (com.vjstb.ledscheme.model.ControllerInstance ci : controllers) {
                 boolean current = ci.getId().equals(node.getControllerInstanceRefId());
-                javax.swing.JMenuItem item = new javax.swing.JMenuItem((current ? "✓ " : "") + ci.getLabel());
+                // Тип контроллера в скобках — чтобы при нескольких одинаково названных
+                // "Контроллер N" было понятно, какой из них какой модели (запрос
+                // пользователя, чат 2026-09-24).
+                String typeName = model.getEquipmentPresets().stream()
+                        .filter(pr -> pr.getId().equals(ci.getControllerTypeId()))
+                        .map(com.vjstb.ledscheme.model.EquipmentPreset::getName).findFirst().orElse(null);
+                javax.swing.JMenuItem item = new javax.swing.JMenuItem((current ? "✓ " : "") + ci.getLabel()
+                        + (typeName != null ? " (" + typeName + ")" : ""));
                 item.addActionListener(ev -> {
                     model.linkSchemaNodeToController(node, ci.getId());
                     onChanged.run();

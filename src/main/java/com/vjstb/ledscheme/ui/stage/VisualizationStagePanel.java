@@ -285,8 +285,9 @@ public class VisualizationStagePanel extends JPanel {
         JButton exportAfterEffects = new JButton("Экспорт под After Effects…");
         exportAfterEffects.addActionListener(e -> exportAfterEffectsPreset());
         exportAfterEffects.setToolTipText("По .jsx-скрипту на каждый канвас текущей сцены — при запуске в AE"
-                + " (File → Scripts → Run Script File) создаёт композицию размером с канвас и по слою на каждый"
-                + " размещённый экран, footage слоя — PNG-маска этого экрана (сохраняется рядом со скриптом).");
+                + " (File → Scripts → Run Script File) создаёт композицию размером с канвас, в ней по прекомпозиции"
+                + " на каждый экран (внутри — PNG-маска экрана) и guide-слои с маской пустот и разметкой"
+                + " координат. Все PNG сохраняются рядом со скриптом.");
         exportRow.add(exportMasks);
         exportRow.add(exportSelectedCanvas);
         exportRow.add(exportResolume);
@@ -700,9 +701,15 @@ public class VisualizationStagePanel extends JPanel {
                     javax.imageio.ImageIO.write(img, "png", new File(folder, fname));
                     maskCount++;
                 }
+                PixelGridRenderer.writePng(PixelGridRenderer.renderCanvasGapMask(c, scene, model),
+                        new File(folder, AfterEffectsJsxWriter.gapMaskFilename(sceneNameSanitized, c)));
+                PixelGridRenderer.writePng(PixelGridRenderer.renderCanvasOverlay(c, scene, model),
+                        new File(folder, AfterEffectsJsxWriter.overlayFilename(sceneNameSanitized, c)));
                 String jsx = AfterEffectsJsxWriter.buildJsx(c, scene, model, sceneNameSanitized);
                 String jsxName = "AE_" + sceneNameSanitized + "_" + OutputPaths.sanitize(c.getName()) + ".jsx";
-                java.nio.file.Files.writeString(new File(folder, jsxName).toPath(), jsx,
+                // BOM обязателен: без него ExtendScript читает файл в системной кодировке, и
+                // кириллица в именах PNG («Маска», «Пустоты») превращается в мусор -> «файл не найден».
+                java.nio.file.Files.writeString(new File(folder, jsxName).toPath(), "﻿" + jsx,
                         java.nio.charset.StandardCharsets.UTF_8);
                 scriptCount++;
             }

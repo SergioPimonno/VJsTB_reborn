@@ -1,5 +1,7 @@
 package com.vjstb.ledscheme;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.vjstb.ledscheme.model.CabinetType;
@@ -10,14 +12,16 @@ import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.store.WorkspaceStore;
 import com.vjstb.ledscheme.ui.AfterEffectsJsxWriter;
+import com.vjstb.ledscheme.ui.PixelGridRenderer;
+import java.awt.image.BufferedImage;
 import java.io.File;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /** Тот же образец канваса, что {@code ResolumePresetExporterTest} (3584×1280, три экрана) —
- *  проверяет, что .jsx создаёт композицию нужного размера и по слою на каждый экран, с
- *  позицией/anchor point, соответствующими границам экрана в координатах канваса, и что
+ *  проверяет, что .jsx создаёт композицию нужного размера и по прекомпу на каждый экран,
+ *  положенному anchor [0,0] в позицию экрана на канвасе, guide-слои пустот/разметки, и что
  *  имя PNG-файла, на который ссылается скрипт, совпадает с {@code
  *  AfterEffectsJsxWriter#maskFilename}. */
 class AfterEffectsJsxWriterTest {
@@ -54,23 +58,57 @@ class AfterEffectsJsxWriterTest {
         assertTrue(jsx.contains("app.project.items.addComp(\"Test_3584x1280\", 3584, 1280,"),
                 "имя композиции несёт разрешение канваса, как и имя файла его маски");
 
-        // Left_Portal: 768×1280 в (0,0) -> anchor (384,640), position (384,640).
-        String leftFile = AfterEffectsJsxWriter.maskFilename("Сцена", left, 768, 1280);
-        assertTrue(jsx.contains("importMask(\"" + leftFile + "\")"));
-        assertTrue(jsx.contains("layer.name = \"Left_Portal_768x1280\";"));
-        assertTrue(jsx.contains("[384.0, 640.0]"), "anchor/position левого портала");
+        // Каждый экран -- прекомп размером с экран, слой прекомпа с anchor [0,0] в позиции экрана.
+        assertScreen(jsx, AfterEffectsJsxWriter.maskFilename("Сцена", left, 768, 1280),
+                "Left_Portal_768x1280", 768, 1280, 0, 0);
+        assertScreen(jsx, AfterEffectsJsxWriter.maskFilename("Сцена", center, 2048, 1024),
+                "Center_2048x1024", 2048, 1024, 768, 0);
+        assertScreen(jsx, AfterEffectsJsxWriter.maskFilename("Сцена", right, 768, 1280),
+                "Right_Portal_768x1280", 768, 1280, 2816, 0);
 
-        // Center: 2048×1024 в (768,0) -> anchor (1024,512), position (768+1024, 0+512) = (1792,512).
-        String centerFile = AfterEffectsJsxWriter.maskFilename("Сцена", center, 2048, 1024);
-        assertTrue(jsx.contains("importMask(\"" + centerFile + "\")"));
-        assertTrue(jsx.contains("layer.name = \"Center_2048x1024\";"));
-        assertTrue(jsx.contains("[1792.0, 512.0]"), "position центрального экрана");
+        // Маска пустот и разметка -- guide-слои (не попадают в рендер), слои не блокируются.
+        assertTrue(jsx.contains("importPng(\"" + AfterEffectsJsxWriter.gapMaskFilename("Сцена", canvas) + "\")"));
+        assertTrue(jsx.contains("importPng(\"" + AfterEffectsJsxWriter.overlayFilename("Сцена", canvas) + "\")"));
+        assertTrue(jsx.contains("gapLayer.guideLayer = true;"));
+        assertTrue(jsx.contains("overlayLayer.guideLayer = true;"));
+        assertFalse(jsx.contains(".locked"), "слои не блокируются -- решение пользователя");
+    }
 
-        // Right_Portal: 768×1280 в (2816,0) -> anchor (384,640), position (2816+384, 640) = (3200,640).
-        String rightFile = AfterEffectsJsxWriter.maskFilename("Сцена", right, 768, 1280);
-        assertTrue(jsx.contains("importMask(\"" + rightFile + "\")"));
-        assertTrue(jsx.contains("layer.name = \"Right_Portal_768x1280\";"));
-        assertTrue(jsx.contains("[3200.0, 640.0]"), "position правого портала");
+    private static void assertScreen(String jsx, String file, String name, int w, int h, int x, int y) {
+        assertTrue(jsx.contains("addComp(\"" + name + "\", " + w + ", " + h + ", 1.0, DUR, FPS)"), name);
+        assertTrue(jsx.contains("importPng(\"" + file + "\")"), file);
+        int at = jsx.indexOf("addComp(\"" + name + "\"");
+        String tail = jsx.substring(at);
+        int pos = tail.indexOf("setValue([" + x + ", " + y + "])");
+        int nextScreen = tail.indexOf("addComp(", 1);
+        assertTrue(pos > 0 && (nextScreen < 0 || pos < nextScreen), "позиция " + name);
+    }
+
+    @Test
+    void canvasHelperPngsHaveCanvasSizeAndCutOutScreens(@TempDir Path dir) {
+        AppModel model = newModel(dir);
+        CabinetType base = new CabinetType();
+        base.setName("Base");
+        base.setResolutionWidth(128);
+        base.setResolutionHeight(128);
+        model.addCabinetType(base);
+        Project project = model.addProject("Проект");
+        model.selectProject(project);
+        Scene scene = model.addScene("Сцена");
+        model.selectScene(scene);
+        Screen scr = model.addScreen("A", base.getId(), 2, 2, 0, 0);
+        ContentCanvas canvas = model.addCanvas("C", 512, 512);
+        model.addScreenToCanvas(canvas, scr.getId(), 0, 0);
+
+        BufferedImage gap = PixelGridRenderer.renderCanvasGapMask(canvas, scene, model);
+        assertEquals(512, gap.getWidth());
+        assertEquals(512, gap.getHeight());
+        assertEquals(0, gap.getRGB(100, 100) >>> 24, "над экраном -- прозрачно");
+        assertEquals(0xFF000000, gap.getRGB(400, 400), "вне экранов -- непрозрачный чёрный");
+
+        BufferedImage overlay = PixelGridRenderer.renderCanvasOverlay(canvas, scene, model);
+        assertEquals(512, overlay.getWidth());
+        assertEquals(0, overlay.getRGB(400, 400) >>> 24, "разметка в основном прозрачна");
     }
 
     @Test

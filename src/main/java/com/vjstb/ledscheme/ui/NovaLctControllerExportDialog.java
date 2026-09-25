@@ -2,13 +2,13 @@ package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.ControllerInstance;
-import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.NovaLctCombineHelper;
 import com.vjstb.ledscheme.service.NovaLctControllerResolver;
 import com.vjstb.ledscheme.service.NovaLctScrWriter;
+import com.vjstb.ledscheme.service.ScreenLogic;
 import com.vjstb.ledscheme.settings.SettingsManager;
 
 import java.awt.BorderLayout;
@@ -81,9 +81,12 @@ public final class NovaLctControllerExportDialog {
                                                             boolean isSelected, boolean hasFocus) {
                 super.getListCellRendererComponent(list, value, index, isSelected, hasFocus);
                 if (value instanceof ControllerInstance ci) {
-                    ControllerType t = model.getWorkspace().controllerTypeById(ci.getControllerTypeId());
-                    String typeName = t != null ? t.getName() : "?";
-                    int cards = t != null ? t.getCards().size() : 0;
+                    // Имя типа-источника — только для показа (карты/порты уже
+                    // заморожены на самом экземпляре, см. class-javadoc ControllerInstance).
+                    String typeName = model.getEquipmentPresets().stream()
+                            .filter(p -> p.getId().equals(ci.getControllerTypeId()))
+                            .map(com.vjstb.ledscheme.model.EquipmentPreset::getName).findFirst().orElse("?");
+                    int cards = ci.getCards().size();
                     String cardsSuffix = cards > 0 ? " (" + cards + " " + cardWord(cards) + ")" : "";
                     setText(ci.getLabel() + " — " + typeName + cardsSuffix);
                 }
@@ -125,6 +128,10 @@ public final class NovaLctControllerExportDialog {
         Set<Screen> involvedScreens = new LinkedHashSet<>();
         for (NovaLctControllerResolver.CabinetRec r : recs) {
             involvedScreens.add(r.sourceScreen());
+        }
+
+        if (confirmStandardSizeMismatchDeclined(owner, involvedScreens, recs, scene, model)) {
+            return;
         }
 
         byte[] data;
@@ -422,6 +429,45 @@ public final class NovaLctControllerExportDialog {
                 "Экспорт NovaLCT — отдельные экраны", JOptionPane.YES_NO_OPTION,
                 JOptionPane.WARNING_MESSAGE);
         return rc == JOptionPane.YES_OPTION;
+    }
+
+    /** true — пользователь увидел предупреждение и ОТКАЗАЛСЯ продолжать. Предупреждение
+     *  показывается, когда экран уходит в Complex только потому, что кабинеты с галочкой
+     *  «прописывать как стандартный кабинет» (см. {@code CabinetType#isExportAsStandardCabinet})
+     *  отличаются по разрешению от типа экрана: Standard хранит один размер на порт, а не
+     *  на кабинет. Просто явно говорим об этом, а не молча меняем формат файла. */
+    private static boolean confirmStandardSizeMismatchDeclined(Frame owner, Set<Screen> screens,
+            List<NovaLctControllerResolver.CabinetRec> recs, Scene scene, AppModel model) {
+        StringBuilder details = new StringBuilder();
+        for (Screen s : screens) {
+            // Размер на порт (разные порты — разные размеры) умеет только одноэкранный экспорт
+            // целого экрана одним контроллером; мультиэкранные пути и экспорт куска экрана
+            // пишут один размер на блок — там строгая проверка «одно разрешение на экран».
+            boolean perPort = screens.size() == 1
+                    && NovaLctControllerResolver.controllersWiringScreen(scene, s, model).size() <= 1;
+            List<String> names = ScreenLogic.standardSizeMismatchTypeNames(s, model.typeOf(s), model.getWorkspace(),
+                    perPort ? NovaLctScrWriter.portKeysOf(s, recs) : null);
+            if (!names.isEmpty()) {
+                details.append("<br>• экран «").append(escapeHtml(s.getName())).append("»: ")
+                        .append(escapeHtml(String.join(", ", names)));
+            }
+        }
+        if (details.length() == 0) {
+            return false;
+        }
+        int rc = JOptionPane.showConfirmDialog(owner,
+                "<html><body style='width:380px'><b>Экран будет записан как Complex Screen.</b>"
+                        + "<br><br>Кабинеты, помеченные «прописывать как стандартный кабинет», имеют другое"
+                        + " разрешение, а Standard Screen хранит один размер на порт (и один на блок при"
+                        + " объединении/раздельных экранах), а не на кабинет:" + details
+                        + "<br><br>Продолжить экспорт как Complex?</body></html>",
+                "Экспорт NovaLCT — разные размеры кабинетов", JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE);
+        return rc != JOptionPane.YES_OPTION;
+    }
+
+    private static String escapeHtml(String text) {
+        return text == null ? "" : text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
     /** true — пользователь увидел предупреждение о неполном расключении и ОТКАЗАЛСЯ

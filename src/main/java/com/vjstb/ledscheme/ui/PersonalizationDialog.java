@@ -41,6 +41,8 @@ public class PersonalizationDialog extends javax.swing.JDialog {
     private final JComboBox<SchemaStylePreset> schemaStylePresetCombo = new JComboBox<>(SchemaStylePreset.values());
     private final JComboBox<com.vjstb.ledscheme.settings.SchemaRenderMode> schemaRenderModeCombo =
             new JComboBox<>(com.vjstb.ledscheme.settings.SchemaRenderMode.values());
+    private final javax.swing.JSpinner signalSideScrollSpinner = new javax.swing.JSpinner(
+            new javax.swing.SpinnerNumberModel(16, 1, 200, 1));
     /** Гасит слушатели комбобоксов схемы на время программной установки значения
      *  при переключении профиля (см. {@link #refreshSchemaCombos()}) — тот же
      *  приём, что уже был у них в {@code PreferencesDialog} (докуда они переехали
@@ -72,6 +74,8 @@ public class PersonalizationDialog extends javax.swing.JDialog {
         content.add(buildColorsPanel());
         content.add(Box.createVerticalStrut(10));
         content.add(buildSchemaAppearancePanel());
+        content.add(Box.createVerticalStrut(10));
+        content.add(buildScrollPanel());
         content.add(Box.createVerticalStrut(10));
 
         JButton reset = new JButton("Сбросить к встроенным цветам");
@@ -358,10 +362,40 @@ public class PersonalizationDialog extends javax.swing.JDialog {
         return (JPanel) UiKit.section("Общая схема", body);
     }
 
+    /** «Прокрутка» — скорость колеса мыши в боковой панели этапа «Сигнал» (список
+     *  контроллеров и сетка портов их карт). Отдельный параметр, а не общий на
+     *  всё приложение: остальные окна прокручиваются нормально (у них у самих
+     *  задан шаг 16 px или это списки/таблицы со своим шагом), и менять там нечего —
+     *  см. {@link UserProfile#getSignalSideScrollUnitPx()}. */
+    private JPanel buildScrollPanel() {
+        JPanel body = new JPanel();
+        body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
+        body.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JPanel row = new JPanel(new java.awt.BorderLayout(8, 0));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+        row.setToolTipText("Сколько пикселей прокручивает одна «единица» колеса мыши в правой панели этапа"
+                + " «Сигнал» (контроллеры и порты их карт); обычный щелчок колеса = 3 единицы. Если у контроллера"
+                + " много карт и панель прокручивается слишком медленно — увеличьте. По умолчанию 16, как в"
+                + " остальных окнах; применяется сразу.");
+        row.add(new JLabel("Прокрутка панели «Сигнал» колесом (px на единицу)"), java.awt.BorderLayout.CENTER);
+        signalSideScrollSpinner.addChangeListener(e -> {
+            if (!refreshingSchemaCombos) {
+                settings.setSignalSideScrollUnitPx((Integer) signalSideScrollSpinner.getValue());
+            }
+        });
+        row.add(signalSideScrollSpinner, java.awt.BorderLayout.EAST);
+        body.add(row);
+
+        return (JPanel) UiKit.section("Прокрутка", body);
+    }
+
     private void refreshSchemaCombos() {
         refreshingSchemaCombos = true;
         schemaStylePresetCombo.setSelectedItem(settings.activeProfile().getSchemaStylePreset());
         schemaRenderModeCombo.setSelectedItem(settings.activeProfile().getSchemaRenderMode());
+        signalSideScrollSpinner.setValue(settings.activeProfile().getSignalSideScrollUnitPx());
         refreshingSchemaCombos = false;
     }
 

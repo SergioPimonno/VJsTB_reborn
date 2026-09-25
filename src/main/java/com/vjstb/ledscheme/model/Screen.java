@@ -41,6 +41,11 @@ public class Screen {
      *  умолчанию, старые проекты десериализуются с этим значением). */
     private ScreenTagColor tagColor = ScreenTagColor.NONE;
 
+    /** Группа экранов сцены, в которую входит этот экран (см. {@link ScreenGroup},
+     *  {@link Scene#getScreenGroups()}) — {@code null}: вне групп. Только
+     *  организация дерева навигации, на расчёты не влияет. */
+    private String groupId;
+
     /** Способ монтажа — влияет на применимость расчёта точек подвеса. */
     private ScreenMountType mountType = ScreenMountType.RIGGED;
     /** Свободные примечания к экрану — НЕ привязаны к способу монтажа (в отличие
@@ -269,6 +274,14 @@ public class Screen {
 
     public void setTagColor(ScreenTagColor tagColor) {
         this.tagColor = tagColor != null ? tagColor : ScreenTagColor.NONE;
+    }
+
+    public String getGroupId() {
+        return groupId;
+    }
+
+    public void setGroupId(String groupId) {
+        this.groupId = groupId;
     }
 
     public ScreenMountType getMountType() {
@@ -563,6 +576,7 @@ public class Screen {
         s.colorBitDepth = colorBitDepth;
         s.background = background;
         s.tagColor = tagColor;
+        s.groupId = groupId;
         s.mountType = mountType;
         s.notes = notes;
         s.riggingPointsCount = riggingPointsCount;

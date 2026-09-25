@@ -5,7 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.CardPort;
-import com.vjstb.ledscheme.model.ControllerType;
+import com.vjstb.ledscheme.model.EquipmentPreset;
 import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.SchemaCard;
@@ -57,12 +57,9 @@ class NovaLctComplexScrWriterTest {
         return ct;
     }
 
-    private ControllerType singleCardController() {
-        ControllerType ct = new ControllerType();
-        ct.setName("Test controller");
-        ct.setPortCount(20);
-        ct.getCards().add(new SchemaCard("Карта 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 20))));
-        return ct;
+    private EquipmentPreset singleCardController(AppModel model) {
+        return model.addControllerPreset("Test controller", "", 20, 1000, 0, false,
+                List.of(new SchemaCard("Карта 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 20)))));
     }
 
     /** Строит общий 4x6 экран (нижний ряд -- 128x64), расключает 24 кабинета в
@@ -85,8 +82,8 @@ class NovaLctComplexScrWriterTest {
             model.setCabinetTypeOverride(cab.getId(), tall64.getId());
         }
 
-        ControllerType ct = model.addControllerType(singleCardController());
-        model.addControllerToScreen(screen, ct.getId());
+        EquipmentPreset ct = singleCardController(model);
+        model.addControllerToScreen(screen, ct.getId(), null);
 
         // (row,col) в точном порядке Receiving Card 1..24 из реальной таблицы --
         // снейк-раскладка: столбец 0 снизу вверх, столбец 1 сверху вниз, и т.д.

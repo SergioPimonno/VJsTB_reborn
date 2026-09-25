@@ -101,6 +101,23 @@ class SchemeExportTest {
         assertEquals(300, readJfifDpi(file));
     }
 
+    /** Баг-репорт: пакет документации на 300 DPI падал с «Maximum supported image
+     *  dimension is 65500 pixels» на длинной схеме — теперь картинка ужимается до
+     *  предела JPEG, а DPI в метаданных снижается пропорционально. */
+    @Test
+    void writeJpeg_oversizedImage_isDownscaledToJpegLimit(@TempDir Path dir) throws Exception {
+        BufferedImage img = new BufferedImage(70000, 20, BufferedImage.TYPE_INT_RGB);
+        File file = new File(dir.toFile(), "wide.jpg");
+
+        SchemeRenderer.writeJpeg(img, file, 300);
+
+        BufferedImage readBack = ImageIO.read(file);
+        assertNotNull(readBack);
+        assertEquals(65500, readBack.getWidth());
+        assertEquals(18, readBack.getHeight());
+        assertEquals(280, readJfifDpi(file));
+    }
+
     @Test
     void renderImage_dpiScale_multipliesPixelDimensions(@TempDir Path dir) throws Exception {
         Screen scr = buildScreen(dir, 2, 2);

@@ -319,6 +319,94 @@ public final class PixelGridRenderer {
         return img;
     }
 
+    /** Маска «пустоты» канваса для After Effects — по образцу pixl Grid (пользователь
+     *  прислал его экспорт как эталон): PNG размером с канвас, непрозрачно-чёрный там, где
+     *  НЕТ ни одного видимого кабинета, и прозрачный поверх экранов. Лежит в композиции
+     *  канваса верхним guide-слоем, чтобы контентщик видел, какие зоны канваса никуда не
+     *  выводятся. Вырезается по видимым кабинетам (тот же расчёт cabX/cabY, что в
+     *  {@link #renderMask}), а не по прямоугольнику экрана — скрытые кабинеты тоже «дыры». */
+    public static BufferedImage renderCanvasGapMask(ContentCanvas canvas, Scene scene, AppModel model) {
+        int w = Math.max(1, canvas.getWidthPx());
+        int h = Math.max(1, canvas.getHeightPx());
+        BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2 = img.createGraphics();
+        g2.setColor(Color.BLACK);
+        g2.fillRect(0, 0, w, h);
+        g2.setComposite(AlphaComposite.Clear);
+        for (CanvasPlacement pl : canvas.getPlacements()) {
+            Screen scr = screenById(scene, pl.getScreenId());
+            if (scr == null) {
+                continue;
+            }
+            CabinetType type = model.typeOf(scr);
+            ScreenStats stats = ScreenLogic.stats(scr, type, model.getWorkspace());
+            int sw = Math.max(1, stats.resolutionWidthPx());
+            int sh = Math.max(1, stats.resolutionHeightPx());
+            int cellW = type != null && scr.getCols() > 0 ? sw / scr.getCols() : sw;
+            int cellH = type != null && scr.getRows() > 0 ? sh / scr.getRows() : sh;
+            for (CabinetInstance cab : scr.getCabinets()) {
+                if (cab.isHidden()) {
+                    continue;
+                }
+                g2.fillRect(pl.getX() + cabX(cab, type, cellW), pl.getY() + cabY(cab, type, cellH), cellW, cellH);
+            }
+        }
+        g2.dispose();
+        return img;
+    }
+
+    /** Оверлей-«курсор» канваса для After Effects — по образцу pixl Grid: прозрачный PNG
+     *  размером с канвас, тонкая рамка канваса с подписью его разрешения и у каждого экрана —
+     *  рамка, имя с разрешением и координата левого верхнего угла «TL:x,y». Только
+     *  справочный guide-слой, в рендер не попадает. */
+    public static BufferedImage renderCanvasOverlay(ContentCanvas canvas, Scene scene, AppModel model) {
+        int w = Math.max(1, canvas.getWidthPx());
+        int h = Math.max(1, canvas.getHeightPx());
+        BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2 = img.createGraphics();
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        Font font = g2.getFont().deriveFont(Font.PLAIN, 14f);
+        g2.setFont(font);
+        FontMetrics fm = g2.getFontMetrics();
+        int lineH = fm.getHeight();
+        g2.setStroke(new BasicStroke(1f));
+
+        g2.setColor(new Color(255, 255, 255, 200));
+        g2.drawRect(0, 0, w - 1, h - 1);
+        String canvasLabel = "Canvas: " + w + "px x " + h + "px";
+        drawLabel(g2, fm, canvasLabel, 0, 0);
+
+        for (CanvasPlacement pl : canvas.getPlacements()) {
+            Screen scr = screenById(scene, pl.getScreenId());
+            if (scr == null) {
+                continue;
+            }
+            ScreenStats stats = ScreenLogic.stats(scr, model.typeOf(scr), model.getWorkspace());
+            int sw = Math.max(1, stats.resolutionWidthPx());
+            int sh = Math.max(1, stats.resolutionHeightPx());
+            g2.setColor(new Color(255, 255, 255, 160));
+            g2.drawRect(pl.getX(), pl.getY(), sw - 1, sh - 1);
+            // Подписи экрана — второй/третьей строкой: первая строка в (0,0) занята
+            // подписью канваса, и у экрана в левом верхнем углу они бы наложились.
+            int ty = pl.getY() + lineH + 2;
+            drawLabel(g2, fm, scr.getName() + " " + sw + "x" + sh, pl.getX(), ty);
+            drawLabel(g2, fm, "TL:" + pl.getX() + "," + pl.getY(), pl.getX(), ty + lineH + 2);
+        }
+        g2.dispose();
+        return img;
+    }
+
+    /** Подпись на полупрозрачной тёмной плашке — иначе белый текст не читается поверх
+     *  светлого контента в AE. */
+    private static void drawLabel(Graphics2D g2, FontMetrics fm, String text, int x, int y) {
+        int tw = fm.stringWidth(text);
+        g2.setColor(new Color(0, 0, 0, 170));
+        g2.fillRect(x, y, tw + 8, fm.getHeight() + 2);
+        g2.setColor(Color.WHITE);
+        g2.drawString(text, x + 4, y + 1 + fm.getAscent());
+    }
+
     private static Screen screenById(Scene scene, String screenId) {
         if (scene == null) {
             return null;

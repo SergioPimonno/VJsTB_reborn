@@ -269,6 +269,13 @@ public class SettingsManager {
         persist();
     }
 
+    /** Скорость прокрутки колесом боковой панели этапа «Сигнал» (px на единицу
+     *  колеса), см. {@link UserProfile#getSignalSideScrollUnitPx()}. */
+    public void setSignalSideScrollUnitPx(int px) {
+        activeProfile().setSignalSideScrollUnitPx(px);
+        persist();
+    }
+
     public void setLoadTrackingEnabled(boolean enabled) {
         activeProfile().setLoadTrackingEnabled(enabled);
         persist();
@@ -324,6 +331,14 @@ public class SettingsManager {
         persist();
     }
 
+    /** Все параметры окна «Параметры экспорта» разом — одна запись профиля на диск. */
+    public void setDocExportOptions(String format, int dpi, int quality) {
+        activeProfile().setDocExportFormat(format);
+        activeProfile().setDocExportDpi(dpi);
+        activeProfile().setDocExportQuality(quality);
+        persist();
+    }
+
     public void setUiScalePercent(int percent) {
         activeProfile().setUiScalePercent(percent);
         persist();
@@ -349,6 +364,15 @@ public class SettingsManager {
 
     public void setOnboardingCompleted(boolean completed) {
         settings.setOnboardingCompleted(completed);
+        persist();
+    }
+
+    public boolean isControllerLibraryMigrated() {
+        return settings.isControllerLibraryMigrated();
+    }
+
+    public void setControllerLibraryMigrated(boolean migrated) {
+        settings.setControllerLibraryMigrated(migrated);
         persist();
     }
 

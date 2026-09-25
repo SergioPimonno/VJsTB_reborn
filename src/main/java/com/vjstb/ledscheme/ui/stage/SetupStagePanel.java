@@ -4,6 +4,8 @@ import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.Project;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
+import com.vjstb.ledscheme.model.ScreenGroup;
+import com.vjstb.ledscheme.model.ScreenTagColor;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.SceneStats;
 import com.vjstb.ledscheme.ui.CabinetTypeRenderer;
@@ -14,6 +16,7 @@ import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -67,6 +70,22 @@ public class SetupStagePanel extends JPanel {
     private final JButton arrangeScreensBtn = new JButton("Расставить экраны без наложения");
     private final JButton exportScreensOverviewBtn = new JButton("Экспорт таблицы экранов…");
     private final JButton deleteNodeBtn = new JButton("✕ Удалить");
+    /** Кнопка «+ Проект» на плашке над деревом (в отличие от контекстной {@link
+     *  #addNodeBtn} всегда создаёт именно проект). */
+    private final JButton addProjectBtn = new JButton("+ Проект");
+    /** «Удалить проект» на плашке над деревом — только ТЕКУЩИЙ проект; удаление
+     *  выделенных в дереве сцен/экранов/групп — нижняя {@link #deleteNodeBtn}. */
+    private final JButton deleteProjectBtn = new JButton("✕ Удалить проект");
+    /** «Особое» выделение дерева, которое модель выразить не может: несколько
+     *  узлов (Shift/Ctrl+клик) или выделенная группа. Пусто — выделение
+     *  определяется моделью (текущий проект/сцена/экран), см. {@link
+     *  #syncTree}/{@link #restoreSpecialSelection}. Объекты — Screen/ScreenGroup
+     *  одной сцены. */
+    private final List<Object> navSel = new ArrayList<>();
+    /** Внутренний буфер обмена для Ctrl+C/Ctrl+V в дереве: копируются не сами
+     *  экраны, а «какие экраны создать» (см. {@link AppModel.ScreenTemplate}) —
+     *  вставка создаёт свежие экраны с параметрами по умолчанию сцены. */
+    private List<AppModel.ScreenTemplate> screenClipboard = new ArrayList<>();
 
     private final JPanel prerigSection;
     private final JLabel prerigScreens = new JLabel();
@@ -305,48 +324,55 @@ public class SetupStagePanel extends JPanel {
 
     // ---- навигация (дерево Проекты → Сцены → Экраны) ----
 
-    /** Единственная точка сборки левой колонки — дерево + компактный тулбар под
-     *  ним. Добавление контекстно зависит от текущего выбора модели (см. {@link
-     *  #addProjectOrScene}), удаление и Delete/Backspace работают с узлом,
-     *  выбранным СЕЙЧАС в дереве (см. {@link #deleteSelectedNode}) — то же
-     *  разделение ответственности, что раньше было у трёх пар «+»/«✕». */
+    /** Единственная точка сборки левой колонки — компактная плашка «+ Проект» /
+     *  «✕ Удалить проект» над деревом, само дерево и тулбар под ним. Добавление
+     *  сцены/экрана контекстно зависит от текущего выбора модели (см. {@link
+     *  #addContextualNode}), удаление и Delete/Backspace работают с узлами,
+     *  выделенными СЕЙЧАС в дереве (см. {@link #deleteSelectedNodes}).
+     *
+     *  <p>Выделение (2026-09-24): дерево допускает мультивыбор (Shift — диапазон,
+     *  Ctrl — по одному) экранов и групп ОДНОЙ сцены; ПКМ открывает контекстное
+     *  меню (см. {@link #maybeShowNavPopup}), Esc снимает выделение целиком (раньше
+     *  выделение снималось ПКМ по уже выбранному узлу), Ctrl+D/Ctrl+C/Ctrl+V —
+     *  дублирование/копирование/вставка экранов (см. {@link #bindNavKeys}). */
     private JPanel buildNav() {
         navTree.setRootVisible(false);
         navTree.setShowsRootHandles(true);
         navTree.setRowHeight(22);
-        navTree.getSelectionModel().setSelectionMode(TreeSelectionModel.SINGLE_TREE_SELECTION);
+        navTree.getSelectionModel().setSelectionMode(TreeSelectionModel.DISCONTIGUOUS_TREE_SELECTION);
         navTree.setCellRenderer(new NavTreeCellRenderer());
-        navTree.addTreeSelectionListener(e -> {
-            if (refreshing) return;
-            TreePath path = navTree.getSelectionPath();
-            if (path == null) return;
-            Object obj = ((DefaultMutableTreeNode) path.getLastPathComponent()).getUserObject();
-            if (obj instanceof Project p) {
-                if (p != model.getCurrentProject()) model.selectProject(p);
-            } else if (obj instanceof Scene s) {
-                if (s != model.getCurrentScene()) model.selectScene(s);
-            } else if (obj instanceof Screen scr) {
-                if (scr != model.getCurrentScreen()) model.selectScreen(scr);
+        navTree.addTreeSelectionListener(e -> onNavSelectionChanged());
+        // Свёрнутость группы — часть проекта (см. ScreenGroup#collapsed): пользовательское
+        // сворачивание/разворачивание сразу сохраняется; программные (в syncTree, под
+        // refreshing) — нет, там дерево лишь приводится к уже сохранённому состоянию.
+        navTree.addTreeExpansionListener(new javax.swing.event.TreeExpansionListener() {
+            @Override
+            public void treeExpanded(javax.swing.event.TreeExpansionEvent e) {
+                onGroupExpansion(e.getPath(), false);
+            }
+
+            @Override
+            public void treeCollapsed(javax.swing.event.TreeExpansionEvent e) {
+                onGroupExpansion(e.getPath(), true);
             }
         });
         enableScreenReorder();
-        UiKit.bindDeleteKey(navTree, this::deleteSelectedNode);
-        // ПКМ на УЖЕ выбранном узле снимает выделение целиком (баг-репорт
-        // 2026-09-15) — свежая копия координат клика проверяется против ТЕКУЩЕГО
-        // пути выделения (а не просто "клик по дереву правой кнопкой") — иначе ПКМ
-        // где угодно по дереву сбрасывал бы выбор, включая клик по другому узлу.
-        // selectProject(null) каскадом обнуляет и сцену, и экран — то же самое, что
-        // "ничего не выбрано" при старте, не частичный откат на уровень выше.
+        UiKit.bindDeleteKey(navTree, this::deleteSelectedNodes);
+        bindNavKeys();
+        // ПКМ по узлу — контекстное меню. Раньше ПКМ на уже выбранном узле снимал
+        // выделение (баг-репорт 2026-09-15), теперь это делает Esc (запрос
+        // 2026-09-24). Стандартный BasicTreeUI по ПКМ узел НЕ выделяет — делаем сами,
+        // но только если узел ещё не в выделении (иначе ПКМ по одному из выделенных
+        // экранов сломал бы мультивыбор).
         navTree.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
-            public void mouseClicked(java.awt.event.MouseEvent e) {
-                if (!javax.swing.SwingUtilities.isRightMouseButton(e)) {
-                    return;
-                }
-                TreePath clicked = navTree.getPathForLocation(e.getX(), e.getY());
-                if (clicked != null && clicked.equals(navTree.getSelectionPath())) {
-                    model.selectProject(null);
-                }
+            public void mousePressed(java.awt.event.MouseEvent e) {
+                maybeShowNavPopup(e);
+            }
+
+            @Override
+            public void mouseReleased(java.awt.event.MouseEvent e) {
+                maybeShowNavPopup(e);
             }
         });
 
@@ -354,6 +380,24 @@ public class SetupStagePanel extends JPanel {
         treeScroll.setBorder(null);
         treeScroll.getVerticalScrollBar().setUnitIncrement(16);
         treeScroll.setMinimumSize(new Dimension(160, 120));
+
+        // Плашка над деревом: «+ Проект» создаёт именно проект (в отличие от
+        // нижние кнопки работают с выделением в дереве (сцены/экраны/группы).
+        // клавиша Delete.
+        addProjectBtn.setToolTipText("Создать новый проект.");
+        addProjectBtn.addActionListener(e -> addProject());
+        deleteProjectBtn.setToolTipText("Удалить текущий проект со всеми сценами и экранами.");
+        deleteProjectBtn.addActionListener(e -> deleteCurrentProject());
+        deleteNodeBtn.setToolTipText("Удалить выделенное в дереве (сцену/экраны/группу) со всем содержимым."
+                + " Группа удаляется вместе со всеми её экранами.");
+        deleteNodeBtn.addActionListener(e -> deleteSelectedNodes());
+        java.awt.Insets compact = new java.awt.Insets(2, 8, 2, 8);
+        addProjectBtn.setMargin(compact);
+        deleteProjectBtn.setMargin(compact);
+        JPanel topBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 3));
+        topBar.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, Palette.BORDER));
+        topBar.add(addProjectBtn);
+        topBar.add(deleteProjectBtn);
 
         JPanel toolbar = UiKit.vbox();
         addNodeBtn.addActionListener(e -> addContextualNode());
@@ -372,20 +416,447 @@ public class SetupStagePanel extends JPanel {
         toolbar.add(exportScreensOverviewBtn);
 
         toolbar.add(UiKit.vgap());
-        deleteNodeBtn.setToolTipText("Удалить выбранный в дереве узел (проект/сцену/экран) со всем содержимым.");
-        deleteNodeBtn.addActionListener(e -> deleteSelectedNode());
         toolbar.add(deleteNodeBtn);
 
         toolbar.add(UiKit.vgap());
         JLabel hint = UiKit.muted("<html>Параметры экрана — в инспекторе справа,"
-                + " кнопка «Параметры экрана…» в «Прериг сцены».</html>");
+                + " кнопка «Параметры экрана…» в «Прериг сцены».<br>Shift/Ctrl+клик — выделить несколько"
+                + " экранов, ПКМ — группы и действия, Ctrl+D — дублировать, Ctrl+C/Ctrl+V — копировать/вставить,"
+                + " Esc — снять выделение.</html>");
         toolbar.add(hint);
 
         JPanel body = new JPanel(new BorderLayout());
+        body.add(topBar, BorderLayout.NORTH);
         body.add(treeScroll, BorderLayout.CENTER);
         body.add(toolbar, BorderLayout.SOUTH);
         return (JPanel) UiKit.dynamicSection("Дерево проекта", body);
     }
+
+    // ---- выделение в дереве ----
+
+    private static Object userObj(TreePath p) {
+        return ((DefaultMutableTreeNode) p.getLastPathComponent()).getUserObject();
+    }
+
+    private static <T> T ancestorOfType(TreePath p, Class<T> type) {
+        Object[] comps = p.getPath();
+        for (Object c : comps) {
+            Object o = ((DefaultMutableTreeNode) c).getUserObject();
+            if (type.isInstance(o)) {
+                return type.cast(o);
+            }
+        }
+        return null;
+    }
+
+    /** Мультивыбор допустим только для экранов/групп ОДНОЙ сцены — иначе групповые
+     *  операции (группировка, дублирование) не имели бы смысла. */
+    private static boolean isValidMultiSelection(TreePath[] paths) {
+        Scene scene = null;
+        for (TreePath p : paths) {
+            Object o = userObj(p);
+            if (!(o instanceof Screen) && !(o instanceof ScreenGroup)) {
+                return false;
+            }
+            Scene s = ancestorOfType(p, Scene.class);
+            if (s == null || (scene != null && s != scene)) {
+                return false;
+            }
+            scene = s;
+        }
+        return true;
+    }
+
+    private void onNavSelectionChanged() {
+        if (refreshing) return;
+        TreePath[] paths = navTree.getSelectionPaths();
+        if (paths == null || paths.length == 0) {
+            navSel.clear();
+            updateNavButtons();
+            return;
+        }
+        TreePath lead = navTree.getLeadSelectionPath();
+        if (lead == null || !navTree.isPathSelected(lead)) {
+            lead = paths[paths.length - 1];
+        }
+        if (paths.length > 1 && !isValidMultiSelection(paths)) {
+            navTree.setSelectionPath(lead); // повторно войдёт сюда уже с одним путём
+            return;
+        }
+        Object leadObj = userObj(lead);
+        // «Особое» выделение (несколько узлов или группа) модель выразить не может —
+        // запоминаем его отдельно, чтобы syncTree не схлопнул его до одного экрана
+        // (см. navSel).
+        navSel.clear();
+        if (paths.length > 1 || leadObj instanceof ScreenGroup) {
+            for (TreePath p : paths) {
+                navSel.add(userObj(p));
+            }
+        }
+        selectInModel(lead);
+        updateNavButtons();
+        if (leadObj instanceof ScreenGroup) {
+            // «Выбрана группа» = ни один экран не активен (инспектор экрана закрывается)
+            if (model.getCurrentScreen() != null) {
+                model.selectScreen(null);
+            }
+        }
+    }
+
+    /** Приводит текущий проект/сцену/экран модели в соответствие с узлом дерева
+     *  (узел может лежать в НЕ текущем проекте/сцене — тогда сначала переключаем их). */
+    private void selectInModel(TreePath path) {
+        Object obj = userObj(path);
+        Project project = ancestorOfType(path, Project.class);
+        Scene scene = ancestorOfType(path, Scene.class);
+        if (project != null && project != model.getCurrentProject()) {
+            model.selectProject(project);
+        }
+        if (obj instanceof Project) {
+            return;
+        }
+        if (scene != null && scene != model.getCurrentScene()) {
+            model.selectScene(scene);
+        }
+        if (obj instanceof Screen scr && scr != model.getCurrentScreen()) {
+            model.selectScreen(scr);
+        }
+    }
+
+    private void updateNavButtons() {
+        deleteNodeBtn.setEnabled(navTree.getSelectionCount() > 0);
+        deleteProjectBtn.setEnabled(model.getCurrentProject() != null);
+    }
+
+    private void onGroupExpansion(TreePath path, boolean collapsed) {
+        if (refreshing) return;
+        if (userObj(path) instanceof ScreenGroup g) {
+            model.setGroupCollapsed(g, collapsed);
+        }
+    }
+
+    /** Экраны выделения: явно выделенные + члены выделенных групп, в порядке сцены. */
+    private List<Screen> selectedScreens() {
+        List<Screen> out = new ArrayList<>();
+        TreePath[] paths = navTree.getSelectionPaths();
+        if (paths == null) {
+            return out;
+        }
+        Scene scene = null;
+        Set<Screen> set = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        for (TreePath p : paths) {
+            Object o = userObj(p);
+            if (o instanceof Screen s) {
+                set.add(s);
+                scene = ancestorOfType(p, Scene.class);
+            } else if (o instanceof ScreenGroup g) {
+                scene = ancestorOfType(p, Scene.class);
+                if (scene != null) {
+                    set.addAll(scene.screensOf(g));
+                }
+            }
+        }
+        if (scene == null) {
+            return out;
+        }
+        for (Screen s : scene.getScreens()) {
+            if (set.contains(s)) {
+                out.add(s);
+            }
+        }
+        return out;
+    }
+
+    private List<ScreenGroup> selectedGroups() {
+        List<ScreenGroup> out = new ArrayList<>();
+        TreePath[] paths = navTree.getSelectionPaths();
+        if (paths != null) {
+            for (TreePath p : paths) {
+                if (userObj(p) instanceof ScreenGroup g) {
+                    out.add(g);
+                }
+            }
+        }
+        return out;
+    }
+
+    private Scene selectionScene() {
+        TreePath lead = navTree.getLeadSelectionPath();
+        return lead == null ? null : ancestorOfType(lead, Scene.class);
+    }
+
+    /** После создания экранов (Ctrl+D/Ctrl+V) выделяет их в дереве. */
+    private void selectCreatedScreens(List<Screen> created) {
+        if (created.isEmpty()) {
+            return;
+        }
+        navSel.clear();
+        if (created.size() > 1) {
+            navSel.addAll(created);
+        }
+        model.selectScreen(created.get(created.size() - 1));
+    }
+
+    // ---- клавиши дерева ----
+
+    private void bindNavKeys() {
+        javax.swing.InputMap im = navTree.getInputMap(JComponent.WHEN_FOCUSED);
+        javax.swing.ActionMap am = navTree.getActionMap();
+        int menuMask = java.awt.Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx();
+        bindNavKey(im, am, javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0),
+                "ledScheme.nav.clear", this::clearNavSelection);
+        bindNavKey(im, am, javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_D, menuMask),
+                "ledScheme.nav.duplicate", this::duplicateSelectedScreens);
+        bindNavKey(im, am, javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_C, menuMask),
+                "ledScheme.nav.copy", this::copySelectedScreens);
+        bindNavKey(im, am, javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_V, menuMask),
+                "ledScheme.nav.paste", this::pasteScreensFromClipboard);
+    }
+
+    private static void bindNavKey(javax.swing.InputMap im, javax.swing.ActionMap am, javax.swing.KeyStroke ks,
+                                   String key, Runnable action) {
+        im.put(ks, key);
+        am.put(key, new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                action.run();
+            }
+        });
+    }
+
+    /** Esc в дереве — снять выделение целиком. selectProject(null) каскадом обнуляет
+     *  и сцену, и экран — то же самое, что «ничего не выбрано» при старте, не
+     *  частичный откат на уровень выше. */
+    private void clearNavSelection() {
+        navSel.clear();
+        navTree.clearSelection();
+        model.selectProject(null);
+    }
+
+    // ---- дублирование / копирование / вставка экранов ----
+
+    private void duplicateSelectedScreens() {
+        List<Screen> screens = selectedScreens();
+        Scene scene = selectionScene();
+        if (screens.isEmpty() || scene == null || scene != model.getCurrentScene()) {
+            return;
+        }
+        tryRun(() -> selectCreatedScreens(model.duplicateScreens(scene, screens)));
+    }
+
+    private void copySelectedScreens() {
+        List<Screen> screens = selectedScreens();
+        if (screens.isEmpty()) {
+            return;
+        }
+        screenClipboard = new ArrayList<>();
+        for (Screen s : screens) {
+            screenClipboard.add(AppModel.ScreenTemplate.of(s));
+        }
+    }
+
+    /** Вставка — в выделенную группу (или в группу выделенного экрана), иначе на
+     *  выделенную сцену без группы. */
+    private void pasteScreensFromClipboard() {
+        Scene scene = selectionScene();
+        TreePath lead = navTree.getLeadSelectionPath();
+        if (screenClipboard.isEmpty() || scene == null || lead == null || scene != model.getCurrentScene()) {
+            return;
+        }
+        Object leadObj = userObj(lead);
+        ScreenGroup target = leadObj instanceof ScreenGroup g ? g
+                : leadObj instanceof Screen s ? scene.groupOf(s) : null;
+        tryRun(() -> selectCreatedScreens(model.pasteScreens(scene, screenClipboard, target)));
+    }
+
+    // ---- контекстное меню ----
+
+    private void maybeShowNavPopup(java.awt.event.MouseEvent e) {
+        if (!e.isPopupTrigger()) {
+            return;
+        }
+        TreePath at = navTree.getClosestPathForLocation(e.getX(), e.getY());
+        java.awt.Rectangle rb = at != null ? navTree.getPathBounds(at) : null;
+        if (rb == null || e.getY() < rb.y || e.getY() >= rb.y + rb.height) {
+            return;
+        }
+        navTree.requestFocusInWindow();
+        if (!navTree.isPathSelected(at)) {
+            navTree.setSelectionPath(at);
+        }
+        javax.swing.JPopupMenu menu = buildNavMenu(at);
+        if (menu.getComponentCount() > 0) {
+            menu.show(navTree, e.getX(), e.getY());
+        }
+    }
+
+    private javax.swing.JPopupMenu buildNavMenu(TreePath at) {
+        javax.swing.JPopupMenu menu = new javax.swing.JPopupMenu();
+        List<ScreenGroup> groups = selectedGroups();
+        List<Screen> screens = selectedScreens();
+        Scene scene = selectionScene();
+        Object atObj = userObj(at);
+        if (!groups.isEmpty()) {
+            addGroupMenuItems(menu, scene, groups);
+        } else if (!screens.isEmpty()) {
+            addScreenMenuItems(menu, scene, screens);
+        } else if (atObj instanceof Scene) {
+            menu.add(menuItem("+ Добавить экран…", this::addScreen));
+            javax.swing.JMenuItem paste = menuItem(pasteLabel(), java.awt.event.KeyEvent.VK_V,
+                this::pasteScreensFromClipboard);
+            paste.setEnabled(!screenClipboard.isEmpty());
+            menu.add(paste);
+            menu.addSeparator();
+            menu.add(menuItem("Удалить сцену…", this::deleteSelectedNodes));
+        } else if (atObj instanceof Project) {
+            menu.add(menuItem("+ Добавить сцену…", this::addContextualNode));
+            menu.addSeparator();
+            menu.add(menuItem("Удалить проект…", this::deleteSelectedNodes));
+        }
+        return menu;
+    }
+
+    private String pasteLabel() {
+        return "Вставить" + (screenClipboard.isEmpty() ? "" : " (" + screenClipboard.size() + ")");
+    }
+
+    private static javax.swing.JMenuItem menuItem(String text, Runnable action) {
+        javax.swing.JMenuItem item = new javax.swing.JMenuItem(text);
+        item.addActionListener(e -> action.run());
+        return item;
+    }
+
+    /** Пункт с подсказкой сочетания клавиш справа (само сочетание обрабатывает
+     *  {@link #bindNavKeys} на дереве — здесь оно только отображается). */
+    private static javax.swing.JMenuItem menuItem(String text, int keyCode, Runnable action) {
+        javax.swing.JMenuItem item = menuItem(text, action);
+        item.setAccelerator(javax.swing.KeyStroke.getKeyStroke(keyCode,
+                java.awt.Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx()));
+        return item;
+    }
+
+    private void addGroupMenuItems(javax.swing.JPopupMenu menu, Scene scene, List<ScreenGroup> groups) {
+        if (groups.size() == 1) {
+            menu.add(menuItem("Переименовать…", () -> renameGroup(groups.get(0))));
+        }
+        // Цвет группы = метка всех её экранов (см. AppModel#setGroupColor)
+        javax.swing.JMenu colorMenu = new javax.swing.JMenu("Цвет группы");
+        ScreenTagColor current = groups.get(0).getTagColor();
+        boolean sameColor = groups.stream().allMatch(g -> g.getTagColor() == groups.get(0).getTagColor());
+        javax.swing.ButtonGroup bg = new javax.swing.ButtonGroup();
+        for (ScreenTagColor c : ScreenTagColor.values()) {
+            javax.swing.JRadioButtonMenuItem item = new javax.swing.JRadioButtonMenuItem(c.getLabel(),
+                    new TagDotIcon(c.color()), sameColor && c == current);
+            item.addActionListener(e -> {
+                for (ScreenGroup g : groups) {
+                    model.setGroupColor(scene, g, c);
+                }
+            });
+            bg.add(item);
+            colorMenu.add(item);
+        }
+        menu.add(colorMenu);
+        boolean allCollapsed = groups.stream().allMatch(ScreenGroup::isCollapsed);
+        menu.add(menuItem(allCollapsed ? "Развернуть" : "Свернуть", () -> setSelectedGroupsExpanded(allCollapsed)));
+        menu.addSeparator();
+        addClipboardMenuItems(menu);
+        menu.addSeparator();
+        menu.add(menuItem("Разгруппировать", () -> model.dissolveGroups(scene, groups)));
+        menu.add(menuItem(groups.size() == 1 ? "Удалить группу с экранами…" : "Удалить группы с экранами…",
+                this::deleteSelectedNodes));
+    }
+
+    private void addScreenMenuItems(javax.swing.JPopupMenu menu, Scene scene, List<Screen> screens) {
+        if (screens.size() >= 2) {
+            menu.add(menuItem("Объединить в группу…", () -> createGroupFrom(scene, screens)));
+        }
+        // «Добавить в группу ▸» — список уже созданных групп сцены (кроме тех, где
+        // ВСЕ выделенные экраны и так состоят) + «Новая группа…»
+        javax.swing.JMenu addTo = new javax.swing.JMenu("Добавить в группу");
+        for (ScreenGroup g : scene.getScreenGroups()) {
+            boolean alreadyAll = screens.stream().allMatch(s -> g.getId().equals(s.getGroupId()));
+            if (alreadyAll) {
+                continue;
+            }
+            javax.swing.JMenuItem item = new javax.swing.JMenuItem(g.getName(), new TagDotIcon(g.getTagColor().color()));
+            item.addActionListener(e -> model.addScreensToGroup(scene, screens, g));
+            addTo.add(item);
+        }
+        if (addTo.getItemCount() > 0) {
+            addTo.addSeparator();
+        }
+        addTo.add(menuItem("Новая группа…", () -> createGroupFrom(scene, screens)));
+        menu.add(addTo);
+        if (screens.stream().anyMatch(s -> scene.groupOf(s) != null)) {
+            menu.add(menuItem("Разгруппировать", () -> model.ungroupScreens(scene, screens)));
+        }
+        menu.addSeparator();
+        addClipboardMenuItems(menu);
+        menu.addSeparator();
+        menu.add(menuItem(screens.size() == 1 ? "Удалить экран…" : "Удалить экраны (" + screens.size() + ")…",
+                this::deleteSelectedNodes));
+    }
+
+    private void addClipboardMenuItems(javax.swing.JPopupMenu menu) {
+        menu.add(menuItem("Дублировать", java.awt.event.KeyEvent.VK_D, this::duplicateSelectedScreens));
+        menu.add(menuItem("Копировать", java.awt.event.KeyEvent.VK_C, this::copySelectedScreens));
+        javax.swing.JMenuItem paste = menuItem(pasteLabel(), java.awt.event.KeyEvent.VK_V,
+                this::pasteScreensFromClipboard);
+        paste.setEnabled(!screenClipboard.isEmpty());
+        menu.add(paste);
+    }
+
+    private void setSelectedGroupsExpanded(boolean expanded) {
+        TreePath[] paths = navTree.getSelectionPaths();
+        if (paths == null) {
+            return;
+        }
+        for (TreePath p : paths) {
+            if (userObj(p) instanceof ScreenGroup) {
+                if (expanded) {
+                    navTree.expandPath(p);
+                } else {
+                    navTree.collapsePath(p);
+                }
+            }
+        }
+    }
+
+    /** «Объединить в группу…» — спрашивает название (по умолчанию «Группа N»),
+     *  создаёт группу и оставляет её выделенной в дереве. */
+    private void createGroupFrom(Scene scene, List<Screen> screens) {
+        int n = scene.getScreenGroups().size() + 1;
+        while (groupNameTaken(scene, "Группа " + n)) {
+            n++;
+        }
+        String name = JOptionPane.showInputDialog(this, "Название группы:", "Группа " + n);
+        if (name == null || name.trim().isEmpty()) {
+            return;
+        }
+        tryRun(() -> {
+            ScreenGroup g = model.groupScreens(scene, screens, name.trim());
+            navSel.clear();
+            navSel.add(g);
+        });
+    }
+
+    private static boolean groupNameTaken(Scene scene, String name) {
+        for (ScreenGroup g : scene.getScreenGroups()) {
+            if (name.equals(g.getName())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void renameGroup(ScreenGroup g) {
+        String name = JOptionPane.showInputDialog(this, "Название группы:", g.getName());
+        if (name != null && !name.trim().isEmpty() && !name.trim().equals(g.getName())) {
+            model.renameGroup(g, name.trim());
+        }
+    }
+
+    // ---- добавление / удаление узлов ----
 
     /** Действие {@link #addNodeBtn} — какой именно уровень добавляется, определяется
      *  тем, что СЕЙЧАС выбрано в модели (дерево и модель всегда синхронны вне
@@ -409,6 +880,20 @@ public class SetupStagePanel extends JPanel {
             }
             return;
         }
+        addProject();
+    }
+
+    /** «✕ Удалить проект» над деревом — текущий проект модели, независимо от того,
+     *  какой узел выделен. */
+    private void deleteCurrentProject() {
+        Project p = model.getCurrentProject();
+        if (p != null && confirm("Удалить проект «" + p.getName() + "» со всеми сценами и экранами?")) {
+            model.deleteProject(p);
+        }
+    }
+
+    /** Кнопка «+ Проект» над деревом — всегда новый проект, независимо от выбора. */
+    private void addProject() {
         String suggested = "Проект " + (model.getProjects().size() + 1);
         String name = JOptionPane.showInputDialog(this, "Название проекта:", suggested);
         if (name != null && !name.trim().isEmpty()) {
@@ -437,34 +922,61 @@ public class SetupStagePanel extends JPanel {
                         scene.getName(), model, screens, dpiScale));
     }
 
-    private void deleteSelectedNode() {
-        TreePath path = navTree.getSelectionPath();
-        if (path == null) {
+    /** Delete/Backspace, «✕ Удалить» и пункты «Удалить…» контекстного меню. Экраны и
+     *  группы (мультивыбор) удаляются одним подтверждением; группа — вместе со всеми
+     *  экранами (предупреждение об этом в тексте подтверждения). */
+    private void deleteSelectedNodes() {
+        TreePath[] paths = navTree.getSelectionPaths();
+        if (paths == null || paths.length == 0) {
             return;
         }
-        Object obj = ((DefaultMutableTreeNode) path.getLastPathComponent()).getUserObject();
-        if (obj instanceof Project p) {
-            if (confirm("Удалить проект со всеми сценами и экранами?")) model.deleteProject(p);
-        } else if (obj instanceof Scene s) {
-            if (confirm("Удалить сцену со всеми экранами?")) model.deleteScene(s);
-        } else if (obj instanceof Screen scr) {
-            if (confirm("Удалить экран «" + scr.getName() + "»?")) model.deleteScreen(scr);
+        if (paths.length == 1) {
+            Object obj = userObj(paths[0]);
+            if (obj instanceof Project p) {
+                if (confirm("Удалить проект со всеми сценами и экранами?")) model.deleteProject(p);
+                return;
+            } else if (obj instanceof Scene s) {
+                if (confirm("Удалить сцену со всеми экранами?")) model.deleteScene(s);
+                return;
+            }
+        }
+        List<Screen> screens = selectedScreens();
+        List<ScreenGroup> groups = selectedGroups();
+        Scene scene = selectionScene();
+        if (screens.isEmpty() || scene == null || scene != model.getCurrentScene()) {
+            return;
+        }
+        String msg;
+        if (!groups.isEmpty()) {
+            msg = (groups.size() == 1 ? "Удалить группу «" + groups.get(0).getName() + "»"
+                    : "Удалить группы (" + groups.size() + ")")
+                    + " вместе со всеми её экранами (" + screens.size() + ")? Это действие нельзя отменить.";
+        } else if (screens.size() == 1) {
+            msg = "Удалить экран «" + screens.get(0).getName() + "»?";
+        } else {
+            msg = "Удалить выбранные экраны (" + screens.size() + ")?";
+        }
+        if (confirm(msg)) {
+            navSel.clear();
+            model.deleteScreens(screens);
         }
     }
 
-    /** Перетаскивание строк экранов для смены порядка — единственный уровень
-     *  дерева, где порядок значим (сквозная нумерация портов, см. {@link
-     *  AppModel#reorderScreens}). Разрешён только между экранами ОДНОЙ и той же
-     *  сцены — {@code canImport} сверяет родителя точки вставки с родителем
-     *  перетаскиваемого узла, иначе перенос экрана в чужую сцену молча бы не имел
-     *  смысла для {@link AppModel#reorderScreens} (та работает индексами внутри
-     *  {@code Scene#getScreens()}). */
+    /** Перетаскивание строк экранов/групп для смены порядка и перехода между
+     *  группами — порядок значим (сквозная нумерация портов, см. {@link
+     *  AppModel#reorderScreens}/{@link AppModel#moveScreens}). Тащится всё
+     *  выделение целиком (экраны и/или группы одной сцены). Бросить можно
+     *  только внутрь той же сцены: на уровень сцены (экран выходит из группы) или
+     *  внутрь группы (экран входит в неё); целые группы вложить друг в друга
+     *  нельзя. {@code canImport} сверяет родителя точки вставки с сценой
+     *  перетаскиваемых узлов, иначе перенос в чужую сцену молча бы не имел смысла. */
     private void enableScreenReorder() {
         navTree.setDragEnabled(true);
         navTree.setDropMode(javax.swing.DropMode.INSERT);
         navTree.setTransferHandler(new javax.swing.TransferHandler() {
-            private Screen dragScreen;
+            private List<Screen> dragScreens;
             private Scene dragScene;
+            private boolean dragHasGroup;
 
             @Override
             public int getSourceActions(JComponent c) {
@@ -473,32 +985,44 @@ public class SetupStagePanel extends JPanel {
 
             @Override
             protected java.awt.datatransfer.Transferable createTransferable(JComponent c) {
-                dragScreen = null;
+                dragScreens = null;
                 dragScene = null;
-                TreePath path = navTree.getSelectionPath();
-                if (path == null) {
+                TreePath[] paths = navTree.getSelectionPaths();
+                if (paths == null || !isValidMultiSelection(paths)) {
                     return null;
                 }
-                DefaultMutableTreeNode node = (DefaultMutableTreeNode) path.getLastPathComponent();
-                DefaultMutableTreeNode parent = (DefaultMutableTreeNode) node.getParent();
-                if (!(node.getUserObject() instanceof Screen scr) || parent == null
-                        || !(parent.getUserObject() instanceof Scene sc)) {
+                List<Screen> screens = selectedScreens();
+                if (screens.isEmpty()) {
                     return null;
                 }
-                dragScreen = scr;
-                dragScene = sc;
-                return new java.awt.datatransfer.StringSelection(scr.getId());
+                dragHasGroup = false;
+                for (TreePath p : paths) {
+                    dragHasGroup |= userObj(p) instanceof ScreenGroup;
+                }
+                dragScreens = screens;
+                dragScene = ancestorOfType(paths[0], Scene.class);
+                return new java.awt.datatransfer.StringSelection(screens.get(0).getId());
             }
 
             @Override
             public boolean canImport(TransferSupport support) {
-                if (!support.isDrop() || dragScreen == null) {
+                if (!support.isDrop() || dragScreens == null) {
                     return false;
                 }
                 JTree.DropLocation dl = (JTree.DropLocation) support.getDropLocation();
                 TreePath path = dl.getPath();
-                return path != null
-                        && ((DefaultMutableTreeNode) path.getLastPathComponent()).getUserObject() == dragScene;
+                if (path == null || dl.getChildIndex() < 0) {
+                    return false;
+                }
+                Object parent = userObj(path);
+                if (parent == dragScene) {
+                    return true;
+                }
+                if (parent instanceof ScreenGroup g && !dragHasGroup && dragScene.getScreenGroups().contains(g)) {
+                    // «бросить в саму себя» — все члены группы и так перетаскиваются
+                    return !dragScreens.containsAll(dragScene.screensOf(g));
+                }
+                return false;
             }
 
             @Override
@@ -507,24 +1031,45 @@ public class SetupStagePanel extends JPanel {
                     return false;
                 }
                 JTree.DropLocation dl = (JTree.DropLocation) support.getDropLocation();
-                Scene scene = dragScene;
-                int from = scene.getScreens().indexOf(dragScreen);
-                int drop = dl.getChildIndex();
-                dragScreen = null;
-                dragScene = null;
-                if (from >= 0 && drop >= 0 && drop != from) {
-                    model.reorderScreens(scene, from, drop);
-                    return true;
+                DefaultMutableTreeNode parentNode = (DefaultMutableTreeNode) dl.getPath().getLastPathComponent();
+                ScreenGroup targetGroup = parentNode.getUserObject() instanceof ScreenGroup g ? g : null;
+                // экран, ПЕРЕД которым встанут перетаскиваемые: первый из «остающихся»
+                // на месте среди соседей справа от точки вставки; нет такого — в конец
+                // контейнера
+                Screen before = null;
+                for (int i = dl.getChildIndex(); i < parentNode.getChildCount() && before == null; i++) {
+                    before = firstStaying((DefaultMutableTreeNode) parentNode.getChildAt(i), dragScreens);
                 }
-                return false;
+                List<Screen> moving = dragScreens;
+                Scene scene = dragScene;
+                boolean changeGroup = !dragHasGroup;
+                dragScreens = null;
+                dragScene = null;
+                model.moveScreens(scene, moving, before, targetGroup, changeGroup);
+                return true;
             }
 
             @Override
             protected void exportDone(JComponent source, java.awt.datatransfer.Transferable data, int action) {
-                dragScreen = null;
+                dragScreens = null;
                 dragScene = null;
             }
         });
+    }
+
+    /** Первый экран узла ({@code node} — сам экран либо группа), не входящий в
+     *  {@code moving}; {@code null} — все экраны узла перетаскиваются. */
+    private static Screen firstStaying(DefaultMutableTreeNode node, List<Screen> moving) {
+        if (node.getUserObject() instanceof Screen s) {
+            return moving.contains(s) ? null : s;
+        }
+        for (int i = 0; i < node.getChildCount(); i++) {
+            Object o = ((DefaultMutableTreeNode) node.getChildAt(i)).getUserObject();
+            if (o instanceof Screen s && !moving.contains(s)) {
+                return s;
+            }
+        }
+        return null;
     }
 
     private void addScreen() {
@@ -2493,13 +3038,17 @@ public class SetupStagePanel extends JPanel {
         pRiggingTrussProfile.setSelectedItem(toSelect);
     }
 
-    /** Перестраивает {@link #navTree} с нуля из модели (Project/Scene/Screen —
-     *  обычные доменные объекты, не отдельная view-модель) и восстанавливает то,
-     *  что при полной пересборке узлов иначе терялось бы: раскрытые ветки (по id,
-     *  т.к. узлы — новые инстансы каждый вызов) и путь к текущему выбору. Заодно
-     *  синхронизирует состояние тулбара (плейсхолдер поля добавления, доступность
-     *  кнопок) — раньше это было размазано по {@link #buildProjects}/{@link
-     *  #buildScenes}/{@link #buildScreens}, теперь один проход. */
+    /** Перестраивает {@link #navTree} с нуля из модели (Project/Scene/ScreenGroup/
+     *  Screen — обычные доменные объекты, не отдельная view-модель) и
+     *  восстанавливает то, что при полной пересборке узлов иначе терялось бы:
+     *  раскрытые ветки проектов/сцен (по id, т.к. узлы — новые инстансы каждый
+     *  вызов), свёрнутость групп (хранится в самой группе) и выделение. Выделение —
+     *  либо «особое» запомненное пользователем ({@link #navSel}: несколько узлов
+     *  или группа, модель их выразить не может), пока оно согласовано с моделью,
+     *  либо путь к текущему выбору модели. Заодно синхронизирует состояние
+     *  тулбара (плейсхолдер поля добавления, доступность кнопок) — раньше это
+     *  было размазано по {@link #buildProjects}/{@link #buildScenes}/{@link
+     *  #buildScreens}, теперь один проход. */
     private void syncTree() {
         Set<String> expandedProjects = new HashSet<>();
         Set<String> expandedScenes = new HashSet<>();
@@ -2516,33 +3065,57 @@ public class SetupStagePanel extends JPanel {
             }
         }
 
+        // узел по доменному объекту (по идентичности) — для восстановления выделения
+        java.util.Map<Object, DefaultMutableTreeNode> nodeOf = new java.util.IdentityHashMap<>();
         navRoot.removeAllChildren();
-        DefaultMutableTreeNode currentProjectNode = null;
-        DefaultMutableTreeNode currentSceneNode = null;
-        DefaultMutableTreeNode currentScreenNode = null;
         for (Project p : model.getProjects()) {
             DefaultMutableTreeNode pNode = new DefaultMutableTreeNode(p);
             navRoot.add(pNode);
-            if (p == model.getCurrentProject()) {
-                currentProjectNode = pNode;
-            }
+            nodeOf.put(p, pNode);
             for (Scene s : p.getScenes()) {
                 DefaultMutableTreeNode sNode = new DefaultMutableTreeNode(s);
                 pNode.add(sNode);
-                if (s == model.getCurrentScene()) {
-                    currentSceneNode = sNode;
-                }
+                nodeOf.put(s, sNode);
                 for (Screen scr : s.getScreens()) {
-                    DefaultMutableTreeNode scrNode = new DefaultMutableTreeNode(scr);
-                    sNode.add(scrNode);
-                    if (scr == model.getCurrentScreen()) {
-                        currentScreenNode = scrNode;
+                    // Узел группы создаётся на её первом экране, остальные члены дописываются
+                    // в него — порядок строк совпадает с порядком экранов сцены (см.
+                    // AppModel: члены группы идут подряд).
+                    ScreenGroup g = s.groupOf(scr);
+                    DefaultMutableTreeNode parent = sNode;
+                    if (g != null) {
+                        DefaultMutableTreeNode gNode = nodeOf.get(g);
+                        if (gNode == null) {
+                            gNode = new DefaultMutableTreeNode(g);
+                            sNode.add(gNode);
+                            nodeOf.put(g, gNode);
+                        }
+                        parent = gNode;
                     }
+                    DefaultMutableTreeNode scrNode = new DefaultMutableTreeNode(scr);
+                    parent.add(scrNode);
+                    nodeOf.put(scr, scrNode);
                 }
             }
         }
-        DefaultMutableTreeNode selectNode = currentScreenNode != null ? currentScreenNode
-                : currentSceneNode != null ? currentSceneNode : currentProjectNode;
+
+        List<TreePath> selection = restoreSpecialSelection(nodeOf);
+        if (selection.isEmpty()) {
+            DefaultMutableTreeNode selectNode = nodeOf.get(model.getCurrentScreen());
+            if (selectNode == null) selectNode = nodeOf.get(model.getCurrentScene());
+            if (selectNode == null) selectNode = nodeOf.get(model.getCurrentProject());
+            if (selectNode != null) {
+                selection.add(new TreePath(selectNode.getPath()));
+            }
+        }
+        // выбранный экран внутри свёрнутой группы — раскрываем группу (только в
+        // памяти, без сохранения: это «показать выбранное», а не действие пользователя)
+        for (TreePath path : selection) {
+            DefaultMutableTreeNode parent = (DefaultMutableTreeNode) ((DefaultMutableTreeNode) path
+                    .getLastPathComponent()).getParent();
+            if (userObj(path) instanceof Screen && parent != null && parent.getUserObject() instanceof ScreenGroup g) {
+                g.setCollapsed(false);
+            }
+        }
 
         navTreeModel.reload();
 
@@ -2558,13 +3131,21 @@ public class SetupStagePanel extends JPanel {
                 if (expandedScenes.contains(s.getId()) || s == model.getCurrentScene()) {
                     navTree.expandPath(new TreePath(sNode.getPath()));
                 }
+                if (!navTree.isExpanded(new TreePath(sNode.getPath()))) {
+                    continue; // expandPath группы раскрыл бы и свёрнутую сцену
+                }
+                for (int k = 0; k < sNode.getChildCount(); k++) {
+                    DefaultMutableTreeNode child = (DefaultMutableTreeNode) sNode.getChildAt(k);
+                    if (child.getUserObject() instanceof ScreenGroup g && !g.isCollapsed()) {
+                        navTree.expandPath(new TreePath(child.getPath()));
+                    }
+                }
             }
         }
 
-        if (selectNode != null) {
-            TreePath path = new TreePath(selectNode.getPath());
-            navTree.setSelectionPath(path);
-            navTree.scrollPathToVisible(path);
+        if (!selection.isEmpty()) {
+            navTree.setSelectionPaths(selection.toArray(new TreePath[0]));
+            navTree.scrollPathToVisible(selection.get(selection.size() - 1));
         } else {
             navTree.clearSelection();
         }
@@ -2582,7 +3163,40 @@ public class SetupStagePanel extends JPanel {
         arrangeScreensBtn.setEnabled(model.getCurrentScene() != null);
         exportScreensOverviewBtn.setEnabled(model.getCurrentScene() != null
                 && !model.getCurrentScene().getScreens().isEmpty());
-        deleteNodeBtn.setEnabled(selectNode != null);
+        updateNavButtons();
+    }
+
+    /** Пути «особого» выделения ({@link #navSel}) в свежепостроенном дереве — пустой
+     *  список, если его нет или оно разошлось с моделью (другая сцена, активен экран
+     *  не из выделения, объекты удалены) — тогда {@link #navSel} сбрасывается и
+     *  выделение берётся из модели. */
+    private List<TreePath> restoreSpecialSelection(java.util.Map<Object, DefaultMutableTreeNode> nodeOf) {
+        List<TreePath> paths = new ArrayList<>();
+        if (navSel.isEmpty()) {
+            return paths;
+        }
+        Screen cur = model.getCurrentScreen();
+        boolean consistent = model.getCurrentScene() != null;
+        boolean curCovered = cur == null;
+        for (Object o : navSel) {
+            DefaultMutableTreeNode node = nodeOf.get(o);
+            if (node == null) {
+                continue;
+            }
+            TreePath path = new TreePath(node.getPath());
+            if (ancestorOfType(path, Scene.class) != model.getCurrentScene()) {
+                consistent = false;
+            }
+            paths.add(path);
+            if (o == cur || (o instanceof ScreenGroup g && cur != null && g.getId().equals(cur.getGroupId()))) {
+                curCovered = true;
+            }
+        }
+        if (paths.isEmpty() || !consistent || !curCovered) {
+            navSel.clear();
+            paths.clear();
+        }
+        return paths;
     }
 
     private static String navTreeText(java.awt.Color muted, String title, String meta) {
@@ -2598,8 +3212,43 @@ public class SetupStagePanel extends JPanel {
         return s == null ? "" : s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
+    /** Квадратик цвета метки перед названием экрана/группы (и в пунктах меню
+     *  выбора цвета). Пустой {@code color} — прозрачный: строки без метки остаются
+     *  выровненными с окрашенными. */
+    private static final class TagDotIcon implements javax.swing.Icon {
+        private final java.awt.Color color;
+
+        TagDotIcon(java.awt.Color color) {
+            this.color = color;
+        }
+
+        @Override
+        public void paintIcon(Component c, java.awt.Graphics g, int x, int y) {
+            if (color == null) {
+                return;
+            }
+            java.awt.Graphics2D g2 = (java.awt.Graphics2D) g.create();
+            g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
+                    java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setColor(color);
+            g2.fillRoundRect(x, y, 10, 10, 3, 3);
+            g2.dispose();
+        }
+
+        @Override
+        public int getIconWidth() {
+            return 12;
+        }
+
+        @Override
+        public int getIconHeight() {
+            return 10;
+        }
+    }
+
     /** Рендерер узла дерева — жирное название + серая мелкая строка-пояснение,
-     *  как раньше {@code NamedRenderer} у трёх отдельных JList (см. git-историю). */
+     *  как раньше {@code NamedRenderer} у трёх отдельных JList (см. git-историю);
+     *  у экранов и групп — ещё цветной квадратик метки. */
     private class NavTreeCellRenderer extends DefaultTreeCellRenderer {
         NavTreeCellRenderer() {
             setLeafIcon(null);
@@ -2611,15 +3260,20 @@ public class SetupStagePanel extends JPanel {
         public Component getTreeCellRendererComponent(JTree tree, Object value, boolean sel, boolean expanded,
                 boolean leaf, int row, boolean hasFocus) {
             super.getTreeCellRendererComponent(tree, value, sel, expanded, leaf, row, hasFocus);
-            Object obj = value instanceof DefaultMutableTreeNode n ? n.getUserObject() : null;
+            DefaultMutableTreeNode node = value instanceof DefaultMutableTreeNode n ? n : null;
+            Object obj = node != null ? node.getUserObject() : null;
             if (obj instanceof Project p) {
                 setText(navTreeText(Palette.MUTED, p.getName(), p.getScenes().size() + " сцен"));
             } else if (obj instanceof Scene s) {
                 setText(navTreeText(Palette.MUTED, s.getName(), s.getScreens().size() + " экранов"));
+            } else if (obj instanceof ScreenGroup g) {
+                setText(navTreeText(Palette.MUTED, g.getName(), "группа · " + node.getChildCount() + " экранов"));
+                setIcon(new TagDotIcon(g.getTagColor().color()));
             } else if (obj instanceof Screen scr) {
                 CabinetType ct = model.typeOf(scr);
                 String meta = scr.getCols() + "×" + scr.getRows() + (ct != null ? " · " + ct.getName() : "");
                 setText(navTreeText(Palette.MUTED, scr.getName(), meta));
+                setIcon(new TagDotIcon(scr.getTagColor().color()));
             }
             return this;
         }

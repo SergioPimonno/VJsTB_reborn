@@ -969,7 +969,17 @@ public class NetworkCanvasPanel extends JPanel {
                 placementByNodeId.put(d.nodeId(), placeImported(d.nodeId(), network));
             }
             for (AppModel.NetworkGraphDevice s : group.switches()) {
-                placementByNodeId.put(s.nodeId(), placeImported(s.nodeId(), network));
+                NetworkDevicePlacement sp = placeImported(s.nodeId(), network);
+                // Коммутатор из общей схемы (узел с networkDeviceTypeId) должен прийти как
+                // КАТАЛОЖНЫЙ блок — с зелёным цветом и числом портов из типа библиотеки, а
+                // не как обычный «связанный» блок с 4 портами по умолчанию (баг-репорт
+                // 2026-09-25: «Aruba перенеслась как обычный блок, а не сетевой»).
+                // linkedSchemaNodeId остаётся — по нему работает дедупликация и подпись.
+                String typeId = networkDeviceTypeIdOfNode(s.nodeId());
+                if (typeId != null) {
+                    sp.setDeviceTypeId(typeId);
+                }
+                placementByNodeId.put(s.nodeId(), sp);
             }
 
             for (AppModel.NetworkGraphLink link : group.links()) {
@@ -995,6 +1005,22 @@ public class NetworkCanvasPanel extends JPanel {
             autoArrangeNetwork(network.getId());
         }
         return skippedLinks;
+    }
+
+    /** id типа сетевого устройства узла схемы текущей сцены, если он ещё есть в библиотеке
+     *  (иначе {@code null} — с несуществующим типом у блока было бы 0 портов). */
+    private String networkDeviceTypeIdOfNode(String schemaNodeId) {
+        Scene scene = model.getCurrentScene();
+        if (scene == null) {
+            return null;
+        }
+        for (SchemaNode n : scene.getSchemaNodes()) {
+            if (n.getId().equals(schemaNodeId)) {
+                String typeId = n.getNetworkDeviceTypeId();
+                return typeId != null && model.getWorkspace().networkDeviceTypeById(typeId) != null ? typeId : null;
+            }
+        }
+        return null;
     }
 
     private NetworkDevicePlacement placeImported(String schemaNodeId, Network network) {

@@ -1,7 +1,6 @@
 package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.model.ControllerInstance;
-import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SignalChain;
 import com.vjstb.ledscheme.service.AppModel;
@@ -57,7 +56,7 @@ public class PortPickerPanel extends JPanel {
         // Раньше вся сетка была ОДНИМ GridLayout на всю панель — годилось, пока
         // портов было мало и они шли одним сплошным диапазоном. Теперь портов
         // может быть НЕСКОЛЬКО отдельных пулов нумерации (по одному на карту
-        // контроллера, см. ControllerType.ethernetPoolCount, баг-репорт: "у меня в
+        // контроллера, см. ControllerInstance.ethernetPoolCount, баг-репорт: "у меня в
         // Н2 2 выходные карты — должен видеть 2 области портов") — вертикальный
         // стек, где на каждый пул своя мини-сетка (+ заголовок карты, если пулов
         // больше одного), собирается заново в rebuild().
@@ -103,15 +102,15 @@ public class PortPickerPanel extends JPanel {
         List<SignalChain> chains = model.getCurrentScene() != null
                 ? model.getCurrentScene().getSignalChains() : List.of();
         int offset = model.portOffsetOf(scr, selectedController);
-        ControllerType t = model.getWorkspace().controllerTypeById(selectedController.getControllerTypeId());
+        ControllerInstance t = selectedController;
         int rangeStart = offset + 1;
-        int rangeEnd = offset + (t != null ? t.effectivePortCount() : 0);
+        int rangeEnd = offset + t.effectivePortCount();
         // Отдельная область (мини-сетка) на КАЖДЫЙ пул нумерации Ethernet-портов —
-        // как правило, один пул на карту контроллера (см. ControllerType
+        // как правило, один пул на карту контроллера (см. ControllerInstance
         // .ethernetPoolCount) — Ethernet-порты каждой карты нумеруются заново от 1,
         // а не сквозным номером на весь контроллер (раньше fiber-порты первой
         // группы "съедали" первые номера, и Ethernet начинался не с 1 — баг-репорт).
-        int poolCount = t != null ? t.ethernetPoolCount() : 0;
+        int poolCount = t.ethernetPoolCount();
         for (int poolIdx = 0; poolIdx < poolCount; poolIdx++) {
             int portsInPool = t.ethernetPortCountInPool(poolIdx);
             if (portsInPool == 0) {
@@ -124,7 +123,7 @@ public class PortPickerPanel extends JPanel {
                 // showed "Карта 1 — HDMI+DP Input card" над портами ВЫХОДНОЙ карты.
                 // sendingCardAt(poolIdx) резолвит ТЕМ ЖЕ способом, что и сама нумерация
                 // портов (ethernetPortCountInPool/globalPortFor чуть выше/ниже) — только
-                // среди карт с ethernetOutput, см. её javadoc в ControllerType.
+                // среди карт с ethernetOutput, см. её javadoc в ControllerInstance.
                 com.vjstb.ledscheme.model.SchemaCard sendingCard = t.sendingCardAt(poolIdx);
                 String cardName = sendingCard != null ? sendingCard.getName() : "";
                 JLabel header = new JLabel("Карта " + (poolIdx + 1) + (cardName.isEmpty() ? "" : " — " + cardName));
@@ -170,7 +169,7 @@ public class PortPickerPanel extends JPanel {
     }
 
     private JButton portButton(Screen scr, List<SignalChain> chains, int port, Integer activePort,
-                                ControllerType t, int offset, int poolLocalPort) {
+                                ControllerInstance t, int offset, int poolLocalPort) {
         SignalChain main = model.signalChainByPort(scr, port, false);
         Integer backupLink = main != null ? main.getBackupPortNumber() : null;
 

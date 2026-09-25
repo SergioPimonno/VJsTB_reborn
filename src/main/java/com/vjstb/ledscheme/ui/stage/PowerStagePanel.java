@@ -13,6 +13,7 @@ import com.vjstb.ledscheme.ui.ChainPatterns;
 import com.vjstb.ledscheme.ui.ContextBar;
 import com.vjstb.ledscheme.ui.Palette;
 import com.vjstb.ledscheme.ui.RadialMenu;
+import com.vjstb.ledscheme.ui.CornerPreviewHost;
 import com.vjstb.ledscheme.ui.SceneCanvasPanel;
 import com.vjstb.ledscheme.ui.SchemaPanel;
 import com.vjstb.ledscheme.ui.UiKit;
@@ -57,11 +58,11 @@ public class PowerStagePanel extends JPanel {
     private final JScrollPane canvasScroll;
     private final com.vjstb.ledscheme.settings.SettingsManager settings;
     private final SceneCanvasPanel cornerPreview;
-    private final JPanel cornerPreviewHost;
+    private final CornerPreviewHost cornerPreviewHost;
 
+    /** Размер корнер-виджета по умолчанию (дальше его тянут мышью, см. CornerPreviewHost). */
     private static final int CORNER_W = 260;
     private static final int CORNER_H = 170;
-    private static final int CORNER_MARGIN = 10;
 
     private final JToggleButton phase1 = new JToggleButton("L1");
     private final JToggleButton phase2 = new JToggleButton("L2");
@@ -139,10 +140,8 @@ public class PowerStagePanel extends JPanel {
         // JLayeredPane, а не встраивается в раскладку, чтобы не отнимать место у холста.
         cornerPreview = new SceneCanvasPanel(model, settings);
         cornerPreview.setDetailMode(true, true, true);
-        cornerPreviewHost = new JPanel(new BorderLayout());
-        cornerPreviewHost.setBorder(BorderFactory.createLineBorder(Palette.BORDER));
-        cornerPreviewHost.add(cornerPreview, BorderLayout.CENTER);
-        cornerPreviewHost.setBounds(0, 0, CORNER_W, CORNER_H);
+        // Виджет только для навигации — см. SignalStagePanel/CornerPreviewHost.
+        cornerPreviewHost = new CornerPreviewHost(cornerPreview, settings, CORNER_W, CORNER_H);
 
         JLayeredPane canvasLayered = new JLayeredPane();
         canvasLayered.setLayout(null);
@@ -152,8 +151,7 @@ public class PowerStagePanel extends JPanel {
             @Override
             public void componentResized(java.awt.event.ComponentEvent e) {
                 canvasScroll.setBounds(0, 0, canvasLayered.getWidth(), canvasLayered.getHeight());
-                cornerPreviewHost.setBounds(canvasLayered.getWidth() - CORNER_W - CORNER_MARGIN,
-                        canvasLayered.getHeight() - CORNER_H - CORNER_MARGIN, CORNER_W, CORNER_H);
+                cornerPreviewHost.placeInParent();
             }
         });
         settings.addListener(this::updateCornerPreviewVisibility);
@@ -536,12 +534,18 @@ public class PowerStagePanel extends JPanel {
         JLabel dotLabel = new JLabel("●");
         dotLabel.setForeground(dot);
         boolean overloaded = status != null && status.overloaded();
-        JLabel text = new JLabel((overloaded ? "⚠ " : "") + label);
+        // Подтверждённая («Я знаю») перегрузка — серым с пометкой, а не тем же
+        // жёлтым ⚠: баг-репорт — раньше подтверждённые и неподтверждённые строки
+        // отличались только наличием кнопки, и найти ту, что ещё блокирует
+        // экспорт, было почти невозможно.
+        boolean acknowledged = overloaded && status.acknowledged();
+        JLabel text = new JLabel((overloaded ? "⚠ " : "") + label + (acknowledged ? " (подтверждено)" : ""));
         if (overloaded) {
-            text.setForeground(Palette.WARN);
+            text.setForeground(acknowledged ? Palette.MUTED : Palette.WARN);
             boolean kw = settings.activeProfile().isPowerUnitKw();
             text.setToolTipText("Перегрузка: " + UiKit.fmtPower(status.loadWatts(), kw) + " при допустимых "
-                    + UiKit.fmtPower(status.capacityWatts(), kw) + " на разъём кабинета");
+                    + UiKit.fmtPower(status.capacityWatts(), kw) + " на разъём кабинета"
+                    + (acknowledged ? " — подтверждено кнопкой «Я знаю», экспорт не блокирует" : ""));
         }
         // ПКМ по строке — свой цвет цепочки (Task #4), по образцу SchemaCanvasPanel.showEdgeMenu.
         // ЛКМ по строке (не по кнопкам справа) — возобновить построение ЭТОЙ цепочки

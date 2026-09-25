@@ -2,7 +2,6 @@ package com.vjstb.ledscheme.service;
 
 import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.ControllerInstance;
-import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SignalChain;
@@ -25,7 +24,7 @@ import java.util.Set;
  * {@link AppModel#controllersInScene} — контроллеры физически по экранам, но
  * пул портов общий для сцены). Здесь контроллер уже ИЗВЕСТЕН заранее, поэтому
  * смещение считается напрямую через {@link AppModel#portOffsetOf(Scene,
- * ControllerInstance)} и {@link ControllerType#ethernetPoolLocalPort(int)} —
+ * ControllerInstance)} и {@link ControllerInstance#ethernetPoolLocalPort(int)} —
  * тот же метод, которым уже пользуется {@code SignalStagePanel} для показа
  * "Карта N" по конкретному контроллеру. */
 public final class NovaLctControllerResolver {
@@ -50,12 +49,8 @@ public final class NovaLctControllerResolver {
         if (scene == null || controller == null || model == null || model.getWorkspace() == null) {
             return result;
         }
-        ControllerType type = model.getWorkspace().controllerTypeById(controller.getControllerTypeId());
-        if (type == null) {
-            return result;
-        }
         int offset = model.portOffsetOf(scene, controller);
-        int portCount = type.effectivePortCount();
+        int portCount = controller.effectivePortCount();
 
         for (SignalChain chain : scene.getSignalChains()) {
             Integer port = chain.getPortNumber();
@@ -63,7 +58,7 @@ public final class NovaLctControllerResolver {
                 continue; // не задан, или принадлежит другому контроллеру сцены
             }
             int controllerLocal = port - offset;
-            int[] pool = type.ethernetPoolLocalPort(controllerLocal);
+            int[] pool = controller.ethernetPoolLocalPort(controllerLocal);
             if (pool == null) {
                 continue; // fiber-порт или вне диапазона -- в расключение NovaLCT не входит
             }

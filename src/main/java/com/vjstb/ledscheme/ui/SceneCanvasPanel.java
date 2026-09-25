@@ -148,6 +148,24 @@ public class SceneCanvasPanel extends JPanel {
      *  начинал перетаскивание/скрытие ячейки под меню как побочный эффект. */
     private boolean radialMenuActive;
 
+    /** Режим «только навигация» — для корнер-виджета превью на этапах Питание/Сигнал
+     *  (см. {@code CornerPreviewHost}): виджет нужен исключительно чтобы ориентироваться
+     *  в сцене при расключении, поэтому здесь НЕЛЬЗЯ ни таскать кабинеты/экраны, ни
+     *  вызывать радиальное меню ячейки (баг-репорт: «в превью можно схватить и перетащить
+     *  кабинеты — такого быть не должно категорически»). Вместо этого: колесо — зум
+     *  (вокруг курсора), протяжка ЛКМ/средней кнопкой — панорамирование, двойной клик —
+     *  сброс вида, одиночный клик без протяжки — выбрать экран под курсором. Работает
+     *  только в {@code detailMode} + {@code detailFit} (см. {@link #viewTransformActive}):
+     *  зум — множитель к масштабу «вписать в окно», сдвиг применяется трансформацией
+     *  графики, а не через JScrollPane (панель всегда равна размеру виджета). */
+    private boolean viewOnly;
+    private double viewZoom = 1.0;
+    private int viewPanX, viewPanY;
+    private boolean viewPressed;
+    private boolean viewDragged;
+    private int viewPressX, viewPressY, viewPanStartX, viewPanStartY;
+    private static final double VIEW_ZOOM_MAX = 8.0;
+
     public SceneCanvasPanel(AppModel model, SettingsManager settings) {
         this.model = model;
         this.settings = settings;
@@ -156,6 +174,18 @@ public class SceneCanvasPanel extends JPanel {
             @Override
             public void mousePressed(MouseEvent e) {
                 requestFocusInWindow();
+                if (viewOnly) {
+                    if (javax.swing.SwingUtilities.isLeftMouseButton(e)
+                            || javax.swing.SwingUtilities.isMiddleMouseButton(e)) {
+                        viewPressed = true;
+                        viewDragged = false;
+                        viewPressX = e.getX();
+                        viewPressY = e.getY();
+                        viewPanStartX = viewPanX;
+                        viewPanStartY = viewPanY;
+                    }
+                    return;
+                }
                 if (javax.swing.SwingUtilities.isMiddleMouseButton(e)) {
                     java.awt.Container parent = getParent();
                     if (parent instanceof javax.swing.JViewport viewport) {
@@ -280,6 +310,23 @@ public class SceneCanvasPanel extends JPanel {
 
             @Override
             public void mouseReleased(MouseEvent e) {
+                if (viewOnly) {
+                    if (viewPressed) {
+                        viewPressed = false;
+                        setCursor(java.awt.Cursor.getDefaultCursor());
+                        if (!viewDragged && javax.swing.SwingUtilities.isLeftMouseButton(e)) {
+                            if (e.getClickCount() >= 2) {
+                                resetView();
+                            } else {
+                                Screen hit = screenAt(e.getX() - viewPanX, e.getY() - viewPanY);
+                                if (hit != null) {
+                                    model.selectScreen(hit);
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
                 if (panning) {
                     panning = false;
                     setCursor(java.awt.Cursor.getDefaultCursor());
@@ -324,6 +371,23 @@ public class SceneCanvasPanel extends JPanel {
 
             @Override
             public void mouseDragged(MouseEvent e) {
+                if (viewOnly) {
+                    if (viewPressed) {
+                        int dx = e.getX() - viewPressX;
+                        int dy = e.getY() - viewPressY;
+                        if (!viewDragged && Math.hypot(dx, dy) > 3) {
+                            viewDragged = true;
+                            setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.MOVE_CURSOR));
+                        }
+                        if (viewDragged) {
+                            viewPanX = viewPanStartX + dx;
+                            viewPanY = viewPanStartY + dy;
+                            clampViewPan();
+                            repaint();
+                        }
+                    }
+                    return;
+                }
                 if (panning) {
                     java.awt.Container parent = getParent();
                     if (parent instanceof javax.swing.JViewport viewport && panViewStart != null) {
@@ -419,6 +483,10 @@ public class SceneCanvasPanel extends JPanel {
 
             @Override
             public void mouseWheelMoved(MouseWheelEvent e) {
+                if (viewOnly) {
+                    zoomViewAt(e.getX(), e.getY(), Math.pow(1.15, -e.getPreciseWheelRotation()));
+                    return;
+                }
                 if (detailMode && !detailFit && e.isControlDown()) {
                     double factor = e.getWheelRotation() < 0 ? 1.1 : 1 / 1.1;
                     detailZoom = Math.max(0.2, Math.min(4.0, detailZoom * factor));
@@ -450,6 +518,61 @@ public class SceneCanvasPanel extends JPanel {
     public void setChainController(CanvasPanel.Controller controller) {
         this.chainController = controller;
         setFocusable(controller != null);
+    }
+
+    /** См. javadoc поля {@link #viewOnly}. */
+    public void setViewOnly(boolean viewOnly) {
+        this.viewOnly = viewOnly;
+        viewPressed = false;
+        resetView();
+    }
+
+    /** Зум/сдвиг вида применяются только в режиме «только навигация» поверх «вписать
+     *  в окно» (корнер-виджет), в остальных режимах масштаб считается как раньше. */
+    private boolean viewTransformActive() {
+        return viewOnly && detailMode && detailFit;
+    }
+
+    /** Возврат к виду «вся сцена целиком» (двойной клик по виджету). */
+    public void resetView() {
+        viewZoom = 1.0;
+        viewPanX = 0;
+        viewPanY = 0;
+        repaint();
+    }
+
+    /** Множитель зума вокруг точки (px, py) виджета — точка под курсором остаётся на
+     *  месте: паддинг не масштабируется, поэтому «начало» контента — это {@code padding()},
+     *  а не 0. */
+    private void zoomViewAt(int px, int py, double factor) {
+        double newZoom = Math.max(1.0, Math.min(VIEW_ZOOM_MAX, viewZoom * factor));
+        double k = newZoom / viewZoom;
+        if (k == 1.0) {
+            return;
+        }
+        int p = padding();
+        viewPanX = (int) Math.round(px - p - (px - viewPanX - p) * k);
+        viewPanY = (int) Math.round(py - p - (py - viewPanY - p) * k);
+        viewZoom = newZoom;
+        clampViewPan();
+        repaint();
+    }
+
+    /** Не даёт увести сцену за пределы виджета: контент (масштаб {@link #scaleFor} уже
+     *  включает зум) всегда остаётся в пределах [размер виджета − размер контента, 0]. */
+    private void clampViewPan() {
+        double[] b = boundsMm();
+        if (b == null || viewZoom == 1.0) {
+            viewPanX = 0;
+            viewPanY = 0;
+            return;
+        }
+        double sc = scaleFor(b, getWidth(), getHeight());
+        int p = padding();
+        int contentW = (int) Math.round((b[2] - b[0]) * sc) + p * 2;
+        int contentH = (int) Math.round((b[3] - b[1]) * sc) + p * 2;
+        viewPanX = Math.max(Math.min(0, getWidth() - contentW), Math.min(0, viewPanX));
+        viewPanY = Math.max(Math.min(0, getHeight() - contentH), Math.min(0, viewPanY));
     }
 
     /** См. javadoc поля {@link #showChains}. */
@@ -501,7 +624,16 @@ public class SceneCanvasPanel extends JPanel {
      *  единиц до сотен кабинетов, перебор на глаз не заметен. */
     private CabinetInstance cabinetAtPoint(Screen s, CabinetType t, int px, int py,
                                             int cellW, int cellH, int offX, int offY) {
-        for (CabinetInstance cab : s.getCabinets()) {
+        // Перебор С КОНЦА: кабинет, стоящий позже в списке, рисуется позже, то есть
+        // сверху — при наложении хватается именно видимый верхний, а не тот, что под ним.
+        // Габаритный прямоугольник даёт только запасной вариант: у треугольника/эллипса
+        // «пустая» часть ячейки визуально свободна, и клик по ней должен уходить
+        // реальной фигуре под ней (баг-репорт: плотные раскладки из треугольников и
+        // узких кабинетов — не схватить нужный).
+        CabinetInstance rectHit = null;
+        List<CabinetInstance> all = s.getCabinets();
+        for (int i = all.size() - 1; i >= 0; i--) {
+            CabinetInstance cab = all.get(i);
             int cx = cabX(cab, t, cellW, offX);
             int cy = cabY(cab, t, cellH, offY);
             // Хит-тест — по ФАКТИЧЕСКОМУ (уменьшенному, если тип переопределён на
@@ -516,10 +648,19 @@ public class SceneCanvasPanel extends JPanel {
             int ew = effW(cab, t, cellW);
             int eh = effH(cab, t, cellH);
             if (px >= cx && px < cx + ew && py >= cy && py < cy + eh) {
-                return cab;
+                if (rectHit == null) {
+                    rectHit = cab;
+                }
+                CabinetType eff = ScreenLogic.effectiveType(cab, t, model.getWorkspace());
+                com.vjstb.ledscheme.model.CabinetShape shape = cab.getShapeOverride() != null
+                        ? cab.getShapeOverride() : (eff != null ? eff.getShape() : null);
+                if (SchemeRenderer.cabinetShapeOutline(cx, cy, ew, eh, shape,
+                        SchemeRenderer.effectiveRotationDeg(cab, eff)).contains(px, py)) {
+                    return cab;
+                }
             }
         }
-        return null;
+        return rectHit;
     }
 
     /** ПКМ (зажать и повести к пункту, как в Krita) по кабинету в detailMode —
@@ -742,6 +883,13 @@ public class SceneCanvasPanel extends JPanel {
                 }
             }
         }
+        // Наложение кабинетов — красная подсветка ПОСЛЕ цветной заливки/контура типа
+        // (в этом же проходе), иначе заливка переопределённого типа перекрывала бы её
+        // (баг-репорт). Раньше пострадавшие кабинеты автоматически скрывались
+        // (AppModel.autoDisableOverlapping), теперь данные не трогаются. Общий код с
+        // холстом расключения — SchemeRenderer.paintOverlapWarnings.
+        SchemeRenderer.paintOverlapWarnings(g2, s, defaultType, cellW, cellH, offX, offY,
+                model.getWorkspace(), fillPass);
     }
 
     private static Color blend(Color a, Color b, float t) {
@@ -922,7 +1070,8 @@ public class SceneCanvasPanel extends JPanel {
         if (detailMode && !detailFit) {
             return DETAIL_PX_PER_MM * detailZoom;
         }
-        return boundsToScale(b, width, Math.max(1, height - rigHeadroomPx()));
+        double fit = boundsToScale(b, width, Math.max(1, height - rigHeadroomPx()));
+        return viewTransformActive() ? fit * viewZoom : fit;
     }
 
     /** v3.0: полосы уровня подвеса (лебёдки/ферма/точки, см. {@link #rigBands}) рисуются
@@ -967,7 +1116,12 @@ public class SceneCanvasPanel extends JPanel {
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
-        paint((Graphics2D) g.create(), getWidth(), getHeight());
+        Graphics2D g2 = (Graphics2D) g.create();
+        if (viewTransformActive()) {
+            clampViewPan();
+            g2.translate(viewPanX, viewPanY);
+        }
+        paint(g2, getWidth(), getHeight());
     }
 
     private void paint(Graphics2D g2, int width, int height) {
@@ -1748,52 +1902,77 @@ public class SceneCanvasPanel extends JPanel {
         // экранного пикселя, курсором столько не поймать.
         double thresholdMm = settings.activeProfile().getSnapThresholdPx() / Math.max(0.0001, sc);
         int strength = settings.activeProfile().getSnapStrengthPercent();
-        double myW = t.getWidthMm();
-        double myH = t.getHeightMm();
-        double candAbsX = cab.getColIndex() * myW + candidateOffX;
-        double candAbsY = cab.getRowIndex() * myH + candidateOffY;
-        List<Double> xTargets = new java.util.ArrayList<>();
-        List<Double> yTargets = new java.util.ArrayList<>();
-        xTargets.add(cab.getColIndex() * myW);
-        yTargets.add(cab.getRowIndex() * myH);
-        int[][] neighborDeltas = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
-        for (int[] d : neighborDeltas) {
-            CabinetInstance n = s.cabinetAt(cab.getRowIndex() + d[0], cab.getColIndex() + d[1]);
-            if (n == null) {
+        // ФАКТИЧЕСКИЕ габариты (тип ячейки может быть переопределён на другой физический
+        // размер, см. ScreenLogic.cabinetRectMm) — раньше здесь везде стоял номинальный
+        // размер типа экрана, и для кабинетов нестандартных габаритов грани соседей
+        // считались от чужой ширины/высоты (баг-репорт: «привязки друг к другу снова
+        // сломались для кабинетов нестандартной формы и габаритов»). Форма (треугольник
+        // и т.п.) занимает тот же габаритный прямоугольник, поэтому отдельного учёта не
+        // требует.
+        double cellW = t.getWidthMm();
+        double cellH = t.getHeightMm();
+        double[] mine = ScreenLogic.cabinetRectMm(cab, t, model.getWorkspace());
+        double myW = mine[2];
+        double myH = mine[3];
+        double baseX = cab.getColIndex() * cellW;
+        double baseY = cab.getRowIndex() * cellH;
+        double candAbsX = baseX + candidateOffX;
+        double candAbsY = baseY + candidateOffY;
+        // Цель — {положение ЛЕВОГО/ВЕРХНЕГО края кабинета, координата направляющей}: свой
+        // левый край можно совместить с левым или правым краем соседа, а свой правый — с
+        // его левым (встык) или правым краем; то же по вертикали. Плюс «родная» позиция
+        // сетки (вернуть на штатное место) — по левому/верхнему краю ячейки и по
+        // правому/нижнему (для кабинетов уже ячейки).
+        List<double[]> xTargets = new java.util.ArrayList<>();
+        List<double[]> yTargets = new java.util.ArrayList<>();
+        xTargets.add(new double[]{baseX, baseX});
+        xTargets.add(new double[]{baseX + cellW - myW, baseX + cellW});
+        yTargets.add(new double[]{baseY, baseY});
+        yTargets.add(new double[]{baseY + cellH - myH, baseY + cellH});
+        for (CabinetInstance n : s.getCabinets()) {
+            if (n == cab || n.isHidden()) {
                 continue;
             }
-            double nAbsX = n.getColIndex() * myW + n.getOffsetXMm();
-            double nAbsY = n.getRowIndex() * myH + n.getOffsetYMm();
-            xTargets.add(nAbsX);
-            xTargets.add(nAbsX + myW);
-            xTargets.add(nAbsX - myW);
-            yTargets.add(nAbsY);
-            yTargets.add(nAbsY + myH);
-            yTargets.add(nAbsY - myH);
+            double[] nr = ScreenLogic.cabinetRectMm(n, t, model.getWorkspace());
+            // Только ближние: в пределах одной ячейки вокруг кабинета (иначе привязка
+            // хваталась бы за случайную грань на другом конце экрана).
+            if (nr[0] > candAbsX + myW + cellW || nr[0] + nr[2] < candAbsX - cellW
+                    || nr[1] > candAbsY + myH + cellH || nr[1] + nr[3] < candAbsY - cellH) {
+                continue;
+            }
+            xTargets.add(new double[]{nr[0], nr[0]});
+            xTargets.add(new double[]{nr[0] + nr[2], nr[0] + nr[2]});
+            xTargets.add(new double[]{nr[0] - myW, nr[0]});
+            xTargets.add(new double[]{nr[0] + nr[2] - myW, nr[0] + nr[2]});
+            yTargets.add(new double[]{nr[1], nr[1]});
+            yTargets.add(new double[]{nr[1] + nr[3], nr[1] + nr[3]});
+            yTargets.add(new double[]{nr[1] - myH, nr[1]});
+            yTargets.add(new double[]{nr[1] + nr[3] - myH, nr[1] + nr[3]});
         }
         double snappedAbsX = closestMm(candAbsX, xTargets, thresholdMm, strength, true);
         double snappedAbsY = closestMm(candAbsY, yTargets, thresholdMm, strength, false);
-        return new double[]{snappedAbsX - cab.getColIndex() * myW, snappedAbsY - cab.getRowIndex() * myH};
+        return new double[]{snappedAbsX - baseX, snappedAbsY - baseY};
     }
 
-    private double closestMm(double value, List<Double> targets, double threshold, int strengthPercent,
+    /** {@code targets} — пары {положение края кабинета, координата направляющей}. */
+    private double closestMm(double value, List<double[]> targets, double threshold, int strengthPercent,
                               boolean isXAxis) {
         double best = value;
         double bestDist = threshold;
-        Double bestTarget = null;
-        for (double target : targets) {
-            double d = Math.abs(target - value);
+        double[] bestTarget = null;
+        for (double[] target : targets) {
+            double d = Math.abs(target[0] - value);
             if (d < bestDist) {
                 bestDist = d;
                 bestTarget = target;
             }
         }
         if (bestTarget != null) {
-            best = SnapMath.blend(value, bestTarget, strengthPercent);
+            best = SnapMath.blend(value, bestTarget[0], strengthPercent);
             if (isXAxis) {
-                snapGuideAbsMmX = bestTarget;
+                snapGuideAbsMmX = bestTarget[1];
             } else {
-                snapGuideAbsMmY = bestTarget;
+                snapGuideAbsMmY = bestTarget[1];
             }
         }
         return best;

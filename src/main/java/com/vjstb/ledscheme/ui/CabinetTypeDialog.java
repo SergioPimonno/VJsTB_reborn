@@ -76,6 +76,11 @@ public class CabinetTypeDialog extends JDialog {
      *  больших библиотек; отмечено по умолчанию для новых типов. */
     private final JCheckBox visibleInPaletteCheck = new JCheckBox("Показывать в палитре (меню выбора типа кабинета)");
 
+    /** См. {@code CabinetType#isExportAsStandardCabinet()} — доступно только пока
+     *  среди допустимых форм есть непрямоугольная. */
+    private final JCheckBox exportAsStandardCheck = new JCheckBox("Прописывать как стандартный кабинет "
+            + "(прямоугольный, по габаритам) при экспорте в NovaLCT");
+
     private CabinetType result;
 
     public CabinetTypeDialog(Window owner, AppModel model, CabinetType existing) {
@@ -147,6 +152,8 @@ public class CabinetTypeDialog extends JDialog {
         formBottom.add(signalConnectorsField);
         formBottom.add(new JLabel("Видимость в палитре"));
         formBottom.add(visibleInPaletteCheck);
+        formBottom.add(new JLabel("Экспорт в NovaLCT"));
+        formBottom.add(exportAsStandardCheck);
 
         CabinetType src = existing != null ? existing : new CabinetType();
         nameField.setText(src.getName());
@@ -176,6 +183,8 @@ public class CabinetTypeDialog extends JDialog {
         powerConnectorsField.setText(String.valueOf(src.getPowerConnectorsNeeded()));
         signalConnectorsField.setText(String.valueOf(src.getSignalConnectorsNeeded()));
         visibleInPaletteCheck.setSelected(src.isVisibleInPalette());
+        exportAsStandardCheck.setSelected(src.isExportAsStandardCabinet());
+        refreshRotationVisibility();
 
         JButton ok = new JButton("Сохранить");
         ok.addActionListener(e -> onOk(existing));
@@ -219,6 +228,7 @@ public class CabinetTypeDialog extends JDialog {
                 .anyMatch(e -> e.getValue().isSelected() && e.getKey() != CabinetShape.RECTANGLE);
         rotationLabel.setEnabled(anyNonRectangle);
         rotationField.setEnabled(anyNonRectangle);
+        exportAsStandardCheck.setEnabled(anyNonRectangle);
         previewLabel.setVisible(anyNonRectangle);
         previewPanel.setVisible(anyNonRectangle);
         if (previewRow != null) {
@@ -306,6 +316,7 @@ public class CabinetTypeDialog extends JDialog {
             ct.setPowerConnectorsNeeded((int) parseNonNeg(powerConnectorsField.getText(), "Линий питания"));
             ct.setSignalConnectorsNeeded((int) parseNonNeg(signalConnectorsField.getText(), "Линий сигнала"));
             ct.setVisibleInPalette(visibleInPaletteCheck.isSelected());
+            ct.setExportAsStandardCabinet(exportAsStandardCheck.isEnabled() && exportAsStandardCheck.isSelected());
             result = ct;
             dispose();
         } catch (IllegalArgumentException ex) {

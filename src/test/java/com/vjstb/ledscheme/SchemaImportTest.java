@@ -157,6 +157,24 @@ class SchemaImportTest {
         assertEquals("p5", skipped.get(0).toNodeId());
     }
 
+    @Test
+    void importedSwitchKeepsCatalogTypeSoItIsRenderedAsNetworkEquipment(@TempDir Path dir) {
+        AppModel model = SchemaFixtures.buildScene(dir);
+        NetworkDeviceType type = model.addNetworkDeviceType(switchType());
+        SchemaNode swtch = model.addSchemaNodeFromNetworkDevice(type, 2000, 0);
+        swtch.setLabel("Aruba");
+
+        NetworkCanvasPanel canvas = new NetworkCanvasPanel(model, settings(dir));
+        NetworkManagerPlan plan = new NetworkManagerPlan();
+        canvas.setPlan(plan, null);
+
+        canvas.applySchemaImport(canvas.previewSchemaImport().newGroups());
+
+        NetworkDevicePlacement placed = placementFor(plan, swtch.getId());
+        assertEquals(type.getId(), placed.getDeviceTypeId(),
+                "коммутатор со схемы обязан прийти каталожным (зелёный блок, порты из типа), не обычным связанным");
+    }
+
     private NetworkDevicePlacement placementFor(NetworkManagerPlan plan, String schemaNodeId) {
         return plan.getDevices().stream()
                 .filter(d -> schemaNodeId.equals(d.getLinkedSchemaNodeId()))

@@ -7,7 +7,7 @@ import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.CardPort;
 import com.vjstb.ledscheme.model.ControllerInstance;
-import com.vjstb.ledscheme.model.ControllerType;
+import com.vjstb.ledscheme.model.EquipmentPreset;
 import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.SchemaCard;
@@ -49,12 +49,9 @@ class NovaLctControllerResolverTest {
         Screen screen = model.addScreen("E", type.getId(), 1, 2, 0, 0);
         model.selectScreen(screen);
 
-        ControllerType ct = new ControllerType();
-        ct.setName("Simple");
-        ct.setPortCount(4);
-        ct.getCards().add(new SchemaCard("Карта 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 4))));
-        model.addControllerType(ct);
-        ControllerInstance controller = model.addControllerToScreen(screen, ct.getId());
+        EquipmentPreset ct = model.addControllerPreset("Simple", "", 4, 1000, 0, false,
+                List.of(new SchemaCard("Карта 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 4)))));
+        ControllerInstance controller = model.addControllerToScreen(screen, ct.getId(), null);
 
         List<String> ids = screen.getCabinets().stream().map(CabinetInstance::getId).toList();
         model.addSignalChain(1, false, ids);
@@ -80,13 +77,10 @@ class NovaLctControllerResolverTest {
         Screen screen = model.addScreen("E", type.getId(), 1, 4, 0, 0);
         model.selectScreen(screen);
 
-        ControllerType h2 = new ControllerType();
-        h2.setName("H2");
-        h2.setPortCount(8);
-        h2.getCards().add(new SchemaCard("Карта 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 2))));
-        h2.getCards().add(new SchemaCard("Карта 2", List.of(new CardPort("Ethernet", PortDirection.OUT, 2))));
-        model.addControllerType(h2);
-        ControllerInstance controller = model.addControllerToScreen(screen, h2.getId());
+        EquipmentPreset h2 = model.addControllerPreset("H2", "", 8, 1000, 0, false, List.of(
+                new SchemaCard("Карта 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 2))),
+                new SchemaCard("Карта 2", List.of(new CardPort("Ethernet", PortDirection.OUT, 2)))));
+        ControllerInstance controller = model.addControllerToScreen(screen, h2.getId(), null);
 
         CabinetInstance c0 = screen.cabinetAt(0, 0);
         CabinetInstance c1 = screen.cabinetAt(0, 1);
@@ -118,14 +112,11 @@ class NovaLctControllerResolverTest {
         Screen screenB = model.addScreen("B", type.getId(), 1, 1, 1000, 0);
         model.selectScreen(screenA);
 
-        ControllerType ct = new ControllerType();
-        ct.setName("Simple");
-        ct.setPortCount(4);
-        ct.getCards().add(new SchemaCard("Карта 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 4))));
-        model.addControllerType(ct);
+        EquipmentPreset ct = model.addControllerPreset("Simple", "", 4, 1000, 0, false,
+                List.of(new SchemaCard("Карта 1", List.of(new CardPort("Ethernet", PortDirection.OUT, 4)))));
         // Контроллер физически хранится под экраном A, но пул портов -- общий для
         // сцены (Task #58) -- резолвер должен найти кабинет экрана B тоже.
-        ControllerInstance controller = model.addControllerToScreen(screenA, ct.getId());
+        ControllerInstance controller = model.addControllerToScreen(screenA, ct.getId(), null);
 
         CabinetInstance cabA = screenA.cabinetAt(0, 0);
         CabinetInstance cabB = screenB.cabinetAt(0, 0);

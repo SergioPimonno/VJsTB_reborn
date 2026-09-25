@@ -23,8 +23,11 @@ public class LibraryExportImportPanel extends JPanel {
 
     private enum Kind {
         CABINET("Кабинеты", "led-cabinet-library.json"),
-        CONTROLLER("Контроллеры", "led-controller-library.json"),
-        EQUIPMENT("Оборудование (пресеты)", "led-equipment-presets.json"),
+        // Контроллеры больше не отдельный вид — слиты в EQUIPMENT (category ==
+        // CONTROLLER, 2026-09-23), экспортируются/импортируются вместе с остальным
+        // оборудованием; importAllLibraries/exportAllLibraries ("Всё сразу") по-прежнему
+        // читает СТАРЫЕ файлы с отдельным controllerTypes (см. AppModel).
+        EQUIPMENT("Оборудование (пресеты, вкл. контроллеры)", "led-equipment-presets.json"),
         CABLE("Кабели", "led-cable-library.json"),
         ALL("Всё сразу", "led-all-libraries.json");
 
@@ -110,7 +113,6 @@ public class LibraryExportImportPanel extends JPanel {
     private static void exportKind(AppModel model, Kind kind, File file) {
         switch (kind) {
             case CABINET -> model.exportCabinetLibrary(file);
-            case CONTROLLER -> model.exportControllerLibrary(file);
             case EQUIPMENT -> model.exportEquipmentPresetLibrary(file);
             case CABLE -> model.exportCableLibrary(file);
             case ALL -> model.exportAllLibraries(file);
@@ -120,7 +122,6 @@ public class LibraryExportImportPanel extends JPanel {
     private static int importKind(AppModel model, Kind kind, File file) {
         return switch (kind) {
             case CABINET -> model.importCabinetLibrary(file);
-            case CONTROLLER -> model.importControllerLibrary(file);
             case EQUIPMENT -> model.importEquipmentPresetLibrary(file);
             case CABLE -> model.importCableLibrary(file);
             case ALL -> model.importAllLibraries(file);

@@ -8,6 +8,7 @@ import com.vjstb.ledscheme.settings.UserProfile;
 import com.vjstb.ledscheme.store.WorkspaceStore;
 import com.vjstb.ledscheme.sync.ClientBackupSync;
 import com.vjstb.ledscheme.sync.LibrarySyncClient;
+import com.vjstb.ledscheme.ui.ControllerLibraryMigrationDialog;
 import com.vjstb.ledscheme.ui.LafStyle;
 import com.vjstb.ledscheme.ui.MainFrame;
 import com.vjstb.ledscheme.ui.OnboardingDialog;
@@ -55,6 +56,18 @@ public class App {
                 frame.setVisible(true);
                 if (!settings.isOnboardingCompleted()) {
                     new OnboardingDialog(frame, model, settings).setVisible(true);
+                }
+                // Одноразовый перенос устаревшей библиотеки контроллеров в пресеты
+                // оборудования (2026-09-23) — см. class-javadoc ControllerLibraryMigrationDialog.
+                // Показывается ТОЛЬКО когда реально есть что переносить — иначе (новый
+                // workspace, или перенос уже сделан ранее) сразу проставляем флаг без
+                // пустого диалога.
+                if (!settings.isControllerLibraryMigrated()) {
+                    if (model.controllerLibraryMigrationPreview().isEmpty()) {
+                        settings.setControllerLibraryMigrated(true);
+                    } else if (new ControllerLibraryMigrationDialog(frame, model).showDialog()) {
+                        settings.setControllerLibraryMigrated(true);
+                    }
                 }
                 checkForUpdatesInBackground(frame, settings);
                 syncLibraryInBackground(model, settings);
