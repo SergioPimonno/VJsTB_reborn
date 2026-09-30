@@ -69,6 +69,13 @@ public class SchemaEdge {
      *  меню линии («Размер шрифта…»). {@code null} — используется стандартный размер
      *  подписи линии (см. {@code SchemaCanvasPanel.EDGE_FONT}). */
     private Integer fontSize;
+    /** Лист (блок-схема, {@link SchemaSheet#getId()}) сцены, которому принадлежит
+     *  связь — запрос пользователя 2026-09-30, несколько схем на сцену. Связь всегда
+     *  соединяет узлы ОДНОГО листа; {@code null}/несуществующий лист — связь из
+     *  старого проекта, миграция относит её к первому листу режима (см. {@link
+     *  SchemaNode#getSheetId()}). Точки излома {@link #waypoints} в памяти — в
+     *  локальных координатах листа (сдвиг D5 — только в файле, см. {@link Scene}). */
+    private String sheetId;
 
     public SchemaEdge() {
     }
@@ -232,6 +239,14 @@ public class SchemaEdge {
         this.fontSize = fontSize;
     }
 
+    public String getSheetId() {
+        return sheetId;
+    }
+
+    public void setSheetId(String sheetId) {
+        this.sheetId = sheetId;
+    }
+
     /** {@link #getRouteMode()}, разрешённый для связи БЕЗ явного режима (старый
      *  проект, PLAN.md §2.1): непустые {@link #waypoints} — {@link EdgeRouteMode#MANUAL}
      *  (пользователь уже провёл линию точками излома, менять её самовольно нельзя),
@@ -292,6 +307,7 @@ public class SchemaEdge {
         e.labelDy = labelDy;
         e.routeMode = routeMode;
         e.fontSize = fontSize;
+        e.sheetId = sheetId;
         return e;
     }
 }
