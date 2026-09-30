@@ -2926,6 +2926,21 @@ public class SchemaCanvasPanel extends JPanel {
             });
             menu.add(cards);
         }
+        // «Сохранить блок в библиотеку…» (запрос 2026-09-30, п. 9) — заменил кнопку
+        // «Сохранить как пресет» в форме «Добавить узел», которая сохраняла ПУСТОЙ пресет
+        // (только подпись). Здесь сохраняется блок целиком, с картами и разъёмами. Не для
+        // экранов, авто-легенд и сетевого оборудования (у него своя библиотека типов).
+        if (node.getType() != SchemaNodeType.SCREEN && !node.isAutoPortLegend() && !node.isAutoLineLegend()
+                && node.getNetworkDeviceTypeId() == null) {
+            javax.swing.JMenuItem saveToLibrary = new javax.swing.JMenuItem("Сохранить блок в библиотеку…");
+            boolean hasContent = !node.getCards().isEmpty() || !node.getPowerConnectors().isEmpty();
+            saveToLibrary.setEnabled(hasContent);
+            if (!hasContent) {
+                saveToLibrary.setToolTipText("Добавьте блоку карты или разъёмы — пустой пресет сохранить нельзя");
+            }
+            saveToLibrary.addActionListener(ev -> promptSaveNodeToLibrary(node));
+            menu.add(saveToLibrary);
+        }
         // Блок сетевого оборудования из библиотеки (docs/schema-ports-rework/PLAN.md,
         // D11/T3.4) — число портов Ethernet/Fiber могли поправить в библиотеке УЖЕ
         // ПОСЛЕ того, как блок поставили на схему; пункт пересобирает карту "Сеть"
@@ -2988,6 +3003,82 @@ public class SchemaCanvasPanel extends JPanel {
         });
         menu.add(del);
         menu.show(this, x, y);
+    }
+
+    /** Диалог «Сохранить блок в библиотеку…» (запрос 2026-09-30, п. 9): название
+     *  (по умолчанию подпись блока), необязательное описание и строка «Будет сохранено:
+     *  N карт, M портов, K разъёмов питания» — чтобы пользователь видел, что именно
+     *  уйдёт в пресет (раскладка гнёзд, размер и привязки блока в него не переходят).
+     *  Если в личной библиотеке уже есть пресет того же режима/категории с таким
+     *  именем — выбор «Заменить» (id пресета сохраняется) / «Другое имя» / «Отмена»;
+     *  общие пресеты не заменяются, см. {@code AppModel.findPersonalPresetForNode}. */
+    private void promptSaveNodeToLibrary(SchemaNode node) {
+        int cardCount = node.getCards().size();
+        int portCount = 0;
+        for (com.vjstb.ledscheme.model.SchemaCard c : node.getCards()) {
+            portCount += c.getPorts().size();
+        }
+        int connectorCount = node.getPowerConnectors().size();
+        String defaultName = node.getLabel() == null || node.getLabel().isBlank()
+                ? model.categoryLabel(node.getType()) : node.getLabel();
+        javax.swing.JTextField nameField = new javax.swing.JTextField(defaultName, 28);
+        javax.swing.JTextField descField = new javax.swing.JTextField(28);
+        JPanel panel = new JPanel(new java.awt.GridLayout(0, 1, 0, 4));
+        panel.add(new javax.swing.JLabel("Название пресета:"));
+        panel.add(nameField);
+        panel.add(new javax.swing.JLabel("Описание (необязательно):"));
+        panel.add(descField);
+        panel.add(new javax.swing.JLabel("Будет сохранено: " + cardCount + " карт, " + portCount
+                + " портов, " + connectorCount + " разъёмов питания"));
+        while (true) {
+            int result = JOptionPane.showConfirmDialog(this, panel, "Сохранить блок в библиотеку",
+                    JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+            if (result != JOptionPane.OK_OPTION) {
+                return;
+            }
+            String name = nameField.getText().trim();
+            if (name.isEmpty()) {
+                JOptionPane.showMessageDialog(this, "Укажите название пресета", "Ошибка",
+                        JOptionPane.ERROR_MESSAGE);
+                continue;
+            }
+            try {
+                com.vjstb.ledscheme.model.EquipmentPreset existing = model.findPersonalPresetForNode(node, name);
+                if (existing != null) {
+                    Object[] options = {"Заменить", "Другое имя", "Отмена"};
+                    int choice = JOptionPane.showOptionDialog(this,
+                            "В личной библиотеке уже есть пресет «" + existing.getName() + "» этой категории.\n"
+                                    + "Заменить его карты и разъёмы содержимым блока?",
+                            "Пресет уже существует", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE,
+                            null, options, options[1]);
+                    if (choice == 1) {
+                        continue;
+                    }
+                    if (choice != 0) {
+                        return;
+                    }
+                    model.replaceEquipmentPresetContents(existing, node);
+                    announcePresetSaved(existing.getName(), node, true);
+                    return;
+                }
+                model.saveSchemaNodeAsPreset(node, name, descField.getText());
+                announcePresetSaved(name, node, false);
+                return;
+            } catch (RuntimeException ex) {
+                JOptionPane.showMessageDialog(this, ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+        }
+    }
+
+    /** Сообщение после сохранения пресета: где его искать. Список пресетов в форме
+     *  «Добавить узел» обновляется сам — SchemaPanel подписан на изменения модели. */
+    private void announcePresetSaved(String name, SchemaNode node, boolean replaced) {
+        JOptionPane.showMessageDialog(this,
+                "Пресет «" + name + "» " + (replaced ? "обновлён" : "сохранён") + " в личную библиотеку.\n"
+                        + "Найти его можно на этапе «Библиотеки» (категория «" + model.categoryLabel(node.getType())
+                        + "») и в списке пресетов формы «Добавить узел».",
+                "Готово", JOptionPane.INFORMATION_MESSAGE);
     }
 
     /** Диалог «Размер шрифта…» — общий для пункта меню узла и связи (docs/schema-
