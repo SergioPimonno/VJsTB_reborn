@@ -85,6 +85,11 @@ public class SchemaNode {
      *  opticalPortCount} этого типа. {@code null} — обычный узел, не связан с
      *  библиотекой сетевого оборудования (в т.ч. ЛЮБОЙ узел из старого проекта). */
     private String networkDeviceTypeId;
+    /** Размер шрифта (пункты) заголовка и подписей этого блока на схема-канвасе —
+     *  задаётся вручную через контекстное меню блока («Размер шрифта…»). {@code null}
+     *  — используется стандартный размер (см. {@code SchemaLayoutMetrics}/шрифты
+     *  {@code SchemaCanvasPanel} по умолчанию). */
+    private Integer fontSize;
 
     public SchemaNode() {
     }
@@ -261,6 +266,14 @@ public class SchemaNode {
         this.networkDeviceTypeId = networkDeviceTypeId;
     }
 
+    public Integer getFontSize() {
+        return fontSize;
+    }
+
+    public void setFontSize(Integer fontSize) {
+        this.fontSize = fontSize;
+    }
+
     public SchemaNode copy() {
         SchemaNode n = new SchemaNode();
         n.id = id;
@@ -291,6 +304,7 @@ public class SchemaNode {
         }
         n.onlyUsedPorts = onlyUsedPorts;
         n.networkDeviceTypeId = networkDeviceTypeId;
+        n.fontSize = fontSize;
         return n;
     }
 }

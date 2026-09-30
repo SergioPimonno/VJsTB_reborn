@@ -65,6 +65,10 @@ public class SchemaEdge {
      *  #effectiveRouteMode()} для legacy-резолва: открытие старого проекта не меняет
      *  уже нарисованные маршруты (Золотое решение D6). */
     private EdgeRouteMode routeMode;
+    /** Размер шрифта (пункты) подписи этой линии — задаётся вручную через контекстное
+     *  меню линии («Размер шрифта…»). {@code null} — используется стандартный размер
+     *  подписи линии (см. {@code SchemaCanvasPanel.EDGE_FONT}). */
+    private Integer fontSize;
 
     public SchemaEdge() {
     }
@@ -220,6 +224,14 @@ public class SchemaEdge {
         this.routeMode = routeMode;
     }
 
+    public Integer getFontSize() {
+        return fontSize;
+    }
+
+    public void setFontSize(Integer fontSize) {
+        this.fontSize = fontSize;
+    }
+
     /** {@link #getRouteMode()}, разрешённый для связи БЕЗ явного режима (старый
      *  проект, PLAN.md §2.1): непустые {@link #waypoints} — {@link EdgeRouteMode#MANUAL}
      *  (пользователь уже провёл линию точками излома, менять её самовольно нельзя),
@@ -279,6 +291,7 @@ public class SchemaEdge {
         e.labelDx = labelDx;
         e.labelDy = labelDy;
         e.routeMode = routeMode;
+        e.fontSize = fontSize;
         return e;
     }
 }

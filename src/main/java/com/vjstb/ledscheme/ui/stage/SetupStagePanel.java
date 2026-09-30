@@ -504,7 +504,16 @@ public class SetupStagePanel extends JPanel {
     }
 
     /** Приводит текущий проект/сцену/экран модели в соответствие с узлом дерева
-     *  (узел может лежать в НЕ текущем проекте/сцене — тогда сначала переключаем их). */
+     *  (узел может лежать в НЕ текущем проекте/сцене — тогда сначала переключаем их).
+     *
+     * <p>Баг-репорт 2026-09-30: ПКМ по узлу проекта → «+ Добавить сцену…» открывал диалог
+     *  «Добавить экран». Причина — выбор узла ПРОЕКТА (в том же, уже текущем, проекте) не
+     *  сбрасывал {@code model.getCurrentScene()} (сцена оставалась той, что была выбрана
+     *  раньше), а {@link #addContextualNode} решает, что добавлять, именно по этому полю:
+     *  видит непустую текущую сцену и добавляет экран. {@code selectProject(project)} ниже
+     *  сцену/экран сбрасывает, но вызывается только когда меняется САМ проект — для узла
+     *  проекта сброс сцены/экрана нужен отдельно, независимо от того, сменился проект или
+     *  нет. */
     private void selectInModel(TreePath path) {
         Object obj = userObj(path);
         Project project = ancestorOfType(path, Project.class);
@@ -513,6 +522,9 @@ public class SetupStagePanel extends JPanel {
             model.selectProject(project);
         }
         if (obj instanceof Project) {
+            if (model.getCurrentScene() != null) {
+                model.selectScene(null);
+            }
             return;
         }
         if (scene != null && scene != model.getCurrentScene()) {

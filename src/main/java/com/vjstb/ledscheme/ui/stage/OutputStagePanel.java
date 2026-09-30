@@ -352,12 +352,15 @@ public class OutputStagePanel extends JPanel {
 
         String report = buildProjectReport(project, kw);
 
-        // Рендер схемы сцены целиком (SceneCanvasPanel) и маски канваса
-        // (PixelGridRenderer.renderCanvasMask) читают "текущую" сцену модели, а не
-        // параметр — на время экспорта временно переключаем выбор сцены, поэтому
+        // Рендер схемы сцены целиком (SceneCanvasPanel) читает "текущую" сцену модели, а
+        // не параметр — на время экспорта временно переключаем выбор сцены, поэтому
         // сохраняем исходный, чтобы вернуть его после (см. finally ниже). Побочный
         // эффект: AppModel.selectScene очищает стек undo — то же самое произошло бы,
         // если бы пользователь вручную переключил сцену, так что это не новый риск.
+        // (PixelGridRenderer.renderCanvasMask эту сцену больше не читает — исправлен
+        // баг-репорт 2026-09-30 "общий экспорт масок не отрисовывает канвасы другой
+        // сцены": у неё теперь свой явный параметр Scene, но переключение здесь
+        // оставлено — оно всё ещё нужно SceneCanvasPanel выше.)
         Scene origScene = model.getCurrentScene();
         Screen origScreen = model.getCurrentScreen();
 
@@ -469,7 +472,7 @@ public class OutputStagePanel extends JPanel {
 
                 for (ContentCanvas c : scene.getCanvases()) {
                     progress.step(scene.getName() + " · маска канваса «" + c.getName() + "»");
-                    BufferedImage img = PixelGridRenderer.renderCanvasMask(c, model, settings);
+                    BufferedImage img = PixelGridRenderer.renderCanvasMask(c, scene, model, settings);
                     PixelGridRenderer.writePng(img,
                             new File(masksFolder, "Канвас_" + OutputPaths.sanitize(c.getName()) + "_"
                                     + img.getWidth() + "x" + img.getHeight() + ".png"));

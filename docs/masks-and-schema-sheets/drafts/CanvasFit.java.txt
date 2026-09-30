@@ -1,0 +1,79 @@
+package com.vjstb.ledscheme.service;
+
+import com.vjstb.ledscheme.model.CanvasPlacement;
+import com.vjstb.ledscheme.model.ContentCanvas;
+import com.vjstb.ledscheme.model.Scene;
+import com.vjstb.ledscheme.model.Screen;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Проверка «канвас не вмещает маски» (запрос 2026-09-30): размещение вылезает за
+ * канвас, если его маска (с учётом множителя экрана-сетки, см. {@link MaskGeometry})
+ * заходит за правый или нижний край — такой экран в экспорте канваса был бы молча
+ * обрезан.
+ */
+public final class CanvasFit {
+
+    private CanvasFit() {
+    }
+
+    /** Одно вылезающее размещение: на сколько px маска выходит за канвас по X/Y. */
+    public record Overflow(CanvasPlacement placement, Screen screen, int overflowX, int overflowY) {
+    }
+
+    public static List<Overflow> overflows(ContentCanvas canvas, Scene scene, AppModel model) {
+        return overflows(canvas, canvas.getWidthPx(), canvas.getHeightPx(), scene, model);
+    }
+
+    /** То же для ПРЕДПОЛАГАЕМОГО размера канваса (проверка до «Применить размер»). */
+    public static List<Overflow> overflows(ContentCanvas canvas, int widthPx, int heightPx, Scene scene,
+                                           AppModel model) {
+        List<Overflow> out = new ArrayList<>();
+        if (canvas == null || scene == null) {
+            return out;
+        }
+        for (CanvasPlacement pl : canvas.getPlacements()) {
+            Screen scr = screenById(scene, pl.getScreenId());
+            if (scr == null) {
+                continue;
+            }
+            MaskGeometry g = MaskGeometry.of(scr, model.typeOf(scr), model.getWorkspace());
+            int ox = Math.max(0, pl.getX() + g.width() - widthPx);
+            int oy = Math.max(0, pl.getY() + g.height() - heightPx);
+            if (ox > 0 || oy > 0) {
+                out.add(new Overflow(pl, scr, ox, oy));
+            }
+        }
+        return out;
+    }
+
+    /** Короткий текст для предупреждения — по строке на экран. */
+    public static String describe(List<Overflow> overflows) {
+        StringBuilder sb = new StringBuilder();
+        for (Overflow o : overflows) {
+            if (sb.length() > 0) {
+                sb.append("\n");
+            }
+            sb.append("«").append(o.screen().getName()).append("» — ");
+            List<String> parts = new ArrayList<>();
+            if (o.overflowX() > 0) {
+                parts.add("по ширине на " + o.overflowX() + " px");
+            }
+            if (o.overflowY() > 0) {
+                parts.add("по высоте на " + o.overflowY() + " px");
+            }
+            sb.append(String.join(", ", parts));
+        }
+        return sb.toString();
+    }
+
+    private static Screen screenById(Scene scene, String id) {
+        for (Screen s : scene.getScreens()) {
+            if (s.getId().equals(id)) {
+                return s;
+            }
+        }
+        return null;
+    }
+}

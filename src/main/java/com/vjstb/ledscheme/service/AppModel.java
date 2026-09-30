@@ -33,6 +33,7 @@ import com.vjstb.ledscheme.model.NodeSide;
 import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.PortPlacement;
 import com.vjstb.ledscheme.model.PowerChain;
+import com.vjstb.ledscheme.model.PowerConnectorPreset;
 import com.vjstb.ledscheme.model.Project;
 import com.vjstb.ledscheme.model.ProjectorInstance;
 import com.vjstb.ledscheme.model.Scene;
@@ -1603,11 +1604,18 @@ public class AppModel {
         }
         com.vjstb.ledscheme.model.NodeOrientation orientation = node.getOrientation() != null
                 ? node.getOrientation() : com.vjstb.ledscheme.model.NodeOrientation.RIGHT;
+        int labelFontSize = node.getFontSize() != null ? node.getFontSize()
+                : com.vjstb.ledscheme.service.schemalayout.SchemaLayoutMetrics.LABEL_FONT_SIZE;
+        // labelPaddingPx -- как и ориентация выше, AppModel не видит текущий профиль
+        // (SettingsManager -- дело UI); берём максимум спиннера "Отступ подписей..."
+        // в PreferencesDialog (0..20), а не 0 -- тем же принципом "заведомо не
+        // МЕНЬШИЙ размер", что и defaultCollapsed=FALSE ниже (0 занизил бы минимум
+        // для любого пользователя с реально ненулевым отступом).
         var in = new com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Input(
                 node.getMode(), node.getType(), orientation, cardGroups,
                 schemaEdgesForCurrentScene(node.getMode()), node.getPortPlacements(), node.isOnlyUsedPorts(),
                 Boolean.FALSE, getInterfaceTypes(),
-                com.vjstb.ledscheme.service.schemalayout.TextMeasure.awt());
+                com.vjstb.ledscheme.service.schemalayout.TextMeasure.awt(), labelFontSize, 20);
         com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Size size =
                 com.vjstb.ledscheme.service.schemalayout.NodePortLayout.minimumSize(in);
         if (node.getWidth() < size.width()) {
@@ -1798,6 +1806,20 @@ public class AppModel {
         pushUndo("Только задействованные гнёзда");
         for (SchemaNode n : nodes) {
             n.setOnlyUsedPorts(onlyUsedPorts);
+        }
+        changed();
+    }
+
+    /** Размер шрифта заголовка/подписей блока(ов) — на многовыделение, одна запись
+     *  отмены, как {@link #setSchemaNodesOrientation}. {@code fontSize == null}
+     *  возвращает блок к стандартному размеру (см. {@link SchemaNode#getFontSize()}). */
+    public void setSchemaNodesFontSize(Collection<SchemaNode> nodes, Integer fontSize) {
+        if (nodes.isEmpty()) {
+            return;
+        }
+        pushUndo("Размер шрифта блока");
+        for (SchemaNode n : nodes) {
+            n.setFontSize(fontSize);
         }
         changed();
     }
@@ -2111,6 +2133,66 @@ public class AppModel {
         changed();
     }
 
+    /** Общая подпись НЕСКОЛЬКИХ связей одного пучка сразу (см. {@code
+     *  com.vjstb.ledscheme.service.schemalayout.EdgeBundles}, запрос пользователя
+     *  2026-09-30: "шину" можно подписать один раз, если все её кабели одинаковые) —
+     *  один и тот же тип/метраж пишется В КАЖДУЮ связь пучка, одна запись отмены на
+     *  весь пучок. Число линий каждой отдельной связи ({@code wireCount}) НЕ
+     *  перезаписывается, если уже задано (то, что показывает "N×Тип" на стволе
+     *  пучка, — это СУММА count всех связей, а не отдельное вводимое поле: явный
+     *  ввод общего числа пользователем рисковал бы разойтись с реальным числом
+     *  связей пучка и испортить расчёт нагрузки/спецификацию кабелей, см. решение
+     *  с пользователем) — только выставляется в 1, если у связи ещё не задано
+     *  (первая подпись пучка целиком с нуля). */
+    public void updateSchemaEdgesWireShared(Collection<SchemaEdge> bundleEdges, String wireType, Double lengthM) {
+        if (bundleEdges.isEmpty()) {
+            return;
+        }
+        if (wireType == null || wireType.isBlank()) {
+            throw new IllegalArgumentException("Укажите тип линии");
+        }
+        pushUndo("Подпись шины связей");
+        for (SchemaEdge edge : bundleEdges) {
+            int count = edge.getWireCount() != null && edge.getWireCount() > 0 ? edge.getWireCount() : 1;
+            edge.setWireCount(count);
+            edge.setWireType(wireType.trim());
+            edge.setLengthM(lengthM != null && lengthM > 0 ? lengthM : null);
+            edge.setLabel(edge.displayLabel());
+        }
+        changed();
+    }
+
+    /** «Очистить подпись» для ВСЕХ связей пучка сразу — симметрично {@link
+     *  #updateSchemaEdgeLabel} для одной связи, одна запись отмены на весь пучок. */
+    public void clearSchemaEdgesWireShared(Collection<SchemaEdge> bundleEdges) {
+        if (bundleEdges.isEmpty()) {
+            return;
+        }
+        pushUndo("Очистка подписи шины связей");
+        for (SchemaEdge edge : bundleEdges) {
+            edge.setLabel(null);
+            edge.setWireCount(null);
+            edge.setWireType(null);
+            edge.setLengthM(null);
+        }
+        changed();
+    }
+
+    /** Размер шрифта чипа подписи ВСЕХ связей пучка сразу — симметрично {@link
+     *  #setSchemaNodesFontSize} для узлов, одна запись отмены на весь пучок (запрос
+     *  пользователя 2026-09-30: "для плашки шины недоступно изменение высоты
+     *  шрифта"). {@code null} возвращает чип к стандартному размеру. */
+    public void setSchemaEdgesFontSize(Collection<SchemaEdge> bundleEdges, Integer fontSize) {
+        if (bundleEdges.isEmpty()) {
+            return;
+        }
+        pushUndo("Размер шрифта подписи шины связей");
+        for (SchemaEdge edge : bundleEdges) {
+            edge.setFontSize(fontSize);
+        }
+        changed();
+    }
+
     /** Точки излома маршрута связи (см. {@link com.vjstb.ledscheme.model.EdgeWaypoint}) —
      *  пустой список сбрасывает её к прямой линии узел-узел (см. пункт «Выпрямить»
      *  в контекстном меню связи схемы). */
@@ -2130,6 +2212,13 @@ public class AppModel {
     public void setSchemaEdgeColor(SchemaEdge edge, Integer rgb) {
         pushUndo("Цвет связи");
         edge.setColor(rgb);
+        changed();
+    }
+
+    /** null — сбросить на стандартный размер подписи линии (см. SchemaCanvasPanel.EDGE_FONT). */
+    public void setSchemaEdgeFontSize(SchemaEdge edge, Integer fontSize) {
+        pushUndo("Размер шрифта подписи связи");
+        edge.setFontSize(fontSize);
         changed();
     }
 
@@ -2524,6 +2613,46 @@ public class AppModel {
 
     public void deleteCableType(CableType cable) {
         workspace.getCableTypes().remove(cable);
+        changed();
+    }
+
+    // ---- каталог "Тип разъёма" в диалоге разъёмов питания распределения
+    //      (PowerConnectorsConfigDialog) — баг-репорт 2026-09-30: раньше жёстко
+    //      зашитый список без возможности редактирования. Пока только личный
+    //      список, без sharedPowerConnectorPresets-пары/синхронизации с сервером
+    //      (см. class-javadoc PowerConnectorPreset) — добавится отдельно позже. ----
+
+    public List<PowerConnectorPreset> getPowerConnectorPresets() {
+        return workspace.getPowerConnectorPresets();
+    }
+
+    public PowerConnectorPreset addPowerConnectorPreset(String name) {
+        String trimmed = name == null ? "" : name.trim();
+        if (trimmed.isEmpty()) {
+            throw new IllegalArgumentException("Укажите название разъёма");
+        }
+        for (PowerConnectorPreset p : workspace.getPowerConnectorPresets()) {
+            if (p.getName().equalsIgnoreCase(trimmed)) {
+                return p;
+            }
+        }
+        PowerConnectorPreset preset = new PowerConnectorPreset(trimmed);
+        workspace.getPowerConnectorPresets().add(preset);
+        changed();
+        return preset;
+    }
+
+    public void renamePowerConnectorPreset(PowerConnectorPreset preset, String name) {
+        String trimmed = name == null ? "" : name.trim();
+        if (trimmed.isEmpty()) {
+            throw new IllegalArgumentException("Укажите название разъёма");
+        }
+        preset.setName(trimmed);
+        changed();
+    }
+
+    public void deletePowerConnectorPreset(PowerConnectorPreset preset) {
+        workspace.getPowerConnectorPresets().remove(preset);
         changed();
     }
 

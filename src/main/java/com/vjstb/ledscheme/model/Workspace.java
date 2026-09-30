@@ -25,7 +25,7 @@ import java.util.Map;
  */
 @JsonIgnoreProperties({"cabinetTypes", "controllerTypes", "equipmentPresets", "cableTypes", "interfaceTypes",
         "cableLengthProfiles", "hoistTypes", "trussProfiles", "structureFrameTypes", "caseTypes", "vehicleTypes",
-        "networkDeviceTypes",
+        "networkDeviceTypes", "powerConnectorPresets",
         "sharedCabinetTypes", "sharedControllerTypes", "sharedEquipmentPresets", "sharedCableTypes",
         "sharedInterfaceTypes", "sharedCableLengthProfiles", "sharedHoistTypes", "sharedTrussProfiles",
         "sharedStructureFrameTypes",
@@ -75,6 +75,14 @@ public class Workspace {
 
     public void setCableTypes(List<CableType> cableTypes) {
         library.setCableTypes(cableTypes);
+    }
+
+    public List<PowerConnectorPreset> getPowerConnectorPresets() {
+        return library.getPowerConnectorPresets();
+    }
+
+    public void setPowerConnectorPresets(List<PowerConnectorPreset> powerConnectorPresets) {
+        library.setPowerConnectorPresets(powerConnectorPresets);
     }
 
     public List<InterfaceType> getInterfaceTypes() {

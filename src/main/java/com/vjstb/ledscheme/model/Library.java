@@ -77,6 +77,24 @@ public class Library {
      *  справочная данные, что и guideSections/onboardingSections, синглтон-вид
      *  INTERACTIVE_SCENARIOS, редактируется только через ledscheme-admin. */
     private List<Scenario> interactiveScenarios = new ArrayList<>();
+    /** Каталог доступных подписей "Тип разъёма" в диалоге разъёмов питания
+     *  распределения (см. PowerConnectorPreset, ui.PowerConnectorsConfigDialog) —
+     *  раньше это был десяток имён, жёстко зашитых в код (баг-репорт 2026-09-30).
+     *  Инициализатор поля — тот же набор, что был жёстко зашит, поэтому у ВСЕХ
+     *  воркспейсов (и новых, и уже существующих файлов library.json, где этого
+     *  поля ещё нет) список по умолчанию совпадает со старым поведением; явно
+     *  сохранённый пользователем пустой список ({@code []} в JSON) уважается —
+     *  Jackson тогда перезаписывает это значение при десериализации. */
+    private List<PowerConnectorPreset> powerConnectorPresets = defaultPowerConnectorPresets();
+
+    private static List<PowerConnectorPreset> defaultPowerConnectorPresets() {
+        List<PowerConnectorPreset> defaults = new ArrayList<>();
+        for (String name : new String[]{"PowerCon TRUE1", "PowerCon 20A", "CEE 16A", "CEE 32A", "CEE 63A",
+                "CEE 125A", "Schuko", "IEC C13", "IEC C19", "Powerlock"}) {
+            defaults.add(new PowerConnectorPreset(name));
+        }
+        return defaults;
+    }
 
     /** Общая библиотека компании ("GTO") — кэш последней синхронизации с сервером
      *  (Task #135/v2.0: "личная библиотека у каждого нулевая"), read-only в клиенте
@@ -234,6 +252,14 @@ public class Library {
 
     public void setInteractiveScenarios(List<Scenario> interactiveScenarios) {
         this.interactiveScenarios = interactiveScenarios;
+    }
+
+    public List<PowerConnectorPreset> getPowerConnectorPresets() {
+        return powerConnectorPresets;
+    }
+
+    public void setPowerConnectorPresets(List<PowerConnectorPreset> powerConnectorPresets) {
+        this.powerConnectorPresets = powerConnectorPresets;
     }
 
     public List<CabinetType> getSharedCabinetTypes() {

@@ -295,6 +295,13 @@ public class SettingsManager {
         persist();
     }
 
+    /** Отступ текста от края блока/гнезда на общей схеме (px) — см. {@link
+     *  UserProfile#getSchemaLabelPaddingPx()}. */
+    public void setSchemaLabelPaddingPx(int px) {
+        activeProfile().setSchemaLabelPaddingPx(px);
+        persist();
+    }
+
     /** Скорость прокрутки колесом боковой панели этапа «Сигнал» (px на единицу
      *  колеса), см. {@link UserProfile#getSignalSideScrollUnitPx()}. */
     public void setSignalSideScrollUnitPx(int px) {

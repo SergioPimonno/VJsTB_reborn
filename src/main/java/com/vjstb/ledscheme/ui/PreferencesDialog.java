@@ -83,6 +83,7 @@ public class PreferencesDialog extends JDialog {
      *  это событие летит). */
     private boolean refreshingWireHop;
     private JSpinner schemaRouteStubSpinner;
+    private JSpinner schemaLabelPaddingSpinner;
     private JLabel exportRootFolderLabel;
     private JCheckBox signalSocketWiringCheck;
     private JCheckBox signalChainEndpointSocketsCheck;
@@ -110,6 +111,7 @@ public class PreferencesDialog extends JDialog {
     private JPanel snapRow;
     private JPanel wireHopRow;
     private JPanel schemaRouteStubRow;
+    private JPanel schemaLabelPaddingRow;
     private JPanel exportRow;
     private JPanel logoRow;
     private JPanel syncRow;
@@ -242,6 +244,22 @@ public class PreferencesDialog extends JDialog {
                 settings.setSchemaRouteStubPx((Integer) schemaRouteStubSpinner.getValue()));
         MathFields.enableExpressions(schemaRouteStubSpinner);
         schemaRouteStubRow.add(schemaRouteStubSpinner);
+
+        // Отступ текста от края блока/гнезда на общей схеме (запрос пользователя
+        // "добавь параметр этих отступов в предпочтения") — тот же паттерн
+        // спиннера, что и schemaRouteStubRow выше; используется и в MODERN
+        // (SchemaCanvasPanel#drawBay/#drawPin), и в CLASSIC режиме отрисовки.
+        schemaLabelPaddingRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        schemaLabelPaddingRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        schemaLabelPaddingRow.setToolTipText("Небольшой отступ подписи (заголовок карты, подпись гнезда) от края"
+                + " блока/точки-гнезда на общей схеме — чисто декоративный, на раскладку/размер блоков не влияет.");
+        schemaLabelPaddingRow.add(new JLabel("Отступ подписей от края блока/гнезда (px):"));
+        schemaLabelPaddingSpinner = new JSpinner(
+                new SpinnerNumberModel(settings.activeProfile().getSchemaLabelPaddingPx(), 0, 20, 1));
+        schemaLabelPaddingSpinner.addChangeListener(e ->
+                settings.setSchemaLabelPaddingPx((Integer) schemaLabelPaddingSpinner.getValue()));
+        MathFields.enableExpressions(schemaLabelPaddingSpinner);
+        schemaLabelPaddingRow.add(schemaLabelPaddingSpinner);
 
         exportRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         exportRow.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -548,7 +566,8 @@ public class PreferencesDialog extends JDialog {
         content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
 
         content.add(UiKit.section("Общие", stack(previewWidgetCheck, canvasSnapToCenterCheck, snapRow,
-                foolProofWiringCheck, schemaScreensAsWiringCheck, wireHopRow, schemaRouteStubRow, exportRow)));
+                foolProofWiringCheck, schemaScreensAsWiringCheck, wireHopRow, schemaRouteStubRow,
+                schemaLabelPaddingRow, exportRow)));
         content.add(Box.createVerticalStrut(8));
         content.add(UiKit.section("Сигнал", stack(signalSocketWiringCheck,
                 comboRow("Ориентация блоков по умолчанию:", signalOrientationCombo),
@@ -610,6 +629,7 @@ public class PreferencesDialog extends JDialog {
         span(g, row, "Узел экрана = мини-схема расключения его кабинетов", schemaScreensAsWiringCheck);
         span(g, row, "«Мостики» на пересечениях линий связи (обход, как в ГОСТ)", wireHopRow);
         span(g, row, "Отступ связей общей схемы от блоков (px)", schemaRouteStubRow);
+        span(g, row, "Отступ подписей от края блока/гнезда (px)", schemaLabelPaddingRow);
 
         category(g, row, "Коммутация через гнёзда разъёмов");
         triple(g, row, "Линия цепляется за конкретный разъём, а не за блок", "мастер-переключатель для строк ниже",
@@ -800,6 +820,7 @@ public class PreferencesDialog extends JDialog {
         wireHopStyleCombo.setSelectedItem(settings.activeProfile().getSchemaWireHopStyle());
         refreshingWireHop = false;
         schemaRouteStubSpinner.setValue(settings.activeProfile().getSchemaRouteStubPx());
+        schemaLabelPaddingSpinner.setValue(settings.activeProfile().getSchemaLabelPaddingPx());
         signalSocketWiringCheck.setSelected(settings.activeProfile().isSignalSocketWiringEnabled());
         powerSocketWiringCheck.setSelected(settings.activeProfile().isPowerSocketWiringEnabled());
         signalChainEndpointSocketsCheck.setSelected(settings.activeProfile().isSignalChainEndpointSocketsEnabled());

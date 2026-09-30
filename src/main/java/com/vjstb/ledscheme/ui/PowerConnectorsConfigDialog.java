@@ -186,14 +186,17 @@ public class PowerConnectorsConfigDialog extends JDialog {
                 ModalityType.APPLICATION_MODAL);
         this.host = host;
         this.model = model;
-        // Кабели пользовательской библиотеки (см. AppModel.cableTypesForMode) —
-        // добавляются в конец встроенного списка типов, чтобы сохранённый ранее
-        // кастомный переходник (например «CEE 32A → 6×PowerCon») сразу предлагался
-        // при заведении нового разъёма распределения.
-        java.util.LinkedHashSet<String> types = new java.util.LinkedHashSet<>(java.util.List.of(
-                "PowerCon TRUE1", "PowerCon 20A", "CEE 16A", "CEE 32A", "CEE 63A", "CEE 125A",
-                "Schuko", "IEC C13", "IEC C19", "Powerlock"));
+        // Каталог "Тип разъёма" (см. AppModel.getPowerConnectorPresets, Библиотеки →
+        // «Разъёмы питания») — раньше был жёстко зашитым списком без возможности
+        // редактирования (баг-репорт 2026-09-30). Кабели пользовательской библиотеки
+        // (см. AppModel.cableTypesForMode) — добавляются следом, чтобы сохранённый
+        // ранее кастомный переходник (например «CEE 32A → 6×PowerCon») сразу
+        // предлагался при заведении нового разъёма распределения.
+        java.util.LinkedHashSet<String> types = new java.util.LinkedHashSet<>();
         if (model != null) {
+            for (com.vjstb.ledscheme.model.PowerConnectorPreset p : model.getPowerConnectorPresets()) {
+                types.add(p.getName());
+            }
             for (com.vjstb.ledscheme.model.CableType c : model.cableTypesForMode(com.vjstb.ledscheme.model.SchemaMode.POWER)) {
                 types.add(c.getLabel());
             }
