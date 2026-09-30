@@ -2467,6 +2467,91 @@ public class AppModel {
         return copy;
     }
 
+    /** Сохраняет блок общей схемы в ЛИЧНУЮ библиотеку как новый пресет вместе со ВСЕМИ
+     *  его картами и разъёмами питания (запрос пользователя 2026-09-30, п. 9). Раньше
+     *  кнопка «Сохранить как пресет» в форме «Добавить узел» брала только подпись из
+     *  поля ввода и вызывала {@code addEquipmentPreset(..., null)} — в библиотеку
+     *  попадали ПУСТЫЕ пресеты, а карты/разъёмы, которые пользователь уже собрал блоку
+     *  на схеме, приходилось заводить заново руками в «Библиотеках».
+     *  <p>Карты и разъёмы копируются теми же {@code duplicateCardWithFreshIds}/{@code
+     *  duplicatePortWithFreshId}, что и в обратном направлении ({@link
+     *  #addSchemaNodeFromPreset}): глубокая копия со свежими id (в т.ч. у портов внутри
+     *  карт) — правка карт узла ПОСЛЕ сохранения пресет не меняет, а два узла, созданных
+     *  из пресета, не делят id гнёзд с исходным. Раскладка гнёзд ({@code PortPlacement}),
+     *  размер, ориентация и привязки узла в пресет не переносятся: у {@code
+     *  EquipmentPreset} таких полей нет, а {@code ledscheme-model} не менялся.
+     *  @throws IllegalArgumentException пустое название либо узел без карт и разъёмов
+     *  (пустой пресет сохранять бессмысленно — именно это и было жалобой). */
+    public EquipmentPreset saveSchemaNodeAsPreset(SchemaNode node, String name, String description) {
+        String trimmed = name == null ? "" : name.trim();
+        if (trimmed.isEmpty()) {
+            throw new IllegalArgumentException("Укажите название пресета");
+        }
+        requireNodeHasContentForPreset(node);
+        EquipmentPreset preset = new EquipmentPreset(node.getMode(), node.getType(), trimmed,
+                description == null ? "" : description.trim());
+        for (SchemaCard c : node.getCards()) {
+            preset.getCards().add(duplicateCardWithFreshIds(c));
+        }
+        for (CardPort p : node.getPowerConnectors()) {
+            preset.getPowerConnectors().add(duplicatePortWithFreshId(p));
+        }
+        workspace.getEquipmentPresets().add(preset);
+        changed();
+        return preset;
+    }
+
+    /** Личный пресет того же режима и категории, что у узла, с таким же названием
+     *  (без учёта регистра и крайних пробелов), или {@code null}. Нужен диалогу
+     *  «Сохранить блок в библиотеку…», чтобы предложить «Заменить» вместо создания
+     *  дубля (запрос 2026-09-30, п. 9). Общие (shared) пресеты НЕ ищутся — их заменять
+     *  нельзя, они приходят с сервера и переписались бы при следующей синхронизации. */
+    public EquipmentPreset findPersonalPresetForNode(SchemaNode node, String name) {
+        String trimmed = name == null ? "" : name.trim();
+        for (EquipmentPreset p : workspace.getEquipmentPresets()) {
+            if (p.getMode() == node.getMode() && p.getCategory() == node.getType()
+                    && p.getName() != null && p.getName().trim().equalsIgnoreCase(trimmed)) {
+                return p;
+            }
+        }
+        return null;
+    }
+
+    /** Заменяет карты и разъёмы питания ЛИЧНОГО пресета содержимым узла, сохраняя id,
+     *  название, описание, компанию и прочие поля пресета (запрос 2026-09-30, п. 9:
+     *  повторное «Сохранить блок в библиотеку…» под тем же именем обновляет пресет, а
+     *  не плодит копии; id сохраняется, чтобы не терять ссылки на него — например,
+     *  типы контроллеров сцен). Копии свежие, как в {@link #saveSchemaNodeAsPreset}.
+     *  {@code defaultCardTemplateIds} сбрасывается: он ссылался на id прежних карт,
+     *  которых после замены нет.
+     *  @throws IllegalArgumentException пустой узел либо пресет общий (shared) —
+     *  общие пресеты не заменяются никогда. */
+    public void replaceEquipmentPresetContents(EquipmentPreset preset, SchemaNode node) {
+        if (isSharedEquipmentPreset(preset.getId())) {
+            throw new IllegalArgumentException("Общий пресет библиотеки заменить нельзя — сохраните блок под другим именем");
+        }
+        requireNodeHasContentForPreset(node);
+        List<SchemaCard> cards = new ArrayList<>();
+        for (SchemaCard c : node.getCards()) {
+            cards.add(duplicateCardWithFreshIds(c));
+        }
+        List<CardPort> connectors = new ArrayList<>();
+        for (CardPort p : node.getPowerConnectors()) {
+            connectors.add(duplicatePortWithFreshId(p));
+        }
+        preset.setCards(cards);
+        preset.setPowerConnectors(connectors);
+        preset.setDefaultCardTemplateIds(new ArrayList<>());
+        changed();
+    }
+
+    private static void requireNodeHasContentForPreset(SchemaNode node) {
+        if (node.getCards().isEmpty() && node.getPowerConnectors().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "Добавьте блоку карты или разъёмы — пустой пресет сохранить нельзя");
+        }
+    }
+
     public void updateEquipmentPreset(EquipmentPreset preset, SchemaMode mode, SchemaNodeType category, String name,
                                        String description) {
         updateEquipmentPreset(preset, mode, category, name, description, preset.getCustomCategoryLabel());

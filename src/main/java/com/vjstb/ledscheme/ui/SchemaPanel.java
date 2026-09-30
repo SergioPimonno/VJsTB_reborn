@@ -53,7 +53,6 @@ public class SchemaPanel extends JPanel {
      *  библиотека, не годится смешивать с общим списком пресетов категории. */
     private final JComboBox<NetworkDeviceType> networkDeviceCombo = new JComboBox<>();
     private final JTextField labelField = new JTextField();
-    private final JButton saveAsPresetBtn = new JButton("💾 Сохранить как пресет");
     private final JToggleButton moveBtn = new JToggleButton("Перемещение", true);
     private final JToggleButton connectBtn = new JToggleButton("Соединение");
     private final JLabel selectionHint = new JLabel(" ");
@@ -185,10 +184,6 @@ public class SchemaPanel extends JPanel {
         labelField.putClientProperty("JTextField.placeholderText", "например, «Щит А1»…");
         addBody.add(labelField);
         addBody.add(UiKit.vgap());
-        saveAsPresetBtn.setToolTipText("Сохранить введённую подпись как пресет библиотеки для этой категории");
-        saveAsPresetBtn.addActionListener(e -> saveAsPreset());
-        addBody.add(saveAsPresetBtn);
-        addBody.add(UiKit.vgap());
         JButton addBtn = new JButton("+ Добавить узел");
         addBtn.addActionListener(e -> addNode());
         addBody.add(addBtn);
@@ -298,7 +293,6 @@ public class SchemaPanel extends JPanel {
         boolean customText = isScreen || presetCombo.getSelectedItem() == null
                 || OTHER_SENTINEL.equals(presetCombo.getSelectedItem());
         labelField.setEnabled(!isScreen && customText);
-        saveAsPresetBtn.setEnabled(!isScreen && customText);
     }
 
     /** Пресеты библиотеки для выбранной категории узла + сентинел «свой текст» —
@@ -430,29 +424,6 @@ public class SchemaPanel extends JPanel {
         }
         CurrentSchemeExporter.exportPng(this, model, settings, scene.getName() + " — легенда портов",
                 dpiScale -> SchemeRenderer.renderPortLegendImage(scene.getName(), rows, dpiScale));
-    }
-
-    /** Сохраняет введённую подпись как новый пресет библиотеки этой категории
-     *  (карты ввода/вывода добавляются позже, в разделе «Библиотеки»). */
-    private void saveAsPreset() {
-        SchemaNodeType type = (SchemaNodeType) typeCombo.getSelectedItem();
-        if (type == null || type == SchemaNodeType.SCREEN) {
-            return;
-        }
-        String suggested = labelField.getText().trim();
-        String name = JOptionPane.showInputDialog(this, "Название пресета:",
-                suggested.isEmpty() ? model.categoryLabel(type) : suggested);
-        if (name == null || name.trim().isEmpty()) {
-            return;
-        }
-        try {
-            model.addEquipmentPreset(mode, type, name.trim(), "", null);
-            refreshPresetCombo();
-            JOptionPane.showMessageDialog(this, "Пресет «" + name.trim() + "» сохранён в библиотеку.",
-                    "Готово", JOptionPane.INFORMATION_MESSAGE);
-        } catch (RuntimeException ex) {
-            JOptionPane.showMessageDialog(this, ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
-        }
     }
 
     private void refresh() {
