@@ -235,10 +235,27 @@ public final class PixelGridRenderer {
                                          GridRenderOptions opts) {
         float minNameSize = opts.largeGridNames() ? 26f : 18f;
         float nameScale = opts.largeGridNames() ? 0.065f : 0.045f;
-        Font nameFont = g2.getFont().deriveFont(Font.BOLD, Math.max(minNameSize, w * nameScale));
-        Font resFont = g2.getFont().deriveFont(Font.PLAIN, Math.max(13f, w * 0.028f));
+        float nameSize = Math.max(minNameSize, w * nameScale);
+        float resSize = Math.max(13f, w * 0.028f);
+        Font nameFont = g2.getFont().deriveFont(Font.BOLD, nameSize);
+        Font resFont = g2.getFont().deriveFont(Font.PLAIN, resSize);
         FontMetrics nameFm = g2.getFontMetrics(nameFont);
         FontMetrics resFm = g2.getFontMetrics(resFont);
+
+        // Шрифт выше посчитан только по ширине -- на широких, но НИЗКИХ экранах
+        // (напр. строка 3840x128) это даёт огромный текст, который по высоте не
+        // влезает в кадр вообще (плашка вылезает за границы маски). Если посчитанная
+        // так высота плашки не влезает в h -- пропорционально уменьшаем оба шрифта,
+        // пока не впишется (с небольшим запасом).
+        int fitBoxH = nameFm.getHeight() + resFm.getHeight() + 36;
+        float maxBoxH = h * 0.9f;
+        if (fitBoxH > maxBoxH && fitBoxH > 0) {
+            float shrink = maxBoxH / fitBoxH;
+            nameFont = g2.getFont().deriveFont(Font.BOLD, Math.max(8f, nameSize * shrink));
+            resFont = g2.getFont().deriveFont(Font.PLAIN, Math.max(6f, resSize * shrink));
+            nameFm = g2.getFontMetrics(nameFont);
+            resFm = g2.getFontMetrics(resFont);
+        }
 
         int nameW = nameFm.stringWidth(name);
         int resW = resFm.stringWidth(resolution);
@@ -278,8 +295,18 @@ public final class PixelGridRenderer {
     /** Маска целого канваса (компоновки контента): чёрный кадр размером с канвас,
      *  в него вклеены маски каждого размещённого экрана на своих позициях, каждая —
      *  со своими настройками (см. {@link GridRenderOptions#of}) — так же используется
-     *  как основа под пресеты медиасерверов/Resolume. */
-    public static BufferedImage renderCanvasMask(ContentCanvas canvas, AppModel model, SettingsManager settings) {
+     *  как основа под пресеты медиасерверов/Resolume.
+     *
+     * <p>Баг-репорт 2026-09-30: «Экспорт масок» (кнопка со ВСЕМИ канвасами ВСЕХ сцен
+     *  проекта, {@code VisualizationStagePanel#exportMasks}) и «Сформировать пакет
+     *  документации» (та же ситуация, {@code OutputStagePanel}) рисовали канвасы чужих
+     *  сцен ПУСТЫМИ (чёрный прямоугольник без единого экрана) — метод брал {@code
+     *  model.getCurrentScene()} вместо сцены, которой РЕАЛЬНО принадлежит {@code canvas},
+     *  и {@code pl.getScreenId()} канваса не находил экрана в чужой текущей сцене.
+     *  Сцену теперь передают явно, как уже сделано в {@link #renderCanvasGapMask}/
+     *  {@link #renderCanvasOverlay} — те же грабли туда просто не успели попасть. */
+    public static BufferedImage renderCanvasMask(ContentCanvas canvas, Scene scene, AppModel model,
+                                                  SettingsManager settings) {
         int w = Math.max(1, canvas.getWidthPx());
         int h = Math.max(1, canvas.getHeightPx());
         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
@@ -289,7 +316,6 @@ public final class PixelGridRenderer {
         g2.setColor(Color.BLACK);
         g2.fillRect(0, 0, w, h);
 
-        Scene scene = model.getCurrentScene();
         Font offsetFont = g2.getFont().deriveFont(Font.PLAIN, 11f);
         for (CanvasPlacement pl : canvas.getPlacements()) {
             Screen scr = screenById(scene, pl.getScreenId());

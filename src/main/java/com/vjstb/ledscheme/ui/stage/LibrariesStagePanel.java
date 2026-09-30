@@ -7,6 +7,7 @@ import com.vjstb.ledscheme.model.EquipmentPreset;
 import com.vjstb.ledscheme.model.InterfaceRole;
 import com.vjstb.ledscheme.model.InterfaceType;
 import com.vjstb.ledscheme.model.NetworkDeviceType;
+import com.vjstb.ledscheme.model.PowerConnectorPreset;
 import com.vjstb.ledscheme.model.SchemaCard;
 import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.SchemaNodeType;
@@ -104,12 +105,17 @@ public class LibrariesStagePanel extends JPanel {
     private final JList<NetworkDeviceType> networkDeviceList = new JList<>(networkDeviceModel);
     private final JScrollPane networkDeviceScroll = new JScrollPane(networkDeviceList);
 
+    private final DefaultListModel<PowerConnectorPreset> powerConnectorPresetModel = new DefaultListModel<>();
+    private final JList<PowerConnectorPreset> powerConnectorPresetList = new JList<>(powerConnectorPresetModel);
+    private final JScrollPane powerConnectorPresetScroll = new JScrollPane(powerConnectorPresetList);
+
     private NamedRenderer<CabinetType> libRenderer;
     private NamedRenderer<EquipmentPreset> powerPresetRenderer;
     private NamedRenderer<CableType> cableRenderer;
     private NamedRenderer<CableLengthProfile> cableLengthProfileRenderer;
     private NamedRenderer<InterfaceType> interfaceTypeRenderer;
     private NamedRenderer<NetworkDeviceType> networkDeviceRenderer;
+    private NamedRenderer<PowerConnectorPreset> powerConnectorPresetRenderer;
 
     private javax.swing.JComponent exportImportSection;
     private javax.swing.JComponent cabinetsSection;
@@ -119,6 +125,7 @@ public class LibrariesStagePanel extends JPanel {
     private javax.swing.JComponent cableLengthProfileSection;
     private javax.swing.JComponent interfaceTypeSection;
     private javax.swing.JComponent networkDeviceSection;
+    private javax.swing.JComponent powerConnectorPresetSection;
 
     /** Ширина содержимого этапа (окно минус вертикальный скроллбар минус паддинг
      *  body) — пересчитывается живьём при ресайзе (см. конструктор), а не
@@ -154,6 +161,7 @@ public class LibrariesStagePanel extends JPanel {
         cableLengthProfileSection = buildCableLengthProfileLibrary();
         interfaceTypeSection = buildInterfaceTypeSection();
         networkDeviceSection = buildNetworkDeviceLibrary();
+        powerConnectorPresetSection = buildPowerConnectorPresetLibrary();
         body.add(exportImportSection);
         body.add(UiKit.vgap(10));
         body.add(cabinetsSection);
@@ -169,6 +177,8 @@ public class LibrariesStagePanel extends JPanel {
         body.add(interfaceTypeSection);
         body.add(UiKit.vgap(10));
         body.add(networkDeviceSection);
+        body.add(UiKit.vgap(10));
+        body.add(powerConnectorPresetSection);
         body.add(javax.swing.Box.createVerticalGlue());
 
         JScrollPane scroll = new JScrollPane(body);
@@ -177,7 +187,7 @@ public class LibrariesStagePanel extends JPanel {
         add(scroll, BorderLayout.CENTER);
 
         for (JScrollPane sp : new JScrollPane[]{libScroll, powerPresetScroll, cableScroll,
-                cableLengthProfileScroll, interfaceTypeScroll, networkDeviceScroll}) {
+                cableLengthProfileScroll, interfaceTypeScroll, networkDeviceScroll, powerConnectorPresetScroll}) {
             sp.setMinimumSize(new Dimension(200, 80));
             // ВСЕГДА показывать вертикальный скроллбар (даже когда все позиции
             // помещаются) — иначе два списка одинаковой ширины секции переносят
@@ -966,6 +976,59 @@ public class LibrariesStagePanel extends JPanel {
                 listSectionBody(networkDeviceScroll, crud));
     }
 
+    // ---- каталог "Тип разъёма" в диалоге разъёмов питания распределения
+    //      (PowerConnectorsConfigDialog) — баг-репорт 2026-09-30: раньше жёстко
+    //      зашитый список без возможности редактирования. Только имя, поэтому без
+    //      отдельного диалога-редактора (JOptionPane.showInputDialog, как у
+    //      addProject/renameGroup). Пока без "Предложить…"/общих элементов — см.
+    //      class-javadoc PowerConnectorPreset про синхронизацию с сервером позже. ----
+
+    private JPanel buildPowerConnectorPresetLibrary() {
+        powerConnectorPresetList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        powerConnectorPresetRenderer = new NamedRenderer<>(PowerConnectorPreset::getName, p -> "");
+        powerConnectorPresetList.setCellRenderer(powerConnectorPresetRenderer);
+
+        JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
+        JButton add = new JButton("+ Добавить разъём…");
+        add.addActionListener(e -> {
+            String name = JOptionPane.showInputDialog(this, "Название разъёма:", "");
+            if (name != null && !name.trim().isEmpty()) {
+                tryRun(() -> {
+                    PowerConnectorPreset p = model.addPowerConnectorPreset(name);
+                    powerConnectorPresetList.setSelectedValue(p, true);
+                });
+            }
+        });
+        JButton rename = new JButton("Переименовать…");
+        rename.addActionListener(e -> {
+            PowerConnectorPreset sel = powerConnectorPresetList.getSelectedValue();
+            if (sel == null) return;
+            String name = JOptionPane.showInputDialog(this, "Название разъёма:", sel.getName());
+            if (name != null && !name.trim().isEmpty() && !name.trim().equals(sel.getName())) {
+                tryRun(() -> model.renamePowerConnectorPreset(sel, name));
+            }
+        });
+        Runnable deleteSelectedPowerConnectorPreset = () -> {
+            PowerConnectorPreset sel = powerConnectorPresetList.getSelectedValue();
+            if (sel != null && confirm("Удалить разъём «" + sel.getName() + "» из списка?")) {
+                model.deletePowerConnectorPreset(sel);
+            }
+        };
+        JButton del = new JButton("Удалить");
+        del.addActionListener(e -> deleteSelectedPowerConnectorPreset.run());
+        UiKit.bindDeleteKey(powerConnectorPresetList, deleteSelectedPowerConnectorPreset);
+        crud.add(add);
+        crud.add(rename);
+        crud.add(del);
+        powerConnectorPresetList.addListSelectionListener(e -> {
+            boolean has = powerConnectorPresetList.getSelectedValue() != null;
+            rename.setEnabled(has);
+            del.setEnabled(has);
+        });
+        return (JPanel) UiKit.dynamicSection("Разъёмы питания (список \"Тип разъёма\")",
+                listSectionBody(powerConnectorPresetScroll, crud));
+    }
+
     // ---- оборудование сигнала: слева тип оборудования, справа его карты-шаблоны ----
 
     private JPanel buildSignalEquipmentSection() {
@@ -1259,6 +1322,11 @@ public class LibrariesStagePanel extends JPanel {
         syncList(networkDeviceModel, model.getNetworkDeviceTypes());
         ListSizing.fit(networkDeviceList, networkDeviceScroll, 2, 6, w);
         recapSection(networkDeviceSection);
+
+        powerConnectorPresetRenderer.setFixedWidth(rw);
+        syncList(powerConnectorPresetModel, model.getPowerConnectorPresets());
+        ListSizing.fit(powerConnectorPresetList, powerConnectorPresetScroll, 2, 6, w);
+        recapSection(powerConnectorPresetSection);
     }
 
     private List<EquipmentPreset> presetsForModeAndCategory(SchemaMode mode, SchemaNodeType category) {

@@ -1,6 +1,7 @@
 package com.vjstb.ledscheme.service.schemalayout;
 
 import com.vjstb.ledscheme.model.NodeSide;
+import java.util.List;
 
 /**
  * Точка слияния и подпись количества для "пучка" — нескольких связей, приходящих в
@@ -61,5 +62,76 @@ public final class EdgeBundles {
         double[] pin = {pinX, pinY};
         double[] merge = {pinX + dir[0] * TRUNK_LENGTH, pinY + dir[1] * TRUNK_LENGTH};
         return new Bundle(pin, merge, count);
+    }
+
+    /** Допуск совпадения точек маршрутов в {@link #commonPrefix} — сознательно НЕ
+     *  математический (1e-6), а в пикселях экрана: {@code OrthogonalRouter} считает
+     *  маршрут каждой связи пучка НЕЗАВИСИМЫМ запуском поиска по сетке, точка
+     *  поворота у которого зависит от границ узла-ПОЛУЧАТЕЛЯ этой конкретной связи
+     *  (см. {@code SchemaCanvasPanel#autoRoutePoints}). На реальном проекте узлы
+     *  часто не выровнены по X пиксель-в-пиксель (авто-подгонка ширины блока под
+     *  чуть разный текст, см. {@code AppModel#autoFitNodeToPorts}) — воспроизведено
+     *  на проекте пользователя "Циммер": 4 получателя на X = 573/573/575/576,
+     *  из-за чего роутер у двух связей поворачивает на X=551, у других двух на
+     *  X=549 — 2px расхождения при визуально одной и той же линии. Значение
+     *  подобрано с запасом над этим измеренным случаем (баг-репорт пользователя
+     *  2026-09-30: чип общей подписи стоял прямо у гнезда вместо реальной
+     *  развилки — прежний допуск 1.5 такой разницы уже не поглощал). */
+    private static final double EPS = 4.0;
+
+    /** Общий начальный отрезок (полилиния) нескольких маршрутов, идущих из ОДНОГО
+     *  общего гнезда, — все точки, в которых маршруты ЕЩЁ совпадают, по порядку
+     *  (запрос пользователя 2026-09-30: индикацию шины — синюю линию/пунктир —
+     *  видно до точки первого отсечения, не только точкой, а как реальную ломаную,
+     *  если между гнездом и расхождением есть общий излом). В отличие от {@link
+     *  #bundleFor} — не геометрическая конструкция по стороне гнезда, а РЕАЛЬНОЕ
+     *  сравнение уже посчитанных маршрутов (после орто-трассировки/изломов),
+     *  поэтому корректна при подходе под любым углом (там, где {@link #bundleFor}
+     *  сознательно не используется самим холстом — см. его javadoc и {@code
+     *  SchemaCanvasPanel#drawEdgeBundleMarkers}).
+     *
+     * @param routes маршруты (полилинии) всех связей пучка — КАЖДЫЙ должен
+     *               начинаться (индекс 0) В ОДНОМ И ТОМ ЖЕ гнезде (вызывающий код
+     *               разворачивает маршрут, если связь заходит в это гнездо с
+     *               ДРУГОГО конца — см. {@code SchemaCanvasPanel#normalizedRouteFromNode}).
+     * @return общий префикс маршрутов, минимум одна точка (само гнездо, index 0),
+     *         если хотя бы одна пара уже расходится на первом же шаге; пустой
+     *         список, если {@code routes} пуст или первый маршрут пуст.
+     */
+    public static List<double[]> commonPrefix(List<List<double[]>> routes) {
+        if (routes.isEmpty() || routes.get(0).isEmpty()) {
+            return List.of();
+        }
+        int minLen = Integer.MAX_VALUE;
+        for (List<double[]> r : routes) {
+            minLen = Math.min(minLen, r.size());
+        }
+        List<double[]> prefix = new java.util.ArrayList<>();
+        for (int i = 0; i < minLen; i++) {
+            double[] p0 = routes.get(0).get(i);
+            boolean allSame = true;
+            for (List<double[]> r : routes) {
+                double[] p = r.get(i);
+                if (Math.abs(p[0] - p0[0]) > EPS || Math.abs(p[1] - p0[1]) > EPS) {
+                    allSame = false;
+                    break;
+                }
+            }
+            if (!allSame) {
+                break;
+            }
+            prefix.add(p0);
+        }
+        return prefix;
+    }
+
+    /** Последняя точка {@link #commonPrefix} — где РЕАЛЬНО расходятся маршруты
+     *  пучка (см. его javadoc). Само гнездо (index 0), если список маршрутов пуст. */
+    public static double[] divergencePoint(List<List<double[]>> routes) {
+        List<double[]> prefix = commonPrefix(routes);
+        if (!prefix.isEmpty()) {
+            return prefix.get(prefix.size() - 1);
+        }
+        return routes.isEmpty() || routes.get(0).isEmpty() ? new double[]{0, 0} : routes.get(0).get(0);
     }
 }

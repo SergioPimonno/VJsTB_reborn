@@ -271,6 +271,15 @@ public class UserProfile {
      *  связи в MODERN — см. {@code SchemaCanvasPanel#autoRoutePoints}. */
     private int schemaRouteStubPx = 24;
 
+    /** Отступ (px) текста от края блока/гнезда на общей схеме — заголовок карты и
+     *  подписи её портов, и в MODERN (заголовок отсека {@code drawBay}, подпись
+     *  гнезда {@code drawPin}), и в CLASSIC режиме отрисовки ({@code
+     *  paintCardBlockHeaderClassic}/{@code drawConnectorRowsClassic}) — см. {@link
+     *  #getSchemaRenderMode()}. Раньше был жёстко зашит (2px, запрос пользователя
+     *  "для красоты", раньше текст сидел вплотную к краю/гнезду), потом сам
+     *  запросил вынести в настройки. */
+    private int schemaLabelPaddingPx = 2;
+
     /** Скорость прокрутки колесом боковой панели этапа «Сигнал» (список
      *  контроллеров + сетка портов {@code PortPickerPanel}) — пикселей на ОДНУ
      *  «единицу» колеса (обычный щелчок = 3 единицы, см. {@code
@@ -817,6 +826,14 @@ public class UserProfile {
         this.schemaRouteStubPx = Math.max(0, px);
     }
 
+    public int getSchemaLabelPaddingPx() {
+        return schemaLabelPaddingPx;
+    }
+
+    public void setSchemaLabelPaddingPx(int px) {
+        this.schemaLabelPaddingPx = Math.max(0, px);
+    }
+
     public int getSignalSideScrollUnitPx() {
         // 0 (не должен встречаться — поле с инициализатором по умолчанию) на всякий
         // случай трактуем как "не задано", а не как "прокрутка выключена".
@@ -991,6 +1008,7 @@ public class UserProfile {
         p.schemaStylePreset = schemaStylePreset;
         p.schemaRenderMode = schemaRenderMode;
         p.schemaRouteStubPx = schemaRouteStubPx;
+        p.schemaLabelPaddingPx = schemaLabelPaddingPx;
         p.signalSideScrollUnitPx = signalSideScrollUnitPx;
         p.loadTrackingEnabled = loadTrackingEnabled;
         p.powerUnitKw = powerUnitKw;

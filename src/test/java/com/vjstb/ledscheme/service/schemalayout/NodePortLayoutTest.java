@@ -37,7 +37,8 @@ class NodePortLayoutTest {
         // autoCollapse=true -> AUTO (null, свернуть только незанятые), false -> ALWAYS_EXPANDED (Boolean.FALSE) —
         // те же два случая, что раньше покрывал boolean defaultCollapseUnusedGroups.
         Boolean defaultCollapsed = autoCollapse ? null : Boolean.FALSE;
-        return new Input(mode, type, orientation, cards, edges, List.of(), onlyUsed, defaultCollapsed, List.of(), TextMeasure.awt());
+        return new Input(mode, type, orientation, cards, edges, List.of(), onlyUsed, defaultCollapsed, List.of(),
+                TextMeasure.awt(), SchemaLayoutMetrics.LABEL_FONT_SIZE, 0);
     }
 
     // ---- пины на рамке ----
@@ -248,7 +249,7 @@ class NodePortLayoutTest {
         com.vjstb.ledscheme.model.PortPlacement pp = new com.vjstb.ledscheme.model.PortPlacement(syncIn.getId());
         pp.setSide(NodeSide.RIGHT); // "синхро сбоку" — реплика пользователя 2026-09-16
         Input in = new Input(SchemaMode.SIGNAL, SchemaNodeType.CONVERTER, NodeOrientation.RIGHT, cards, edges,
-                List.of(pp), false, null, List.of(), TextMeasure.awt());
+                List.of(pp), false, null, List.of(), TextMeasure.awt(), SchemaLayoutMetrics.LABEL_FONT_SIZE, 0);
 
         Result r = NodePortLayout.layout(in, NodePortLayout.minimumSize(in).width(), NodePortLayout.minimumSize(in).height());
         boolean syncOnRight = r.pins().stream()

@@ -830,7 +830,17 @@ public class SceneCanvasPanel extends JPanel {
      *  {@code fillPass=true} МЕЖДУ {@link SchemeRenderer#paintSchemeGrid} и {@link
      *  SchemeRenderer#paintSchemeChains} (заливка ложится под цепочку), а {@code
      *  fillPass=false} — уже ПОСЛЕ цепочек (контур подсветки/формы остаётся чётким
-     *  поверх линии, это не тот же баг — контур не закрашивает цепочку целиком). */
+     *  поверх линии, это не тот же баг — контур не закрашивает цепочку целиком).
+     *
+     * <p>Баг-репорт 2026-09-30 (два раунда): сначала базовые (непереопределённые) ячейки
+     *  экрана с частичным переопределением тоже стали получать заливку — сплошным цветом
+     *  своего базового типа, чтобы легенда (см. {@link #drawCabinetTypeOverrideLegend})
+     *  называла оба цвета, а не только меньшинство. Пользователь сразу отклонил результат
+     *  («плохо выглядит») — сплошная заливка БОЛЬШИНСТВА ячеек экрана оказалась заметно
+     *  более навязчивой, чем редкие переопределения, которые она должна была объяснять.
+     *  Базовые ячейки заливку больше НЕ получают (прозрачно — как до всей этой истории),
+     *  красится ТОЛЬКО реальное переопределение; имя базового типа при этом всё ещё
+     *  называется в легенде — просто без закрашенного соответствия на самой сетке. */
     private void drawCabinetOverrideMarks(Graphics2D g2, Screen s, CabinetType defaultType,
                                            int cellW, int cellH, int offX, int offY, boolean fillPass) {
         for (CabinetInstance c : s.getCabinets()) {
@@ -860,20 +870,19 @@ public class SceneCanvasPanel extends JPanel {
             // применяется рядом в drawChainBuildingOverlay.
             int ew = effW(c, defaultType, cellW);
             int eh = effH(c, defaultType, cellH);
-            if (c.getCabinetTypeId() != null) {
-                if (fillPass) {
-                    CabinetType override = model.getWorkspace().cabinetTypeById(c.getCabinetTypeId());
-                    Color typeColor = override != null ? typeColorFor(override) : Palette.ACCENT;
-                    g2.setColor(blend(Palette.PHASE_NONE, typeColor, 0.55f));
-                    SchemeRenderer.fillCabinetShape(g2, x + 1, y + 1, ew - 2, eh - 2, effectiveShape, rotationDeg);
-                    // Заливка кладётся между сеткой и цепочками (см. javadoc метода) и без
-                    // этого молча перекрывала бы подпись «строка,столбец» — баг-репорт
-                    // 2026-09-14.
-                    SchemeRenderer.drawCabinetIndexLabel(g2, c, x, y, ew, eh);
-                } else {
-                    g2.setColor(Palette.ACCENT);
-                    SchemeRenderer.outlineCabinetShape(g2, x + 1, y + 1, ew - 2, eh - 2, effectiveShape, rotationDeg);
-                }
+            boolean overridden = c.getCabinetTypeId() != null;
+            if (overridden && fillPass) {
+                CabinetType override = model.getWorkspace().cabinetTypeById(c.getCabinetTypeId());
+                Color typeColor = override != null ? typeColorFor(override) : Palette.ACCENT;
+                g2.setColor(blend(Palette.PHASE_NONE, typeColor, 0.55f));
+                SchemeRenderer.fillCabinetShape(g2, x + 1, y + 1, ew - 2, eh - 2, effectiveShape, rotationDeg);
+                // Заливка кладётся между сеткой и цепочками (см. javadoc метода) и без
+                // этого молча перекрывала бы подпись «строка,столбец» — баг-репорт
+                // 2026-09-14.
+                SchemeRenderer.drawCabinetIndexLabel(g2, c, x, y, ew, eh);
+            } else if (overridden) {
+                g2.setColor(Palette.ACCENT);
+                SchemeRenderer.outlineCabinetShape(g2, x + 1, y + 1, ew - 2, eh - 2, effectiveShape, rotationDeg);
             }
             if (!fillPass) {
                 com.vjstb.ledscheme.model.CabinetShape shape = c.getShapeOverride();
@@ -1007,13 +1016,44 @@ public class SceneCanvasPanel extends JPanel {
      *  кабинетов (см. {@link #screenExtentMm}), используется для отрисовки рамки/
      *  заливки И для хит-теста (screenAt/screenAndCabinetAt) — обе стороны должны
      *  видеть ОДНИ И ТЕ ЖЕ границы, иначе клик и картинка разъедутся (тот же принцип,
-     *  что и у SchemaCanvasPanel.computeSocketRects). */
+     *  что и у SchemaCanvasPanel.computeSocketRects).
+     *
+     * <p>Баг-репорт 2026-09-30: рамка была ЗАМЕТНО УЖЕ реально нарисованной сетки у
+     *  широких экранов (много колонок) — крайние кабинеты попадали правее рамки и
+     *  клик по ним отбраковывался ещё на этом грубом тесте (см. вызывающий код
+     *  screenAndCabinetAt), настроить их через прериг было невозможно. Причина —
+     *  разное округление: сетка (см. {@code SchemeRenderer#cabX}/{@link
+     *  #screenGridX}) кладёт КАЖДЫЙ кабинет на {@code col * cellW}, где {@code
+     *  cellW = round(мм_кабинета * sc)} УЖЕ округлён, — при 29 колонках погрешность
+     *  округления одного кабинета накапливается на всю ширину экрана. А эта рамка
+     *  раньше считала ширину ОДНИМ округлением всего пролёта в мм ({@code
+     *  round(cols * мм_кабинета * sc)}) — на широких экранах два числа расходятся на
+     *  несколько пикселей. Теперь рамка тоже строится из {@code cellW}/{@code cellH}
+     *  и той же формулы позиции кабинета, что и сама сетка — они больше не могут
+     *  разъехаться, независимо от числа колонок. */
     private int[] screenBoxPx(Screen s, CabinetType t, double[] b, double sc, int padding) {
-        double[] ext = screenExtentMm(s, t);
-        int x = padding + (int) Math.round((s.getPosXMm() + ext[0] - b[0]) * sc);
-        int y = padding + rigHeadroomPx() + (int) Math.round((s.getPosYMm() + ext[1] - b[1]) * sc);
-        int w = Math.max(2, (int) Math.round((ext[2] - ext[0]) * sc));
-        int h = Math.max(2, (int) Math.round((ext[3] - ext[1]) * sc));
+        int cellW = (int) Math.round(t.getWidthMm() * sc);
+        int cellH = (int) Math.round(t.getHeightMm() * sc);
+        int minX = 0, minY = 0;
+        int maxX = s.getCols() * cellW;
+        int maxY = s.getRows() * cellH;
+        for (CabinetInstance cab : s.getCabinets()) {
+            CabinetType eff = ScreenLogic.effectiveType(cab, t, model.getWorkspace());
+            int ew = (int) Math.round(ScreenLogic.effectiveCellW(eff, t, cellW));
+            int eh = (int) Math.round(ScreenLogic.effectiveCellH(eff, t, cellH));
+            int x0 = (int) Math.round(cab.getColIndex() * cellW
+                    + ScreenLogic.offsetPx(cab.getOffsetXMm(), cellW, t.getWidthMm()));
+            int y0 = (int) Math.round(cab.getRowIndex() * cellH
+                    + ScreenLogic.offsetPx(cab.getOffsetYMm(), cellH, t.getHeightMm()));
+            minX = Math.min(minX, x0);
+            minY = Math.min(minY, y0);
+            maxX = Math.max(maxX, x0 + ew);
+            maxY = Math.max(maxY, y0 + eh);
+        }
+        int x = screenGridX(s, b, sc, padding) + minX;
+        int y = screenGridY(s, b, sc, padding) + minY;
+        int w = Math.max(2, maxX - minX);
+        int h = Math.max(2, maxY - minY);
         return new int[]{x, y, w, h};
     }
 
@@ -1364,29 +1404,24 @@ public class SceneCanvasPanel extends JPanel {
         g2.dispose();
     }
 
-    /** Легенда цветов подсветки переопределённого типа кабинета (см. {@link
-     *  #drawCabinetOverrideMarks}/{@link #typeColorFor}) — какой цвет какой ТИП
-     *  означает, иначе цвет на схеме ничего не говорит без открытия радиального
-     *  меню каждой ячейки (баг-репорт: "показывать в табличке к какой категории
-     *  применялся конкретный цвет"). Только типы, РЕАЛЬНО использованные как
-     *  переопределение хотя бы одной НЕскрытой ячейки этой сцены — не вся
-     *  библиотека целиком (иначе легенда была бы бесполезно длинной и не отвечала
-     *  бы на вопрос "что вот ЭТОТ цвет на схеме значит"). Ничего не рисует, если
-     *  переопределений в сцене нет вовсе. */
+    /** Легенда типов кабинета (см. {@link #drawCabinetOverrideMarks}/{@link
+     *  #typeColorFor}) — какой цвет какой ТИП означает, иначе цвет переопределения на
+     *  схеме ничего не говорит без открытия радиального меню каждой ячейки (баг-репорт:
+     *  "показывать в табличке к какой категории применялся конкретный цвет"). Состав —
+     *  см. {@link #legendTypeIds}: значение {@code true} — тип реально закрашен на схеме
+     *  (переопределение) → закрашенный квадратик; {@code false} — только БАЗОВЫЙ тип
+     *  экрана с частичным переопределением, на схеме НЕ закрашен (баг-репорт 2026-09-30,
+     *  второй раунд: закраска большинства ячеек экрана цветом базового типа оказалась
+     *  навязчивой — от неё отказались, оставив только имя в легенде) → пустой контур,
+     *  честно показывающий «на схеме этому имени не соответствует никакой заливки».
+     *  Ничего не рисует, если легенде нечего показать. */
     private void drawCabinetTypeOverrideLegend(Graphics2D g2, Scene scene, int width, int height) {
-        java.util.LinkedHashSet<String> usedTypeIds = new java.util.LinkedHashSet<>();
-        for (Screen s : scene.getScreens()) {
-            for (CabinetInstance c : s.getCabinets()) {
-                if (!c.isHidden() && c.getCabinetTypeId() != null) {
-                    usedTypeIds.add(c.getCabinetTypeId());
-                }
-            }
-        }
+        java.util.LinkedHashMap<String, Boolean> usedTypeIds = legendTypeIds(scene);
         if (usedTypeIds.isEmpty()) {
             return;
         }
         List<CabinetType> types = new ArrayList<>();
-        for (String id : usedTypeIds) {
+        for (String id : usedTypeIds.keySet()) {
             CabinetType t = model.getWorkspace().cabinetTypeById(id);
             if (t != null) {
                 types.add(t);
@@ -1408,12 +1443,66 @@ public class SceneCanvasPanel extends JPanel {
         g2.fillRoundRect(lx - 6, ly - 4, legendW + 24, legendH, 8, 8);
         int y = ly + rowH - 4;
         for (CabinetType t : types) {
-            g2.setColor(typeColorFor(t));
-            g2.fillRect(lx, y - swatch + 2, swatch, swatch);
+            if (Boolean.TRUE.equals(usedTypeIds.get(t.getId()))) {
+                g2.setColor(typeColorFor(t));
+                g2.fillRect(lx, y - swatch + 2, swatch, swatch);
+            } else {
+                g2.setColor(Palette.MUTED);
+                g2.drawRect(lx, y - swatch + 2, swatch - 1, swatch - 1);
+            }
             g2.setColor(Color.WHITE);
             g2.drawString(t.getName(), lx + swatch + gap, y);
             y += rowH;
         }
+    }
+
+    /** Состав легенды (см. {@link #drawCabinetTypeOverrideLegend}) — какие типы кабинетов
+     *  ей нужно назвать и закрашен ли соответствующий квадратик (значение map): типы,
+     *  РЕАЛЬНО использованные переопределением хотя бы одной видимой ячейки — {@code
+     *  true}; плюс базовый (по умолчанию) тип каждого экрана, где переопределение есть
+     *  хотя бы у одной ячейки И при этом остаются видимые базовые ячейки — {@code false}
+     *  (на схеме он ничем не закрашен, см. {@link #drawCabinetOverrideMarks}, только
+     *  назван в легенде). Тип, использованный И как чьё-то переопределение, И как чей-то
+     *  базовый — {@code true} (закрашенный квадратик всё равно есть у переопределения).
+     *  Порядок — по порядку обхода экранов/кабинетов сцены (не алфавитный). */
+    private java.util.LinkedHashMap<String, Boolean> legendTypeIds(Scene scene) {
+        java.util.LinkedHashMap<String, Boolean> usedTypeIds = new java.util.LinkedHashMap<>();
+        for (Screen s : scene.getScreens()) {
+            boolean screenHasOverride = false;
+            boolean screenHasDefault = false;
+            for (CabinetInstance c : s.getCabinets()) {
+                if (c.isHidden()) {
+                    continue;
+                }
+                if (c.getCabinetTypeId() != null) {
+                    usedTypeIds.put(c.getCabinetTypeId(), true);
+                    screenHasOverride = true;
+                } else {
+                    screenHasDefault = true;
+                }
+            }
+            if (screenHasOverride && screenHasDefault) {
+                CabinetType defaultType = model.typeOf(s);
+                if (defaultType != null) {
+                    usedTypeIds.putIfAbsent(defaultType.getId(), false);
+                }
+            }
+        }
+        return usedTypeIds;
+    }
+
+    /** Только для тестов — состав легенды {@link #drawCabinetTypeOverrideLegend} как
+     *  имена типов (стабильный порядок, см. {@link #legendTypeIds}), без разбора пикселей
+     *  отрисованного изображения. */
+    public List<String> legendTypeNamesForTest(Scene scene) {
+        List<String> names = new ArrayList<>();
+        for (String id : legendTypeIds(scene).keySet()) {
+            CabinetType t = model.getWorkspace().cabinetTypeById(id);
+            if (t != null) {
+                names.add(t.getName());
+            }
+        }
+        return names;
     }
 
     /** Направляющие линии Shift-прилипания кабинета (см. snapCabinetOffset) — тот же

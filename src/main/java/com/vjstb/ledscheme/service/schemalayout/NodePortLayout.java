@@ -86,11 +86,28 @@ public final class NodePortLayout {
      *                          — авто: свёрнута, только пока не задействована
      *                          ({@code #AUTO}). Вызывающий UI-код конвертирует enum
      *                          в это значение — {@code service.schemalayout} не
-     *                          зависит от пакета {@code settings}. */
+     *                          зависит от пакета {@code settings}.
+     * @param fontSize размер шрифта подписей узла ({@link
+     *                 com.vjstb.ledscheme.model.SchemaNode#getFontSize()}, если
+     *                 задан вручную через контекстное меню блока, иначе {@link
+     *                 SchemaLayoutMetrics#LABEL_FONT_SIZE}) — шаг между соседними
+     *                 гнёздами и глубина зоны TOP/BOTTOM масштабируются от него
+     *                 (см. {@link #rowStep}/{@link #horizontalSideDepth}), иначе
+     *                 при увеличенном шрифте подписи соседних гнёзд налезают друг
+     *                 на друга (запрос пользователя: "отступы между гнёздами пусть
+     *                 зависят от высоты шрифта тоже").
+     * @param labelPaddingPx {@code Настройки → Отступ подписей от края блока/гнезда}
+     *                 (см. {@link com.vjstb.ledscheme.settings.UserProfile
+     *                 #getSchemaLabelPaddingPx()}) — помимо горизонтального отступа
+     *                 текста от гнезда (см. {@code SchemaCanvasPanel.drawPin}),
+     *                 участвует и в {@link #rowStep} как поля СВЕРХУ/СНИЗУ вокруг
+     *                 каждой строки-подписи на LEFT/RIGHT, не только между гнёздами
+     *                 разных карт (запрос пользователя: "поля вокруг каждого
+     *                 текста", а не просто увеличенный шаг). */
     public record Input(SchemaMode mode, SchemaNodeType nodeType, NodeOrientation orientation,
                          List<CardGroup> cardGroups, List<SchemaEdge> modeEdges, List<PortPlacement> placements,
                          boolean onlyUsedPorts, Boolean defaultCollapsed, List<InterfaceType> library,
-                         TextMeasure textMeasure) {
+                         TextMeasure textMeasure, int fontSize, int labelPaddingPx) {
     }
 
     /** Минимальный размер, вмещающий ВСЕ видимые гнёзда без наложений — не зависит
@@ -98,8 +115,8 @@ public final class NodePortLayout {
      *  AppModel#autoFitNodeToPorts}, T2.2). */
     public static Size minimumSize(Input in) {
         Resolved r = resolve(in);
-        double topDepth = reservedDepth(r, NodeSide.TOP);
-        double bottomDepth = reservedDepth(r, NodeSide.BOTTOM);
+        double topDepth = reservedDepth(r, NodeSide.TOP, in.fontSize(), in.labelPaddingPx());
+        double bottomDepth = reservedDepth(r, NodeSide.BOTTOM, in.fontSize(), in.labelPaddingPx());
         Map<NodeSide, SideOutcome> outcomes = new EnumMap<>(NodeSide.class);
         for (NodeSide side : NodeSide.values()) {
             outcomes.put(side, layoutSide(side, r, in, Double.POSITIVE_INFINITY, 0, 0, false, topDepth));
@@ -112,8 +129,8 @@ public final class NodePortLayout {
      *  "+N ещё…"), поведение симметрично для всех четырёх сторон. */
     public static Result layout(Input in, double width, double height) {
         Resolved r = resolve(in);
-        double topDepth = reservedDepth(r, NodeSide.TOP);
-        double bottomDepth = reservedDepth(r, NodeSide.BOTTOM);
+        double topDepth = reservedDepth(r, NodeSide.TOP, in.fontSize(), in.labelPaddingPx());
+        double bottomDepth = reservedDepth(r, NodeSide.BOTTOM, in.fontSize(), in.labelPaddingPx());
         List<Pin> pins = new ArrayList<>();
         List<Bay> bays = new ArrayList<>();
         List<Overflow> overflow = new ArrayList<>();
@@ -132,15 +149,40 @@ public final class NodePortLayout {
         return new Result(pins, bays, overflow, new Size(width, height));
     }
 
-    /** {@code HORIZONTAL_SIDE_DEPTH}, если у этой стороны вообще есть видимое
+    /** {@link #horizontalSideDepth}, если у этой стороны вообще есть видимое
      *  содержимое (пины или сводка "ещё…" при {@code onlyUsedPorts}), иначе 0 —
      *  используется ДО вызова {@link #layoutSide} для этой же стороны (не из уже
      *  посчитанного {@link SideOutcome}), чтобы LEFT/RIGHT знали о зарезервированной
      *  под TOP/BOTTOM полосе независимо от порядка обхода {@link NodeSide#values()}. */
-    private static double reservedDepth(Resolved r, NodeSide side) {
+    private static double reservedDepth(Resolved r, NodeSide side, int fontSize, int labelPaddingPx) {
         boolean hasContent = !r.bySide.getOrDefault(side, List.of()).isEmpty()
                 || !r.overflowBySide.getOrDefault(side, List.of()).isEmpty();
-        return hasContent ? SchemaLayoutMetrics.HORIZONTAL_SIDE_DEPTH : 0;
+        return hasContent ? horizontalSideDepth(fontSize, labelPaddingPx) : 0;
+    }
+
+    /** Шаг между соседними гнёздами на LEFT/RIGHT (и высота шапки отсека карты,
+     *  {@link SchemaLayoutMetrics#BAY_HEADER_STEP} — та же величина) — масштаб
+     *  {@link SchemaLayoutMetrics#ROW_STEP} от отношения фактического размера
+     *  шрифта узла к базовому {@link SchemaLayoutMetrics#LABEL_FONT_SIZE}, ПЛЮС
+     *  {@code labelPaddingPx} — поля сверху/снизу вокруг каждой строки-подписи
+     *  (запрос пользователя: без font-масштаба подписи увеличенного шрифта
+     *  налезают на соседнюю строку; без {@code labelPaddingPx} вокруг каждой
+     *  строки нет "полей", только между гнёздами разных карт). */
+    private static double rowStep(int fontSize, int labelPaddingPx) {
+        return SchemaLayoutMetrics.ROW_STEP * fontSize / (double) SchemaLayoutMetrics.LABEL_FONT_SIZE + labelPaddingPx;
+    }
+
+    /** Глубина зоны TOP/BOTTOM (строка номеров гнёзд + строка подписи группы) —
+     *  та же логика масштаба, что {@link #rowStep}: два ряда высотой
+     *  {@link #rowStep}. */
+    private static double horizontalSideDepth(int fontSize, int labelPaddingPx) {
+        return rowStep(fontSize, labelPaddingPx) * 2;
+    }
+
+    /** {@link SchemaLayoutMetrics#COL_STEP_MIN}, отмасштабированный так же, как
+     *  {@link #rowStep} — нижняя граница {@link #colStepFor}. */
+    private static double colStepMin(int fontSize) {
+        return SchemaLayoutMetrics.COL_STEP_MIN * fontSize / (double) SchemaLayoutMetrics.LABEL_FONT_SIZE;
     }
 
     private static Size sizeFromOutcomes(Map<NodeSide, SideOutcome> outcomes, double bottomDepth) {
@@ -273,7 +315,7 @@ public final class NodePortLayout {
         List<ResolvedGroup> onSide = r.bySide.getOrDefault(side, List.of());
         List<Overflow> preOverflow = r.overflowBySide.getOrDefault(side, List.of());
         boolean horizontal = side == NodeSide.TOP || side == NodeSide.BOTTOM;
-        double step = horizontal ? colStepFor(onSide, in.textMeasure()) : SchemaLayoutMetrics.ROW_STEP;
+        double step = horizontal ? colStepFor(onSide, in.textMeasure(), in.fontSize()) : rowStep(in.fontSize(), in.labelPaddingPx());
 
         List<Pin> pins = new ArrayList<>();
         List<Bay> bays = new ArrayList<>();
@@ -309,9 +351,9 @@ public final class NodePortLayout {
                 boolean showHeader = !r.suppressHeaders && cardKey != null
                         && g.card.cardName() != null && !g.card.cardName().isBlank();
                 if (showHeader) {
-                    along += SchemaLayoutMetrics.BAY_HEADER_STEP;
+                    along += rowStep(in.fontSize(), in.labelPaddingPx());
                 }
-                bayStart = along - (showHeader ? SchemaLayoutMetrics.BAY_HEADER_STEP : 0);
+                bayStart = along - (showHeader ? rowStep(in.fontSize(), in.labelPaddingPx()) : 0);
                 bayCardId = cardKey;
                 bayLabel = showHeader ? g.card.displayName() : null;
                 bayMergedCount = g.card.mergedCount();
@@ -324,13 +366,13 @@ public final class NodePortLayout {
                     // не нужно — там шапка идёт ВДОЛЬ границы (её ширина влияет на along,
                     // не на depth) и уже клипуется по ширине СВОЕГО отсека при отрисовке.
                     maxLabelWidth = Math.max(maxLabelWidth,
-                            in.textMeasure().width(bayLabel, SchemaLayoutMetrics.LABEL_FONT_SIZE, false));
+                            in.textMeasure().width(bayLabel, in.fontSize(), false));
                 }
             }
             boolean collapsed = isCollapsed(g, in.defaultCollapsed());
             int slots = collapsed ? 1 : Math.max(1, g.port.getCount());
             String label = collapsed ? g.port.getCount() + "×" + g.port.getConnectorType() : g.port.getConnectorType();
-            double labelWidth = in.textMeasure().width(label, SchemaLayoutMetrics.LABEL_FONT_SIZE, false);
+            double labelWidth = in.textMeasure().width(label, in.fontSize(), false);
             maxLabelWidth = Math.max(maxLabelWidth, labelWidth);
             // Общий "step" — ширина под ОДНУ цифру слота, рассчитан на плотно стоящие
             // колонки развёрнутой группы ("1","2","3"…). Свёрнутая группа на TOP/BOTTOM
@@ -360,7 +402,7 @@ public final class NodePortLayout {
         }
         if (!truncated) {
             for (Overflow o : preOverflow) {
-                maxLabelWidth = Math.max(maxLabelWidth, in.textMeasure().width(o.text(), SchemaLayoutMetrics.LABEL_FONT_SIZE, false));
+                maxLabelWidth = Math.max(maxLabelWidth, in.textMeasure().width(o.text(), in.fontSize(), false));
                 if (along + step <= avail) {
                     overflow.add(o);
                     along += step;
@@ -411,13 +453,13 @@ public final class NodePortLayout {
         return !g.used;
     }
 
-    private static double colStepFor(List<ResolvedGroup> onSide, TextMeasure textMeasure) {
+    private static double colStepFor(List<ResolvedGroup> onSide, TextMeasure textMeasure, int fontSize) {
         int maxSlot = 1;
         for (ResolvedGroup g : onSide) {
             maxSlot = Math.max(maxSlot, g.port.getCount());
         }
-        double digitsWidth = textMeasure.width(String.valueOf(maxSlot), SchemaLayoutMetrics.LABEL_FONT_SIZE, false);
-        return Math.max(SchemaLayoutMetrics.COL_STEP_MIN, digitsWidth + 6);
+        double digitsWidth = textMeasure.width(String.valueOf(maxSlot), fontSize, false);
+        return Math.max(colStepMin(fontSize), digitsWidth + 6);
     }
 
     // ---- слияние подряд идущих незадействованных одинаковых карт ("Имя ×N") ----

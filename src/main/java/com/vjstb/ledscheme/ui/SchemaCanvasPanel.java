@@ -42,6 +42,7 @@ import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -255,6 +256,19 @@ public class SchemaCanvasPanel extends JPanel {
      *  узла на ПОСЛЕДНЕЙ отрисовке — используется только для наведения мыши
      *  (getToolTipText), пересчитывается заново в каждом paintComponent. */
     private final java.util.Map<SchemaNode, java.awt.Rectangle> overloadIconRects = new java.util.HashMap<>();
+
+    /** Одна "шина" (пучок 2+ связей в одно гнездо, см. {@link #drawEdgeBundleMarkers})
+     *  на ПОСЛЕДНЕЙ отрисовке — чип у точки РЕАЛЬНОГО расхождения маршрутов (см.
+     *  {@link com.vjstb.ledscheme.service.schemalayout.EdgeBundles#divergencePoint}),
+     *  используется для хит-теста ПКМ ({@link #handleRightClick}, запрос
+     *  пользователя 2026-09-30: "шину можно подписать"). {@code editable} — все
+     *  связи пучка имеют один и тот же непустой {@code wireType} (иначе подпись
+     *  общая не имеет смысла — пользователь подписывает каждый кабель отдельно,
+     *  как раньше, через обычное меню связи). */
+    private record BundleChipHit(SchemaNode node, String portId, java.awt.Rectangle rect,
+                                  List<SchemaEdge> edges, boolean editable) { }
+
+    private final List<BundleChipHit> bundleChipHits = new ArrayList<>();
 
     /** Одно гнездо разъёма конкретного узла — попадание клика/наведения мыши. */
     private record SocketHit(SchemaNode node, CardPort port) { }
@@ -2043,6 +2057,14 @@ public class SchemaCanvasPanel extends JPanel {
 
     private static final Font EDGE_FONT = new Font(Font.SANS_SERIF, Font.PLAIN, 10);
 
+    /** Шрифт подписи ЭТОЙ связи — {@link EDGE_FONT}, изменённый на {@link
+     *  SchemaEdge#getFontSize()}, если размер задан вручную через контекстное меню
+     *  линии («Размер шрифта…»), иначе стандартный {@link #EDGE_FONT} как раньше. */
+    private static Font edgeFont(SchemaEdge edge) {
+        Integer size = edge.getFontSize();
+        return size != null ? EDGE_FONT.deriveFont((float) size) : EDGE_FONT;
+    }
+
     /** Границы кликабельного «чипа» подписи связи (на середине ЛОМАНОЙ линии, не
      *  просто между началом и концом) — используются и при отрисовке, и при
      *  хит-тесте клика, чтобы не разъезжались. */
@@ -2059,7 +2081,7 @@ public class SchemaCanvasPanel extends JPanel {
         String display = edge.displayLabel();
         boolean hasLabel = display != null && !display.isEmpty();
         String text = hasLabel ? display : "+ подпись";
-        java.awt.FontMetrics fm = getFontMetrics(EDGE_FONT);
+        java.awt.FontMetrics fm = getFontMetrics(edgeFont(edge));
         int w = fm.stringWidth(text) + 14;
         int h = fm.getHeight() + 6;
         return new java.awt.Rectangle(mx - w / 2, my - h / 2, w, h);
@@ -2076,9 +2098,23 @@ public class SchemaCanvasPanel extends JPanel {
 
     private SchemaEdge edgeLabelChipAt(Point p) {
         for (SchemaEdge edge : edges()) {
+            if (suppressedByBundleLabel(edge)) {
+                continue;
+            }
             java.awt.Rectangle r = labelChipBounds(edge);
             if (r != null && r.contains(p)) {
                 return edge;
+            }
+        }
+        return null;
+    }
+
+    /** Чип общей подписи шины под курсором — см. {@link #bundleChipHits},
+     *  заполняется на КАЖДОЙ отрисовке в {@link #drawEdgeBundleMarkers}. */
+    private BundleChipHit bundleChipAt(Point p) {
+        for (BundleChipHit hit : bundleChipHits) {
+            if (hit.rect().contains(p)) {
+                return hit;
             }
         }
         return null;
@@ -2166,6 +2202,106 @@ public class SchemaCanvasPanel extends JPanel {
                 JOptionPane.showMessageDialog(this, ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
                 return;
             }
+        }
+        onChanged.run();
+        repaint();
+    }
+
+    /** Меню чипа шины по ПКМ — «Подпись шины…» (только когда кабели пучка ещё не
+     *  разошлись типом, см. {@link BundleChipHit#editable()}/{@link
+     *  #bundleLabelEditable}) и «Размер шрифта…» (ВСЕГДА — ортогонален типу
+     *  кабеля, запрос пользователя 2026-09-30: "для плашки шины недоступно
+     *  изменение высоты шрифта"). Пишет в {@link
+     *  com.vjstb.ledscheme.service.AppModel#setSchemaEdgesFontSize} сразу на ВСЕ
+     *  связи пучка, одна запись отмены — тот же приём, что {@link
+     *  #updateSchemaEdgesWireShared}. */
+    private void showBundleChipMenu(BundleChipHit hit, int x, int y) {
+        JPopupMenu menu = new JPopupMenu();
+        if (hit.editable()) {
+            javax.swing.JMenuItem label = new javax.swing.JMenuItem("Подпись шины…");
+            label.addActionListener(ev -> editBundleLabel(hit));
+            menu.add(label);
+        }
+        javax.swing.JMenuItem fontSizeItem = new javax.swing.JMenuItem("Размер шрифта…");
+        fontSizeItem.addActionListener(ev -> promptFontSize("Размер шрифта подписи шины",
+                sharedFontSize(hit.edges()), size -> {
+                    model.setSchemaEdgesFontSize(hit.edges(), size);
+                    onChanged.run();
+                    repaint();
+                }));
+        menu.add(fontSizeItem);
+        menu.show(this, x, y);
+    }
+
+    /** Диалог общей подписи ШИНЫ — тип+метраж один раз на ВСЕ связи пучка сразу
+     *  (запрос пользователя 2026-09-30: "если кабели в шине одинаковые — подпишет
+     *  1 раз"). Сознательно проще {@link WireLabelDialog} (тот привязан к ОДНОЙ
+     *  связи — гнёзда/лимиты/переходники другого конца считаются per-edge, а у
+     *  каждой связи пучка СВОЙ второй конец, единого смысла для них нет) — только
+     *  тип и метраж; число линий КАЖДОЙ связи не спрашивается здесь вовсе (см.
+     *  {@link com.vjstb.ledscheme.service.AppModel#updateSchemaEdgesWireShared} —
+     *  показанное на чипе "N×Тип" это сумма, а не отдельно вводимое поле). Список
+     *  типов в выпадающем списке — те же ДВЕ библиотеки, что и в {@link
+     *  WireLabelDialog} без намёков на разъём (каталог длин + переходники) —
+     *  сузить до конкретного разъёма кабинета тут нельзя (у разных связей пучка
+     *  разные вторые концы), поэтому список не фильтруется, только предлагается
+     *  (комбобокс остаётся редактируемым — запрос пользователя 2026-09-30: "нет
+     *  дропдауна с доступными типами кабеля"). */
+    private void editBundleLabel(BundleChipHit hit) {
+        String sharedType = sharedWireType(hit.edges());
+        Double sharedLength = null;
+        boolean lengthConsistent = true;
+        for (SchemaEdge e : hit.edges()) {
+            Double len = e.getLengthM();
+            if (sharedLength == null) {
+                sharedLength = len;
+            } else if (len == null || Math.abs(len - sharedLength) > 1e-6) {
+                lengthConsistent = false;
+            }
+        }
+        java.util.LinkedHashSet<String> presets = new java.util.LinkedHashSet<>();
+        for (com.vjstb.ledscheme.model.CableLengthProfile p : model.cableLengthProfilesForMode(mode)) {
+            presets.add(p.getName());
+        }
+        for (com.vjstb.ledscheme.model.CableType t : model.cableTypesForMode(mode)) {
+            presets.add(t.getLabel());
+        }
+        javax.swing.JComboBox<String> typeCombo = new javax.swing.JComboBox<>(presets.toArray(new String[0]));
+        typeCombo.setEditable(true);
+        if (sharedType != null) {
+            typeCombo.getEditor().setItem(sharedType);
+        }
+        javax.swing.JTextField lengthField = new javax.swing.JTextField(
+                lengthConsistent && sharedLength != null ? UiKit.fmt(sharedLength) : "", 8);
+        JPanel panel = new JPanel(new java.awt.GridLayout(0, 2, 8, 6));
+        panel.setBorder(javax.swing.BorderFactory.createEmptyBorder(6, 0, 6, 0));
+        panel.add(new javax.swing.JLabel("Тип (общий на " + hit.edges().size() + " связи):"));
+        panel.add(typeCombo);
+        panel.add(new javax.swing.JLabel("Метраж, м (необязательно):"));
+        panel.add(lengthField);
+        Object[] options = {"Сохранить", "Очистить подпись", "Отмена"};
+        int result = JOptionPane.showOptionDialog(this, panel, "Подпись шины связей",
+                JOptionPane.YES_NO_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE, null, options, options[0]);
+        if (result == 1) {
+            model.clearSchemaEdgesWireShared(hit.edges());
+            onChanged.run();
+            repaint();
+            return;
+        }
+        if (result != 0) {
+            return;
+        }
+        String type = String.valueOf(typeCombo.getEditor().getItem()).trim();
+        if (type.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Укажите тип линии", "Проверка данных", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        Double length = MathExpr.tryEval(lengthField.getText());
+        try {
+            model.updateSchemaEdgesWireShared(hit.edges(), type, length);
+        } catch (RuntimeException ex) {
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
+            return;
         }
         onChanged.run();
         repaint();
@@ -2434,6 +2570,15 @@ public class SchemaCanvasPanel extends JPanel {
 
     private void handleRightClick(MouseEvent e) {
         Point mp = toModel(e.getPoint());
+        // ПКМ по чипу общей подписи шины — меню «Подпись шины…»/«Размер шрифта…»
+        // (запрос пользователя 2026-09-30), проверяется ПЕРВЫМ: чип стоит в точке
+        // расхождения маршрутов, довольно далеко от гнезда/узла, но на дорогу к
+        // цели связь и чип могут визуально совпасть с самой линией связи ниже.
+        BundleChipHit bundleHit = bundleChipAt(mp);
+        if (bundleHit != null) {
+            showBundleChipMenu(bundleHit, e.getX(), e.getY());
+            return;
+        }
         // ПКМ по пину — меню ГРУППЫ гнёзд (PLAN.md, задача T3.3), а не общее меню
         // блока: проверяется ПЕРВЫМ, потому что пины лежат ровно на границе узла и
         // иначе всегда проигрывали бы hit-test по прямоугольнику узла (nodeAt ниже).
@@ -2461,6 +2606,22 @@ public class SchemaCanvasPanel extends JPanel {
             } else {
                 showNodeMenu(hitNode, e.getX(), e.getY());
             }
+            return;
+        }
+        // ПКМ по чипу подписи связи — сразу диалог «Размер шрифта…» для ЭТОЙ подписи
+        // (запрос пользователя), а не общее меню связи: чип часто стоит в стороне от
+        // самой линии (см. Task #3, перетаскивание чипа), поэтому проверяется ДО
+        // хит-теста излома/линии — иначе ПКМ по чипу мог просто ничего не найти.
+        SchemaEdge chipHit = edgeLabelChipAt(mp);
+        if (chipHit != null) {
+            selectedNodes.clear();
+            selectSingleEdge(chipHit);
+            repaint();
+            promptFontSize("Размер шрифта подписи связи", chipHit.getFontSize(), size -> {
+                model.setSchemaEdgeFontSize(chipHit, size);
+                onChanged.run();
+                repaint();
+            });
             return;
         }
         // Точки излома видны/хватаются только у уже ВЫДЕЛЕННОЙ связи (см. waypointAt),
@@ -2810,6 +2971,14 @@ public class SchemaCanvasPanel extends JPanel {
             menu.addSeparator();
             addBlockLayoutMenuItems(menu, List.of(node));
         }
+        menu.addSeparator();
+        javax.swing.JMenuItem fontSizeItem = new javax.swing.JMenuItem("Размер шрифта…");
+        fontSizeItem.addActionListener(ev -> promptFontSize("Размер шрифта блока", node.getFontSize(), size -> {
+            model.setSchemaNodesFontSize(List.of(node), size);
+            onChanged.run();
+            repaint();
+        }));
+        menu.add(fontSizeItem);
         javax.swing.JMenuItem del = new javax.swing.JMenuItem("Удалить узел");
         del.addActionListener(ev -> {
             model.deleteSchemaNode(node);
@@ -2819,6 +2988,27 @@ public class SchemaCanvasPanel extends JPanel {
         });
         menu.add(del);
         menu.show(this, x, y);
+    }
+
+    /** Диалог «Размер шрифта…» — общий для пункта меню узла и связи (docs/schema-
+     *  ports-rework — размер шрифта переехал из библиотеки/админ-консоли сюда,
+     *  задаётся per-instance прямо на холсте). Спиннер 0..72, 0 = «стандартный
+     *  размер» ({@code null} в модели) — {@code apply} вызывается только по ОК,
+     *  отмена диалога ничего не меняет. */
+    private void promptFontSize(String title, Integer current, java.util.function.Consumer<Integer> apply) {
+        javax.swing.SpinnerNumberModel spinnerModel =
+                new javax.swing.SpinnerNumberModel(current != null ? current : 0, 0, 72, 1);
+        javax.swing.JSpinner spinner = new javax.swing.JSpinner(spinnerModel);
+        JPanel panel = new JPanel(new java.awt.BorderLayout(6, 6));
+        panel.add(new javax.swing.JLabel("Размер шрифта, пункты (0 — стандартный):"), java.awt.BorderLayout.WEST);
+        panel.add(spinner, java.awt.BorderLayout.CENTER);
+        int result = JOptionPane.showConfirmDialog(this, panel, title, JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.PLAIN_MESSAGE);
+        if (result != JOptionPane.OK_OPTION) {
+            return;
+        }
+        int value = (Integer) spinner.getValue();
+        apply.accept(value > 0 ? value : null);
     }
 
     private void addRenameMenuItem(JPopupMenu menu, SchemaNode node) {
@@ -2868,6 +3058,14 @@ public class SchemaCanvasPanel extends JPanel {
             });
             menu.add(resetColor);
         }
+
+        javax.swing.JMenuItem fontSizeItem = new javax.swing.JMenuItem("Размер шрифта…");
+        fontSizeItem.addActionListener(ev -> promptFontSize("Размер шрифта подписи связи", edge.getFontSize(), size -> {
+            model.setSchemaEdgeFontSize(edge, size);
+            onChanged.run();
+            repaint();
+        }));
+        menu.add(fontSizeItem);
         if (edge.getLabelDx() != 0 || edge.getLabelDy() != 0) {
             javax.swing.JMenuItem resetLabelPos = new javax.swing.JMenuItem("Вернуть подпись на линию");
             resetLabelPos.addActionListener(ev -> {
@@ -3139,7 +3337,6 @@ public class SchemaCanvasPanel extends JPanel {
         // связи — под узлами
         g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         g2.setFont(EDGE_FONT);
-        java.awt.FontMetrics edgeFm = g2.getFontMetrics();
         // Маршрут каждой связи считаем один раз — и для отрисовки, и для поиска
         // пересечений («мостики», см. ниже) нужна одна и та же ломаная.
         Map<SchemaEdge, List<double[]>> routeCache = new IdentityHashMap<>();
@@ -3228,7 +3425,7 @@ public class SchemaCanvasPanel extends JPanel {
             java.awt.Rectangle chip = labelChipBounds(edge);
             String display = edge.displayLabel();
             boolean hasLabel = display != null && !display.isEmpty();
-            boolean showChip = hasLabel || shouldShowEmptyLabelChip(edge, selected);
+            boolean showChip = (hasLabel && !suppressedByBundleLabel(edge)) || shouldShowEmptyLabelChip(edge, selected);
             if (chip != null && showChip) {
                 g2.setColor(selected ? style.accent : hasLabel ? style.labelChipBackground : style.labelChipBackgroundEmpty);
                 g2.fillRoundRect(chip.x, chip.y, chip.width, chip.height, 8, 8);
@@ -3237,7 +3434,9 @@ public class SchemaCanvasPanel extends JPanel {
                 g2.drawRoundRect(chip.x, chip.y, chip.width, chip.height, 8, 8);
                 g2.setColor(hasLabel || selected ? style.labelChipText : style.labelChipTextEmpty);
                 String text = hasLabel ? display : "+ подпись";
-                g2.drawString(text, chip.x + 7, chip.y + chip.height - edgeFm.getDescent() - 2);
+                Font edgeLabelFont = edgeFont(edge);
+                g2.setFont(edgeLabelFont);
+                g2.drawString(text, chip.x + 7, chip.y + chip.height - g2.getFontMetrics().getDescent() - 2);
                 g2.setFont(EDGE_FONT);
             }
         }
@@ -3266,11 +3465,12 @@ public class SchemaCanvasPanel extends JPanel {
             }
         }
 
-        Font titleFont = getFont().deriveFont(Font.BOLD, 12f);
-        Font metaFont = getFont().deriveFont(10f);
         layoutCache.clear();
         overloadIconRects.clear();
+        bundleChipHits.clear();
         for (SchemaNode n : ns) {
+            Font titleFont = nodeTitleFont(n);
+            Font metaFont = nodeMetaFont(n);
             boolean selected = selectedNodes.contains(n);
             boolean pending = n.getId().equals(connectPendingId);
             int nw = (int) n.getWidth(), nh = (int) n.getHeight();
@@ -3324,10 +3524,12 @@ public class SchemaCanvasPanel extends JPanel {
                 int titleW = g2.getFontMetrics().stringWidth(clippedTitle);
                 int titleX = (int) n.getX() + (nw - titleW) / 2;
                 int titleY = (int) (n.getY() + topOffset
-                        + com.vjstb.ledscheme.service.schemalayout.SchemaLayoutMetrics.TITLE_BAND - 6);
+                        + com.vjstb.ledscheme.service.schemalayout.SchemaLayoutMetrics.TITLE_BAND - 6)
+                        + labelPaddingPx();
                 g2.drawString(clippedTitle, titleX, titleY);
             } else {
-                drawClipped(g2, title, (int) n.getX() + 8, (int) n.getY() + 20, nw - 16);
+                drawClipped(g2, title, (int) n.getX() + 8 + labelPaddingPx(), (int) n.getY() + 20 + labelPaddingPx(),
+                        nw - 16);
             }
             g2.setFont(metaFont);
             g2.setColor(style.metaText);
@@ -3753,6 +3955,16 @@ public class SchemaCanvasPanel extends JPanel {
     /** Запас вокруг гнезда для хит-теста клика/наведения. */
     private static final int SOCKET_HIT_PAD = 8;
 
+    /** Отступ текста шапки карты/подписи гнезда от гнезда и от края отсека --
+     *  "для красоты", запрос пользователя: раньше текст сидел вплотную. Настройка
+     *  пользователя ({@code Настройки → Отступ подписей от края блока/гнезда}, см.
+     *  {@link com.vjstb.ledscheme.settings.UserProfile#getSchemaLabelPaddingPx()}),
+     *  не константа -- общая для MODERN ({@link #drawBay}/{@link #drawPin}) и
+     *  CLASSIC ({@link #paintCardBlockHeaderClassic}/{@link #drawConnectorRowsClassic}). */
+    private int labelPaddingPx() {
+        return settings.activeProfile().getSchemaLabelPaddingPx();
+    }
+
     /** Цвет точки-гнезда по типу разъёма — см. {@link SchemaStyle#connectorDotColor}
      *  (docs/schema-ports-rework/PLAN.md, задача T3.1 — раньше палитра/хэш были
      *  захардкожены прямо здесь, теперь часть пресета оформления). */
@@ -3768,6 +3980,22 @@ public class SchemaCanvasPanel extends JPanel {
      *  назначены — их гнёзда должны отрисовываться независимо от типа узла. */
     private static boolean hasPorts(SchemaNode n) {
         return !n.getCards().isEmpty() || !n.getPowerConnectors().isEmpty();
+    }
+
+    /** Шрифт заголовка блока — {@link SchemaNode#getFontSize()}+2pt (жирный), если
+     *  размер задан вручную через контекстное меню блока («Размер шрифта…»), иначе
+     *  стандартные 12pt (как метка/гнёзда узла — см. {@link #nodeMetaFont}). */
+    private Font nodeTitleFont(SchemaNode n) {
+        Integer size = n.getFontSize();
+        return getFont().deriveFont(Font.BOLD, size != null ? size + 2f : 12f);
+    }
+
+    /** Шрифт подписей содержимого блока (гнёзда/метаданные) — {@link
+     *  SchemaNode#getFontSize()}, если задан, иначе стандартные 10pt. Тот же размер
+     *  передаётся в {@link #drawNodeSockets} для подписей гнёзд/карт этого узла. */
+    private Font nodeMetaFont(SchemaNode n) {
+        Integer size = n.getFontSize();
+        return getFont().deriveFont(size != null ? (float) size : 10f);
     }
 
     private static List<com.vjstb.ledscheme.service.schemalayout.NodePortLayout.CardGroup> cardGroupsOf(SchemaNode n) {
@@ -3811,9 +4039,12 @@ public class SchemaCanvasPanel extends JPanel {
                 case ALWAYS_EXPANDED -> Boolean.FALSE;
                 case AUTO -> null;
             };
+            int labelFontSize = node.getFontSize() != null ? node.getFontSize()
+                    : com.vjstb.ledscheme.service.schemalayout.SchemaLayoutMetrics.LABEL_FONT_SIZE;
             var in = new com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Input(mode, node.getType(),
                     orientation, groups, edges(), node.getPortPlacements(), node.isOnlyUsedPorts(), defaultCollapsed,
-                    model.getInterfaceTypes(), com.vjstb.ledscheme.service.schemalayout.TextMeasure.awt());
+                    model.getInterfaceTypes(), com.vjstb.ledscheme.service.schemalayout.TextMeasure.awt(),
+                    labelFontSize, labelPaddingPx());
             return com.vjstb.ledscheme.service.schemalayout.NodePortLayout.layout(in, node.getWidth(), node.getHeight());
         });
     }
@@ -3826,15 +4057,16 @@ public class SchemaCanvasPanel extends JPanel {
     private void drawNodeSockets(Graphics2D g2, SchemaNode n) {
         var layout = nodeLayout(n);
         double ox = n.getX(), oy = n.getY();
+        Integer nodeFontSize = n.getFontSize();
         for (var bay : layout.bays()) {
             drawBayBackground(g2, bay, layout.pins(), ox, oy, (int) n.getWidth(), (int) n.getHeight());
         }
         for (var bay : layout.bays()) {
-            drawBay(g2, bay, layout.pins(), ox, oy, (int) n.getWidth(), (int) n.getHeight());
+            drawBay(g2, bay, layout.pins(), ox, oy, (int) n.getWidth(), (int) n.getHeight(), nodeFontSize);
         }
         drawGroupBrackets(g2, layout, ox, oy, (int) n.getHeight());
         for (var pin : layout.pins()) {
-            drawPin(g2, n, pin, ox, oy);
+            drawPin(g2, n, pin, ox, oy, nodeFontSize);
         }
         for (var overflow : layout.overflow()) {
             drawOverflow(g2, overflow, ox, oy, (int) n.getWidth(), (int) n.getHeight());
@@ -3876,7 +4108,7 @@ public class SchemaCanvasPanel extends JPanel {
             g2.drawLine((int) xStart, bracketY, (int) xEnd, bracketY);
             String label = clipToWidth(g2, p.port().getConnectorType(), (int) (xEnd - xStart) + 20);
             int tw = g2.getFontMetrics().stringWidth(label);
-            g2.drawString(label, (int) ((xStart + xEnd) / 2 - tw / 2.0), bracketY + 9);
+            g2.drawString(label, (int) ((xStart + xEnd) / 2 - tw / 2.0), bracketY + 9 + labelPaddingPx());
             i = runEnd;
         }
     }
@@ -3953,10 +4185,14 @@ public class SchemaCanvasPanel extends JPanel {
      *  строка (см. DIALOG.md/PLAN.md, задача T3.2, найдено пиксельным просмотром
      *  рендера Disguise D3: сперва "Basic Set" наложилось на скобку "Ethernet Cat6"
      *  у развёрнутой группы, затем — на собственную подпись "3×Ethernet Cat6" у
-     *  свёрнутой). */
+     *  свёрнутой).
+     *
+     * <p>{@code nodeFontSize} -- {@link SchemaNode#getFontSize()} узла, если задан
+     *  через контекстное меню блока («Размер шрифта…»), иначе {@code null} и
+     *  используется унаследованный шрифт. Отступ — см. {@link #labelPaddingPx()}. */
     private void drawBay(Graphics2D g2, com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Bay bay,
                           List<com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Pin> pins,
-                          double ox, double oy, int nw, int nh) {
+                          double ox, double oy, int nw, int nh, Integer nodeFontSize) {
         if (bay.label() == null) {
             return;
         }
@@ -3965,16 +4201,21 @@ public class SchemaCanvasPanel extends JPanel {
         if (topOrBottom && baySpanIsSingleGroup(pins, bay)) {
             return;
         }
+        int pad = labelPaddingPx();
+        Font original = g2.getFont();
+        if (nodeFontSize != null) {
+            g2.setFont(original.deriveFont((float) nodeFontSize));
+        }
         g2.setColor(style.cardBlockHeaderText);
         switch (bay.side()) {
             case LEFT -> {
-                String clipped = clipToWidth(g2, bay.label(), nw - 16);
-                g2.drawString(clipped, (int) ox + 4, (int) (oy + bay.alongStart()) + 9);
+                String clipped = clipToWidth(g2, bay.label(), nw - 16 - pad * 2);
+                g2.drawString(clipped, (int) ox + 4 + pad, (int) (oy + bay.alongStart()) + 9);
             }
             case RIGHT -> {
-                String clipped = clipToWidth(g2, bay.label(), nw - 16);
+                String clipped = clipToWidth(g2, bay.label(), nw - 16 - pad * 2);
                 int w = g2.getFontMetrics().stringWidth(clipped);
-                g2.drawString(clipped, (int) (ox + nw) - 4 - w, (int) (oy + bay.alongStart()) + 9);
+                g2.drawString(clipped, (int) (ox + nw) - 4 - pad - w, (int) (oy + bay.alongStart()) + 9);
             }
             case TOP, BOTTOM -> {
                 String clipped = clipToWidth(g2, bay.label(), (int) (bay.alongEnd() - bay.alongStart()));
@@ -3984,12 +4225,13 @@ public class SchemaCanvasPanel extends JPanel {
                 int bracketY = (int) (oy + (top
                         ? com.vjstb.ledscheme.service.schemalayout.SchemaLayoutMetrics.HORIZONTAL_SIDE_DEPTH - 10
                         : nh - com.vjstb.ledscheme.service.schemalayout.SchemaLayoutMetrics.HORIZONTAL_SIDE_DEPTH + 4));
-                int textY = bracketY + (top ? 9 : 9);
+                int textY = bracketY + 9 + pad;
                 g2.setStroke(new BasicStroke(1f));
                 g2.drawLine((int) (ox + bay.alongStart()), bracketY, (int) (ox + bay.alongEnd()), bracketY);
                 g2.drawString(clipped, textX, textY);
             }
         }
+        g2.setFont(original);
     }
 
     /** {@code true}, если ВСЕ пины отсека (та же сторона и та же карта, что у
@@ -4012,8 +4254,10 @@ public class SchemaCanvasPanel extends JPanel {
         return sole != null;
     }
 
+    /** {@code nodeFontSize} -- см. class-javadoc {@link #drawBay}: тот же принцип,
+     *  применяется к подписи этого гнезда. */
     private void drawPin(Graphics2D g2, SchemaNode node, com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Pin pin,
-                          double ox, double oy) {
+                          double ox, double oy, Integer nodeFontSize) {
         int cx = (int) Math.round(ox + pin.x());
         int cy = (int) Math.round(oy + pin.y());
         boolean used = com.vjstb.ledscheme.service.schemalayout.SchemaUsage.isPortUsed(edges(), pin.port().getId());
@@ -4031,22 +4275,31 @@ public class SchemaCanvasPanel extends JPanel {
 
         String label = pinLabel(pin);
         g2.setColor(style.socketLabelText);
+        int pad = labelPaddingPx();
+        Font original = g2.getFont();
+        if (nodeFontSize != null) {
+            g2.setFont(original.deriveFont((float) nodeFontSize));
+        }
         FontMetrics fm = g2.getFontMetrics();
         switch (pin.side()) {
-            case LEFT -> g2.drawString(clipToWidth(g2, label, 160), cx + PIN_DOT_D, cy + fm.getAscent() / 2 - 1);
+            case LEFT -> g2.drawString(clipToWidth(g2, label, 160), cx + PIN_DOT_D + pad,
+                    cy + fm.getAscent() / 2 - 1);
             case RIGHT -> {
                 String clipped = clipToWidth(g2, label, 160);
-                g2.drawString(clipped, cx - PIN_DOT_D - fm.stringWidth(clipped), cy + fm.getAscent() / 2 - 1);
+                g2.drawString(clipped, cx - PIN_DOT_D - pad - fm.stringWidth(clipped),
+                        cy + fm.getAscent() / 2 - 1);
             }
             case TOP -> {
                 String clipped = clipToWidth(g2, label, topBottomLabelMaxWidth(pin));
-                g2.drawString(clipped, cx - fm.stringWidth(clipped) / 2, cy + PIN_DOT_D + fm.getAscent());
+                g2.drawString(clipped, cx - fm.stringWidth(clipped) / 2,
+                        cy + PIN_DOT_D + pad + fm.getAscent());
             }
             case BOTTOM -> {
                 String clipped = clipToWidth(g2, label, topBottomLabelMaxWidth(pin));
-                g2.drawString(clipped, cx - fm.stringWidth(clipped) / 2, cy - PIN_DOT_D - 2);
+                g2.drawString(clipped, cx - fm.stringWidth(clipped) / 2, cy - PIN_DOT_D - 2 - pad);
             }
         }
+        g2.setFont(original);
     }
 
     /** Максимальная ширина подписи пина TOP/BOTTOM — свёрнутая группа (один пин,
@@ -4199,23 +4452,181 @@ public class SchemaCanvasPanel extends JPanel {
         if (pinMatches != 1) {
             return 0;
         }
-        int count = 0;
+        int count = bundledEdges(node, portId).size();
+        return count >= 2 ? count : 0;
+    }
+
+    /** Связи пучка узла {@code node}/{@code portId} — те же условия отбора, что
+     *  {@link #bundleCount}, но нужны сами связи (для маршрутов/общей подписи), не
+     *  только их число. НЕ проверяет "гнездо свёрнуто в один пин" (это уже сделано
+     *  в {@link #bundleCount}) — вызывающий код сам решает, что делать с < 2. */
+    private List<SchemaEdge> bundledEdges(SchemaNode node, String portId) {
+        List<SchemaEdge> result = new ArrayList<>();
         for (SchemaEdge e : edges()) {
             boolean asFrom = node.getId().equals(e.getFromNodeId()) && portId.equals(e.getFromPortId());
             boolean asTo = node.getId().equals(e.getToNodeId()) && portId.equals(e.getToPortId());
             if (asFrom || asTo) {
-                count++;
+                result.add(e);
             }
         }
-        return count >= 2 ? count : 0;
+        return result;
     }
 
-    /** Рисует короткий общий ствол и подпись "×N" для каждого гнезда узла {@code
-     *  node}, в которое сходится 2+ связи (см. {@link #bundleCount}) — один раз на
-     *  гнездо, а не на связь (иначе подпись повторялась бы N раз друг на друге).
-     *  Индивидуальные маршруты связей при этом не меняются — они и так сходятся в
-     *  ту же самую точку (общий пин свёрнутой группы), ствол здесь только
-     *  визуально подчёркивает слияние и даёт число, которого в самих линиях нет. */
+    /** Маршрут связи, развёрнутый так, чтобы индекс 0 был В ГНЕЗДЕ узла {@code node} —
+     *  у самой связи это гнездо может быть и НАЧАЛОМ, и КОНЦОМ маршрута (см. {@link
+     *  #routePoints}: индекс 0 всегда у {@code fromNode}). Нужно, чтобы передать все
+     *  маршруты пучка в {@link com.vjstb.ledscheme.service.schemalayout.EdgeBundles
+     *  #divergencePoint} "от одного и того же гнезда". */
+    private List<double[]> normalizedRouteFromNode(SchemaEdge edge, SchemaNode node) {
+        List<double[]> pts = routePoints(edge);
+        if (pts == null || pts.isEmpty()) {
+            return List.of();
+        }
+        if (node.getId().equals(edge.getFromNodeId())) {
+            return pts;
+        }
+        List<double[]> reversed = new ArrayList<>(pts);
+        java.util.Collections.reverse(reversed);
+        return reversed;
+    }
+
+    /** Общий тип кабеля пучка — {@link SchemaEdge#getWireType()}, если у ВСЕХ
+     *  подписанных связей пучка один и тот же (непустые сравниваются по trim()),
+     *  {@code null} — если хотя бы две подписанные связи расходятся типом (тогда
+     *  общая подпись не имеет смысла, каждый кабель подписывается отдельно, как
+     *  раньше). Связи БЕЗ подписи (wireType == null) не мешают — пучок остаётся
+     *  "общим" (просто ещё не подписан целиком), см. {@link #bundleLabelEditable}. */
+    private static String sharedWireType(List<SchemaEdge> bundle) {
+        String type = null;
+        for (SchemaEdge e : bundle) {
+            String t = e.getWireType();
+            if (t == null || t.isBlank()) {
+                continue;
+            }
+            String trimmed = t.trim();
+            if (type == null) {
+                type = trimmed;
+            } else if (!type.equals(trimmed)) {
+                return null;
+            }
+        }
+        return type;
+    }
+
+    /** Общий размер шрифта пучка — {@link SchemaEdge#getFontSize()}, если у ВСЕХ
+     *  связей пучка, у которых он вообще задан, одно и то же значение; {@code null}
+     *  — ничей размер не задан ИЛИ они расходятся (тогда чип рисуется стандартным
+     *  {@link #EDGE_FONT}, как обычная связь без своего размера). Задаётся через
+     *  {@link #setSchemaEdgesFontSize} на пункт «Размер шрифта…» контекстного меню
+     *  чипа шины (запрос пользователя 2026-09-30: "для плашки шины недоступно
+     *  изменение высоты шрифта"). */
+    private static Integer sharedFontSize(List<SchemaEdge> bundle) {
+        Integer size = null;
+        for (SchemaEdge e : bundle) {
+            Integer s = e.getFontSize();
+            if (s == null) {
+                continue;
+            }
+            if (size == null) {
+                size = s;
+            } else if (!size.equals(s)) {
+                return null;
+            }
+        }
+        return size;
+    }
+
+    /** true — подпись ЭТОЙ связи не нужно показывать отдельным чипом: связь входит
+     *  в пучок (см. {@link #bundleCount}), у которого уже ЕСТЬ общая подпись (см.
+     *  {@link #sharedWireType}) — та подпись уже показана единым чипом на стволе
+     *  пучка (см. {@link #drawEdgeBundleMarkers}), повторять её на КАЖДОЙ отдельной
+     *  связи избыточно (запрос пользователя 2026-09-30: "если я подписал чип шины,
+     *  чипы отдельных линий... нужно скрывать"). Симметрично: как только хотя бы
+     *  одна связь пучка получает СВОЙ, отличный от общего, тип (обычным меню связи)
+     *  — {@link #sharedWireType} пучка становится {@code null}, подавление снимается
+     *  само собой ("если пользователь руками выставит чип отдельной линии — чип
+     *  шины скрыть" — тут же перестаёт быть единым и общий чип, см. {@link
+     *  #bundleLabelText}/{@code editable} в {@link #drawEdgeBundleMarkers}). */
+    private boolean suppressedByBundleLabel(SchemaEdge edge) {
+        return suppressedByBundleLabelAtEnd(edge, edge.getFromNodeId(), edge.getFromPortId())
+                || suppressedByBundleLabelAtEnd(edge, edge.getToNodeId(), edge.getToPortId());
+    }
+
+    private boolean suppressedByBundleLabelAtEnd(SchemaEdge edge, String nodeId, String portId) {
+        if (portId == null) {
+            return false;
+        }
+        SchemaNode node = nodeById(nodeId);
+        if (node == null || bundleCount(node, portId) < 2) {
+            return false;
+        }
+        return sharedWireType(bundledEdges(node, portId)) != null;
+    }
+
+    /** Можно ли подписать пучок ОДНИМ чипом — да, если связи ещё вовсе не
+     *  подписаны (чистый лист, только предстоит указать тип целиком) ИЛИ уже
+     *  подписаны ОДНИМ и тем же типом; нет — если хотя бы две связи пучка уже
+     *  подписаны РАЗНЫМИ типами (запрос пользователя 2026-09-30: "если разные —
+     *  подпишет каждый кабель отдельно", как обычным меню связи). */
+    private static boolean bundleLabelEditable(List<SchemaEdge> bundle) {
+        String type = null;
+        for (SchemaEdge e : bundle) {
+            String t = e.getWireType();
+            if (t == null || t.isBlank()) {
+                continue;
+            }
+            String trimmed = t.trim();
+            if (type == null) {
+                type = trimmed;
+            } else if (!type.equals(trimmed)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** "N×Тип[, Lм]" для чипа шины — N это СУММА {@code wireCount} всех связей
+     *  пучка (реальное число проводов: каждая связь и сама может нести несколько
+     *  одинаковых, не только одну на пучок), метраж показан, только если у ВСЕХ
+     *  связей пучка один и тот же (иначе неясно, какой из них показать). */
+    private static String bundleLabelText(List<SchemaEdge> bundle, String sharedType) {
+        int totalCount = 0;
+        Double sharedLength = null;
+        boolean lengthConsistent = true;
+        for (SchemaEdge e : bundle) {
+            Integer c = e.getWireCount();
+            totalCount += c != null && c > 0 ? c : 1;
+            Double len = e.getLengthM();
+            if (sharedLength == null) {
+                sharedLength = len;
+            } else if (len == null || Math.abs(len - sharedLength) > 1e-6) {
+                lengthConsistent = false;
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append(totalCount).append('×').append(sharedType);
+        if (lengthConsistent && sharedLength != null && sharedLength > 0) {
+            sb.append(", ").append(UiKit.fmt(sharedLength)).append("м");
+        }
+        return sb.toString();
+    }
+
+    /** Рисует общий маркер для каждого гнезда узла {@code node}, в которое сходится
+     *  2+ связи (см. {@link #bundleCount}) — один раз на гнездо, а не на связь
+     *  (иначе подпись повторялась бы N раз друг на друге). Индивидуальные маршруты
+     *  связей при этом не меняются — они и так сходятся в ту же самую точку (общий
+     *  пин свёрнутой группы). Маркер стоит не у самого гнезда фиксированным
+     *  коротким "усом", а в точке РЕАЛЬНОГО расхождения маршрутов (см. {@link
+     *  com.vjstb.ledscheme.service.schemalayout.EdgeBundles#commonPrefix}), а сам
+     *  общий участок дополнительно обведён пунктиром акцентного цвета ПОВЕРХ
+     *  обычных (цветных) линий связей — запрос пользователя 2026-09-30: "индикация
+     *  шины — синяя линия/пунктир — шла до точки расхождения линий", а не была
+     *  одной точкой у гнезда. Когда все связи пучка либо ещё не подписаны, либо
+     *  подписаны ОДНИМ и тем же типом (см. {@link #bundleLabelEditable}) — маркер
+     *  рисуется как настоящий кликабельный чип (см. {@link #bundleChipHits},
+     *  {@link #handleRightClick}) с общей подписью "N×Тип"; иначе — как раньше,
+     *  простой текст "×N" без рамки (кабели разные, шину целиком не подписать,
+     *  каждая связь редактируется своим обычным меню). */
     private void drawEdgeBundleMarkers(Graphics2D g2, SchemaNode node, List<SchemaEdge> es) {
         if (classicMode()) {
             return;
@@ -4230,8 +4641,8 @@ public class SchemaCanvasPanel extends JPanel {
             }
         }
         for (String portId : portIds) {
-            int count = bundleCount(node, portId);
-            if (count < 2) {
+            List<SchemaEdge> bundle = bundledEdges(node, portId);
+            if (bundle.size() < 2) {
                 continue;
             }
             var pin = pinFor(node, portId, null);
@@ -4240,28 +4651,109 @@ public class SchemaCanvasPanel extends JPanel {
             }
             double pinX = node.getX() + pin.x();
             double pinY = node.getY() + pin.y();
-            // НЕ рисуем сам ствол EdgeBundles.trunk() как отрезок — тот предполагает,
-            // что все связи и сами подходят строго по нормали стороны гнезда (как
-            // после орто-трассировки). Пока это не так для гнёзд-кабинетов расключения
-            // экрана (см. javadoc autoRoutePoints — туда OrthogonalRouter ещё не
-            // дотянулся, связи подходят под произвольным углом) — жёстко направленный
-            // отрезок создавал бы ложный "залом", не соответствующий ни одной реальной
-            // линии (баг-репорт пользователя 2026-09-18, DIALOG.md). Кружок без
-            // направления + подпись рядом читаются верно при любом угле подхода.
-            var bundle = com.vjstb.ledscheme.service.schemalayout.EdgeBundles.bundleFor(pinX, pinY, pin.side(), count);
-            double[] labelAt = bundle.trunk()[0];
+            List<List<double[]>> routes = new ArrayList<>();
+            for (SchemaEdge edge : bundle) {
+                List<double[]> r = normalizedRouteFromNode(edge, node);
+                if (!r.isEmpty()) {
+                    routes.add(r);
+                }
+            }
+            List<double[]> prefix = routes.size() >= 2
+                    ? com.vjstb.ledscheme.service.schemalayout.EdgeBundles.commonPrefix(routes)
+                    : List.of();
+            double[] at = !prefix.isEmpty() ? prefix.get(prefix.size() - 1) : new double[]{pinX, pinY};
+
+            if (prefix.size() >= 2) {
+                g2.setColor(style.accent);
+                g2.setStroke(new BasicStroke(2.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 0,
+                        new float[]{6, 4}, 0));
+                for (int i = 0; i < prefix.size() - 1; i++) {
+                    g2.drawLine((int) Math.round(prefix.get(i)[0]), (int) Math.round(prefix.get(i)[1]),
+                            (int) Math.round(prefix.get(i + 1)[0]), (int) Math.round(prefix.get(i + 1)[1]));
+                }
+            }
+
             g2.setColor(style.accent);
             int dotD = PIN_DOT_D + 4;
             g2.fillOval((int) Math.round(pinX - dotD / 2.0), (int) Math.round(pinY - dotD / 2.0), dotD, dotD);
-            g2.setFont(EDGE_FONT);
-            g2.setColor(style.mutedText);
-            g2.drawString(bundle.label(), (int) Math.round(labelAt[0]) + 4, (int) Math.round(labelAt[1]) - 3);
+
+            Integer bundleSize = sharedFontSize(bundle);
+            g2.setFont(bundleSize != null ? EDGE_FONT.deriveFont((float) bundleSize) : EDGE_FONT);
+            boolean editable = bundleLabelEditable(bundle);
+            String sharedType = sharedWireType(bundle);
+            String text = sharedType != null ? bundleLabelText(bundle, sharedType) : "×" + bundle.size();
+            int atX = (int) Math.round(at[0]);
+            int atY = (int) Math.round(at[1]);
+            if (editable) {
+                FontMetrics fm = g2.getFontMetrics();
+                int chipW = fm.stringWidth(text) + 14;
+                int chipH = fm.getHeight() + 6;
+                int chipX = atX + 4;
+                int chipY = atY - chipH - 2;
+                boolean hasLabel = sharedType != null;
+                g2.setColor(hasLabel ? style.labelChipBackground : style.labelChipBackgroundEmpty);
+                g2.fillRoundRect(chipX, chipY, chipW, chipH, 8, 8);
+                g2.setColor(style.labelChipBorder);
+                g2.setStroke(new BasicStroke(1f));
+                g2.drawRoundRect(chipX, chipY, chipW, chipH, 8, 8);
+                g2.setColor(hasLabel ? style.labelChipText : style.labelChipTextEmpty);
+                g2.drawString(text, chipX + 7, chipY + chipH - fm.getDescent() - 2);
+                bundleChipHits.add(new BundleChipHit(node, portId,
+                        new java.awt.Rectangle(chipX, chipY, chipW, chipH), bundle, true));
+            } else {
+                // Кабели пучка уже подписаны РАЗНЫМИ типами — общую подпись целиком
+                // не предложить (см. javadoc класса), но размер шрифта всё равно
+                // применим ко всем сразу (ортогонален типу кабеля) — поэтому чип
+                // под ПКМ регистрируется и здесь, просто без пункта «Подпись шины…»
+                // в его меню (см. {@link #showBundleChipMenu}).
+                g2.setColor(style.mutedText);
+                FontMetrics fm = g2.getFontMetrics();
+                int textX = atX + 4;
+                int textY = atY - 3;
+                g2.drawString(text, textX, textY);
+                bundleChipHits.add(new BundleChipHit(node, portId,
+                        new java.awt.Rectangle(textX - 2, textY - fm.getAscent() - 2,
+                                fm.stringWidth(text) + 4, fm.getHeight() + 4),
+                        bundle, false));
+            }
         }
     }
 
     /** Только для тестов — открывает {@link #bundleCount} (T4.3/T4.4 доводка, T6.2). */
     public int bundleSizeForTest(SchemaNode node, String portId) {
         return bundleCount(node, portId);
+    }
+
+    /** Только для тестов — открывает {@link #suppressedByBundleLabel}. */
+    public boolean suppressedByBundleLabelForTest(SchemaEdge edge) {
+        return suppressedByBundleLabel(edge);
+    }
+
+    /** Только для тестов — прямоугольник маркера пучка (см. {@link
+     *  #bundleChipHits}, заполняется при отрисовке — вызывающий тест должен сперва
+     *  вызвать {@link #renderImage}) для гнезда {@code node}/{@code portId},
+     *  {@code null} — маркера нет вовсе (не пучок/пучок из < 2 связей). Есть и для
+     *  кабелей пучка, подписанных РАЗНЫМИ типами (размер шрифта применим всегда) —
+     *  см. {@link #bundleChipEditableForTest}, чтобы различить эти два случая. */
+    public java.awt.Rectangle bundleChipRectForTest(SchemaNode node, String portId) {
+        for (BundleChipHit hit : bundleChipHits) {
+            if (hit.node() == node && hit.portId().equals(portId)) {
+                return hit.rect();
+            }
+        }
+        return null;
+    }
+
+    /** Только для тестов — {@link BundleChipHit#editable()} для гнезда {@code
+     *  node}/{@code portId}, {@code null} — маркера нет вовсе (см. {@link
+     *  #bundleChipRectForTest}). */
+    public Boolean bundleChipEditableForTest(SchemaNode node, String portId) {
+        for (BundleChipHit hit : bundleChipHits) {
+            if (hit.node() == node && hit.portId().equals(portId)) {
+                return hit.editable();
+            }
+        }
+        return null;
     }
 
     /** Гнездо разъёма под точкой клика/курсора — учитывает только реально
@@ -4543,14 +5035,15 @@ public class SchemaCanvasPanel extends JPanel {
         if (cardName == null || cardName.isEmpty()) {
             return;
         }
+        int pad = labelPaddingPx();
         g2.setColor(style.cardBlockHeaderText);
         if (vertical) {
-            int maxLen = (acrossFar - acrossNear) - 12;
+            int maxLen = (acrossFar - acrossNear) - 12 - pad * 2;
             drawVerticalLabelCenteredClassic(g2, cardName, headerAlong + CLASSIC_CONNECTOR_DOT_D / 2,
                     (acrossNear + acrossFar) / 2, maxLen);
         } else {
-            String clipped = clipToWidth(g2, cardName, (acrossFar - acrossNear) - 16);
-            g2.drawString(clipped, acrossNear + 8, headerAlong + CLASSIC_CONNECTOR_DOT_D);
+            String clipped = clipToWidth(g2, cardName, (acrossFar - acrossNear) - 16 - pad * 2);
+            g2.drawString(clipped, acrossNear + 8 + pad, headerAlong + CLASSIC_CONNECTOR_DOT_D);
         }
     }
 
@@ -4618,19 +5111,22 @@ public class SchemaCanvasPanel extends JPanel {
             String label = expandedRow ? port.getConnectorType() + " #" + (r.slotIndex() + 1)
                     : port.getCount() + "×" + port.getConnectorType();
             g2.setColor(style.socketLabelText);
+            int pad = labelPaddingPx();
             if (vertical) {
-                int maxLen = (acrossFar - acrossNear) / 2 - CLASSIC_CONNECTOR_DOT_D - 8;
+                int maxLen = (acrossFar - acrossNear) / 2 - CLASSIC_CONNECTOR_DOT_D - 8 - pad * 2;
                 int labelCenterX = r.dotX() + CLASSIC_CONNECTOR_DOT_D / 2;
                 if (r.isIn()) {
-                    drawVerticalLabelGrowDownClassic(g2, label, labelCenterX, r.dotY() + CLASSIC_CONNECTOR_DOT_D + 4, maxLen);
+                    drawVerticalLabelGrowDownClassic(g2, label, labelCenterX,
+                            r.dotY() + CLASSIC_CONNECTOR_DOT_D + 4 + pad, maxLen);
                 } else {
-                    drawVerticalLabelGrowUpClassic(g2, label, labelCenterX, r.dotY() - 4, maxLen);
+                    drawVerticalLabelGrowUpClassic(g2, label, labelCenterX, r.dotY() - 4 - pad, maxLen);
                 }
             } else {
-                int maxTextW = w - CLASSIC_CONNECTOR_DOT_D - 16;
+                int maxTextW = w - CLASSIC_CONNECTOR_DOT_D - 16 - pad * 2;
                 String clipped = clipToWidth(g2, label, maxTextW);
                 FontMetrics fm = g2.getFontMetrics();
-                int textX = r.isIn() ? r.dotX() + CLASSIC_CONNECTOR_DOT_D + 4 : r.dotX() - 4 - fm.stringWidth(clipped);
+                int textX = r.isIn() ? r.dotX() + CLASSIC_CONNECTOR_DOT_D + 4 + pad
+                        : r.dotX() - 4 - pad - fm.stringWidth(clipped);
                 g2.drawString(clipped, textX, r.dotY() + CLASSIC_CONNECTOR_DOT_D);
             }
         }
@@ -4749,7 +5245,6 @@ public class SchemaCanvasPanel extends JPanel {
 
         g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         g2.setFont(EDGE_FONT);
-        java.awt.FontMetrics edgeFm = g2.getFontMetrics();
         Map<SchemaEdge, List<double[]>> routeCache = new IdentityHashMap<>();
         for (SchemaEdge edge : es) {
             routeCache.put(edge, routePoints(edge));
@@ -4822,7 +5317,9 @@ public class SchemaCanvasPanel extends JPanel {
                 g2.drawRoundRect(chip.x, chip.y, chip.width, chip.height, 8, 8);
                 g2.setColor(hasLabel || selected ? style.labelChipText : style.labelChipTextEmpty);
                 String text = hasLabel ? display : "+ подпись";
-                g2.drawString(text, chip.x + 7, chip.y + chip.height - edgeFm.getDescent() - 2);
+                Font edgeLabelFont = edgeFont(edge);
+                g2.setFont(edgeLabelFont);
+                g2.drawString(text, chip.x + 7, chip.y + chip.height - g2.getFontMetrics().getDescent() - 2);
                 g2.setFont(EDGE_FONT);
             }
         }
@@ -4850,11 +5347,11 @@ public class SchemaCanvasPanel extends JPanel {
             }
         }
 
-        Font titleFont = getFont().deriveFont(Font.BOLD, 12f);
-        Font metaFont = getFont().deriveFont(10f);
         boolean verticalConnectors = settings.activeProfile().isConnectorsVertical(mode);
         overloadIconRects.clear();
         for (SchemaNode n : ns) {
+            Font titleFont = nodeTitleFont(n);
+            Font metaFont = nodeMetaFont(n);
             boolean selected = selectedNodes.contains(n);
             boolean pending = n.getId().equals(connectPendingId);
             int nw = (int) n.getWidth(), nh = (int) n.getHeight();
@@ -4897,7 +5394,8 @@ public class SchemaCanvasPanel extends JPanel {
                 int titleY = (int) n.getY() + nh / 2 + g2.getFontMetrics().getAscent() / 2 - 2;
                 g2.drawString(clippedTitle, titleX, titleY);
             } else {
-                drawClipped(g2, title, (int) n.getX() + 8, (int) n.getY() + 20, nw - 16);
+                drawClipped(g2, title, (int) n.getX() + 8 + labelPaddingPx(), (int) n.getY() + 20 + labelPaddingPx(),
+                        nw - 16);
             }
             g2.setFont(metaFont);
             g2.setColor(style.metaText);

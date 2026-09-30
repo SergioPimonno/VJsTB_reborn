@@ -1,9 +1,12 @@
 package com.vjstb.ledscheme.ui;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.vjstb.ledscheme.model.CardPort;
+import com.vjstb.ledscheme.model.EdgeWaypoint;
 import com.vjstb.ledscheme.model.PortDirection;
 import com.vjstb.ledscheme.model.SchemaEdge;
 import com.vjstb.ledscheme.model.SchemaMode;
@@ -13,6 +16,7 @@ import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.settings.SettingsManager;
 import com.vjstb.ledscheme.settings.SettingsStore;
 import java.awt.Point;
+import java.awt.Rectangle;
 import java.io.File;
 import java.nio.file.Path;
 import java.util.List;
@@ -61,5 +65,176 @@ class EdgeBundleRenderTest {
 
         int bundleSize = canvas.bundleSizeForTest(distro, in.getId());
         assertEquals(3, bundleSize, "три связи в одно свёрнутое гнездо — пучок из 3, а не 0/1");
+    }
+
+    /** Запрос пользователя 2026-09-30: раньше маркер пучка стоял фиксированным
+     *  16px-стволом у самого гнезда (см. {@code EdgeBundles.TRUNK_LENGTH}) — теперь
+     *  чип общей подписи должен стоять в РЕАЛЬНОЙ точке расхождения маршрутов. Две
+     *  связи из ОДНОГО гнезда идут через один и тот же общий излом (250,200),
+     *  прежде чем разойтись к разным получателям — чип обязан оказаться заметно
+     *  правее самого гнезда (x≈0), у этого излома, а не в 16px от него. */
+    @Test
+    void bundleChipSitsAtTheRealDivergencePointNotAtAFixedStub(@TempDir Path dir) {
+        AppModel model = new AppModel(new com.vjstb.ledscheme.store.WorkspaceStore(
+                new File(dir.toFile(), "workspace.json")));
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("Зал"));
+        SettingsManager settings = new SettingsManager(new SettingsStore(new File(dir.toFile(), "settings.json")));
+
+        SchemaNode source = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "Источник", 0, 200, null);
+        CardPort out = model.addPowerConnectorToNode(source, "CEE 32A", PortDirection.OUT, 3, 1, null);
+        model.setGroupCollapsed(source, out.getId(), Boolean.TRUE);
+
+        SchemaNode t1 = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "A", 500, 0, null);
+        CardPort in1 = model.addPowerConnectorToNode(t1, "CEE 32A", PortDirection.IN, 1, 1, null);
+        SchemaNode t2 = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "B", 500, 400, null);
+        CardPort in2 = model.addPowerConnectorToNode(t2, "CEE 32A", PortDirection.IN, 1, 1, null);
+
+        SchemaEdge e1 = model.addSchemaEdge(SchemaMode.POWER, source.getId(), out.getId(), t1.getId(), in1.getId(), null);
+        SchemaEdge e2 = model.addSchemaEdge(SchemaMode.POWER, source.getId(), out.getId(), t2.getId(), in2.getId(), null);
+        model.setSchemaEdgeWaypoints(e1, List.of(new EdgeWaypoint(250, 200)));
+        model.setSchemaEdgeWaypoints(e2, List.of(new EdgeWaypoint(250, 200)));
+
+        SchemaCanvasPanel canvas = new SchemaCanvasPanel(model, SchemaMode.POWER, settings);
+        canvas.renderImage(1200, 800, false);
+
+        Rectangle chip = canvas.bundleChipRectForTest(source, out.getId());
+        assertTrue(chip != null, "кабели ещё не подписаны — чип общей подписи должен быть доступен");
+        assertTrue(chip.x > 150, "чип должен стоять у точки расхождения (250,200), не у фиксированного короткого ствола");
+    }
+
+    /** Если связи пучка уже подписаны РАЗНЫМИ типами кабеля, общий чип не
+     *  показывается — запрос пользователя: "если разные — подпишет каждый кабель
+     *  отдельно", как обычным меню связи (индивидуальные чипы у самих связей) —
+     *  но сам маркер под ПКМ остаётся (размер шрифта применим всегда, ортогонален
+     *  типу кабеля, см. {@link SchemaCanvasPanel#showBundleChipMenu}), просто без
+     *  пункта «Подпись шины…» в его меню. */
+    @Test
+    void bundleChipOffersOnlyFontSizeWhenCablesAreAlreadyLabeledDifferently(@TempDir Path dir) {
+        AppModel model = new AppModel(new com.vjstb.ledscheme.store.WorkspaceStore(
+                new File(dir.toFile(), "workspace.json")));
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("Зал"));
+        SettingsManager settings = new SettingsManager(new SettingsStore(new File(dir.toFile(), "settings.json")));
+
+        SchemaNode source = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "Источник", 0, 200, null);
+        CardPort out = model.addPowerConnectorToNode(source, "CEE 32A", PortDirection.OUT, 2, 1, null);
+        model.setGroupCollapsed(source, out.getId(), Boolean.TRUE);
+
+        SchemaNode t1 = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "A", 500, 0, null);
+        CardPort in1 = model.addPowerConnectorToNode(t1, "CEE 32A", PortDirection.IN, 1, 1, null);
+        SchemaNode t2 = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "B", 500, 400, null);
+        CardPort in2 = model.addPowerConnectorToNode(t2, "CEE 32A", PortDirection.IN, 1, 1, null);
+
+        SchemaEdge e1 = model.addSchemaEdge(SchemaMode.POWER, source.getId(), out.getId(), t1.getId(), in1.getId(), null);
+        SchemaEdge e2 = model.addSchemaEdge(SchemaMode.POWER, source.getId(), out.getId(), t2.getId(), in2.getId(), null);
+        model.updateSchemaEdgeWire(e1, 1, "CEE 32A · 3ф", null);
+        model.updateSchemaEdgeWire(e2, 1, "Schuko", null);
+
+        SchemaCanvasPanel canvas = new SchemaCanvasPanel(model, SchemaMode.POWER, settings);
+        canvas.renderImage(1200, 800, false);
+
+        assertTrue(canvas.bundleChipRectForTest(source, out.getId()) != null,
+                "маркер пучка остаётся под ПКМ даже с разными типами -- нужен для смены размера шрифта");
+        assertFalse(canvas.bundleChipEditableForTest(source, out.getId()),
+                "кабели пучка подписаны разными типами -- общий чип подписи не должен предлагаться");
+    }
+
+    /** Ядро фичи "подписать шину один раз" (запрос пользователя 2026-09-30):
+     *  {@link AppModel#updateSchemaEdgesWireShared} пишет ОДИН И ТОТ ЖЕ тип во ВСЕ
+     *  связи пучка, но НЕ навязывает count каждой связи (тот, что уже стоял на
+     *  связи, сохраняется — только пустой выставляется в 1). */
+    @Test
+    void sharedWireUpdateAppliesTypeToAllEdgesWithoutOverwritingExistingCounts(@TempDir Path dir) {
+        AppModel model = new AppModel(new com.vjstb.ledscheme.store.WorkspaceStore(
+                new File(dir.toFile(), "workspace.json")));
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("Зал"));
+
+        SchemaNode a = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SOURCE, "A", 0, 0, null);
+        SchemaNode b = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SOURCE, "B", 0, 100, null);
+        SchemaNode c = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SOURCE, "C", 0, 200, null);
+        SchemaEdge e1 = model.addSchemaEdge(SchemaMode.POWER, a.getId(), b.getId(), null);
+        SchemaEdge e2 = model.addSchemaEdge(SchemaMode.POWER, a.getId(), c.getId(), null);
+        e2.setWireCount(2);
+
+        model.updateSchemaEdgesWireShared(List.of(e1, e2), "CEE 32A · 3ф", 12.5);
+
+        assertEquals("CEE 32A · 3ф", e1.getWireType());
+        assertEquals(1, e1.getWireCount(), "у связи без своего count — проставляется 1, не общее число пучка");
+        assertEquals("CEE 32A · 3ф", e2.getWireType());
+        assertEquals(2, e2.getWireCount(), "существующий count связи не перезаписывается общей подписью шины");
+        assertEquals(12.5, e1.getLengthM());
+        assertEquals(12.5, e2.getLengthM());
+
+        model.clearSchemaEdgesWireShared(List.of(e1, e2));
+        assertNull(e1.getWireType());
+        assertNull(e2.getWireType());
+        assertNull(e1.getLabel());
+        assertNull(e2.getLabel());
+    }
+
+    /** Запрос пользователя 2026-09-30: "если я подписал чип шины, то чипы каждой
+     *  отдельной линии... нужно скрывать". */
+    @Test
+    void individualEdgeChipsAreSuppressedOnceTheBundleHasASharedLabel(@TempDir Path dir) {
+        AppModel model = new AppModel(new com.vjstb.ledscheme.store.WorkspaceStore(
+                new File(dir.toFile(), "workspace.json")));
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("Зал"));
+        SettingsManager settings = new SettingsManager(new SettingsStore(new File(dir.toFile(), "settings.json")));
+
+        SchemaNode source = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "Источник", 0, 200, null);
+        CardPort out = model.addPowerConnectorToNode(source, "CEE 32A", PortDirection.OUT, 2, 1, null);
+        model.setGroupCollapsed(source, out.getId(), Boolean.TRUE);
+        SchemaNode t1 = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "A", 500, 0, null);
+        CardPort in1 = model.addPowerConnectorToNode(t1, "CEE 32A", PortDirection.IN, 1, 1, null);
+        SchemaNode t2 = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "B", 500, 400, null);
+        CardPort in2 = model.addPowerConnectorToNode(t2, "CEE 32A", PortDirection.IN, 1, 1, null);
+        SchemaEdge e1 = model.addSchemaEdge(SchemaMode.POWER, source.getId(), out.getId(), t1.getId(), in1.getId(), null);
+        SchemaEdge e2 = model.addSchemaEdge(SchemaMode.POWER, source.getId(), out.getId(), t2.getId(), in2.getId(), null);
+
+        SchemaCanvasPanel canvas = new SchemaCanvasPanel(model, SchemaMode.POWER, settings);
+
+        // Ещё не подписаны -- своих отдельных чипов у них и так не было (пустая
+        // подпись), подавление пока неприменимо ни в ту, ни в другую сторону.
+        assertFalse(canvas.suppressedByBundleLabelForTest(e1));
+
+        model.updateSchemaEdgesWireShared(List.of(e1, e2), "CEE 32A · 3ф", null);
+        assertTrue(canvas.suppressedByBundleLabelForTest(e1),
+                "общая подпись шины уже есть -- свой чип каждой связи избыточен");
+        assertTrue(canvas.suppressedByBundleLabelForTest(e2));
+
+        // Пользователь вручную переподписал ОДНУ связь другим типом -- общая
+        // подпись шины перестаёт быть единой, подавление снимается для ОБЕИХ
+        // связей пучка (запрос: "если разные -- подпишет каждый кабель отдельно").
+        model.updateSchemaEdgeWire(e2, 1, "Schuko", null);
+        assertFalse(canvas.suppressedByBundleLabelForTest(e1));
+        assertFalse(canvas.suppressedByBundleLabelForTest(e2));
+    }
+
+    /** Запрос пользователя 2026-09-30: "для плашки шины недоступно изменение
+     *  высоты шрифта" — {@link AppModel#setSchemaEdgesFontSize} пишет ОДИН И ТОТ
+     *  ЖЕ размер во ВСЕ связи пучка сразу, одна запись отмены. */
+    @Test
+    void sharedFontSizeUpdateAppliesToAllEdgesOfTheBundle(@TempDir Path dir) {
+        AppModel model = new AppModel(new com.vjstb.ledscheme.store.WorkspaceStore(
+                new File(dir.toFile(), "workspace.json")));
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("Зал"));
+
+        SchemaNode a = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SOURCE, "A", 0, 0, null);
+        SchemaNode b = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SOURCE, "B", 0, 100, null);
+        SchemaNode c = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.SOURCE, "C", 0, 200, null);
+        SchemaEdge e1 = model.addSchemaEdge(SchemaMode.POWER, a.getId(), b.getId(), null);
+        SchemaEdge e2 = model.addSchemaEdge(SchemaMode.POWER, a.getId(), c.getId(), null);
+
+        model.setSchemaEdgesFontSize(List.of(e1, e2), 16);
+        assertEquals(16, e1.getFontSize());
+        assertEquals(16, e2.getFontSize());
+
+        model.setSchemaEdgesFontSize(List.of(e1, e2), null);
+        assertNull(e1.getFontSize());
+        assertNull(e2.getFontSize());
     }
 }

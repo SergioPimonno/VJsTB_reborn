@@ -544,7 +544,7 @@ public class VisualizationStagePanel extends JPanel {
                     images.add(new NamedImage(fname, img));
                 }
                 for (ContentCanvas c : scene.getCanvases()) {
-                    BufferedImage img = PixelGridRenderer.renderCanvasMask(c, model, settings);
+                    BufferedImage img = PixelGridRenderer.renderCanvasMask(c, scene, model, settings);
                     String fname = OutputPaths.sanitize(scene.getName()) + "_канвас_" + OutputPaths.sanitize(c.getName())
                             + "_" + img.getWidth() + "x" + img.getHeight() + ".png";
                     images.add(new NamedImage(fname, img));
@@ -577,7 +577,7 @@ public class VisualizationStagePanel extends JPanel {
         }
         List<NamedImage> images = new ArrayList<>();
         try {
-            BufferedImage canvasImg = PixelGridRenderer.renderCanvasMask(currentCanvas, model, settings);
+            BufferedImage canvasImg = PixelGridRenderer.renderCanvasMask(currentCanvas, scene, model, settings);
             String canvasFname = OutputPaths.sanitize(scene.getName()) + "_канвас_"
                     + OutputPaths.sanitize(currentCanvas.getName()) + "_" + canvasImg.getWidth() + "x"
                     + canvasImg.getHeight() + ".png";
