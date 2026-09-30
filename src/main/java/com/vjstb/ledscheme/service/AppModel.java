@@ -45,6 +45,7 @@ import com.vjstb.ledscheme.model.SchemaEdge;
 import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.SchemaNode;
 import com.vjstb.ledscheme.model.SchemaNodeType;
+import com.vjstb.ledscheme.model.SchemaSheet;
 import com.vjstb.ledscheme.model.ScreenGroup;
 import com.vjstb.ledscheme.model.ScreenMountType;
 import com.vjstb.ledscheme.model.ScreenTagColor;
@@ -92,6 +93,15 @@ public class AppModel {
     private Mode mode = Mode.POWER;
     private int activePhase = 1;
 
+    /** Текущий лист общей схемы по режиму (id {@link SchemaSheet}) — transient, не
+     *  сохраняется (запрос 2026-09-30, несколько схем на сцену). Нет записи или лист
+     *  исчез — текущим считается первый лист режима (см. {@link #currentSchemaSheet}). */
+    private final Map<SchemaMode, String> currentSchemaSheetIds = new java.util.EnumMap<>(SchemaMode.class);
+    /** Лист, в который ВРЕМЕННО пишут добавления узлов вместо текущего — только на
+     *  время {@link #autoPopulateSchema} (решение D2: автозаполнение — только в
+     *  ПЕРВЫЙ лист режима, независимо от того, какой лист открыт). */
+    private String schemaSheetOverrideId;
+
     /** Снимок для «отменить»: состояние текущего экрана (null, если на момент записи
      *  экран не был выбран — например, правка велась на этапе «Генерация масок», где
      *  выбор экрана не требуется) + цепочки, канвасы И общая схема площадки (узлы +
@@ -118,10 +128,17 @@ public class AppModel {
      *  ОДНОГО экрана к структурной правке не относится). В отличие от снимков правок
      *  экрана такие записи переживают смену выбранного экрана — иначе после
      *  Ctrl+D (новый экран сразу выбирается) отменять было бы нечего, см. {@link
-     *  #selectScreen}. */
+     *  #selectScreen}.
+     *
+     *  <p>{@code schemaSheetsSnapshot} — копии листов общей схемы (запрос 2026-09-30,
+     *  несколько схем на сцену): добавление/удаление/переименование/перемещение листа
+     *  отменяется тем же Ctrl+Z, что и правки узлов, а удалённый лист возвращается
+     *  вместе со своими узлами/связями (они в {@code schemaNodesSnapshot}/{@code
+     *  schemaEdgesSnapshot}). */
     private record UndoEntry(Screen screenSnapshot, List<PowerChain> powerChainsSnapshot,
                               List<SignalChain> signalChainsSnapshot, List<ContentCanvas> canvasesSnapshot,
                               List<SchemaNode> schemaNodesSnapshot, List<SchemaEdge> schemaEdgesSnapshot,
+                              List<SchemaSheet> schemaSheetsSnapshot,
                               String actionLabel, List<Screen> screensSnapshot, List<ScreenGroup> groupsSnapshot,
                               java.util.Map<Screen, ScreenMeta> screenMetaSnapshot) {
     }
@@ -141,6 +158,20 @@ public class AppModel {
         seedDefaultInterfaceTypesIfEmpty();
         for (Project project : workspace.getProjects()) {
             seedScreenMaskColorsFromLegacyPlacements(project);
+            ensureSchemaSheets(project);
+        }
+    }
+
+    /** Листы общей схемы у всех сцен проекта (запрос 2026-09-30, см. {@link
+     *  SchemaSheetMigration}) — при загрузке и при появлении проекта в рабочем списке
+     *  (импорт/архив/облако). Без undo и без сохранения, как {@link
+     *  #seedScreenMaskColorsFromLegacyPlacements}: часть загрузки, а не действие. */
+    private static void ensureSchemaSheets(Project project) {
+        if (project == null) {
+            return;
+        }
+        for (Scene scene : project.getScenes()) {
+            SchemaSheetMigration.ensure(scene);
         }
     }
 
@@ -328,11 +359,19 @@ public class AppModel {
         currentProject = p;
         currentScene = null;
         currentScreen = null;
+        currentSchemaSheetIds.clear();
         undoStack.clear();
         fireChanged();
     }
 
+    /** Смена сцены сбрасывает текущий лист общей схемы на ПЕРВЫЙ лист каждого режима
+     *  (запрос 2026-09-30, трек C1) — выбор листа transient и привязан к сцене;
+     *  повторный выбор ТОЙ ЖЕ сцены (перестройка UI) выбранный лист не сбрасывает. */
     public void selectScene(Scene s) {
+        if (s != currentScene) {
+            currentSchemaSheetIds.clear();
+        }
+        SchemaSheetMigration.ensure(s);
         currentScene = s;
         currentScreen = null;
         undoStack.clear();
@@ -1024,6 +1063,7 @@ public class AppModel {
      *  бы с существующим локальным id; вложенные id сцен/экранов внутри не трогаем. */
     public Project importProject(Project incoming) {
         incoming.setId(java.util.UUID.randomUUID().toString());
+        ensureSchemaSheets(incoming);
         workspace.getProjects().add(incoming);
         changed();
         return incoming;
@@ -1052,6 +1092,7 @@ public class AppModel {
      *  извлечении не бывает). После этого вызова файл архива уже не нужен —
      *  {@code LocalArchiveDialog} удаляет его отдельно через LocalArchiveStore. */
     public Project restoreProjectFromArchive(Project p) {
+        ensureSchemaSheets(p);
         workspace.getProjects().add(p);
         changed();
         return p;
@@ -1081,6 +1122,7 @@ public class AppModel {
         }
         Scene s = new Scene(name);
         s.setOrderIndex(currentProject.getScenes().size());
+        SchemaSheetMigration.ensure(s); // по листу «Схема питания»/«Схема сигнала» сразу
         currentProject.getScenes().add(s);
         currentProject.setUpdatedAt(System.currentTimeMillis());
         changed();
@@ -1467,30 +1509,318 @@ public class AppModel {
     // pushUndo()/undoStack (тот снимает состояние только текущего экрана) — как и
     // autoArrangeScreensInScene() выше.
 
+    /** Узлы ТЕКУЩЕГО листа режима {@code mode} текущей сцены (см. {@link
+     *  #currentSchemaSheet}). До 2026-09-30 — все узлы режима сцены; с появлением
+     *  нескольких схем на сцену холст/палитры видят только открытый лист. У старого
+     *  проекта лист на режим один — поведение не меняется. */
     public List<SchemaNode> schemaNodesForCurrentScene(SchemaMode mode) {
-        if (currentScene == null) {
-            return List.of();
-        }
+        SchemaSheet sheet = currentSchemaSheet(mode);
+        return sheet == null ? List.of() : schemaNodesOfSheet(currentScene, sheet.getId());
+    }
+
+    /** Связи ТЕКУЩЕГО листа режима {@code mode}, см. {@link #schemaNodesForCurrentScene}. */
+    public List<SchemaEdge> schemaEdgesForCurrentScene(SchemaMode mode) {
+        SchemaSheet sheet = currentSchemaSheet(mode);
+        return sheet == null ? List.of() : schemaEdgesOfSheet(currentScene, sheet.getId());
+    }
+
+    /** Узлы листа {@code sheetId} сцены {@code scene} (любой сцены, не только
+     *  текущей — для экспорта каждого листа отдельным файлом и спецификации по
+     *  листам, треки C2/C3). Наводит инвариант листов (см. {@link SchemaSheetMigration}). */
+    public List<SchemaNode> schemaNodesOfSheet(Scene scene, String sheetId) {
         List<SchemaNode> result = new ArrayList<>();
-        for (SchemaNode n : currentScene.getSchemaNodes()) {
-            if (n.getMode() == mode) {
+        if (scene == null || sheetId == null) {
+            return result;
+        }
+        SchemaSheetMigration.ensure(scene);
+        for (SchemaNode n : scene.getSchemaNodes()) {
+            if (sheetId.equals(n.getSheetId())) {
                 result.add(n);
             }
         }
         return result;
     }
 
-    public List<SchemaEdge> schemaEdgesForCurrentScene(SchemaMode mode) {
-        if (currentScene == null) {
-            return List.of();
-        }
+    /** Связи листа {@code sheetId} сцены {@code scene}, см. {@link #schemaNodesOfSheet}. */
+    public List<SchemaEdge> schemaEdgesOfSheet(Scene scene, String sheetId) {
         List<SchemaEdge> result = new ArrayList<>();
-        for (SchemaEdge e : currentScene.getSchemaEdges()) {
-            if (e.getMode() == mode) {
+        if (scene == null || sheetId == null) {
+            return result;
+        }
+        SchemaSheetMigration.ensure(scene);
+        for (SchemaEdge e : scene.getSchemaEdges()) {
+            if (sheetId.equals(e.getSheetId())) {
                 result.add(e);
             }
         }
         return result;
+    }
+
+    // ---- листы общей схемы: несколько блок-схем на сцену (запрос 2026-09-30,
+    //      docs/masks-and-schema-sheets/PLAN.md, пункт 8, трек C1) ----
+    //
+    // Лист (SchemaSheet) — заголовок схемы: имя, режим, порядок. Узлы/связи остаются
+    // плоскими списками сцены со ссылкой sheetId (см. javadoc SchemaSheet). Текущий
+    // лист режима — transient (currentSchemaSheetIds), при смене сцены — первый.
+    // Все мутаторы ниже — с pushUndo и changed(), отменяются Ctrl+Z (листы входят в
+    // снимок UndoEntry). Аргумент-лист резолвится по id в ТЕКУЩЕЙ сцене — ссылка,
+    // которую UI держал до отмены (объекты листов после undo — копии), остаётся рабочей.
+
+    /** Листы режима {@code mode} текущей сцены по порядку ({@link
+     *  SchemaSheet#getOrderIndex()}); пусто, если сцена не выбрана. Всегда не меньше
+     *  одного листа на режим (инвариант наводится лениво). */
+    public List<SchemaSheet> schemaSheets(SchemaMode mode) {
+        return schemaSheets(currentScene, mode);
+    }
+
+    /** Листы режима {@code mode} ЛЮБОЙ сцены по порядку — для спецификации по сценам
+     *  и экспорта (треки C2/C3). */
+    public List<SchemaSheet> schemaSheets(Scene scene, SchemaMode mode) {
+        if (scene == null) {
+            return List.of();
+        }
+        SchemaSheetMigration.ensure(scene);
+        return SchemaSheetMigration.sheetsOf(scene, mode);
+    }
+
+    /** Лист сцены по id или {@code null}. */
+    public SchemaSheet schemaSheetById(Scene scene, String sheetId) {
+        return SchemaSheetMigration.sheetById(scene, sheetId);
+    }
+
+    /** Текущий (открытый) лист режима {@code mode} текущей сцены; первый лист режима,
+     *  если лист ещё не выбирали в этой сцене или выбранный исчез (удалён/отменён).
+     *  {@code null} — сцена не выбрана. */
+    public SchemaSheet currentSchemaSheet(SchemaMode mode) {
+        if (currentScene == null) {
+            return null;
+        }
+        SchemaSheetMigration.ensure(currentScene);
+        SchemaSheet selected = SchemaSheetMigration.sheetById(currentScene, currentSchemaSheetIds.get(mode));
+        if (selected != null && selected.getMode() == mode) {
+            return selected;
+        }
+        return SchemaSheetMigration.firstSheet(currentScene, mode);
+    }
+
+    /** Делает лист текущим для его режима. Выбор не сохраняется в файл и не пишется
+     *  в историю отмены — только оповещает UI. Лист чужой сцены игнорируется. */
+    public void selectSchemaSheet(SchemaSheet sheet) {
+        SchemaSheet live = liveSheet(sheet);
+        if (live == null) {
+            return;
+        }
+        currentSchemaSheetIds.put(live.getMode(), live.getId());
+        fireChanged();
+    }
+
+    /** Проблема с названием листа для режима {@code mode} текущей сцены — русский
+     *  текст ошибки или {@code null}, если название годится: не пустое (после trim) и
+     *  не совпадает (без учёта регистра) с другим листом ТОГО ЖЕ режима; {@code
+     *  ignore} — переименовываемый лист (его собственное имя совпадением не считается).
+     *  Совпадение с листом ДРУГОГО режима допустимо («Сцена» у питания и у сигнала).
+     *  Публично — чтобы диалог названия (трек C2) показывал ту же ошибку до OK. */
+    public String schemaSheetNameProblem(SchemaMode mode, String name, SchemaSheet ignore) {
+        String trimmed = name == null ? "" : name.trim();
+        if (trimmed.isEmpty()) {
+            return "Название схемы не может быть пустым";
+        }
+        for (SchemaSheet s : schemaSheets(mode)) {
+            if (ignore != null && s.getId().equals(ignore.getId())) {
+                continue;
+            }
+            if (s.getName() != null && s.getName().trim().equalsIgnoreCase(trimmed)) {
+                return "Схема «" + trimmed + "» уже есть в этой сцене";
+            }
+        }
+        return null;
+    }
+
+    /** Свободное имя вида «Схема питания 2» для нового листа режима — подсказка для
+     *  диалога названия (трек C2). */
+    public String suggestSchemaSheetName(SchemaMode mode) {
+        String base = SchemaSheetMigration.defaultSheetName(mode);
+        if (schemaSheetNameProblem(mode, base, null) == null) {
+            return base;
+        }
+        for (int i = 2; ; i++) {
+            String candidate = base + " " + i;
+            if (schemaSheetNameProblem(mode, candidate, null) == null) {
+                return candidate;
+            }
+        }
+    }
+
+    /** Новый пустой лист режима {@code mode} в конце списка; сразу становится текущим.
+     *  @throws IllegalArgumentException пустое/занятое название (см. {@link
+     *  #schemaSheetNameProblem}) */
+    public SchemaSheet addSchemaSheet(SchemaMode mode, String name) {
+        if (currentScene == null) {
+            throw new IllegalStateException("Не выбрана сцена");
+        }
+        requireSchemaSheetName(mode, name, null);
+        pushUndo("Новая схема");
+        SchemaSheet sheet = new SchemaSheet(mode, name.trim(), schemaSheets(mode).size());
+        currentScene.getSchemaSheets().add(sheet);
+        SchemaSheetMigration.renumber(currentScene, mode);
+        currentSchemaSheetIds.put(mode, sheet.getId());
+        changed();
+        return sheet;
+    }
+
+    /** Переименование листа. @throws IllegalArgumentException пустое/занятое
+     *  название (см. {@link #schemaSheetNameProblem}) */
+    public void renameSchemaSheet(SchemaSheet sheet, String name) {
+        SchemaSheet live = requireLiveSheet(sheet);
+        requireSchemaSheetName(live.getMode(), name, live);
+        if (name.trim().equals(live.getName())) {
+            return;
+        }
+        pushUndo("Переименование схемы");
+        live.setName(name.trim());
+        changed();
+    }
+
+    /** Удаление листа вместе с его узлами и связями. Последний лист режима удалить
+     *  нельзя (инвариант «хотя бы одна схема на режим», см. {@link
+     *  SchemaSheetMigration}) — {@link IllegalStateException}.
+     *
+     *  <p>Ссылки Сетевого менеджера ({@code NetworkDevicePlacement.linkedSchemaNodeId})
+     *  на удалённые узлы НЕ трогаются — ровно как при {@link #deleteSchemaNodes}: по
+     *  контракту {@code NetworkDevicePlacement} ссылка на исчезнувший узел молча
+     *  игнорируется (блок показывает своё имя/заглушку), а план сети в снимок отмены
+     *  не входит — удалив размещения здесь, Ctrl+Z вернул бы лист, но не блоки сети. */
+    public void deleteSchemaSheet(SchemaSheet sheet) {
+        SchemaSheet live = requireLiveSheet(sheet);
+        if (schemaSheets(live.getMode()).size() <= 1) {
+            throw new IllegalStateException("Нельзя удалить единственную схему этого режима");
+        }
+        pushUndo("Удаление схемы «" + live.getName() + "»");
+        String id = live.getId();
+        currentScene.getSchemaNodes().removeIf(n -> id.equals(n.getSheetId()));
+        currentScene.getSchemaEdges().removeIf(e -> id.equals(e.getSheetId()));
+        currentScene.getSchemaSheets().remove(live);
+        SchemaSheetMigration.renumber(currentScene, live.getMode());
+        if (id.equals(currentSchemaSheetIds.get(live.getMode()))) {
+            currentSchemaSheetIds.remove(live.getMode());
+        }
+        changed();
+    }
+
+    /** Копия листа сразу ПОСЛЕ исходного, имя «&lt;имя&gt; (копия)» (при занятом — с
+     *  номером); становится текущей. Узлы и связи копируются со СВЕЖИМИ id, {@code
+     *  from/toNodeId} связей перепривязаны на копии узлов. id гнёзд (CardPort) и
+     *  раскладка гнёзд НЕ меняются (план трека C1) — гнёзда уникальны в пределах
+     *  узла, а все подсчёты занятости гнёзд идут по связям ОДНОГО листа (см. {@link
+     *  #schemaEdgesOfSheet}), так что одинаковые id гнёзд в разных листах друг другу
+     *  не мешают. Привязки к экрану/контроллеру ({@code screenRefId}/{@code
+     *  controllerInstanceRefId}) сохраняются — копия изображает то же оборудование;
+     *  автозаполнение ищет узлы-якоря только в ПЕРВОМ листе (D2), дублей не будет. */
+    public SchemaSheet duplicateSchemaSheet(SchemaSheet sheet) {
+        SchemaSheet src = requireLiveSheet(sheet);
+        pushUndo("Дублирование схемы «" + src.getName() + "»");
+        SchemaMode mode = src.getMode();
+        String base = src.getName() + " (копия)";
+        String name = base;
+        for (int i = 2; schemaSheetNameProblem(mode, name, null) != null; i++) {
+            name = base.substring(0, base.length() - 1) + " " + i + ")";
+        }
+        SchemaSheet copy = new SchemaSheet(mode, name, src.getOrderIndex());
+        copy.setDefaultFontSize(src.getDefaultFontSize());
+        copy.setDefaultEdgeFontSize(src.getDefaultEdgeFontSize());
+        // вставка сразу после исходного: всё, что правее, сдвигается на 1
+        for (SchemaSheet s : schemaSheets(mode)) {
+            if (s.getOrderIndex() > src.getOrderIndex()) {
+                s.setOrderIndex(s.getOrderIndex() + 1);
+            }
+        }
+        copy.setOrderIndex(src.getOrderIndex() + 1);
+        currentScene.getSchemaSheets().add(copy);
+        Map<String, String> nodeIdMap = new HashMap<>();
+        for (SchemaNode n : schemaNodesOfSheet(currentScene, src.getId())) {
+            SchemaNode c = n.copy();
+            c.setId(java.util.UUID.randomUUID().toString());
+            c.setSheetId(copy.getId());
+            nodeIdMap.put(n.getId(), c.getId());
+            currentScene.getSchemaNodes().add(c);
+        }
+        for (SchemaEdge e : schemaEdgesOfSheet(currentScene, src.getId())) {
+            SchemaEdge c = e.copy();
+            c.setId(java.util.UUID.randomUUID().toString());
+            c.setSheetId(copy.getId());
+            c.setFromNodeId(nodeIdMap.getOrDefault(e.getFromNodeId(), e.getFromNodeId()));
+            c.setToNodeId(nodeIdMap.getOrDefault(e.getToNodeId(), e.getToNodeId()));
+            currentScene.getSchemaEdges().add(c);
+        }
+        SchemaSheetMigration.renumber(currentScene, mode);
+        currentSchemaSheetIds.put(mode, copy.getId());
+        changed();
+        return copy;
+    }
+
+    /** Перемещение листа на позицию {@code newIndex} (0-based, в пределах листов его
+     *  режима; вне диапазона — прижимается к краю). Порядок важен: ПЕРВЫЙ лист режима
+     *  — тот, куда пишет автозаполнение (D2), и первый в экспорте/спецификации. */
+    public void moveSchemaSheet(SchemaSheet sheet, int newIndex) {
+        SchemaSheet live = requireLiveSheet(sheet);
+        List<SchemaSheet> ordered = new ArrayList<>(schemaSheets(live.getMode()));
+        int from = ordered.indexOf(live);
+        int to = Math.max(0, Math.min(ordered.size() - 1, newIndex));
+        if (from == to) {
+            return;
+        }
+        pushUndo("Порядок схем");
+        ordered.remove(from);
+        ordered.add(to, live);
+        for (int i = 0; i < ordered.size(); i++) {
+            ordered.get(i).setOrderIndex(i);
+        }
+        changed();
+    }
+
+    private void requireSchemaSheetName(SchemaMode mode, String name, SchemaSheet ignore) {
+        String problem = schemaSheetNameProblem(mode, name, ignore);
+        if (problem != null) {
+            throw new IllegalArgumentException(problem);
+        }
+    }
+
+    private SchemaSheet liveSheet(SchemaSheet sheet) {
+        if (sheet == null || currentScene == null) {
+            return null;
+        }
+        SchemaSheetMigration.ensure(currentScene);
+        return SchemaSheetMigration.sheetById(currentScene, sheet.getId());
+    }
+
+    private SchemaSheet requireLiveSheet(SchemaSheet sheet) {
+        SchemaSheet live = liveSheet(sheet);
+        if (live == null) {
+            throw new IllegalArgumentException("Схема не найдена в текущей сцене");
+        }
+        return live;
+    }
+
+    /** Лист, в который пишут добавления узлов режима {@code mode}: текущий лист, а на
+     *  время автозаполнения — первый (см. {@link #schemaSheetOverrideId}). */
+    private String targetSchemaSheetId(SchemaMode mode) {
+        if (schemaSheetOverrideId != null) {
+            SchemaSheet override = SchemaSheetMigration.sheetById(currentScene, schemaSheetOverrideId);
+            if (override != null && override.getMode() == mode) {
+                return override.getId();
+            }
+        }
+        SchemaSheet sheet = currentSchemaSheet(mode);
+        return sheet != null ? sheet.getId() : null;
+    }
+
+    /** Лист узла: сам {@code sheetId}, либо (узел без листа — собран в обход модели)
+     *  первый лист его режима после наведения инварианта. */
+    private String sheetIdOf(Scene scene, SchemaNode node) {
+        if (node.getSheetId() == null && scene != null) {
+            SchemaSheetMigration.ensure(scene);
+        }
+        return node.getSheetId();
     }
 
     public SchemaNode addSchemaNode(SchemaMode mode, SchemaNodeType type, String label, double x, double y,
@@ -1500,6 +1830,7 @@ public class AppModel {
         }
         pushUndo("Добавление узла схемы");
         SchemaNode n = new SchemaNode(mode, type, label, x, y, screenRefId);
+        n.setSheetId(targetSchemaSheetId(mode)); // в открытый лист (2026-09-30)
         currentScene.getSchemaNodes().add(n);
         if (type == SchemaNodeType.SCREEN && screenRefId != null) {
             // Экран мог быть расключен ДО того, как для него завели блок в общей
@@ -1589,6 +1920,24 @@ public class AppModel {
      *  всегда дают ту же или меньшую ширину/высоту, развёрнутая группа не бывает
      *  занимает меньше места, чем свёрнутая), поэтому блок гарантированно не
      *  окажется тесным ни при каком реальном режиме. */
+    /** Связи того же режима на листе узла {@code node} текущей сцены. */
+    private List<SchemaEdge> schemaEdgesInSheetOf(SchemaNode node) {
+        if (currentScene == null) {
+            return List.of();
+        }
+        String sheetId = sheetIdOf(currentScene, node);
+        if (sheetId == null) {
+            return schemaEdgesForCurrentScene(node.getMode());
+        }
+        List<SchemaEdge> result = new ArrayList<>();
+        for (SchemaEdge e : schemaEdgesOfSheet(currentScene, sheetId)) {
+            if (e.getMode() == node.getMode()) {
+                result.add(e);
+            }
+        }
+        return result;
+    }
+
     public void autoFitNodeToPorts(SchemaNode node) {
         List<com.vjstb.ledscheme.service.schemalayout.NodePortLayout.CardGroup> cardGroups = new ArrayList<>();
         for (SchemaCard c : node.getCards()) {
@@ -1613,7 +1962,9 @@ public class AppModel {
         // для любого пользователя с реально ненулевым отступом).
         var in = new com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Input(
                 node.getMode(), node.getType(), orientation, cardGroups,
-                schemaEdgesForCurrentScene(node.getMode()), node.getPortPlacements(), node.isOnlyUsedPorts(),
+                // связи ЛИСТА узла, а не открытого листа: узел может стоять не на
+                // текущем листе (автозаполнение пишет в первый, D2 — 2026-09-30)
+                schemaEdgesInSheetOf(node), node.getPortPlacements(), node.isOnlyUsedPorts(),
                 Boolean.FALSE, getInterfaceTypes(),
                 com.vjstb.ledscheme.service.schemalayout.TextMeasure.awt(), labelFontSize, 20);
         com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Size size =
@@ -1975,6 +2326,9 @@ public class AppModel {
             return List.of();
         }
         pushUndo("Вставка узлов схемы");
+        // Вставка — всегда в ОТКРЫТЫЙ лист (2026-09-30): копии из буфера несут sheetId
+        // листа-источника, Ctrl+C на одном листе и Ctrl+V на другом переносит узлы сюда.
+        String targetSheetId = targetSchemaSheetId(mode);
         Map<String, String> nodeIdMap = new HashMap<>();
         Map<String, String> portIdMap = new HashMap<>();
         Map<String, Boolean> pastedNodeIsScreen = new HashMap<>();
@@ -1985,6 +2339,7 @@ public class AppModel {
             nodeIdMap.put(src.getId(), newId);
             n.setId(newId);
             n.setMode(mode);
+            n.setSheetId(targetSheetId);
             n.setControllerInstanceRefId(null);
             n.setX(n.getX() + offsetX);
             n.setY(n.getY() + offsetY);
@@ -2027,6 +2382,7 @@ public class AppModel {
                 SchemaEdge e = src.copy();
                 e.setId(java.util.UUID.randomUUID().toString());
                 e.setMode(mode);
+                e.setSheetId(targetSheetId);
                 e.setFromNodeId(from);
                 e.setToNodeId(to);
                 e.setFromPortId(src.getFromPortId() != null ? portIdMap.get(src.getFromPortId()) : null);
@@ -2095,6 +2451,18 @@ public class AppModel {
         }
         pushUndo("Добавление связи");
         SchemaEdge edge = new SchemaEdge(mode, fromNodeId, toNodeId, label);
+        // Лист связи — лист её узла-источника (связь всегда внутри одного листа), а не
+        // «текущий» напрямую: автозаполнение проводит связи в ПЕРВОМ листе, даже когда
+        // открыт другой (D2). Узел не найден — текущий лист, как для узлов.
+        SchemaNode fromNode = null;
+        for (SchemaNode n : currentScene.getSchemaNodes()) {
+            if (n.getId().equals(fromNodeId)) {
+                fromNode = n;
+                break;
+            }
+        }
+        String fromSheetId = fromNode != null ? sheetIdOf(currentScene, fromNode) : null;
+        edge.setSheetId(fromSheetId != null ? fromSheetId : targetSchemaSheetId(mode));
         edge.setFromPortId(fromPortId);
         edge.setToPortId(toPortId);
         edge.setFromCabinetInstanceId(fromCabinetInstanceId);
@@ -2296,13 +2664,18 @@ public class AppModel {
         changed();
     }
 
+    /** «Очистить схему» — только ТЕКУЩИЙ лист режима (2026-09-30: на сцене может быть
+     *  несколько схем, очистка открытой не должна стирать соседние). Сам лист
+     *  остаётся, пустым. */
     public void clearSchema(SchemaMode mode) {
-        if (currentScene == null) {
+        SchemaSheet sheet = currentSchemaSheet(mode);
+        if (currentScene == null || sheet == null) {
             return;
         }
         pushUndo("Очистка схемы");
-        currentScene.getSchemaNodes().removeIf(n -> n.getMode() == mode);
-        currentScene.getSchemaEdges().removeIf(e -> e.getMode() == mode);
+        String sheetId = sheet.getId();
+        currentScene.getSchemaNodes().removeIf(n -> n.getMode() == mode && sheetId.equals(n.getSheetId()));
+        currentScene.getSchemaEdges().removeIf(e -> e.getMode() == mode && sheetId.equals(e.getSheetId()));
         changed();
     }
 
@@ -5497,11 +5870,33 @@ public class AppModel {
      *  новый непрописанный порт/кабинет: инженер мог сознательно разорвать
      *  автосвязь и оставить порт свободным — молчаливое автозаполнение на каждый
      *  последующий переход стёрло бы это решение (баг-репорт). */
+    /** <p>Несколько схем на сцену (запрос 2026-09-30, решение пользователя D2):
+     *  автозаполнение работает ТОЛЬКО с ПЕРВЫМ листом режима, независимо от того,
+     *  какой лист сейчас открыт — и поиск уже присутствующих узлов (дедупликация),
+     *  и добавление узлов/связей, и подбор щитов под автосвязь питания. Остальные
+     *  листы пользователь рисует сам. Первый лист подставляется в добавления через
+     *  {@link #schemaSheetOverrideId} на время вызова. */
     public void autoPopulateSchema(SchemaMode mode, boolean autoConnectSockets) {
         if (currentScene == null) {
             return;
         }
-        List<SchemaNode> nodes = new ArrayList<>(schemaNodesForCurrentScene(mode));
+        SchemaSheet first = SchemaSheetMigration.firstSheet(currentScene, mode);
+        String previousOverride = schemaSheetOverrideId;
+        schemaSheetOverrideId = first.getId();
+        try {
+            autoPopulateSheet(mode, autoConnectSockets, first.getId());
+        } finally {
+            schemaSheetOverrideId = previousOverride;
+        }
+    }
+
+    private void autoPopulateSheet(SchemaMode mode, boolean autoConnectSockets, String sheetId) {
+        List<SchemaNode> nodes = new ArrayList<>();
+        for (SchemaNode n : schemaNodesOfSheet(currentScene, sheetId)) {
+            if (n.getMode() == mode) {
+                nodes.add(n);
+            }
+        }
         Map<String, SchemaNode> screenNodesByScreenId = new java.util.LinkedHashMap<>();
         Map<String, SchemaNode> controllerNodesByInstanceId = new java.util.LinkedHashMap<>();
         for (SchemaNode n : nodes) {
@@ -5532,7 +5927,7 @@ public class AppModel {
 
         if (mode == SchemaMode.POWER) {
             if (autoConnectSockets) {
-                autoConnectPowerChainEndpoints(screenNodesByScreenId, freshlyAddedScreenIds);
+                autoConnectPowerChainEndpoints(screenNodesByScreenId, freshlyAddedScreenIds, sheetId);
             }
             return;
         }
@@ -5625,6 +6020,7 @@ public class AppModel {
     private SchemaNode addSchemaNodeForController(ControllerInstance ci, double x, double y) {
         String label = ci.getLabel() != null && !ci.getLabel().isEmpty() ? ci.getLabel() : "Контроллер";
         SchemaNode node = new SchemaNode(SchemaMode.SIGNAL, SchemaNodeType.CONTROLLER, label, x, y, null);
+        node.setSheetId(targetSchemaSheetId(SchemaMode.SIGNAL));
         node.setControllerInstanceRefId(ci.getId());
         mirrorControllerCardsOntoNode(node, ci, label);
         currentScene.getSchemaNodes().add(node);
@@ -5690,7 +6086,9 @@ public class AppModel {
             return;
         }
         String toPortId = mirroredPorts.get(group[1]).getId();
-        for (SchemaEdge e : currentScene.getSchemaEdges()) {
+        // только связи листа узла-контроллера: у дубликата листа те же id гнёзд
+        // (duplicateSchemaSheet), связь на другом листе дублем не считается
+        for (SchemaEdge e : schemaEdgesInSheetOf(controllerNode)) {
             if (e.getMode() != SchemaMode.SIGNAL) {
                 continue;
             }
@@ -5716,9 +6114,10 @@ public class AppModel {
      *  исчерпана), связь не проводится — новые узлы «Распределение» автоматически
      *  НЕ создаются, инженер размещает их сам. */
     private void autoConnectPowerChainEndpoints(Map<String, SchemaNode> screenNodesByScreenId,
-                                                 Set<String> freshlyAddedScreenIds) {
+                                                 Set<String> freshlyAddedScreenIds, String sheetId) {
         List<SchemaNode> distroNodes = new ArrayList<>();
-        for (SchemaNode n : currentScene.getSchemaNodes()) {
+        // щиты — только того же (первого, D2) листа: связь не может уйти на другой лист
+        for (SchemaNode n : schemaNodesOfSheet(currentScene, sheetId)) {
             if (n.getMode() == SchemaMode.POWER && n.getType() == SchemaNodeType.DISTRO) {
                 distroNodes.add(n);
             }
@@ -5731,7 +6130,8 @@ public class AppModel {
             if (ids.isEmpty()) {
                 continue;
             }
-            autoConnectPowerCabinetToDistro(screenNodesByScreenId, freshlyAddedScreenIds, distroNodes, ids.get(0));
+            autoConnectPowerCabinetToDistro(screenNodesByScreenId, freshlyAddedScreenIds, distroNodes, ids.get(0),
+                    sheetId);
         }
     }
 
@@ -5748,7 +6148,8 @@ public class AppModel {
      *  (баг-репорт). */
     private void autoConnectPowerCabinetToDistro(Map<String, SchemaNode> screenNodesByScreenId,
                                                   Set<String> freshlyAddedScreenIds,
-                                                  List<SchemaNode> distroNodes, String cabinetId) {
+                                                  List<SchemaNode> distroNodes, String cabinetId,
+                                                  String sheetId) {
         Screen owner = screenOfCabinet(currentScene, cabinetId);
         if (owner == null || !freshlyAddedScreenIds.contains(owner.getId())) {
             return;
@@ -5757,7 +6158,8 @@ public class AppModel {
         if (screenNode == null) {
             return;
         }
-        for (SchemaEdge e : currentScene.getSchemaEdges()) {
+        List<SchemaEdge> sheetEdges = schemaEdgesOfSheet(currentScene, sheetId);
+        for (SchemaEdge e : sheetEdges) {
             if (e.getMode() == SchemaMode.POWER
                     && (cabinetId.equals(e.getFromCabinetInstanceId()) || cabinetId.equals(e.getToCabinetInstanceId()))) {
                 return;
@@ -5772,7 +6174,7 @@ public class AppModel {
                 if (p.getDirection() == PortDirection.IN || !dominantType.equals(p.getConnectorType())) {
                     continue;
                 }
-                if (countPowerEdgesForPort(p.getId()) < p.getCount()) {
+                if (countPowerEdgesForPort(sheetEdges, p.getId()) < p.getCount()) {
                     addSchemaEdge(SchemaMode.POWER, screenNode.getId(), null, cabinetId, distro.getId(), p.getId(),
                             null, null);
                     return;
@@ -5802,10 +6204,11 @@ public class AppModel {
 
     /** Число связей силовой схемы (в любом направлении), уже ссылающихся на разъём
      *  {@code portId} — используется для проверки остатка ёмкости группы разъёмов
-     *  (см. {@link CardPort#getCount()}). */
-    private int countPowerEdgesForPort(String portId) {
+     *  (см. {@link CardPort#getCount()}). {@code edges} — связи ОДНОГО листа (2026-09-30:
+     *  у дубликата листа те же id гнёзд, см. {@link #duplicateSchemaSheet}). */
+    private int countPowerEdgesForPort(List<SchemaEdge> edges, String portId) {
         int used = 0;
-        for (SchemaEdge e : currentScene.getSchemaEdges()) {
+        for (SchemaEdge e : edges) {
             if (e.getMode() == SchemaMode.POWER
                     && (portId.equals(e.getFromPortId()) || portId.equals(e.getToPortId()))) {
                 used++;
@@ -6294,16 +6697,35 @@ public class AppModel {
      *  ИСТОЧНИКА связи). Порядок — по первому появлению связи в списке сцены
      *  (детерминированно, без произвольной сортировки по enum). */
     public List<InterfaceRole> lineLegendRoles(Scene scene) {
+        return lineLegendRoles(scene, legendSheetId(scene, SchemaMode.SIGNAL));
+    }
+
+    /** Лист, по которому считается легенда при вызове без явного листа: открытый лист
+     *  режима для текущей сцены, первый — для любой другой. */
+    private String legendSheetId(Scene scene, SchemaMode mode) {
+        if (scene == null) {
+            return null;
+        }
+        SchemaSheet sheet = scene == currentScene ? currentSchemaSheet(mode)
+                : SchemaSheetMigration.firstSheet(scene, mode);
+        return sheet != null ? sheet.getId() : null;
+    }
+
+    /** {@link #lineLegendRoles(Scene)} в пределах ЛИСТА {@code sheetId} (запрос
+     *  2026-09-30, несколько схем на сцену): легенда стоит на конкретной схеме и
+     *  описывает цвета ЕЁ линий — роли, встречающиеся только на соседнем листе, в неё
+     *  не попадают. Холст передаёт лист самого блока-легенды. */
+    public List<InterfaceRole> lineLegendRoles(Scene scene, String sheetId) {
         List<InterfaceRole> roles = new ArrayList<>();
         if (scene == null) {
             return roles;
         }
         List<InterfaceType> library = getInterfaceTypes();
         java.util.Map<String, SchemaNode> byId = new java.util.LinkedHashMap<>();
-        for (SchemaNode n : scene.getSchemaNodes()) {
+        for (SchemaNode n : schemaNodesOfSheet(scene, sheetId)) {
             byId.put(n.getId(), n);
         }
-        for (SchemaEdge e : scene.getSchemaEdges()) {
+        for (SchemaEdge e : schemaEdgesOfSheet(scene, sheetId)) {
             if (e.getMode() != SchemaMode.SIGNAL) {
                 continue;
             }
@@ -6328,15 +6750,21 @@ public class AppModel {
      *  CardPort#getConnectorType()} гнезда-источника (у питания цвет линии по
      *  номиналу разъёма, не по роли, см. {@code SchemaCanvasPanel#edgeDefaultColor}). */
     public List<String> lineLegendPowerNominals(Scene scene) {
+        return lineLegendPowerNominals(scene, legendSheetId(scene, SchemaMode.POWER));
+    }
+
+    /** {@link #lineLegendPowerNominals(Scene)} в пределах листа {@code sheetId} — см.
+     *  {@link #lineLegendRoles(Scene, String)}. */
+    public List<String> lineLegendPowerNominals(Scene scene, String sheetId) {
         List<String> nominals = new ArrayList<>();
         if (scene == null) {
             return nominals;
         }
         java.util.Map<String, SchemaNode> byId = new java.util.LinkedHashMap<>();
-        for (SchemaNode n : scene.getSchemaNodes()) {
+        for (SchemaNode n : schemaNodesOfSheet(scene, sheetId)) {
             byId.put(n.getId(), n);
         }
-        for (SchemaEdge e : scene.getSchemaEdges()) {
+        for (SchemaEdge e : schemaEdgesOfSheet(scene, sheetId)) {
             if (e.getMode() != SchemaMode.POWER) {
                 continue;
             }
@@ -6402,18 +6830,33 @@ public class AppModel {
                                 List<NetworkGraphDevice> switches) {
     }
 
+    /** Старая сигнатура (до листов, 2026-09-30) — граф ПЕРВОЙ схемы сигнала сцены, что
+     *  для проекта с одной схемой сигнала совпадает с прежним «вся сцена». Выбор
+     *  листа в «Перенести из схемы…» — трек C3, он переводит вызовы на {@link
+     *  #networkGraphFromSheet}. */
     public NetworkGraph networkGraphFromScene(Scene scene) {
         if (scene == null) {
             return new NetworkGraph(List.of(), List.of(), List.of());
         }
+        return networkGraphFromSheet(scene, SchemaSheetMigration.firstSheet(scene, SchemaMode.SIGNAL).getId());
+    }
+
+    /** Граф сети по ОДНОМУ листу сигнала {@code sheetId} (запрос 2026-09-30: при
+     *  импорте в сетевой менеджер пользователь выбирает схему сигнала) — устройства
+     *  и связи только этого листа. */
+    public NetworkGraph networkGraphFromSheet(Scene scene, String sheetId) {
+        if (scene == null || sheetId == null) {
+            return new NetworkGraph(List.of(), List.of(), List.of());
+        }
         List<InterfaceType> library = getInterfaceTypes();
+        List<SchemaNode> sheetNodes = schemaNodesOfSheet(scene, sheetId);
         java.util.Map<String, SchemaNode> byId = new java.util.LinkedHashMap<>();
-        for (SchemaNode n : scene.getSchemaNodes()) {
+        for (SchemaNode n : sheetNodes) {
             byId.put(n.getId(), n);
         }
         List<NetworkGraphLink> links = new ArrayList<>();
         java.util.LinkedHashSet<String> connectedIds = new java.util.LinkedHashSet<>();
-        for (SchemaEdge e : scene.getSchemaEdges()) {
+        for (SchemaEdge e : schemaEdgesOfSheet(scene, sheetId)) {
             if (e.getMode() != SchemaMode.SIGNAL) {
                 continue;
             }
@@ -6431,7 +6874,7 @@ public class AppModel {
         }
         List<NetworkGraphDevice> devices = new ArrayList<>();
         List<NetworkGraphDevice> switches = new ArrayList<>();
-        for (SchemaNode n : scene.getSchemaNodes()) {
+        for (SchemaNode n : sheetNodes) {
             if (n.getMode() != SchemaMode.SIGNAL) {
                 continue;
             }
@@ -6533,6 +6976,10 @@ public class AppModel {
         for (SchemaEdge e : currentScene.getSchemaEdges()) {
             se.add(e.copy());
         }
+        List<SchemaSheet> sh = new ArrayList<>();
+        for (SchemaSheet s : currentScene.getSchemaSheets()) {
+            sh.add(s.copy());
+        }
         List<Screen> screens = null;
         List<ScreenGroup> groups = null;
         java.util.Map<Screen, ScreenMeta> meta = null;
@@ -6547,7 +6994,7 @@ public class AppModel {
                 meta.put(s, new ScreenMeta(s.getGroupId(), s.getTagColor()));
             }
         }
-        undoStack.push(new UndoEntry(screenSnap, pc, sc, cv, sn, se, actionLabel, screens, groups, meta));
+        undoStack.push(new UndoEntry(screenSnap, pc, sc, cv, sn, se, sh, actionLabel, screens, groups, meta));
         while (undoStack.size() > UNDO_LIMIT) {
             undoStack.removeLast();
         }
@@ -6597,6 +7044,9 @@ public class AppModel {
         currentScene.setCanvases(snap.canvasesSnapshot());
         currentScene.setSchemaNodes(snap.schemaNodesSnapshot());
         currentScene.setSchemaEdges(snap.schemaEdgesSnapshot());
+        currentScene.setSchemaSheets(snap.schemaSheetsSnapshot());
+        // Текущий лист мог исчезнуть (отмена «Новая схема») — currentSchemaSheet сам
+        // откатится на первый лист режима; явно ничего сбрасывать не нужно.
     }
 
     /** Подписи отменяемых действий, сверху — самое свежее (индекс 0 = «отменить
