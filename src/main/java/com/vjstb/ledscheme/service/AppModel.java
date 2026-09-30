@@ -123,7 +123,28 @@ public class AppModel {
                               List<SignalChain> signalChainsSnapshot, List<ContentCanvas> canvasesSnapshot,
                               List<SchemaNode> schemaNodesSnapshot, List<SchemaEdge> schemaEdgesSnapshot,
                               String actionLabel, List<Screen> screensSnapshot, List<ScreenGroup> groupsSnapshot,
-                              java.util.Map<Screen, ScreenMeta> screenMetaSnapshot) {
+                              java.util.Map<Screen, ScreenMeta> screenMetaSnapshot,
+                              java.util.Map<Screen, MaskProps> maskPropsSnapshot) {
+    }
+
+    /** Свойства маски экрана на момент снимка отмены (2026-09-30: пресет/своя пара цветов и
+     *  экран-«сетка»). Снимаются по ВСЕМ экранам сцены, а не только по текущему, как
+     *  {@code screenSnapshot}, — таблица гридов на этапе «Генерация масок» правит маски
+     *  любого экрана, не обязательно выбранного, и иначе такая правка не откатывалась бы. */
+    private record MaskProps(MaskColorPreset background, Integer colorA, Integer colorB,
+                              boolean mesh, int heightMultiplier) {
+        static MaskProps of(Screen s) {
+            return new MaskProps(s.getBackground(), s.getMaskColorA(), s.getMaskColorB(),
+                    s.isMaskMesh(), s.getMaskHeightMultiplier());
+        }
+
+        void applyTo(Screen s) {
+            s.setBackground(background);
+            s.setMaskColorA(colorA);
+            s.setMaskColorB(colorB);
+            s.setMaskMesh(mesh);
+            s.setMaskHeightMultiplier(heightMultiplier);
+        }
     }
 
     /** Принадлежность экрана группе и цветная метка на момент структурного снимка. */
@@ -4173,21 +4194,17 @@ public class AppModel {
 
     /** Настройка маски одного грида (размещённого на канвасе экрана) — имя-override,
      *  набор включённых элементов (см. class-javadoc CanvasPlacement/
-     *  PixelGridRenderer.GridRenderOptions). Цвет чек-борда сюда больше НЕ входит
-     *  (2026-08-13) — он общий для экрана, см. {@link #setMaskColor}. */
-    public void updatePlacementMaskConfig(CanvasPlacement pl, String name,
-                                           boolean showGrid, boolean showRaster, boolean showIds,
-                                           boolean showCircle, boolean showCross, boolean showCorner,
-                                           boolean showLogo) {
-        pushUndo("Настройка маски «" + (name == null || name.isBlank() ? pl.getId() : name) + "»");
-        pl.setName(name);
-        pl.setShowGrid(showGrid);
-        pl.setShowRaster(showRaster);
-        pl.setShowIds(showIds);
-        pl.setShowCircle(showCircle);
-        pl.setShowCross(showCross);
-        pl.setShowCorner(showCorner);
-        pl.setShowLogo(showLogo);
+     *  PixelGridRenderer.GridRenderOptions). Цвет чек-борда сюда не входит (2026-08-13) —
+     *  он общий для экрана, см. {@link #setMaskColor}.
+     *
+     *  <p>2026-09-30 (запрос пользователя: убрать «Растр», добавить «Плашка»/«Разрешение»):
+     *  вместо прежнего 9-аргументного метода с позиционными boolean'ами (каждая новая
+     *  галочка требовала править все вызовы таблицы) — {@code edit} меняет нужные поля
+     *  размещения, а запись отмены одна на всю правку. */
+    public void updatePlacementMask(CanvasPlacement pl, java.util.function.Consumer<CanvasPlacement> edit) {
+        String label = pl.getName() == null || pl.getName().isBlank() ? pl.getId() : pl.getName();
+        pushUndo("Настройка маски «" + label + "»");
+        edit.accept(pl);
         changed();
     }
 
@@ -4197,6 +4214,33 @@ public class AppModel {
     public void setMaskColor(Screen screen, MaskColorPreset color) {
         pushUndo("Цвет маски «" + screen.getName() + "»");
         screen.setBackground(color);
+        changed();
+    }
+
+    /** Собственная пара цветов маски экрана (2026-09-30, запрос пользователя: «своя пара
+     *  цветов для маски») — записывает обе и переключает экран на {@link
+     *  MaskColorPreset#CUSTOM}. Как и пресет, пара общая для экрана во всех канвасах. Цвета
+     *  берутся без альфы. */
+    public void setMaskCustomColors(Screen screen, java.awt.Color a, java.awt.Color b) {
+        pushUndo("Свои цвета маски «" + screen.getName() + "»");
+        screen.setMaskColorA(a.getRGB() & 0xFFFFFF);
+        screen.setMaskColorB(b.getRGB() & 0xFFFFFF);
+        screen.setBackground(MaskColorPreset.CUSTOM);
+        changed();
+    }
+
+    /** Включает/выключает экран-«сетку» (маска выше в {@link Screen#getMaskHeightMultiplier()}
+     *  раз, запрос пользователя 2026-09-30). Множитель при этом не меняется. */
+    public void setMaskMesh(Screen screen, boolean mesh) {
+        pushUndo("Экран-сетка «" + screen.getName() + "»");
+        screen.setMaskMesh(mesh);
+        changed();
+    }
+
+    /** Множитель высоты маски экрана-сетки (минимум 1; по умолчанию 2). */
+    public void setMaskHeightMultiplier(Screen screen, int multiplier) {
+        pushUndo("Высота маски «" + screen.getName() + "»");
+        screen.setMaskHeightMultiplier(multiplier);
         changed();
     }
 
@@ -4241,7 +4285,7 @@ public class AppModel {
     }
 
     /** Настройки подписи имени, общие для ВСЕХ гридов этого канваса (в отличие от
-     *  updatePlacementMaskConfig — per-грид). */
+     *  updatePlacementMask — per-грид). */
     public void updateCanvasMaskSettings(ContentCanvas canvas, boolean largeGridNames, Integer textColorRgb,
                                           boolean dropShadow) {
         pushUndo("Настройка подписей канваса «" + canvas.getName() + "»");
@@ -6496,7 +6540,7 @@ public class AppModel {
 
     /** Снимает текущее состояние сцены (экран, если выбран, + цепочки + канвасы) для
      *  «отменить». Требует только currentScene — НЕ currentScreen, т.к. правка масок
-     *  (см. {@link #updatePlacementMaskConfig}/{@link #updateCanvasMaskSettings} и
+     *  (см. {@link #updatePlacementMask}/{@link #updateCanvasMaskSettings} и
      *  канвас-CRUD ниже) идёт без выбора конкретного экрана. */
     private void pushUndo(String actionLabel) {
         pushUndo(actionLabel, false);
@@ -6547,7 +6591,12 @@ public class AppModel {
                 meta.put(s, new ScreenMeta(s.getGroupId(), s.getTagColor()));
             }
         }
-        undoStack.push(new UndoEntry(screenSnap, pc, sc, cv, sn, se, actionLabel, screens, groups, meta));
+        java.util.Map<Screen, MaskProps> maskProps = new java.util.IdentityHashMap<>();
+        for (Screen scr : currentScene.getScreens()) {
+            maskProps.put(scr, MaskProps.of(scr));
+        }
+        undoStack.push(new UndoEntry(screenSnap, pc, sc, cv, sn, se, actionLabel, screens, groups, meta,
+                maskProps));
         while (undoStack.size() > UNDO_LIMIT) {
             undoStack.removeLast();
         }
@@ -6597,6 +6646,11 @@ public class AppModel {
         currentScene.setCanvases(snap.canvasesSnapshot());
         currentScene.setSchemaNodes(snap.schemaNodesSnapshot());
         currentScene.setSchemaEdges(snap.schemaEdgesSnapshot());
+        // Маски экранов (2026-09-30) -- только для экранов, что есть в снимке: вернувшийся
+        // структурной отменой экран уже в нём, новый (созданный после снимка) не трогаем.
+        if (snap.maskPropsSnapshot() != null) {
+            snap.maskPropsSnapshot().forEach((screen, props) -> props.applyTo(screen));
+        }
     }
 
     /** Подписи отменяемых действий, сверху — самое свежее (индекс 0 = «отменить

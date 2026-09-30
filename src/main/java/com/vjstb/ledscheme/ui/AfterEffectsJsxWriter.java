@@ -5,8 +5,7 @@ import com.vjstb.ledscheme.model.ContentCanvas;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
-import com.vjstb.ledscheme.service.ScreenLogic;
-import com.vjstb.ledscheme.service.ScreenStats;
+import com.vjstb.ledscheme.service.MaskGeometry;
 
 /**
  * Генератор .jsx (ExtendScript) для Adobe After Effects — по прямому запросу пользователя:
@@ -84,9 +83,11 @@ public final class AfterEffectsJsxWriter {
             if (scr == null) {
                 continue;
             }
-            ScreenStats stats = ScreenLogic.stats(scr, model.typeOf(scr), model.getWorkspace());
-            int w = stats.resolutionWidthPx();
-            int h = stats.resolutionHeightPx();
+            // Размер прекомпа -- размер МАСКИ (2026-09-30: экран-«сетка» даёт маску выше в N раз,
+            // имя файла маски и композиция в AE должны нести тот же размер, что и PNG).
+            MaskGeometry geo = MaskGeometry.of(scr, model.typeOf(scr), model.getWorkspace());
+            int w = geo.width();
+            int h = geo.height();
             String filename = maskFilename(sceneNameSanitized, scr, w, h);
             String name = scr.getName() + "_" + w + "x" + h;
             String v = safeVarName(scr.getId());

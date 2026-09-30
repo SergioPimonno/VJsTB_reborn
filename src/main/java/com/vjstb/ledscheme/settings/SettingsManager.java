@@ -454,6 +454,20 @@ public class SettingsManager {
         persist();
     }
 
+    /** То же, что {@link #rememberRecentLineColor}, но для ОТДЕЛЬНОЙ памяти цветов масок
+     *  (2026-09-30, запрос пользователя: «память цветов масок — отдельная») — цвета
+     *  шахматки масок не попадают в палитру цветов линий схем и наоборот. */
+    public void rememberRecentMaskColor(int rgb) {
+        List<Integer> recent = new ArrayList<>(activeProfile().getRecentMaskColors());
+        recent.removeIf(existing -> existing == rgb);
+        recent.add(0, rgb);
+        while (recent.size() > 24) {
+            recent.remove(recent.size() - 1);
+        }
+        activeProfile().setRecentMaskColors(recent);
+        persist();
+    }
+
     public double getLayoutProportion(String key, double defaultValue) {
         Double v = activeProfile().getLayout().get(key);
         return v != null ? v : defaultValue;

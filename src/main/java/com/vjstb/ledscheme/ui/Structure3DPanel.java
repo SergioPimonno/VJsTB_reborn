@@ -892,7 +892,6 @@ public class Structure3DPanel extends JPanel {
             double cellW = defaultType.getWidthMm();
             double cellH = defaultType.getHeightMm();
             double totalHeight = screen.getRows() * cellH;
-            MaskColorPreset mask = screen.getBackground() != null ? screen.getBackground() : MaskColorPreset.NORMAL;
             for (var cab : screen.getCabinets()) {
                 if (cab.isHidden()) {
                     continue;
@@ -908,7 +907,7 @@ public class Structure3DPanel extends JPanel {
                 double h = effective.getHeightMm();
                 double x = cab.getColIndex() * cellW;
                 double yTop = totalHeight - cab.getRowIndex() * cellH;
-                java.awt.Color front = mask.color((cab.getRowIndex() + cab.getColIndex()) % 2);
+                java.awt.Color front = screen.maskColor((cab.getRowIndex() + cab.getColIndex()) % 2);
                 boxFrontColored(gl, x, elevationMm + yTop - h, -15, w, h, 15, front, CABINET_CHASSIS_COLOR);
             }
         }
