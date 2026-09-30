@@ -85,20 +85,31 @@ public final class UiKit {
      *  у {@code JColorChooser.showDialog}. */
     public static java.awt.Color showColorChooser(Component owner, String title, java.awt.Color initial,
             com.vjstb.ledscheme.settings.SettingsManager settings) {
-        RecentColorsChooserPanel.loadPersisted(settings);
+        return showColorChooser(owner, title, initial, settings, RecentColorsChooserPanel.Channel.LINES);
+    }
+
+    /** Тот же диалог, но с указанным каналом памяти «недавних» цветов (2026-09-30, запрос
+     *  пользователя: «механизм палитры из общих схем, но память цветов масок — отдельная»):
+     *  {@link RecentColorsChooserPanel.Channel#MASKS} — для цветов шахматки масок, свой
+     *  список в памяти и в профиле ({@code UserProfile.getRecentMaskColors()}). Перегрузка
+     *  без канала остаётся на {@link RecentColorsChooserPanel.Channel#LINES}, все прежние
+     *  вызовы (цвета линий) работают без изменений. */
+    public static java.awt.Color showColorChooser(Component owner, String title, java.awt.Color initial,
+            com.vjstb.ledscheme.settings.SettingsManager settings, RecentColorsChooserPanel.Channel channel) {
+        RecentColorsChooserPanel.loadPersisted(settings, channel);
         javax.swing.JColorChooser chooser = new javax.swing.JColorChooser(
                 initial != null ? initial : java.awt.Color.WHITE);
         javax.swing.colorchooser.AbstractColorChooserPanel[] existing = chooser.getChooserPanels();
         javax.swing.colorchooser.AbstractColorChooserPanel[] withRecent =
                 new javax.swing.colorchooser.AbstractColorChooserPanel[existing.length + 1];
-        withRecent[0] = new RecentColorsChooserPanel();
+        withRecent[0] = new RecentColorsChooserPanel(channel);
         System.arraycopy(existing, 0, withRecent, 1, existing.length);
         chooser.setChooserPanels(withRecent);
         final java.awt.Color[] result = {null};
         javax.swing.JDialog dialog = javax.swing.JColorChooser.createDialog(owner, title, true, chooser,
                 e -> result[0] = chooser.getColor(), null);
         dialog.setVisible(true);
-        RecentColorsChooserPanel.remember(result[0], settings);
+        RecentColorsChooserPanel.remember(result[0], settings, channel);
         return result[0];
     }
 

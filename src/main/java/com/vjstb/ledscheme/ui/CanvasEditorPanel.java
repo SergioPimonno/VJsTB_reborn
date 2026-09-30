@@ -6,8 +6,7 @@ import com.vjstb.ledscheme.model.ContentCanvas;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
-import com.vjstb.ledscheme.service.ScreenLogic;
-import com.vjstb.ledscheme.service.ScreenStats;
+import com.vjstb.ledscheme.service.MaskGeometry;
 import com.vjstb.ledscheme.settings.SettingsManager;
 import java.awt.BasicStroke;
 import java.awt.Color;
@@ -32,6 +31,12 @@ import javax.swing.JPanel;
  * экраны сцены на своих пиксельных позициях, перетаскиваются мышью. Shift во время
  * перетаскивания — прилипание к краям уже размещённых экранов и краям канваса
  * (и, опционально, к центру канваса — см. «Персонализация»).
+ *
+ * <p>2026-09-30 (запрос пользователя): размеры размещения берутся из
+ * {@link MaskGeometry} (экран-«сетка» занимает на канвасе маску выше в N раз — отрисовка,
+ * hit-test, прилипание и подпись показывают именно её), а часть маски, вылезающая за край
+ * канваса (такая в экспорте будет молча обрезана, см. {@link CanvasFit}), закрашивается
+ * красной штриховкой с красной обводкой.
  */
 public class CanvasEditorPanel extends JPanel {
 
@@ -106,8 +111,8 @@ public class CanvasEditorPanel extends JPanel {
                 if (e.isShiftDown()) {
                     Screen scr = screenById(dragging.getScreenId());
                     if (scr != null) {
-                        ScreenStats st = ScreenLogic.stats(scr, model.typeOf(scr), model.getWorkspace());
-                        int[] snapped = snap(nx, ny, st.resolutionWidthPx(), st.resolutionHeightPx(), scale);
+                        MaskGeometry geo = geometry(scr);
+                        int[] snapped = snap(nx, ny, geo.width(), geo.height(), scale);
                         nx = snapped[0];
                         ny = snapped[1];
                     }
@@ -190,9 +195,9 @@ public class CanvasEditorPanel extends JPanel {
             if (other == null) {
                 continue;
             }
-            ScreenStats ost = ScreenLogic.stats(other, model.typeOf(other), model.getWorkspace());
-            int ow = ost.resolutionWidthPx();
-            int oh = ost.resolutionHeightPx();
+            MaskGeometry ogeo = geometry(other);
+            int ow = ogeo.width();
+            int oh = ogeo.height();
             xTargets.add(pl.getX());
             xTargets.add(pl.getX() + ow);
             xTargets.add(pl.getX() + ow - w);
@@ -245,6 +250,11 @@ public class CanvasEditorPanel extends JPanel {
         return null;
     }
 
+    /** Размер маски размещения в px канваса — см. class-javadoc. */
+    private MaskGeometry geometry(Screen scr) {
+        return MaskGeometry.of(scr, model.typeOf(scr), model.getWorkspace());
+    }
+
     private double scale() {
         if (canvas == null) {
             return 1;
@@ -265,11 +275,11 @@ public class CanvasEditorPanel extends JPanel {
             if (scr == null) {
                 continue;
             }
-            ScreenStats st = ScreenLogic.stats(scr, model.typeOf(scr), model.getWorkspace());
+            MaskGeometry geo = geometry(scr);
             int x = (int) (PADDING + pl.getX() * scale);
             int y = (int) (PADDING + pl.getY() * scale);
-            int w = (int) Math.max(2, st.resolutionWidthPx() * scale);
-            int h = (int) Math.max(2, st.resolutionHeightPx() * scale);
+            int w = (int) Math.max(2, geo.width() * scale);
+            int h = (int) Math.max(2, geo.height() * scale);
             if (p.x >= x && p.x <= x + w && p.y >= y && p.y <= y + h) {
                 return pl;
             }
@@ -311,11 +321,11 @@ public class CanvasEditorPanel extends JPanel {
                 continue;
             }
             CabinetType type = model.typeOf(scr);
-            ScreenStats st = ScreenLogic.stats(scr, type, model.getWorkspace());
+            MaskGeometry geo = MaskGeometry.of(scr, type, model.getWorkspace());
             int x = (int) (PADDING + pl.getX() * scale);
             int y = (int) (PADDING + pl.getY() * scale);
-            int w = (int) Math.max(2, st.resolutionWidthPx() * scale);
-            int h = (int) Math.max(2, st.resolutionHeightPx() * scale);
+            int w = (int) Math.max(2, geo.width() * scale);
+            int h = (int) Math.max(2, geo.height() * scale);
 
             boolean isSelected = pl == selected;
             // Настоящая маска (тот же PixelGridRenderer, что и экспорт), просто
@@ -329,11 +339,12 @@ public class CanvasEditorPanel extends JPanel {
             g2.setColor(isSelected ? Color.WHITE : Palette.BORDER);
             g2.setStroke(new BasicStroke(isSelected ? 2.5f : 1.4f));
             g2.drawRect(x, y, w, h);
+            drawOverflow(g2, pl, geo, scale, x, y, w, h, cw, ch);
 
             // Мелкий HUD-лейбл поверх маски в углу — крупная подпись уже вписана
             // renderMask-ом по центру, но при сильном уменьшении масштаба канваса
             // (много экранов сразу) она нечитаема; этот всегда виден.
-            String resLabel = st.resolutionWidthPx() + "×" + st.resolutionHeightPx() + " px";
+            String resLabel = geo.sizeLabel();
             g2.setFont(labelFont);
             int nameW = g2.getFontMetrics().stringWidth(scr.getName());
             g2.setFont(metaFont);
@@ -356,6 +367,49 @@ public class CanvasEditorPanel extends JPanel {
         drawSnapGuides(g2, PADDING, PADDING, cw, ch);
 
         g2.dispose();
+    }
+
+    /** Красная штриховка и обводка части маски, вылезающей за правый/нижний край канваса
+     *  (запрос пользователя 2026-09-30: «предупреждение, если канвас меньше размещённых в
+     *  нём масок» — такую часть экспорт канваса молча обрежет). Условие то же, что в
+     *  {@link CanvasFit}: размещение вылезает, если x+ширина_маски &gt; W или
+     *  y+высота_маски &gt; H (в px канваса); здесь — в экранных px. */
+    private void drawOverflow(Graphics2D g2, CanvasPlacement pl, MaskGeometry geo, double scale,
+                              int x, int y, int w, int h, int cw, int ch) {
+        boolean overX = pl.getX() + geo.width() > canvas.getWidthPx();
+        boolean overY = pl.getY() + geo.height() > canvas.getHeightPx();
+        if (!overX && !overY) {
+            return;
+        }
+        int canvasRight = PADDING + cw;
+        int canvasBottom = PADDING + ch;
+        Graphics2D gh = (Graphics2D) g2.create();
+        gh.setColor(new Color(0xff, 0x30, 0x30, 120));
+        if (overX) {
+            hatch(gh, canvasRight, y, x + w - canvasRight, h);
+        }
+        if (overY) {
+            hatch(gh, x, canvasBottom, w, y + h - canvasBottom);
+        }
+        gh.setColor(new Color(0xff, 0x30, 0x30));
+        gh.setStroke(new BasicStroke(2.5f));
+        gh.drawRect(x, y, w, h);
+        gh.dispose();
+    }
+
+    private static void hatch(Graphics2D g, int x, int y, int w, int h) {
+        if (w <= 0 || h <= 0) {
+            return;
+        }
+        Graphics2D gc = (Graphics2D) g.create();
+        gc.clipRect(x, y, w, h);
+        gc.fillRect(x, y, w, h);
+        gc.setColor(new Color(0xff, 0x30, 0x30));
+        gc.setStroke(new BasicStroke(1f));
+        for (int d = -h; d < w; d += 8) {
+            gc.drawLine(x + d, y + h, x + d + h, y);
+        }
+        gc.dispose();
     }
 
     /** Направляющие линии Shift-прилипания (см. snap()) — тот же стиль, что и в

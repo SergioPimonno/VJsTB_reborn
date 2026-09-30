@@ -33,6 +33,12 @@ public class UserProfile {
      *  у старого профиля — то же самое, что пустой список. */
     private List<Integer> recentLineColors;
 
+    /** «Недавние» цвета ПАР МАСОК (2026-09-30, запрос пользователя: «механизм палитры из
+     *  общих схем, но память цветов масок — отдельная») — тот же принцип, что и
+     *  {@link #recentLineColors}, но свой список: цвета шахматки масок и цвета линий схем
+     *  не смешиваются. {@code null} у старого профиля — то же самое, что пустой список. */
+    private List<Integer> recentMaskColors;
+
     private Map<String, Double> layout = new LinkedHashMap<>();
 
     /** Показывать ли всегда видимый мини-превью раскладки сцены в правом нижнем
@@ -451,6 +457,14 @@ public class UserProfile {
 
     public void setRecentLineColors(List<Integer> recentLineColors) {
         this.recentLineColors = recentLineColors;
+    }
+
+    public List<Integer> getRecentMaskColors() {
+        return recentMaskColors != null ? recentMaskColors : new ArrayList<>();
+    }
+
+    public void setRecentMaskColors(List<Integer> recentMaskColors) {
+        this.recentMaskColors = recentMaskColors;
     }
 
     public Map<String, Double> getLayout() {
@@ -980,6 +994,7 @@ public class UserProfile {
         p.accentColor = accentColor;
         p.signalColors = signalColors != null ? new ArrayList<>(signalColors) : null;
         p.recentLineColors = recentLineColors != null ? new ArrayList<>(recentLineColors) : null;
+        p.recentMaskColors = recentMaskColors != null ? new ArrayList<>(recentMaskColors) : null;
         p.layout = new LinkedHashMap<>(layout);
         p.previewWidgetEnabled = previewWidgetEnabled;
         p.inspectorDocked = inspectorDocked;

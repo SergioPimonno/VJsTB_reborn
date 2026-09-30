@@ -34,6 +34,24 @@ public class Screen {
      *  {@code CanvasPlacement} про историю этого поля). Меняется через
      *  {@code AppModel#setMaskColor}, не напрямую сеттером. */
     private MaskColorPreset background = MaskColorPreset.NORMAL;
+    /** Своя пара цветов чек-борда (RGB, без альфы) — используется, только когда
+     *  {@link #background} == {@link MaskColorPreset#CUSTOM} (2026-09-30, запрос
+     *  пользователя). Хранятся и при переключении обратно на пресет, чтобы выбор не
+     *  терялся; {@code null} — пара не задана. Так же, как и пресет, — свойство ЭКРАНА,
+     *  одинаковое во всех канвасах. Меняются через {@code AppModel#setMaskCustomColors}. */
+    private Integer maskColorA;
+    private Integer maskColorB;
+
+    /** Экран из кабинетов-«сеток» (2026-09-30, запрос пользователя: «маска в 2 раза
+     *  выше») — маска экрана и ячейки кабинетов растягиваются по высоте в
+     *  {@link #getMaskHeightMultiplier()} раз (см. {@code service.MaskGeometry}). Свойство
+     *  ЭКРАНА (как цвет): одинаково во всех канвасах. false по умолчанию — старые проекты
+     *  рисуются как раньше. На расчёты сигнала/питания не влияет. */
+    private boolean maskMesh;
+    /** Множитель высоты маски для экрана-сетки; по умолчанию 2 (решение D3 плана v2.6),
+     *  минимум 1. Значение хранится и при выключенной сетке — включив её снова, пользователь
+     *  получит прежний множитель. */
+    private int maskHeightMultiplier = 2;
 
     /** Цветная метка зоны/площадки (v3.0, баг-репорт 2026-09-14) — только визуальная
      *  тонировка заливки на схеме сцены прерига, никак не влияет на расчёты; см.
@@ -266,6 +284,61 @@ public class Screen {
 
     public void setBackground(MaskColorPreset background) {
         this.background = background != null ? background : MaskColorPreset.NORMAL;
+    }
+
+    public Integer getMaskColorA() {
+        return maskColorA;
+    }
+
+    public void setMaskColorA(Integer maskColorA) {
+        this.maskColorA = maskColorA;
+    }
+
+    public Integer getMaskColorB() {
+        return maskColorB;
+    }
+
+    public void setMaskColorB(Integer maskColorB) {
+        this.maskColorB = maskColorB;
+    }
+
+    /** Цвет клетки чек-борда по чётности (rowIndex + colIndex) % 2 — ЕДИНСТВЕННЫЙ способ
+     *  получить его (рендер масок, 3D): учитывает и пресет, и собственную пару
+     *  ({@link MaskColorPreset#CUSTOM}); без пары CUSTOM ведёт себя как «Обычный». */
+    @JsonIgnore
+    public java.awt.Color maskColor(int parity) {
+        MaskColorPreset bg = getBackground();
+        if (bg == MaskColorPreset.CUSTOM) {
+            Integer rgb = parity == 0 ? maskColorA : maskColorB;
+            if (rgb != null) {
+                return new java.awt.Color(rgb & 0xFFFFFF);
+            }
+        }
+        return bg.color(parity);
+    }
+
+    public boolean isMaskMesh() {
+        return maskMesh;
+    }
+
+    public void setMaskMesh(boolean maskMesh) {
+        this.maskMesh = maskMesh;
+    }
+
+    public int getMaskHeightMultiplier() {
+        return maskHeightMultiplier;
+    }
+
+    public void setMaskHeightMultiplier(int maskHeightMultiplier) {
+        this.maskHeightMultiplier = Math.max(1, maskHeightMultiplier);
+    }
+
+    /** Фактический множитель высоты маски: 1 для обычного экрана, {@link
+     *  #getMaskHeightMultiplier()} для экрана-сетки. Старый JSON без поля даёт 2 (дефолт
+     *  поля), а при {@code maskHeightMultiplier: 0} — защита {@code max(1, …)}. */
+    @JsonIgnore
+    public int effectiveMaskHeightMultiplier() {
+        return maskMesh ? Math.max(1, maskHeightMultiplier) : 1;
     }
 
     public ScreenTagColor getTagColor() {
@@ -575,6 +648,10 @@ public class Screen {
         s.refreshRateHz = refreshRateHz;
         s.colorBitDepth = colorBitDepth;
         s.background = background;
+        s.maskColorA = maskColorA;
+        s.maskColorB = maskColorB;
+        s.maskMesh = maskMesh;
+        s.maskHeightMultiplier = maskHeightMultiplier;
         s.tagColor = tagColor;
         s.groupId = groupId;
         s.mountType = mountType;
