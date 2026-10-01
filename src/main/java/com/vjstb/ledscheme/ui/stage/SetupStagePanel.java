@@ -2505,7 +2505,7 @@ public class SetupStagePanel extends JPanel {
             return "";
         }
         if (!com.vjstb.ledscheme.service.StructureCurveMath.separateTowers(curveType, rawGap)) {
-            return "<html><div style='width:260px'>Прямой экран без зазора: башни стоят стеной с общими"
+            return "<html><body style='margin:0'><div style='width:200px'>Прямой экран без зазора: башни стоят стеной с общими"
                     + " столбами (перемычки и основание между всеми соседними столбами).</div></html>";
         }
         CabinetType type = model.typeOf(scr);
@@ -2531,7 +2531,7 @@ public class SetupStagePanel extends JPanel {
                 .analyze(com.vjstb.ledscheme.service.StructureCurveMath.setupOf(preview, type, model.getWorkspace()));
         com.vjstb.ledscheme.service.StructureCurveMath.Curve c = report.setup().curve();
         com.vjstb.ledscheme.service.StructureCurveMath.TowerSpec t = report.setup().tower();
-        StringBuilder sb = new StringBuilder("<html><div style='width:260px'>");
+        StringBuilder sb = new StringBuilder("<html><body style='margin:0'><div style='width:200px'>");
         if (c.curved()) {
             sb.append(String.format("R = %.0f мм, угол между кабинетами %.2f°, дуга %.1f°, хорда %.0f мм,"
                             + " стрела прогиба %.0f мм.<br>", c.radiusMm(), Math.toDegrees(c.cabinetAngleRad()),
