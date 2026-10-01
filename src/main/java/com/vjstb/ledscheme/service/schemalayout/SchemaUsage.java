@@ -14,7 +14,10 @@ import java.util.List;
  *
  * <p>Везде передаётся уже отфильтрованный по {@code SchemaMode} список связей (как
  * {@code AppModel.schemaEdgesForCurrentScene(mode)}) — эти функции сами по режиму
- * не фильтруют.
+ * не фильтруют. С 2026-09-30 (несколько схем на сцену) список должен быть ещё и
+ * связями ОДНОГО листа ({@code schemaEdgesForCurrentScene} уже фильтрует по текущему
+ * листу, {@code AppModel.schemaEdgesOfSheet} — по произвольному): у дубликата листа
+ * id гнёзд те же, что у исходного, и связи чужого листа исказили бы занятость гнёзд.
  */
 public final class SchemaUsage {
 

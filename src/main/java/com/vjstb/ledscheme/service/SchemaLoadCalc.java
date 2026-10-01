@@ -72,7 +72,8 @@ public final class SchemaLoadCalc {
         }
         double total = 0;
         for (SchemaEdge e : scene.getSchemaEdges()) {
-            if (e.getMode() != SchemaMode.POWER || !node.getId().equals(e.getFromNodeId())) {
+            if (e.getMode() != SchemaMode.POWER || !node.getId().equals(e.getFromNodeId())
+                    || !sameSheet(e, node)) {
                 continue;
             }
             SchemaNode target = nodeById(scene, e.getToNodeId());
@@ -116,7 +117,8 @@ public final class SchemaLoadCalc {
         double totalWatts = ScreenLogic.stats(scr, defaultType, model.getWorkspace()).totalPowerW();
         int totalLines = 0;
         for (SchemaEdge e : scene.getSchemaEdges()) {
-            if (e.getMode() == SchemaMode.POWER && screenNode.getId().equals(e.getToNodeId())) {
+            if (e.getMode() == SchemaMode.POWER && screenNode.getId().equals(e.getToNodeId())
+                    && sameSheet(e, screenNode)) {
                 totalLines += lineCount(e);
             }
         }
@@ -126,6 +128,15 @@ public final class SchemaLoadCalc {
             return 0;
         }
         return totalWatts * lineCount(edge) / (double) denominator;
+    }
+
+    /** Связь на том же листе, что и узел (запрос 2026-09-30, несколько схем на сцену):
+     *  нагрузка считается в пределах СХЕМЫ узла — каждая схема самостоятельна
+     *  (решение D1), связь соседнего листа не должна ни добавлять нагрузку щиту, ни
+     *  делить долю экрана. Узел/связь без листа (сцена собрана в обход модели) —
+     *  без фильтра, как до листов. */
+    private static boolean sameSheet(SchemaEdge e, SchemaNode node) {
+        return node.getSheetId() == null || e.getSheetId() == null || node.getSheetId().equals(e.getSheetId());
     }
 
     private static int lineCount(SchemaEdge edge) {
