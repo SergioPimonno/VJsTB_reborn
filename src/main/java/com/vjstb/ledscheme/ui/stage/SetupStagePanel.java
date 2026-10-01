@@ -2630,7 +2630,11 @@ public class SetupStagePanel extends JPanel {
         DefaultComboBoxModel<com.vjstb.ledscheme.model.MaskColorPreset> bgModel = new DefaultComboBoxModel<>();
         bgModel.addElement(null);
         for (com.vjstb.ledscheme.model.MaskColorPreset v : com.vjstb.ledscheme.model.MaskColorPreset.values()) {
-            bgModel.addElement(v);
+            // «Свои цвета…» (CUSTOM, 2026-09-30) -- пара цветов хранится на конкретном экране,
+            // дефолт сцены «пустой пары» задать не может -- только готовые пресеты.
+            if (v != com.vjstb.ledscheme.model.MaskColorPreset.CUSTOM) {
+                bgModel.addElement(v);
+            }
         }
         dBackground.setModel(bgModel);
         dBackground.setRenderer(notSetRenderer());

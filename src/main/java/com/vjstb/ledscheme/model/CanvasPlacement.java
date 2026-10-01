@@ -1,5 +1,7 @@
 package com.vjstb.ledscheme.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.UUID;
 
 /** Экран, размещённый внутри канваса (компоновка контента) — позиция в пикселях
@@ -32,8 +34,20 @@ public class CanvasPlacement {
      *  безусловными). Остальные четыре — новые элементы, раньше не существовавшие,
      *  дефолт false. */
     private boolean showGrid = true;
+    /** УСТАРЕЛО (2026-09-30, запрос пользователя «убрать колонку Растр — не используется»):
+     *  растр (линии через каждые 16 px) больше нигде не рисуется. Поле оставлено ТОЛЬКО
+     *  чтобы Jackson читал старый JSON, где оно есть; в новые файлы не пишется (см.
+     *  {@link #isShowRaster()}). */
     private boolean showRaster = true;
     private boolean showIds = true;
+    /** Плашка с именем экрана в центре маски (2026-09-30, запрос пользователя: вместо
+     *  колонки «Растр» — видимость плашки с именем). true по умолчанию — старые проекты
+     *  рисовали плашку безусловно, поведение не меняется. */
+    private boolean showNameLabel = true;
+    /** Строка разрешения на той же плашке — отдельная галочка (тот же запрос). Плашка
+     *  рисуется, если включена хотя бы одна из двух строк; при одной — высота плашки
+     *  ужимается под одну строку. true по умолчанию по той же причине, что и выше. */
+    private boolean showResolution = true;
     private boolean showCircle;
     private boolean showCross;
     private boolean showCorner;
@@ -108,12 +122,35 @@ public class CanvasPlacement {
         this.showGrid = showGrid;
     }
 
+    /** @deprecated растр убран (2026-09-30) — не пишется в JSON, значение игнорируется
+     *  рендером; оставлен только сеттер для чтения старых файлов. */
+    @Deprecated
+    @JsonIgnore
     public boolean isShowRaster() {
         return showRaster;
     }
 
+    /** @deprecated см. {@link #isShowRaster()} — нужен Jackson'у для старого JSON. */
+    @Deprecated
+    @JsonProperty("showRaster")
     public void setShowRaster(boolean showRaster) {
         this.showRaster = showRaster;
+    }
+
+    public boolean isShowNameLabel() {
+        return showNameLabel;
+    }
+
+    public void setShowNameLabel(boolean showNameLabel) {
+        this.showNameLabel = showNameLabel;
+    }
+
+    public boolean isShowResolution() {
+        return showResolution;
+    }
+
+    public void setShowResolution(boolean showResolution) {
+        this.showResolution = showResolution;
     }
 
     public boolean isShowIds() {
@@ -166,6 +203,8 @@ public class CanvasPlacement {
         p.background = background;
         p.showGrid = showGrid;
         p.showRaster = showRaster;
+        p.showNameLabel = showNameLabel;
+        p.showResolution = showResolution;
         p.showIds = showIds;
         p.showCircle = showCircle;
         p.showCross = showCross;

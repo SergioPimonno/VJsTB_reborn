@@ -27,7 +27,15 @@ public enum MaskColorPreset {
     BLUE_GRAY("Blue/Gray", 0x2266cc, 0x404040),
     FULL_RED("Full Red", 0xff0000, 0xaa0000),
     FULL_GREEN("Full Green", 0x00ff00, 0x00aa00),
-    FULL_BLUE("Full Blue", 0x0000ff, 0x0000aa);
+    FULL_BLUE("Full Blue", 0x0000ff, 0x0000aa),
+    /** Собственная пара цветов экрана (2026-09-30, запрос пользователя: «своя пара цветов
+     *  для маски») — сами цвета лежат в {@link Screen#getMaskColorA()}/{@code B}, а не в
+     *  перечислении. Запасные цвета здесь = {@link #NORMAL}: если пара почему-то не задана
+     *  (старый клиент, ручная правка JSON), маска выглядит как «Обычный», а не ломается.
+     *  Единственный способ получить цвет клетки — {@link Screen#maskColor(int)}.
+     *  ВАЖНО: JS-копия {@code MASK_PRESETS} веб-редактора масок (ledscheme-server) это
+     *  значение сознательно НЕ содержит (золотое правило 4, трек E). */
+    CUSTOM("Свои цвета…", 0x2b2f36, 0x3d434c);
 
     private final String label;
     private final int colorA;

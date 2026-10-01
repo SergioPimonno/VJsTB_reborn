@@ -4,13 +4,11 @@ import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.CanvasPlacement;
 import com.vjstb.ledscheme.model.ContentCanvas;
-import com.vjstb.ledscheme.model.MaskColorPreset;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.Workspace;
 import com.vjstb.ledscheme.service.AppModel;
-import com.vjstb.ledscheme.service.ScreenLogic;
-import com.vjstb.ledscheme.service.ScreenStats;
+import com.vjstb.ledscheme.service.MaskGeometry;
 import com.vjstb.ledscheme.settings.SettingsManager;
 import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
@@ -32,11 +30,15 @@ import javax.imageio.ImageIO;
  * номера рисовались безусловно, теперь каждый включается отдельно per-грид (см.
  * {@code CanvasPlacement}), а окружность/крест/уголковые метки/лого — новые
  * элементы, которых раньше не было вовсе.
+ *
+ * <p>2026-09-30 (запрос пользователя): растр (тонкие линии через 16 px) убран совсем — его
+ * место в таблице гридов заняли галочки «Плашка»/«Разрешение»; размеры маски и ячеек
+ * берутся ТОЛЬКО из {@link MaskGeometry} (учитывает экран-«сетку» с множителем высоты);
+ * цвет клетки — через пару {@link GridRenderOptions#colorEven()}/{@code colorOdd()},
+ * полученную из {@link Screen#maskColor(int)} (пресет или собственная пара).
  */
 public final class PixelGridRenderer {
 
-    private static final Color GRID_LINE = new Color(255, 255, 255, 40);
-    private static final int GRID_STEP_PX = 16;
     /** Жёлтый — чтобы не сливаться ни с белой сеткой/номерами, ни с фоном чек-борда. */
     private static final Color MARK_COLOR = new Color(255, 221, 0, 230);
 
@@ -47,10 +49,11 @@ public final class PixelGridRenderer {
      *  собирается из {@link CanvasPlacement} (свои для КАЖДОГО грида: имя-override,
      *  фон, какие элементы включены) и {@link ContentCanvas} (общие для ВСЕХ гридов
      *  канваса: крупные имена/цвет текста/тень/лого). */
-    public record GridRenderOptions(String displayName, MaskColorPreset background,
-                                     boolean showGrid, boolean showRaster, boolean showIds,
+    public record GridRenderOptions(String displayName, Color colorEven, Color colorOdd,
+                                     boolean showGrid, boolean showIds,
                                      boolean showCircle, boolean showCross, boolean showCorner,
-                                     boolean showLogo, boolean largeGridNames, Color textColor,
+                                     boolean showLogo, boolean showNameLabel, boolean showResolution,
+                                     boolean largeGridNames, Color textColor,
                                      boolean dropShadow, BufferedImage logoImage) {
 
         /** Лого берётся не с канваса, а из профиля пользователя (см.
@@ -71,48 +74,37 @@ public final class PixelGridRenderer {
                     logo = null;
                 }
             }
-            // background -- ОБЩИЙ для экрана (см. Screen#getBackground), не с pl -- та же
-            // запись экрана в разных канвасах теперь красится одинаково (2026-08-13,
-            // баг-репорт: раньше был per-placement, см. class-javadoc CanvasPlacement).
-            return new GridRenderOptions(displayName, screen.getBackground(),
-                    pl.isShowGrid(), pl.isShowRaster(), pl.isShowIds(),
+            // Цвет -- ОБЩИЙ для экрана (см. Screen#maskColor), не с pl -- та же запись
+            // экрана в разных канвасах красится одинаково (2026-08-13, баг-репорт: раньше
+            // был per-placement, см. class-javadoc CanvasPlacement). 2026-09-30: сюда
+            // приходит уже готовая ПАРА цветов, а не пресет -- так «Свои цвета…» не
+            // требуют отдельной ветки в рендерере.
+            return new GridRenderOptions(displayName, screen.maskColor(0), screen.maskColor(1),
+                    pl.isShowGrid(), pl.isShowIds(),
                     pl.isShowCircle(), pl.isShowCross(), pl.isShowCorner(), pl.isShowLogo(),
+                    pl.isShowNameLabel(), pl.isShowResolution(),
                     canvas.isLargeGridNames(), textColor, canvas.isDropShadow(), logo);
         }
 
         /** Для отдельного полноэкранного экспорта маски вне канваса (по сцене целиком,
          *  см. VisualizationStagePanel.exportMasks) — прежнее поведение по умолчанию
-         *  (сетка+растр+номера, без новых элементов, без канваса), но цвет теперь берётся
-         *  из {@link Screen#getBackground()}, а не хардкодится в NORMAL — иначе этот путь
+         *  (сетка+номера+плашка имени/разрешения, без новых элементов, без канваса), но
+         *  цвет берётся из {@link Screen#maskColor(int)}, а не хардкодится в NORMAL — иначе этот путь
          *  экспорта расходился бы с тем, что реально видно на канвасе (тот же баг-репорт,
          *  что и у {@link #of}). */
         public static GridRenderOptions defaultForScreen(Screen screen) {
-            return new GridRenderOptions(screen.getName(), screen.getBackground(),
-                    true, true, true, false, false, false, false,
+            return new GridRenderOptions(screen.getName(), screen.maskColor(0), screen.maskColor(1),
+                    true, true, false, false, false, false,
+                    true, true,
                     false, Color.WHITE, false, null);
         }
     }
 
-    /** Позиция ячейки в НАТИВНЫХ пикселях маски — сеточная позиция плюс свободное
-     *  мм-смещение (см. CabinetInstance.getOffsetXMm/getOffsetYMm, Task #7/v1.6),
-     *  переведённое через {@link ScreenLogic#offsetPx} (тот же приём, что и в
-     *  SchemeRenderer/CanvasPanel/SceneCanvasPanel — независимая копия, здесь
-     *  масштаб пикселей другой: не экранный зум, а реальное разрешение маски). */
-    private static int cabX(CabinetInstance cab, CabinetType type, int cellW) {
-        double dx = type != null ? ScreenLogic.offsetPx(cab.getOffsetXMm(), cellW, type.getWidthMm()) : 0;
-        return (int) Math.round(cab.getColIndex() * cellW + dx);
-    }
-
-    private static int cabY(CabinetInstance cab, CabinetType type, int cellH) {
-        double dy = type != null ? ScreenLogic.offsetPx(cab.getOffsetYMm(), cellH, type.getHeightMm()) : 0;
-        return (int) Math.round(cab.getRowIndex() * cellH + dy);
-    }
-
     public static BufferedImage renderMask(Screen screen, CabinetType defaultType, Workspace workspace,
                                             GridRenderOptions opts) {
-        ScreenStats stats = ScreenLogic.stats(screen, defaultType, workspace);
-        int w = Math.max(1, stats.resolutionWidthPx());
-        int h = Math.max(1, stats.resolutionHeightPx());
+        MaskGeometry geo = MaskGeometry.of(screen, defaultType, workspace);
+        int w = geo.width();
+        int h = geo.height();
         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
         Graphics2D g2 = img.createGraphics();
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -120,30 +112,19 @@ public final class PixelGridRenderer {
         g2.setColor(Color.BLACK);
         g2.fillRect(0, 0, w, h);
 
-        int cellW = defaultType != null && screen.getCols() > 0 ? w / screen.getCols() : w;
-        int cellH = defaultType != null && screen.getRows() > 0 ? h / screen.getRows() : h;
+        int cellW = geo.cellW();
+        int cellH = geo.cellH();
         Font cellFont = g2.getFont().deriveFont(Font.BOLD, Math.max(10f, Math.min(cellW, cellH) * 0.16f));
 
         for (CabinetInstance cab : screen.getCabinets()) {
             if (cab.isHidden()) {
                 continue;
             }
-            int x = cabX(cab, defaultType, cellW);
-            int y = cabY(cab, defaultType, cellH);
+            int x = geo.cabinetX(cab);
+            int y = geo.cabinetY(cab);
 
-            g2.setColor(opts.background().color((cab.getRowIndex() + cab.getColIndex()) % 2));
+            g2.setColor((cab.getRowIndex() + cab.getColIndex()) % 2 == 0 ? opts.colorEven() : opts.colorOdd());
             g2.fillRect(x, y, cellW, cellH);
-
-            if (opts.showRaster()) {
-                g2.setColor(GRID_LINE);
-                g2.setStroke(new BasicStroke(1f));
-                for (int gx = x; gx <= x + cellW; gx += GRID_STEP_PX) {
-                    g2.drawLine(gx, y, gx, y + cellH);
-                }
-                for (int gy = y; gy <= y + cellH; gy += GRID_STEP_PX) {
-                    g2.drawLine(x, gy, x + cellW, gy);
-                }
-            }
 
             if (opts.showGrid()) {
                 g2.setColor(new Color(255, 255, 255, 200));
@@ -173,8 +154,7 @@ public final class PixelGridRenderer {
             drawLogo(g2, w, h, opts.logoImage());
         }
 
-        drawCenterLabel(g2, w, h, opts.displayName(),
-                stats.resolutionWidthPx() + "×" + stats.resolutionHeightPx() + " px", opts);
+        drawCenterLabel(g2, w, h, opts.displayName(), geo.sizeLabel(), opts);
 
         g2.dispose();
         return img;
@@ -231,8 +211,18 @@ public final class PixelGridRenderer {
         g2.drawImage(logo, w - lw - margin, h - lh - margin, lw, lh, null);
     }
 
+    /** Плашка с именем и/или разрешением по центру маски. 2026-09-30 (запрос пользователя:
+     *  «видимость плашки с именем экрана; отдельная галочка для разрешения на той же
+     *  плашке»): строки включаются независимо ({@link GridRenderOptions#showNameLabel()},
+     *  {@link GridRenderOptions#showResolution()}); обе выключены — плашки нет вовсе; одна
+     *  строка — плашка ужимается под неё (раньше высота всегда считалась на две строки). */
     private static void drawCenterLabel(Graphics2D g2, int w, int h, String name, String resolution,
                                          GridRenderOptions opts) {
+        boolean showName = opts.showNameLabel();
+        boolean showRes = opts.showResolution();
+        if (!showName && !showRes) {
+            return;
+        }
         float minNameSize = opts.largeGridNames() ? 26f : 18f;
         float nameScale = opts.largeGridNames() ? 0.065f : 0.045f;
         float nameSize = Math.max(minNameSize, w * nameScale);
@@ -247,7 +237,7 @@ public final class PixelGridRenderer {
         // влезает в кадр вообще (плашка вылезает за границы маски). Если посчитанная
         // так высота плашки не влезает в h -- пропорционально уменьшаем оба шрифта,
         // пока не впишется (с небольшим запасом).
-        int fitBoxH = nameFm.getHeight() + resFm.getHeight() + 36;
+        int fitBoxH = labelBoxHeight(nameFm, resFm, showName, showRes);
         float maxBoxH = h * 0.9f;
         if (fitBoxH > maxBoxH && fitBoxH > 0) {
             float shrink = maxBoxH / fitBoxH;
@@ -257,10 +247,10 @@ public final class PixelGridRenderer {
             resFm = g2.getFontMetrics(resFont);
         }
 
-        int nameW = nameFm.stringWidth(name);
-        int resW = resFm.stringWidth(resolution);
+        int nameW = showName ? nameFm.stringWidth(name) : 0;
+        int resW = showRes ? resFm.stringWidth(resolution) : 0;
         int boxW = Math.max(nameW, resW) + 60;
-        int boxH = nameFm.getHeight() + resFm.getHeight() + 36;
+        int boxH = labelBoxHeight(nameFm, resFm, showName, showRes);
         int boxX = (w - boxW) / 2;
         int boxY = (h - boxH) / 2;
 
@@ -274,22 +264,37 @@ public final class PixelGridRenderer {
         gb.drawRoundRect(boxX, boxY, boxW, boxH, 18, 18);
         gb.dispose();
 
-        int nameX = (w - nameW) / 2;
-        int nameY = boxY + 14 + nameFm.getAscent();
-        if (opts.dropShadow()) {
-            g2.setColor(new Color(0, 0, 0, 200));
+        int cursorY = boxY + 14;
+        if (showName) {
+            int nameX = (w - nameW) / 2;
+            int nameY = cursorY + nameFm.getAscent();
+            if (opts.dropShadow()) {
+                g2.setColor(new Color(0, 0, 0, 200));
+                g2.setFont(nameFont);
+                g2.drawString(name, nameX + 2, nameY + 2);
+            }
+            g2.setColor(opts.textColor());
             g2.setFont(nameFont);
-            g2.drawString(name, nameX + 2, nameY + 2);
+            g2.drawString(name, nameX, nameY);
+            cursorY += nameFm.getHeight() + 6;
         }
-        g2.setColor(opts.textColor());
-        g2.setFont(nameFont);
-        g2.drawString(name, nameX, nameY);
+        if (showRes) {
+            int resX = (w - resW) / 2;
+            int resY = cursorY + resFm.getAscent();
+            g2.setColor(new Color(0xc0, 0xc8, 0xd0));
+            g2.setFont(resFont);
+            g2.drawString(resolution, resX, resY);
+        }
+    }
 
-        int resX = (w - resW) / 2;
-        int resY = boxY + 20 + nameFm.getHeight() + resFm.getAscent();
-        g2.setColor(new Color(0xc0, 0xc8, 0xd0));
-        g2.setFont(resFont);
-        g2.drawString(resolution, resX, resY);
+    /** Высота плашки под включённые строки. Для двух строк формула прежняя
+     *  ({@code nameH + resH + 36}), чтобы уже сгенерированные маски не поменяли вид;
+     *  для одной — её высота плюс те же поля (14 сверху + 14 снизу + запас). */
+    static int labelBoxHeight(FontMetrics nameFm, FontMetrics resFm, boolean showName, boolean showRes) {
+        if (showName && showRes) {
+            return nameFm.getHeight() + resFm.getHeight() + 36;
+        }
+        return (showName ? nameFm.getHeight() : resFm.getHeight()) + 30;
     }
 
     /** Маска целого канваса (компоновки контента): чёрный кадр размером с канвас,
@@ -364,17 +369,14 @@ public final class PixelGridRenderer {
             if (scr == null) {
                 continue;
             }
-            CabinetType type = model.typeOf(scr);
-            ScreenStats stats = ScreenLogic.stats(scr, type, model.getWorkspace());
-            int sw = Math.max(1, stats.resolutionWidthPx());
-            int sh = Math.max(1, stats.resolutionHeightPx());
-            int cellW = type != null && scr.getCols() > 0 ? sw / scr.getCols() : sw;
-            int cellH = type != null && scr.getRows() > 0 ? sh / scr.getRows() : sh;
+            // Размеры ячейки -- только через MaskGeometry (2026-09-30: экран-«сетка» даёт
+            // ячейки выше в N раз, и «дыры» должны совпадать с ними, а не с реальным разрешением).
+            MaskGeometry geo = MaskGeometry.of(scr, model.typeOf(scr), model.getWorkspace());
             for (CabinetInstance cab : scr.getCabinets()) {
                 if (cab.isHidden()) {
                     continue;
                 }
-                g2.fillRect(pl.getX() + cabX(cab, type, cellW), pl.getY() + cabY(cab, type, cellH), cellW, cellH);
+                g2.fillRect(pl.getX() + geo.cabinetX(cab), pl.getY() + geo.cabinetY(cab), geo.cellW(), geo.cellH());
             }
         }
         g2.dispose();
@@ -408,9 +410,9 @@ public final class PixelGridRenderer {
             if (scr == null) {
                 continue;
             }
-            ScreenStats stats = ScreenLogic.stats(scr, model.typeOf(scr), model.getWorkspace());
-            int sw = Math.max(1, stats.resolutionWidthPx());
-            int sh = Math.max(1, stats.resolutionHeightPx());
+            MaskGeometry geo = MaskGeometry.of(scr, model.typeOf(scr), model.getWorkspace());
+            int sw = geo.width();
+            int sh = geo.height();
             g2.setColor(new Color(255, 255, 255, 160));
             g2.drawRect(pl.getX(), pl.getY(), sw - 1, sh - 1);
             // Подписи экрана — второй/третьей строкой: первая строка в (0,0) занята
