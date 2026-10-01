@@ -41,6 +41,11 @@ public final class NetworkDeviceLabels {
         return "(устройство)";
     }
 
+    /** Узел ищется по id во ВСЕХ схемах сцены ({@code Scene#getSchemaNodes()} — плоский
+     *  список узлов всех листов, id уникальны): блок менеджера сети может быть связан с
+     *  узлом схемы сигнала, которая сейчас не открыта (несколько схем на сцену, запрос
+     *  2026-09-30). Если схему удалили вместе с узлом — {@code null}, и подпись берётся
+     *  из следующих источников (см. {@link #resolveLabel}), а не падает. */
     private static SchemaNode findSchemaNode(String id, AppModel model) {
         if (model.getCurrentScene() == null) {
             return null;

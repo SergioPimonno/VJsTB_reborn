@@ -337,9 +337,14 @@ public class NetworkManagerPanel extends JPanel {
                     JOptionPane.WARNING_MESSAGE);
             return;
         }
-        NetworkCanvasPanel.SchemaImportPreview preview = canvas.previewSchemaImport();
+        // Схем сигнала на сцене может быть несколько (запрос 2026-09-30, пункт 8) — диалог
+        // сам даёт выбрать схему (если их больше одной) и пересчитывает предпросмотр;
+        // по умолчанию — схема, открытая сейчас на этапе «Сигнал».
+        List<com.vjstb.ledscheme.model.SchemaSheet> signalSheets = model.schemaSheets(SchemaMode.SIGNAL);
+        com.vjstb.ledscheme.model.SchemaSheet currentSheet = model.currentSchemaSheet(SchemaMode.SIGNAL);
         SchemaImportDialog dlg = new SchemaImportDialog(
-                (java.awt.Window) javax.swing.SwingUtilities.getWindowAncestor(this), preview);
+                (java.awt.Window) javax.swing.SwingUtilities.getWindowAncestor(this), signalSheets,
+                currentSheet == null ? null : currentSheet.getId(), canvas::previewSchemaImport);
         if (!dlg.showDialog()) {
             return;
         }
@@ -532,7 +537,7 @@ public class NetworkManagerPanel extends JPanel {
         schemaSection.setBorder(BorderFactory.createTitledBorder("Узлы общей схемы сигнала"));
         schemaPaletteList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         schemaPaletteList.setCellRenderer((list, value, index, isSelected, cellHasFocus) ->
-                cellLabel(value.getLabel(), list, isSelected));
+                cellLabel(value.getLabel() + schemaSheetSuffix(value), list, isSelected));
         schemaPaletteList.setDragEnabled(true);
         schemaPaletteList.setTransferHandler(new TransferHandler() {
             @Override
@@ -704,7 +709,7 @@ public class NetworkManagerPanel extends JPanel {
         }
     }
 
-    /** Список узлов схемы для добавления — узлы сигнальной схемы текущей сцены, ЗА
+    /** Список узлов схемы для добавления — узлы ВСЕХ сигнальных схем текущей сцены, ЗА
      *  ВЫЧЕТОМ экранов (баг-репорт: "у экранов самих по себе айпишников нет, их
      *  добавлять не нужно в этом менеджере" — {@code SchemaNodeType.SCREEN}
      *  единственный тип, у которого в принципе нет сетевого адреса, остальные
@@ -727,14 +732,35 @@ public class NetworkManagerPanel extends JPanel {
                         .map(NetworkDevicePlacement::getLinkedSchemaNodeId)
                         .filter(Objects::nonNull)
                         .collect(Collectors.toSet());
-        for (SchemaNode node : model.schemaNodesForCurrentScene(SchemaMode.SIGNAL)) {
-            if (node.getType() != SchemaNodeType.SCREEN && !usedAnywhere.contains(node.getId())) {
-                schemaPaletteModel.addElement(node);
+        // Узлы ВСЕХ схем сигнала сцены, а не только открытой: план менеджера один на
+        // сцену, и устройство второй схемы сигнала так же должно быть доступно для
+        // перетаскивания, как первой (после появления нескольких схем на сцену, запрос
+        // 2026-09-30, палитра по «текущей схеме» прятала бы устройства остальных).
+        for (com.vjstb.ledscheme.model.SchemaSheet sheet : model.schemaSheets(SchemaMode.SIGNAL)) {
+            for (SchemaNode node : model.schemaNodesOfSheet(model.getCurrentScene(), sheet.getId())) {
+                if (node.getType() != SchemaNodeType.SCREEN && !usedAnywhere.contains(node.getId())) {
+                    schemaPaletteModel.addElement(node);
+                }
             }
         }
         if (selected != null) {
             schemaPaletteList.setSelectedValue(selected, true);
         }
+    }
+
+    /** « · Название схемы» для узла палитры, если схем сигнала на сцене несколько —
+     *  одинаково подписанные блоки разных схем иначе не отличить (запрос 2026-09-30). */
+    private String schemaSheetSuffix(SchemaNode node) {
+        List<com.vjstb.ledscheme.model.SchemaSheet> sheets = model.schemaSheets(SchemaMode.SIGNAL);
+        if (sheets.size() < 2) {
+            return "";
+        }
+        for (com.vjstb.ledscheme.model.SchemaSheet sheet : sheets) {
+            if (sheet.getId().equals(node.getSheetId())) {
+                return "  · " + sheet.getName();
+            }
+        }
+        return "";
     }
 
     private void refreshPaletteAvailability() {
