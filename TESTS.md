@@ -634,3 +634,19 @@ multi-controller сцена — префикс контроллера по ин�
   старые файлы настроек без поля версии; версия переживает перезапуск.
 - `ui/WhatsNewResourceTest` (1): `whats-new.html` соответствует `AppInfo.VERSION`
   (напоминание обновить страницу «Что нового» при выпуске версии).
+
+### Рама основания под всей башней (Round 25, багфикс 2026-10-01)
+См. `STRUCTURE_CALC_NOTES.md` Round 25.
+- `service/StructureCalcTest.totalBaseSectionsIsWholeModulesAndNeverShorterThanTowerFootprint`:
+  глубина базы — целые модули `1 + ⌈(вынос − 500)/500⌉`, но не меньше footprint'а
+  башни (2 модуля с задним рядом, 1 без); выносы 0…3500 мм, не кратные 500.
+- `AppModelTest.baseFramesCoverWholeTowerAndEveryRequestedOverhangSectionAcrossRecalculations`:
+  порядок вызовов «Предварительного расчёта», 2/3/5 столбов, с типом рамы и без,
+  повторные пересчёты на одном экране (рост и уменьшение выноса) — число видимых
+  секций в каждом зазоре, `structureExtendedBaseSections`, усилительные рамы только
+  над настоящим выносом, `baseFrameCount` спецификации.
+- `AppModelTest.towerWithoutBackRowKeepsStrictlyOneMandatoryBaseModule`: без заднего
+  ряда правило Round 19 («обязательная часть — строго 500 мм») не изменилось.
+- Обновлены: `updateScreenStructureSeedsFullUniformGrid` (база 1 → 2 секции),
+  `toggleStructureFrameCellSupportsRow2ReinforcementInExtensionSection` (вынос 1500,
+  усилительная рама в секции 2).
