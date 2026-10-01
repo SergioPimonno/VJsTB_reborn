@@ -323,6 +323,13 @@ public class UserProfile {
      *  не нужно выбирать файл заново на каждом канвасе. null — логотип не задан. */
     private String maskLogoImagePath;
 
+    /** Разрешение превью масок на этапе «Генерация масок» — имя константы
+     *  {@code ui.MaskPreviewResolution} (FULL/HALF/THIRD/QUARTER/EIGHTH/AUTO), как
+     *  «Resolution» в After Effects. Запрос 2026-09-30 (решение D7): после снятия предела 16k
+     *  превью больше не держится в полном разрешении. По умолчанию «Авто» — маска рисуется
+     *  в размере отображения; старые профили без поля получают его же. */
+    private String maskPreviewResolution = "AUTO";
+
     /** Корневая папка по умолчанию для экспортов (маски/пресеты/пакет документации,
      *  см. {@code ui.OutputPaths#defaultFolder}) — {@code null}/пусто = встроенный
      *  дефолт {@code ~/Documents/Video} (запрос пользователя: "добавить путь по
@@ -882,6 +889,15 @@ public class UserProfile {
         this.maskLogoImagePath = maskLogoImagePath;
     }
 
+    public String getMaskPreviewResolution() {
+        return maskPreviewResolution == null || maskPreviewResolution.isBlank() ? "AUTO" : maskPreviewResolution;
+    }
+
+    public void setMaskPreviewResolution(String maskPreviewResolution) {
+        this.maskPreviewResolution = maskPreviewResolution == null || maskPreviewResolution.isBlank()
+                ? "AUTO" : maskPreviewResolution;
+    }
+
     public String getExportRootFolder() {
         return exportRootFolder;
     }
@@ -1028,6 +1044,7 @@ public class UserProfile {
         p.loadTrackingEnabled = loadTrackingEnabled;
         p.powerUnitKw = powerUnitKw;
         p.maskLogoImagePath = maskLogoImagePath;
+        p.maskPreviewResolution = maskPreviewResolution;
         p.exportRootFolder = exportRootFolder;
         p.powerSceneStatsEnabled = powerSceneStatsEnabled;
         p.signalSceneStatsEnabled = signalSceneStatsEnabled;

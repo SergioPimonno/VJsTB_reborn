@@ -4481,10 +4481,16 @@ public class AppModel {
         return currentScene == null ? List.of() : currentScene.getCanvases();
     }
 
+    /** 2026-09-30 (запрос пользователя, решение D7): прежний предел 16384 px на сторону был
+     *  только в спиннерах UI; теперь сторона до {@link MaskLimits#MAX_SIDE_PX} допустима
+     *  (≥ {@link MaskLimits#WARN_SIDE_PX} — лишь предупреждение в UI), больше — отказ здесь,
+     *  в модели, чтобы ни один путь в обход спиннеров не создал канвас, который нельзя
+     *  экспортировать в After Effects. */
     public ContentCanvas addCanvas(String name, int widthPx, int heightPx) {
         if (currentScene == null) {
             throw new IllegalStateException("Не выбрана сцена");
         }
+        MaskLimits.checkCanvasSize(widthPx, heightPx);
         pushUndo("Добавление канваса «" + name + "»");
         ContentCanvas c = new ContentCanvas();
         c.setName(name);
@@ -4495,7 +4501,9 @@ public class AppModel {
         return c;
     }
 
+    /** Предел стороны — как у {@link #addCanvas} (см. его javadoc). */
     public void updateCanvas(ContentCanvas canvas, String name, int widthPx, int heightPx) {
+        MaskLimits.checkCanvasSize(widthPx, heightPx);
         pushUndo("Правка канваса «" + canvas.getName() + "»");
         canvas.setName(name);
         canvas.setWidthPx(Math.max(1, widthPx));

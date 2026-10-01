@@ -6,6 +6,7 @@ import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.MaskGeometry;
+import com.vjstb.ledscheme.service.MaskLimits;
 
 /**
  * Генератор .jsx (ExtendScript) для Adobe After Effects — по прямому запросу пользователя:
@@ -88,6 +89,14 @@ public final class AfterEffectsJsxWriter {
             MaskGeometry geo = MaskGeometry.of(scr, model.typeOf(scr), model.getWorkspace());
             int w = geo.width();
             int h = geo.height();
+            if (MaskLimits.exceedsMax(w, h)) {
+                // 2026-09-30 (решение D7): маска больше 30000 px не экспортируется (это и предел
+                // композиции AE -- addComp такого размера упал бы), скрипт на неё не ссылается.
+                sb.append("    // ").append(jsComment(scr.getName())).append(": маска ").append(w).append("x").append(h)
+                        .append(" больше ").append(MaskLimits.MAX_SIDE_PX)
+                        .append(" px -- не экспортирована (предел After Effects)\n");
+                continue;
+            }
             String filename = maskFilename(sceneNameSanitized, scr, w, h);
             String name = scr.getName() + "_" + w + "x" + h;
             String v = safeVarName(scr.getId());
