@@ -26,58 +26,79 @@ import javax.swing.UIManager;
 public class App {
 
     public static void main(String[] args) {
+        // Лог запуска (запрос 2026-09-30, пункт 7 — «программа не открывается на
+        // диске D:»): под javaw/jpackage-лаунчером консоли нет, и причина отказа
+        // запуска раньше нигде не оставалась. Обработчик необработанных исключений
+        // ставится ДО invokeLater — он ловит и сбои на EDT, и в фоновых потоках.
+        StartupLog startupLog = StartupLog.forDefaultLocation();
+        startupLog.installUncaughtHandler();
+        startupLog.writeEnvironment();
         SwingUtilities.invokeLater(() -> {
-            // Настройки читаются ДО выбора L&F — стиль оформления (Тёмная/Светлая/
-            // Darcula/IntelliJ, см. ui.LafStyle) и шрифт персистентны по профилю,
-            // больше не жёстко FlatDarkLaf при каждом запуске.
-            SettingsManager settings = new SettingsManager(new SettingsStore());
-            UserProfile activeProfile = settings.activeProfile();
-            LafStyle style = LafStyle.byId(activeProfile.getLafStyle());
-            if (activeProfile.getFontFamily() != null) {
-                FlatLaf.setPreferredFontFamily(activeProfile.getFontFamily());
-            }
-            // Масштаб интерфейса (Персонализация → Стиль оформления) — свойство читается
-            // FlatLaf'ом ОДИН РАЗ при установке L&F ниже, поэтому применяется только со
-            // следующего запуска (см. PersonalizationDialog.buildStylePanel/UserProfile.uiScalePercent).
-            if (activeProfile.getUiScalePercent() != 100) {
-                System.setProperty("flatlaf.uiScale", activeProfile.getUiScalePercent() + "%");
-            }
             try {
-                UIManager.setLookAndFeel(style.createLaf());
-            } catch (Exception e) {
-                // не критично — останется системная тема
-            }
-            Palette.applyTheme(style.isDark());
-            try {
-                WorkspaceStore store = new WorkspaceStore();
-                AppModel model = new AppModel(store);
-                Palette.applyProfile(settings.activeProfile());
-                MainFrame frame = new MainFrame(model, settings);
-                frame.setVisible(true);
-                if (!settings.isOnboardingCompleted()) {
-                    new OnboardingDialog(frame, model, settings).setVisible(true);
-                }
-                // Одноразовый перенос устаревшей библиотеки контроллеров в пресеты
-                // оборудования (2026-09-23) — см. class-javadoc ControllerLibraryMigrationDialog.
-                // Показывается ТОЛЬКО когда реально есть что переносить — иначе (новый
-                // workspace, или перенос уже сделан ранее) сразу проставляем флаг без
-                // пустого диалога.
-                if (!settings.isControllerLibraryMigrated()) {
-                    if (model.controllerLibraryMigrationPreview().isEmpty()) {
-                        settings.setControllerLibraryMigrated(true);
-                    } else if (new ControllerLibraryMigrationDialog(frame, model).showDialog()) {
-                        settings.setControllerLibraryMigrated(true);
-                    }
-                }
-                checkForUpdatesInBackground(frame, settings);
-                syncLibraryInBackground(model, settings);
-            } catch (RuntimeException ex) {
+                startUi(startupLog);
+            } catch (Throwable ex) {
+                // Throwable, а не RuntimeException: сбой загрузки нативной
+                // библиотеки/класса (UnsatisfiedLinkError, NoClassDefFoundError) — это
+                // Error, а именно такие ошибки типичны для «не запускается на другой
+                // машине/диске». Путь к логу — в тексте диалога, чтобы пользователь
+                // мог сразу прислать файл.
+                startupLog.writeThrowable("Не удалось запустить приложение", ex);
                 JOptionPane.showMessageDialog(null,
-                        "Не удалось запустить приложение: " + ex.getMessage(),
+                        "Не удалось запустить приложение: " + ex
+                                + "\n\nПодробности записаны в файл:\n" + startupLog.file(),
                         "Ошибка", JOptionPane.ERROR_MESSAGE);
                 ex.printStackTrace();
             }
         });
+    }
+
+    private static void startUi(StartupLog startupLog) {
+        // Настройки читаются ДО выбора L&F — стиль оформления (Тёмная/Светлая/
+        // Darcula/IntelliJ, см. ui.LafStyle) и шрифт персистентны по профилю,
+        // больше не жёстко FlatDarkLaf при каждом запуске.
+        SettingsManager settings = new SettingsManager(new SettingsStore());
+        UserProfile activeProfile = settings.activeProfile();
+        LafStyle style = LafStyle.byId(activeProfile.getLafStyle());
+        if (activeProfile.getFontFamily() != null) {
+            FlatLaf.setPreferredFontFamily(activeProfile.getFontFamily());
+        }
+        // Масштаб интерфейса (Персонализация → Стиль оформления) — свойство читается
+        // FlatLaf'ом ОДИН РАЗ при установке L&F ниже, поэтому применяется только со
+        // следующего запуска (см. PersonalizationDialog.buildStylePanel/UserProfile.uiScalePercent).
+        if (activeProfile.getUiScalePercent() != 100) {
+            System.setProperty("flatlaf.uiScale", activeProfile.getUiScalePercent() + "%");
+        }
+        try {
+            UIManager.setLookAndFeel(style.createLaf());
+        } catch (Exception e) {
+            // не критично — останется системная тема
+        }
+        Palette.applyTheme(style.isDark());
+        WorkspaceStore store = new WorkspaceStore();
+        AppModel model = new AppModel(store);
+        Palette.applyProfile(settings.activeProfile());
+        MainFrame frame = new MainFrame(model, settings);
+        frame.setVisible(true);
+        // Отметка «окно показано» — если в логе есть заголовок запуска, но нет этой
+        // строки, значит старт оборвался до появления окна.
+        startupLog.write("Главное окно показано");
+        if (!settings.isOnboardingCompleted()) {
+            new OnboardingDialog(frame, model, settings).setVisible(true);
+        }
+        // Одноразовый перенос устаревшей библиотеки контроллеров в пресеты
+        // оборудования (2026-09-23) — см. class-javadoc ControllerLibraryMigrationDialog.
+        // Показывается ТОЛЬКО когда реально есть что переносить — иначе (новый
+        // workspace, или перенос уже сделан ранее) сразу проставляем флаг без
+        // пустого диалога.
+        if (!settings.isControllerLibraryMigrated()) {
+            if (model.controllerLibraryMigrationPreview().isEmpty()) {
+                settings.setControllerLibraryMigrated(true);
+            } else if (new ControllerLibraryMigrationDialog(frame, model).showDialog()) {
+                settings.setControllerLibraryMigrated(true);
+            }
+        }
+        checkForUpdatesInBackground(frame, settings);
+        syncLibraryInBackground(model, settings);
     }
 
     /** Проверка обновлений при запуске (см. class-javadoc update.VersionManifest) —
