@@ -231,8 +231,16 @@ public class AppModel {
         listeners.add(l);
     }
 
+    /** Отписка — для немодальных окон, создаваемых заново при каждом открытии (окно плана
+     *  пола {@code ui.FloorPlanDialog}, 2026-10-01): без неё каждое открытие оставляло бы
+     *  висящего слушателя. */
+    public void removeListener(Listener l) {
+        listeners.remove(l);
+    }
+
     private void fireChanged() {
-        for (Listener l : listeners) {
+        // Копия — слушатель может отписаться (закрыть своё окно) прямо из оповещения.
+        for (Listener l : new ArrayList<>(listeners)) {
             l.onModelChanged();
         }
     }
@@ -1449,14 +1457,45 @@ public class AppModel {
      *  {@code structureFrameTypeId}/{@code structureCupTypeId}, что и у наземного конструктива
      *  (одни и те же библиотечные записи; у экрана активен только один способ монтажа — см.
      *  javadoc {@code Screen#floorTeethPerCabinet}), поэтому ячейки башен и прочие поля
-     *  STRUCTURE здесь не трогаются. Число зубов зажимается в 2..4. Расстановка рам нигде не
-     *  хранится — {@link FloorCalc#compute} считает её заново от текущей формы экрана. */
+     *  STRUCTURE здесь не трогаются. Число зубов зажимается в 2..4.
+     *
+     * <p>С 2026-10-01 (3D-редактор пола) «Рассчитать пол» ещё и СОХРАНЯЕТ действующий список
+     *  рам {@link Screen#getFloorFrameCells()} — merge-not-overwrite ({@link
+     *  FloorCalc#mergeCells}): ручные правки в допустимых позициях сохраняются (включая
+     *  спрятанные рамы), новые позиции автоматики получают видимую запись, записи вне новой
+     *  сетки отбрасываются. Старый проект без списка получает его здесь впервые. В той же
+     *  записи отмены. */
     public void updateScreenFloor(Screen screen, String frameTypeId, String cupTypeId, int teethPerCabinet) {
         pushUndo("Правка напольного каркаса экрана");
         screen.setStructureFrameTypeId(frameTypeId);
         screen.setStructureCupTypeId(cupTypeId);
         screen.setFloorTeethPerCabinet(teethPerCabinet);
+        screen.setFloorFrameCells(FloorCalc.effectiveCells(screen,
+                FloorCalc.layout(screen, typeOf(screen), getWorkspace())));
         changed();
+    }
+
+    /** Правка 3D-редактора пола (запрос 2026-10-01, {@code ui.FloorPlan3DPanel}): клик по раме
+     *  прячет её, Ctrl+клик по «призраку» возвращает/добавляет — логика в {@link
+     *  FloorCalc#toggle}. Своя запись отмены (Ctrl+Z, по образцу {@link
+     *  #toggleStructureFrameCell}); откат списка рам — {@code ScreenLogic#restore}. Снимок отмены
+     *  берётся с ТЕКУЩЕГО экрана, поэтому правка разрешена только для него — иначе Ctrl+Z
+     *  откатил бы не тот экран. Недопустимая позиция — ничего не меняет и не пишет отмену.
+     *
+     * @return {@code true}, если рама переключилась. */
+    public boolean toggleFloorFrameCell(Screen screen, int row, int col) {
+        if (screen == null || screen != currentScreen) {
+            return false;
+        }
+        CabinetType type = typeOf(screen);
+        FloorCalc.Layout layout = FloorCalc.layout(screen, type, getWorkspace());
+        if (!FloorCalc.canToggle(layout, FloorCalc.effectiveCells(screen, layout), row, col)) {
+            return false;
+        }
+        pushUndo("Правка рамы напольного каркаса");
+        boolean done = FloorCalc.toggle(screen, type, getWorkspace(), row, col);
+        changed();
+        return done;
     }
 
     /** Точечно включает/выключает ОДИН сегмент вертикальной рамы башни, в переднем ИЛИ заднем

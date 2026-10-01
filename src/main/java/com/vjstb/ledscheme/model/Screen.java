@@ -228,6 +228,13 @@ public class Screen {
      *  единой правки. */
     private int floorTeethPerCabinet = 4;
 
+    /** Рамы напольного каркаса (запрос 2026-10-01 — 3D-редактор пола, см. {@link FloorFrameCell}
+     *  и раздел «Напольный каркас» в STRUCTURE_CALC_NOTES.md). Пустой список (старые проекты,
+     *  экран ещё не считали) = «только автоматическая расстановка», как было до редактора;
+     *  заполняется при «Рассчитать пол» ({@code AppModel#updateScreenFloor}) и правках в 3D
+     *  ({@code AppModel#toggleFloorFrameCell}), не напрямую сеттером. */
+    private List<FloorFrameCell> floorFrameCells = new ArrayList<>();
+
     /** Контроллеры, обслуживающие экран (может быть несколько). Если список не пуст,
      *  суммарное число их портов определяет доступные порты сигнала вместо signalPortCount. */
     private List<ControllerInstance> controllers = new ArrayList<>();
@@ -673,6 +680,14 @@ public class Screen {
         this.floorTeethPerCabinet = clampFloorTeeth(floorTeethPerCabinet);
     }
 
+    public List<FloorFrameCell> getFloorFrameCells() {
+        return floorFrameCells;
+    }
+
+    public void setFloorFrameCells(List<FloorFrameCell> floorFrameCells) {
+        this.floorFrameCells = floorFrameCells != null ? floorFrameCells : new ArrayList<>();
+    }
+
     /** Та же граница 2..4, что {@code service.FloorCalc#clampTeeth} — продублирована здесь,
      *  чтобы модель не зависела от сервисного слоя. */
     private static int clampFloorTeeth(int v) {
@@ -805,6 +820,12 @@ public class Screen {
             s.structureBaseFrameCells.add(copy);
         }
         s.floorTeethPerCabinet = floorTeethPerCabinet;
+        // Глубокая копия с hidden/manual — тот же урок, что у structureFrameCells выше:
+        // поверхностная копия делила бы записи между снимком отмены и живым экраном.
+        s.floorFrameCells = new ArrayList<>();
+        for (FloorFrameCell c : floorFrameCells) {
+            s.floorFrameCells.add(c.copy());
+        }
         s.controllers = new ArrayList<>();
         for (ControllerInstance c : controllers) {
             s.controllers.add(c.copy());
