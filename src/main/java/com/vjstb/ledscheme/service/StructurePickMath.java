@@ -100,4 +100,59 @@ public final class StructurePickMath {
         }
         return tMin >= 0 ? tMin : tMax;
     }
+
+    /** Локальная система раздельной башни изогнутого экрана (запрос 2026-10-01, см. {@link
+     *  StructureCurveMath}): {@code world = anchor + Rot_y(yawDeg)·(local − localOffset)}, где
+     *  {@code Rot_y} — тот же поворот, что {@code glRotate(yawDeg, 0, 1, 0)} ({@code x' = x·cos
+     *  + z·sin}, {@code z' = −x·sin + z·cos}). {@code localOffset} — точка «плоской» сетки
+     *  3D-панели, которая попадает в {@code anchor} (середина передней плоскости башни): так
+     *  код кандидатов панели строит рамы в прежних координатах стены, а этот слой переносит и
+     *  поворачивает башню целиком. {@link #IDENTITY} — прямой экран с зазором 0, ничего не
+     *  меняется. */
+    public record YawTransform(double anchorX, double anchorZ, double yawDeg, double localOffsetX,
+            double localOffsetZ) {
+
+        public static final YawTransform IDENTITY = new YawTransform(0, 0, 0, 0, 0);
+
+        public boolean isIdentity() {
+            return anchorX == 0 && anchorZ == 0 && yawDeg == 0 && localOffsetX == 0 && localOffsetZ == 0;
+        }
+
+        public Vec3 toWorld(Vec3 local) {
+            double a = Math.toRadians(yawDeg);
+            double cos = Math.cos(a);
+            double sin = Math.sin(a);
+            double x = local.x() - localOffsetX;
+            double z = local.z() - localOffsetZ;
+            return new Vec3(anchorX + x * cos + z * sin, local.y(), anchorZ - x * sin + z * cos);
+        }
+
+        public Vec3 toLocal(Vec3 world) {
+            Vec3 d = rotateInverse(new Vec3(world.x() - anchorX, world.y(), world.z() - anchorZ));
+            return new Vec3(d.x() + localOffsetX, d.y(), d.z() + localOffsetZ);
+        }
+
+        /** Направление (без переноса) в локальную систему. */
+        public Vec3 rotateInverse(Vec3 v) {
+            double a = Math.toRadians(yawDeg);
+            double cos = Math.cos(a);
+            double sin = Math.sin(a);
+            return new Vec3(v.x() * cos - v.z() * sin, v.y(), v.x() * sin + v.z() * cos);
+        }
+
+        public Ray toLocal(Ray ray) {
+            return new Ray(toLocal(ray.origin()), rotateInverse(ray.direction()));
+        }
+    }
+
+    /** Луч против ПОВЁРНУТОЙ коробки (OBB): луч переводится в локальную систему башни, там —
+     *  обычный {@link #intersectAabb}. Поворот ортонормированный, поэтому {@code t} (расстояние
+     *  вдоль луча) совпадает с мировым и сравним с попаданиями в другие башни.
+     *  {@code transform == null} или единичный — ровно {@link #intersectAabb}. */
+    public static Double intersectObb(Ray ray, Vec3 boxMin, Vec3 boxMax, YawTransform transform) {
+        if (transform == null || transform.isIdentity()) {
+            return intersectAabb(ray, boxMin, boxMax);
+        }
+        return intersectAabb(transform.toLocal(ray), boxMin, boxMax);
+    }
 }

@@ -46,6 +46,7 @@ import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.SchemaNode;
 import com.vjstb.ledscheme.model.SchemaNodeType;
 import com.vjstb.ledscheme.model.SchemaSheet;
+import com.vjstb.ledscheme.model.ScreenCurveType;
 import com.vjstb.ledscheme.model.ScreenGroup;
 import com.vjstb.ledscheme.model.ScreenMountType;
 import com.vjstb.ledscheme.model.ScreenTagColor;
@@ -1352,7 +1353,37 @@ public class AppModel {
                                        int peremychkaLevels, double baseExtensionMm, double ballastRatio,
                                        String frameTypeId, String cupTypeId, String ballastTypeId,
                                        double screenElevationMm, String notes) {
+        updateScreenStructure(screen, towerHeightMm, towerCount, verticalFramesPerTower, backRowSegments,
+                peremychkaLevels, baseExtensionMm, ballastRatio, frameTypeId, cupTypeId, ballastTypeId,
+                screenElevationMm, notes, screen.getStructureCurveType(), screen.getStructureCurveRadiusMm(),
+                screen.isStructureCurveByAngle(), screen.getStructureTowerGapMm(),
+                screen.getStructureSeparateTowerCount());
+    }
+
+    /** То же, плюс форма экрана и раздельные башни (запрос 2026-10-01, см. {@link
+     *  StructureCurveMath}) — одной записью отмены. Прежняя 13-аргументная версия делегирует
+     *  сюда с ТЕКУЩИМИ значениями экрана, т.е. для прямого экрана с зазором 0 (значения по
+     *  умолчанию) всё считается ровно как раньше.
+     *
+     * <p><b>Число башен</b>: в раздельном режиме ({@link StructureCurveMath#separateTowers})
+     *  параметр {@code towerCount} (число СТОЛБОВ стены, его по-прежнему предлагает {@link
+     *  StructureCalc#suggestTowerCount}) игнорируется — столбов ставится {@code 2 × n}, где
+     *  {@code n} — {@code separateTowerCount} пользователя или, если там 0, авто-подбор {@link
+     *  StructureCurveMath#suggestTowerCount}; {@code Screen.structureTowerCount} сохраняет
+     *  именно число столбов (как и раньше — его читают 3D-панель и регенерация). */
+    public void updateScreenStructure(Screen screen, double towerHeightMm,
+                                       int towerCount, int verticalFramesPerTower, int backRowSegments,
+                                       int peremychkaLevels, double baseExtensionMm, double ballastRatio,
+                                       String frameTypeId, String cupTypeId, String ballastTypeId,
+                                       double screenElevationMm, String notes,
+                                       ScreenCurveType curveType, double curveRadiusMm, boolean curveByAngle,
+                                       double towerGapMm, int separateTowerCount) {
         pushUndo("Правка наземного конструктива экрана");
+        screen.setStructureCurveType(curveType);
+        screen.setStructureCurveRadiusMm(curveRadiusMm);
+        screen.setStructureCurveByAngle(curveByAngle);
+        screen.setStructureTowerGapMm(towerGapMm);
+        screen.setStructureSeparateTowerCount(separateTowerCount);
         screen.setStructureTowerHeightMm(towerHeightMm);
         screen.setStructureTowerCount(towerCount);
         screen.setStructureVerticalFramesPerTower(verticalFramesPerTower);
@@ -1386,8 +1417,29 @@ public class AppModel {
         int totalBaseSections = StructureCalc.totalBaseSections(baseExtensionMm, frameW, backRowSegments);
         int extendedBaseSections = totalBaseSections - StructureCalc.CORE_BASE_SECTION_COUNT;
         screen.setStructureExtendedBaseSections(extendedBaseSections);
-        ScreenLogic.regenerateStructureCells(screen, typeOf(screen), towerCount, verticalFramesPerTower,
-                backRowSegments, peremychkaLevels, totalBaseSections - footprintSections, footprintSections);
+        CabinetType cabinetType = typeOf(screen);
+        List<double[]> separateSpans = null;
+        int posts = towerCount;
+        if (StructureCurveMath.separateTowers(screen)) {
+            // Раздельные башни (2026-10-01): число башен -- пользовательское или авто, столбов
+            // вдвое больше; отрезки экрана под каждой башней -- для правила «нет кабинетов
+            // нижнего ряда -- башня не строится».
+            StructureCurveMath.Curve curve = StructureCurveMath.curveOf(screen, cabinetType);
+            StructureCurveMath.TowerSpec spec = StructureCurveMath.towerSpecOf(screen, getWorkspace());
+            double gap = StructureCurveMath.effectiveGapMm(screen.getStructureCurveType(),
+                    screen.getStructureTowerGapMm());
+            int n = separateTowerCount > 0 ? separateTowerCount
+                    : StructureCurveMath.suggestTowerCount(curve, spec, gap);
+            posts = 2 * n;
+            separateSpans = new ArrayList<>();
+            for (int k = 0; k < n; k++) {
+                separateSpans.add(StructureCurveMath.towerScreenSpanMm(curve, spec, n, gap, k));
+            }
+        }
+        screen.setStructureTowerCount(posts);
+        ScreenLogic.regenerateStructureCells(screen, cabinetType, posts, verticalFramesPerTower,
+                backRowSegments, peremychkaLevels, totalBaseSections - footprintSections, footprintSections,
+                separateSpans);
         changed();
     }
 
