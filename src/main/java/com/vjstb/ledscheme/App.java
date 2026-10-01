@@ -82,7 +82,7 @@ public class App {
         // Отметка «окно показано» — если в логе есть заголовок запуска, но нет этой
         // строки, значит старт оборвался до появления окна.
         startupLog.write("Главное окно показано");
-        if (!settings.isOnboardingCompleted()) {
+        if (settings.isOnboardingDue(AppInfo.VERSION)) {
             new OnboardingDialog(frame, model, settings).setVisible(true);
         }
         // Одноразовый перенос устаревшей библиотеки контроллеров в пресеты

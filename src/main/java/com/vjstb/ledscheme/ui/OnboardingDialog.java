@@ -34,7 +34,11 @@ import javax.swing.UIManager;
  */
 public class OnboardingDialog extends JDialog {
 
-    private static final String[] STEPS = {"welcome", "workflow", "theme", "personalization"};
+    /** «whatsnew» — страница «Что нового» после обновления, «scenarios» — последний
+     *  шаг с переходом к интерактивным сценариям (запрос 2026-10-01: человек сам их
+     *  вряд ли найдёт, поэтому тур заканчивается открытием списка сценариев). */
+    private static final String[] STEPS = {"welcome", "whatsnew", "workflow", "theme", "personalization",
+            "scenarios"};
 
     /** Шаги «welcome»/«workflow»/«personalization» — текст (заголовок+тело), общая
      *  справочная данные (Task #135/v2.0), редактируется только через отдельную
@@ -78,7 +82,7 @@ public class OnboardingDialog extends JDialog {
     private final JPanel cardsPanel = new JPanel(cards);
     private final JButton back = new JButton("Назад");
     private final JButton next = new JButton("Далее");
-    private final JButton finish = new JButton("Готово");
+    private final JButton finish = new JButton("Открыть интерактивные сценарии");
     private final AppModel model;
     private final SettingsManager settings;
     private javax.swing.JScrollPane welcomePanel;
@@ -92,7 +96,9 @@ public class OnboardingDialog extends JDialog {
         this.settings = settings;
 
         rebuildTextSteps();
-        cardsPanel.add(scrollWrap(buildThemeStep(owner)), STEPS[2]);
+        cardsPanel.add(scrollWrap(buildWhatsNewStep()), STEPS[1]);
+        cardsPanel.add(scrollWrap(buildThemeStep(owner)), STEPS[3]);
+        cardsPanel.add(scrollWrap(buildScenariosStep()), STEPS[5]);
 
         JPanel content = new JPanel(new BorderLayout());
         content.add(cardsPanel, BorderLayout.CENTER);
@@ -100,14 +106,17 @@ public class OnboardingDialog extends JDialog {
         JPanel nav = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 8));
         JButton skip = new JButton("Пропустить");
         skip.addActionListener(e -> {
-            settings.setOnboardingCompleted(true);
+            settings.markOnboardingDone(AppInfo.VERSION);
             dispose();
         });
         back.addActionListener(e -> goTo(step - 1));
         next.addActionListener(e -> goTo(step + 1));
+        // «Принудительный» переход (запрос 2026-10-01): последняя кнопка тура не просто
+        // закрывает окно, а сразу открывает список интерактивных сценариев.
         finish.addActionListener(e -> {
-            settings.setOnboardingCompleted(true);
+            settings.markOnboardingDone(AppInfo.VERSION);
             dispose();
+            ScenarioListDialog.show(owner, model.getWorkspace().getLibrary().getInteractiveScenarios());
         });
         nav.add(skip);
         nav.add(back);
@@ -116,7 +125,7 @@ public class OnboardingDialog extends JDialog {
         content.add(nav, BorderLayout.SOUTH);
 
         setContentPane(content);
-        setSize(480, 420);
+        setSize(520, 440);
         setLocationRelativeTo(owner);
         goTo(0);
     }
@@ -143,13 +152,13 @@ public class OnboardingDialog extends JDialog {
             cardsPanel.remove(workflowPanel);
         }
         workflowPanel = scrollWrap(step(s.get(1).getTitle(), s.get(1).getBodyHtml()));
-        cardsPanel.add(workflowPanel, STEPS[1]);
+        cardsPanel.add(workflowPanel, STEPS[2]);
 
         if (personalizationPanel != null) {
             cardsPanel.remove(personalizationPanel);
         }
         personalizationPanel = scrollWrap(step(s.get(2).getTitle(), s.get(2).getBodyHtml()));
-        cardsPanel.add(personalizationPanel, STEPS[3]);
+        cardsPanel.add(personalizationPanel, STEPS[4]);
     }
 
     private void goTo(int newStep) {
@@ -228,6 +237,51 @@ public class OnboardingDialog extends JDialog {
         scroll.setBorder(BorderFactory.createEmptyBorder());
         scroll.getVerticalScrollBar().setUnitIncrement(16);
         return scroll;
+    }
+
+    /** Страница «Что нового в vX» — текст лежит в ресурсе {@code whats-new.html} (его надо
+     *  обновлять при каждом релизе, см. {@code WhatsNewResourceTest}); внизу — ссылка на
+     *  полный журнал изменений. */
+    private JPanel buildWhatsNewStep() {
+        JPanel p = step("Что нового в v" + AppInfo.VERSION, loadWhatsNewHtml());
+        JButton full = new JButton("Полный журнал изменений…");
+        full.addActionListener(e -> {
+            try {
+                java.awt.Desktop.getDesktop().browse(java.net.URI.create(AppInfo.REPOSITORY_URL
+                        + "/blob/master/CHANGELOG.md"));
+            } catch (Exception ex) {
+                javax.swing.JOptionPane.showMessageDialog(this, AppInfo.REPOSITORY_URL
+                        + "/blob/master/CHANGELOG.md", "Журнал изменений", javax.swing.JOptionPane.INFORMATION_MESSAGE);
+            }
+        });
+        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        row.setBorder(BorderFactory.createEmptyBorder(10, 0, 0, 0));
+        row.add(full);
+        p.add(row, BorderLayout.CENTER);
+        return p;
+    }
+
+    /** Текст страницы «Что нового» из ресурса; без ресурса — короткая заглушка, чтобы
+     *  тур не падал из-за отсутствующего файла. */
+    static String loadWhatsNewHtml() {
+        try (java.io.InputStream in = OnboardingDialog.class.getResourceAsStream("/whats-new.html")) {
+            if (in != null) {
+                return new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            }
+        } catch (java.io.IOException ignored) {
+            // ниже вернём заглушку
+        }
+        return "Список изменений этой версии — по кнопке ниже.";
+    }
+
+    private JPanel buildScenariosStep() {
+        return step("Интерактивные сценарии",
+                "Лучший способ освоить программу — пройти интерактивные сценарии: пошаговые подсказки "
+                + "показывают по самому интерфейсу, что и где нажимать, от создания сцены до итогового пакета "
+                + "документации."
+                + "<br><br>Нажмите кнопку ниже — откроется список сценариев. Начните с первого: на всё уйдёт "
+                + "несколько минут, зато дальше вы не будете искать нужные функции."
+                + "<br><br>Список всегда доступен в меню «Настройки → Интерактивные примеры» и из «Руководства».");
     }
 
     private JPanel buildThemeStep(Window owner) {
