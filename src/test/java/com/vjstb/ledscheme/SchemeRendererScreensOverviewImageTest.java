@@ -1,5 +1,6 @@
 package com.vjstb.ledscheme;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.vjstb.ledscheme.model.CabinetType;
@@ -74,6 +75,74 @@ class SchemeRendererScreensOverviewImageTest {
         BufferedImage imgWide = SchemeRenderer.renderScreensOverviewImage("Зал", model, List.of(veryWide), 1.0);
 
         assertTrue(imgWide.getWidth() > imgNarrow.getWidth());
+    }
+
+
+    private static boolean hasPixelNear(BufferedImage img, java.awt.Color target, int tolerance) {
+        for (int y = 0; y < img.getHeight(); y++) {
+            for (int x = 0; x < img.getWidth(); x++) {
+                java.awt.Color c = new java.awt.Color(img.getRGB(x, y));
+                if (Math.abs(c.getRed() - target.getRed()) <= tolerance
+                        && Math.abs(c.getGreen() - target.getGreen()) <= tolerance
+                        && Math.abs(c.getBlue() - target.getBlue()) <= tolerance) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Запрос 2026-10-01: в экспорте экранов разные типы кабинетов выделяются цветом (тот же
+     *  стабильный цвет по id типа, что на холсте сцены), а справа в углу стоит панель с
+     *  легендой типов и статистикой сцены. */
+    @Test
+    void differentCabinetTypesAreTintedAndLegendPanelIsAddedOnTheRight(@TempDir Path dir) {
+        AppModel model = model(dir);
+        CabinetType a = model.addCabinetType(type("P3 500x500", 500, 500, 128, 128, 12));
+        CabinetType b = model.addCabinetType(type("P2.6 500x1000", 500, 1000, 192, 384, 20));
+        Screen sa = model.addScreen("Экран A", a.getId(), 3, 4, 0, 0);
+        Screen sb = model.addScreen("Экран B", b.getId(), 2, 4, 3000, 0);
+
+        BufferedImage twoTypes = SchemeRenderer.renderScreensOverviewImage("Зал", model, List.of(sa, sb), 1.0);
+        BufferedImage oneType = SchemeRenderer.renderScreensOverviewImage("Зал", model, List.of(sa), 1.0);
+
+        java.awt.Color bg = com.vjstb.ledscheme.ui.Palette.BG;
+        for (CabinetType t : List.of(a, b)) {
+            java.awt.Color base = com.vjstb.ledscheme.ui.Palette.stableColorFor(t.getId());
+            // заливка 150/255 поверх фона (ниже в тесте — допуск на сглаживание и линии сетки)
+            java.awt.Color blended = new java.awt.Color(
+                    (base.getRed() * 150 + bg.getRed() * 105) / 255,
+                    (base.getGreen() * 150 + bg.getGreen() * 105) / 255,
+                    (base.getBlue() * 150 + bg.getBlue() * 105) / 255);
+            assertTrue(hasPixelNear(twoTypes, blended, 6), "кабинеты типа " + t.getName() + " должны быть закрашены");
+            assertTrue(hasPixelNear(twoTypes, new java.awt.Color(base.getRed(), base.getGreen(), base.getBlue()), 6),
+                    "в легенде есть квадратик цвета типа " + t.getName());
+        }
+        // единственный тип — заливки нет (она ничего бы не различала)
+        java.awt.Color baseA = com.vjstb.ledscheme.ui.Palette.stableColorFor(a.getId());
+        java.awt.Color blendedA = new java.awt.Color(
+                (baseA.getRed() * 150 + bg.getRed() * 105) / 255,
+                (baseA.getGreen() * 150 + bg.getGreen() * 105) / 255,
+                (baseA.getBlue() * 150 + bg.getBlue() * 105) / 255);
+        assertFalse(hasPixelNear(oneType, blendedA, 3), "при одном типе кабинеты не закрашиваются");
+    }
+
+    /** Область примечаний вдвое уже (420 → 210), освободившееся место отдано панели справа:
+     *  длинное примечание обрезается по новой ширине, а картинка не шире прежней на всю
+     *  ширину панели. */
+    @Test
+    void longNotesAreClippedToTheNarrowerColumn(@TempDir Path dir) {
+        AppModel model = model(dir);
+        CabinetType t = model.addCabinetType(type("P3 500x500", 500, 500, 128, 128, 12));
+        Screen shortNotes = model.addScreen("Экран 1", t.getId(), 2, 2, 0, 0);
+        Screen longNotes = model.addScreen("Экран 2", t.getId(), 2, 2, 0, 0);
+        longNotes.setNotes("очень длинное примечание ".repeat(30));
+
+        BufferedImage imgShort = SchemeRenderer.renderScreensOverviewImage("Зал", model, List.of(shortNotes), 1.0);
+        BufferedImage imgLong = SchemeRenderer.renderScreensOverviewImage("Зал", model, List.of(longNotes), 1.0);
+
+        int growth = imgLong.getWidth() - imgShort.getWidth();
+        assertTrue(growth <= 210, "колонка примечаний ограничена 210 px, рост ширины " + growth);
     }
 
     @Test
