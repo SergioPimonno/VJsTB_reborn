@@ -168,6 +168,22 @@ public class SetupStagePanel extends JPanel {
     /** 0 = экран стоит на земле. */
     private final JTextField pStructureScreenElevation = new JTextField(6);
     private final JTextField pStructureNotes = new JTextField(10);
+    // ---- изогнутые экраны (запрос 2026-10-01, service.StructureCurveMath) ----
+    // Форма экрана и раздельные башни. Как и остальные поля блока, сохраняются в Screen по
+    // «Предварительному расчёту»; подсказка ниже пересчитывается сразу при правке полей.
+    private static final String CURVE_BY_RADIUS = "радиусом, мм";
+    private static final String CURVE_BY_ANGLE = "углом между кабинетами, °";
+    private final JComboBox<com.vjstb.ledscheme.model.ScreenCurveType> pStructureCurveType =
+            new JComboBox<>(com.vjstb.ledscheme.model.ScreenCurveType.values());
+    private final JComboBox<String> pStructureCurveMode = new JComboBox<>(new String[]{CURVE_BY_RADIUS, CURVE_BY_ANGLE});
+    /** Значение изгиба в единицах {@link #pStructureCurveMode}: радиус (мм) или угол (°). */
+    private final JSpinner pStructureCurveValue = new JSpinner(new SpinnerNumberModel(10_000.0, 0.1, 1_000_000.0, 500.0));
+    private final JSpinner pStructureTowerGap = new JSpinner(new SpinnerNumberModel(0.0, 0.0, 50_000.0, 100.0));
+    private final JSpinner pStructureSeparateTowers = new JSpinner(new SpinnerNumberModel(0, 0, 200, 1));
+    private final JLabel structureCurveHint = new JLabel();
+    /** Режим, в котором сейчас показано {@link #pStructureCurveValue} — чтобы при смене способа
+     *  ввода пересчитать уже введённое число, а не потерять его. */
+    private String shownCurveMode = CURVE_BY_RADIUS;
     private final JButton toggle3DBtn = new JButton("Показать 3D");
     /** Отдельное всплывающее окно (не встроенная панель — баг-репорт "вынеси в отдельное
      *  окно, как калькулятор видеотайминга", см. {@code ui.Structure3DDialog}), ленивое —
@@ -1451,6 +1467,7 @@ public class SetupStagePanel extends JPanel {
                 + " всегда есть рама основания.</html>");
         structureFieldsPanel.add(UiKit.formRow("Вынос базы под балласт, мм", pStructureBaseExtension));
         structureFieldsPanel.add(UiKit.vgap());
+        buildStructureCurveRows();
 
         setStructureFrameRenderer(pStructureFrameType);
         setStructureFrameRenderer(pStructureCupType);
@@ -2353,6 +2370,184 @@ public class SetupStagePanel extends JPanel {
         return sel instanceof com.vjstb.ledscheme.model.StructureFrameType t ? t.getId() : null;
     }
 
+    // ---- изогнутые экраны / раздельные башни (запрос 2026-10-01) ----
+
+    /** Строки «Форма экрана» / «Изгиб задан» / значение / «Зазор между башнями» / «Число
+     *  башен» + подсказка с производными величинами и предупреждениями — в блоке «Наземный
+     *  конструктив», сразу под выносом базы. Поля изгиба неактивны у прямого экрана, «Число
+     *  башен» — пока башни не раздельные (прямой экран с зазором 0 строится стеной). */
+    private void buildStructureCurveRows() {
+        pStructureCurveType.setName("structureCurveType");
+        pStructureCurveMode.setName("structureCurveMode");
+        pStructureCurveValue.setName("structureCurveValue");
+        pStructureTowerGap.setName("structureTowerGap");
+        pStructureSeparateTowers.setName("structureSeparateTowers");
+        structureCurveHint.setName("structureCurveHint");
+        pStructureCurveType.setToolTipText("<html>Изгиб экрана по горизонтали (по вертикали экран всегда прямой)."
+                + "<br>Вогнутый — центр кривизны со стороны зрителя, выпуклый — за экраном. Изогнутый экран"
+                + " строится раздельными башнями (по 2 столба) с зазором не меньше 500 мм, каждая башня"
+                + " повёрнута по дуге. Кабинеты, маски, сигнал и питание изгибом не затрагиваются.</html>");
+        pStructureCurveMode.setToolTipText("Как задан изгиб: радиусом лицевой поверхности или углом между"
+                + " соседними кабинетами (R = w / (2·sin(θ/2))). Хранится радиус, показывается то, что вводили.");
+        pStructureCurveValue.setToolTipText("Радиус к ЛИЦЕВОЙ поверхности экрана, мм, или угол между соседними"
+                + " кабинетами, градусы — см. «Изгиб задан».");
+        pStructureTowerGap.setToolTipText("<html>Зазор между раздельными башнями, мм (по тыльной поверхности экрана)."
+                + "<br>Прямой экран: 0 — башни стеной с общими столбами (как раньше), от 500 — раздельные башни."
+                + "<br>Изогнутый экран: всегда раздельные башни, зазор не меньше 500 мм.</html>");
+        pStructureSeparateTowers.setToolTipText("Число раздельных башен (каждая — 2 столба, перемычки и основание"
+                + " между ними). 0 — авто: сколько помещается вдоль экрана с заданным зазором.");
+        structureFieldsPanel.add(UiKit.formRow("Форма экрана", pStructureCurveType));
+        structureFieldsPanel.add(UiKit.vgap());
+        structureFieldsPanel.add(UiKit.formRow("Изгиб задан", pStructureCurveMode));
+        structureFieldsPanel.add(UiKit.vgap());
+        structureFieldsPanel.add(UiKit.formRow("Радиус / угол", pStructureCurveValue));
+        structureFieldsPanel.add(UiKit.vgap());
+        structureFieldsPanel.add(UiKit.formRow("Зазор между башнями, мм", pStructureTowerGap));
+        structureFieldsPanel.add(UiKit.vgap());
+        structureFieldsPanel.add(UiKit.formRow("Число башен (0 — авто)", pStructureSeparateTowers));
+        structureFieldsPanel.add(UiKit.vgap());
+        structureCurveHint.setForeground(Palette.MUTED);
+        structureCurveHint.setAlignmentX(Component.LEFT_ALIGNMENT);
+        structureFieldsPanel.add(structureCurveHint);
+        structureFieldsPanel.add(UiKit.vgap());
+
+        pStructureCurveType.addActionListener(e -> updateStructureCurveUi());
+        pStructureCurveMode.addActionListener(e -> {
+            convertCurveValueToMode((String) pStructureCurveMode.getSelectedItem());
+            updateStructureCurveUi();
+        });
+        pStructureCurveValue.addChangeListener(e -> updateStructureCurveUi());
+        pStructureTowerGap.addChangeListener(e -> updateStructureCurveUi());
+        pStructureSeparateTowers.addChangeListener(e -> updateStructureCurveUi());
+        pStructureBaseExtension.addChangeListener(e -> updateStructureCurveUi());
+        pStructureFrameType.addActionListener(e -> updateStructureCurveUi());
+    }
+
+    /** Ширина кабинета текущего экрана — для пересчёта угла ↔ радиуса. */
+    private double currentCabinetWidthMm() {
+        Screen scr = model.getCurrentScreen();
+        CabinetType t = scr != null ? model.typeOf(scr) : null;
+        return t != null && t.getWidthMm() > 0 ? t.getWidthMm() : 500;
+    }
+
+    /** Смена способа ввода изгиба: уже введённое число пересчитывается в новые единицы (радиус
+     *  ↔ угол), а не теряется и не трактуется буквально в чужих единицах. */
+    private void convertCurveValueToMode(String newMode) {
+        if (newMode == null || newMode.equals(shownCurveMode)) {
+            return;
+        }
+        double radius = structureCurveRadiusFromForm();
+        shownCurveMode = newMode;
+        setCurveValueForRadius(radius);
+    }
+
+    /** Показывает радиус {@code radiusMm} в текущем способе ввода. */
+    private void setCurveValueForRadius(double radiusMm) {
+        SpinnerNumberModel m = (SpinnerNumberModel) pStructureCurveValue.getModel();
+        if (CURVE_BY_ANGLE.equals(shownCurveMode)) {
+            double deg = com.vjstb.ledscheme.service.StructureCurveMath.cabinetAngleDeg(currentCabinetWidthMm(), radiusMm);
+            m.setStepSize(0.5);
+            m.setValue(Double.isNaN(deg) ? 5.0 : Math.max(0.1, Math.round(deg * 100) / 100.0));
+        } else {
+            m.setStepSize(500.0);
+            m.setValue((double) Math.round(radiusMm));
+        }
+    }
+
+    /** Радиус лицевой поверхности, мм, из формы (угол пересчитывается через ширину кабинета). */
+    private double structureCurveRadiusFromForm() {
+        double v = ((Number) pStructureCurveValue.getValue()).doubleValue();
+        if (CURVE_BY_ANGLE.equals(shownCurveMode)) {
+            double r = com.vjstb.ledscheme.service.StructureCurveMath.radiusFromCabinetAngle(currentCabinetWidthMm(), v);
+            return Double.isNaN(r) ? Screen.DEFAULT_CURVE_RADIUS_MM : r;
+        }
+        return v > 0 ? v : Screen.DEFAULT_CURVE_RADIUS_MM;
+    }
+
+    private com.vjstb.ledscheme.model.ScreenCurveType selectedCurveType() {
+        Object sel = pStructureCurveType.getSelectedItem();
+        return sel instanceof com.vjstb.ledscheme.model.ScreenCurveType t ? t
+                : com.vjstb.ledscheme.model.ScreenCurveType.FLAT;
+    }
+
+    /** Заполняет поля изгиба из экрана (при выборе экрана/ребилде). */
+    private void populateStructureCurveFields(Screen scr) {
+        pStructureCurveType.setSelectedItem(scr.getStructureCurveType());
+        shownCurveMode = scr.isStructureCurveByAngle() ? CURVE_BY_ANGLE : CURVE_BY_RADIUS;
+        pStructureCurveMode.setSelectedItem(shownCurveMode);
+        setCurveValueForRadius(scr.getStructureCurveRadiusMm());
+        pStructureTowerGap.setValue(scr.getStructureTowerGapMm());
+        pStructureSeparateTowers.setValue(scr.getStructureSeparateTowerCount());
+    }
+
+    /** Активность полей и текст подсказки: производные величины изгиба (радиус, угол между
+     *  кабинетами, угол дуги, хорда, стрела прогиба), число/ширина/зазор башен и
+     *  предупреждения {@link com.vjstb.ledscheme.service.StructureCurveMath#analyze} — по ТЕКУЩИМ
+     *  значениям формы (ещё не сохранённым), на черновой копии экрана. */
+    private void updateStructureCurveUi() {
+        com.vjstb.ledscheme.model.ScreenCurveType curveType = selectedCurveType();
+        double gap = ((Number) pStructureTowerGap.getValue()).doubleValue();
+        boolean separate = com.vjstb.ledscheme.service.StructureCurveMath.separateTowers(curveType, gap);
+        pStructureCurveMode.setEnabled(curveType.isCurved());
+        pStructureCurveValue.setEnabled(curveType.isCurved());
+        pStructureSeparateTowers.setEnabled(separate);
+        structureCurveHint.setText(structureCurveHintText());
+    }
+
+    /** Текст подсказки (HTML) — вынесен отдельно, чтобы его можно было проверить в тесте. */
+    String structureCurveHintText() {
+        Screen scr = model.getCurrentScreen();
+        com.vjstb.ledscheme.model.ScreenCurveType curveType = selectedCurveType();
+        double rawGap = ((Number) pStructureTowerGap.getValue()).doubleValue();
+        if (scr == null) {
+            return "";
+        }
+        if (!com.vjstb.ledscheme.service.StructureCurveMath.separateTowers(curveType, rawGap)) {
+            return "<html><div style='width:260px'>Прямой экран без зазора: башни стоят стеной с общими"
+                    + " столбами (перемычки и основание между всеми соседними столбами).</div></html>";
+        }
+        CabinetType type = model.typeOf(scr);
+        Screen preview = scr.copy();
+        preview.setStructureCurveType(curveType);
+        preview.setStructureCurveRadiusMm(structureCurveRadiusFromForm());
+        double gap = com.vjstb.ledscheme.service.StructureCurveMath.effectiveGapMm(curveType, rawGap);
+        preview.setStructureTowerGapMm(gap);
+        preview.setStructureSeparateTowerCount(((Number) pStructureSeparateTowers.getValue()).intValue());
+        preview.setStructureBaseExtensionMm(((Number) pStructureBaseExtension.getValue()).doubleValue());
+        preview.setStructureFrameTypeId(structureFrameTypeId(pStructureFrameType));
+        com.vjstb.ledscheme.model.StructureFrameType frameType = model.getWorkspace()
+                .structureFrameTypeById(preview.getStructureFrameTypeId());
+        double frameH = frameType != null && frameType.getHeightMm() != null && frameType.getHeightMm() > 0
+                ? frameType.getHeightMm() : 950.0;
+        preview.setStructureBackRowSegments(com.vjstb.ledscheme.service.StructureCalc.suggestBackRowSegments(frameH));
+        preview.setStructureExtendedBaseSections(0);
+        preview.setStructureTowerCount(0);
+        preview.setStructureFrameCells(new ArrayList<>());
+        preview.setStructurePeremychkaCells(new ArrayList<>());
+        preview.setStructureBaseFrameCells(new ArrayList<>());
+        com.vjstb.ledscheme.service.StructureCurveMath.Report report = com.vjstb.ledscheme.service.StructureCurveMath
+                .analyze(com.vjstb.ledscheme.service.StructureCurveMath.setupOf(preview, type, model.getWorkspace()));
+        com.vjstb.ledscheme.service.StructureCurveMath.Curve c = report.setup().curve();
+        com.vjstb.ledscheme.service.StructureCurveMath.TowerSpec t = report.setup().tower();
+        StringBuilder sb = new StringBuilder("<html><div style='width:260px'>");
+        if (c.curved()) {
+            sb.append(String.format("R = %.0f мм, угол между кабинетами %.2f°, дуга %.1f°, хорда %.0f мм,"
+                            + " стрела прогиба %.0f мм.<br>", c.radiusMm(), Math.toDegrees(c.cabinetAngleRad()),
+                    Math.toDegrees(c.arcAngleRad()), c.chordMm(), c.sagittaMm()));
+        }
+        int userCount = ((Number) pStructureSeparateTowers.getValue()).intValue();
+        sb.append(String.format("Башен: %d%s (по 2 столба), ширина башни %.0f мм, глубина %.0f мм, зазор %.0f мм",
+                report.setup().towerCount(), userCount > 0 ? "" : " (авто)", t.outerWidthMm(), t.depthMm(), gap));
+        if (rawGap < gap) {
+            sb.append(String.format(" (введено %.0f — меньше минимума)", rawGap));
+        }
+        sb.append('.');
+        for (String w : report.warnings()) {
+            sb.append("<br><b>⚠</b> ").append(w);
+        }
+        return sb.append("</div></html>").toString();
+    }
+
     /** Пересчитывает количество железа наземного конструктива (см. {@code StructureCalc})
      *  для выбранного экрана: башни/сегменты рамы/уровни перемычек/секции выноса
      *  вычисляются ПОЛНОСТЬЮ формулами-подсказками (см. {@code StructureCalc.suggestXxx})
@@ -2394,9 +2589,24 @@ public class SetupStagePanel extends JPanel {
                 com.vjstb.ledscheme.service.StructureCalc.suggestPeremychkaLevels(backRowHeightMm, frameHeightMm);
         double screenHeightMm = screenType != null ? scr.getRows() * screenType.getHeightMm() : 0;
 
+        // Изогнутый экран / раздельные башни (2026-10-01): зазор меньше минимума поднимается до
+        // 500 мм прямо в поле (у прямого экрана 0 остаётся 0 -- это стена), чтобы сохранённое
+        // значение совпадало с тем, по которому реально строятся башни.
+        com.vjstb.ledscheme.model.ScreenCurveType curveType = selectedCurveType();
+        double rawGap = ((Number) pStructureTowerGap.getValue()).doubleValue();
+        double towerGap = com.vjstb.ledscheme.service.StructureCurveMath.effectiveGapMm(curveType, rawGap);
+        if (towerGap != rawGap) {
+            pStructureTowerGap.setValue(towerGap);
+        }
         model.updateScreenStructure(scr, towerHeight, towers, vertical,
                 backRowSegments, peremychkaLevels, baseExtensionMm, ballastRatio, frameTypeId,
-                cupTypeId, ballastTypeId, screenElevation, pStructureNotes.getText());
+                cupTypeId, ballastTypeId, screenElevation, pStructureNotes.getText(), curveType,
+                structureCurveRadiusFromForm(), CURVE_BY_ANGLE.equals(shownCurveMode), towerGap,
+                ((Number) pStructureSeparateTowers.getValue()).intValue());
+        boolean separate = com.vjstb.ledscheme.service.StructureCurveMath.separateTowers(scr);
+        if (separate) {
+            towers = scr.getStructureTowerCount();
+        }
         // 3D-окно не подписано на модель (см. Structure3DPanel#refresh() javadoc) -- если оно
         // уже открыто, без этого явного вызова пересчёт не отразился бы в картинке, пока
         // пользователь не закроет и не откроет окно заново (баг-репорт).
@@ -2414,8 +2624,12 @@ public class SetupStagePanel extends JPanel {
         // а не только введённое число -- иначе "ввёл 500, а построено 1000" выглядит как сбой.
         int baseSections = com.vjstb.ledscheme.service.StructureCalc.CORE_BASE_SECTION_COUNT
                 + scr.getStructureExtendedBaseSections();
-        msg.append(String.format("Стартовая сетка построена: %d башен, %d сегментов переднего ряда, %d заднего,"
-                + " %d уровней перемычек, вынос базы %.0f мм (база: %d секц. = %.0f мм в глубину).%n", towers,
+        String towersText = separate
+                ? String.format("%d раздельных башен (%d столбов, зазор %.0f мм, %s экран)", towers / 2, towers,
+                        towerGap, curveType.getLabel().toLowerCase())
+                : towers + " башен";
+        msg.append(String.format("Стартовая сетка построена: %s, %d сегментов переднего ряда, %d заднего,"
+                + " %d уровней перемычек, вынос базы %.0f мм (база: %d секц. = %.0f мм в глубину).%n", towersText,
                 vertical, backRowSegments, peremychkaLevels, baseExtensionMm, baseSections,
                 baseSections * (frameType != null && frameType.getWidthMm() != null && frameType.getWidthMm() > 0
                         ? frameType.getWidthMm() : com.vjstb.ledscheme.service.StructureCalc.DEFAULT_FRAME_WIDTH_MM)));
@@ -2431,8 +2645,12 @@ public class SetupStagePanel extends JPanel {
             msg.append(String.format("%n%nВНИМАНИЕ: высота башни %.0f мм превышает высоту экрана %.0f мм —"
                     + " башня должна быть не выше экрана!%n", result.totalTowerHeightMm(), screenHeightMm));
         }
+        for (String w : result.curveWarnings()) {
+            msg.append(String.format("%n%nВНИМАНИЕ: %s", w));
+        }
+        boolean warnCurve = !result.curveWarnings().isEmpty();
         JOptionPane.showMessageDialog(this, msg.toString(), "Стартовая сетка построена",
-                (warnSafe || warnScreen) ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE);
+                (warnSafe || warnScreen || warnCurve) ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE);
     }
 
     /** Ведомость материалов конструктива по РЕАЛЬНО расставленным в 3D деталям (не по
@@ -2463,6 +2681,9 @@ public class SetupStagePanel extends JPanel {
         if (result.requiredBallastKg() > 0) {
             msg.append(String.format("Отгрузов: %d (≈%.1f кг балласта)%n",
                     result.ballastContainerCount(), result.requiredBallastKg()));
+        }
+        for (String w : result.curveWarnings()) {
+            msg.append("\nВНИМАНИЕ: ").append(w).append('\n');
         }
         msg.append("\nЭтот же список войдёт в общую спецификацию проекта (лист «Конструктив») на этапе «Вывод».");
         msg.append("\nТребует независимой инженерной перепроверки перед монтажом — см. STRUCTURE_CALC_NOTES.md.");
@@ -3075,6 +3296,8 @@ public class SetupStagePanel extends JPanel {
                 pStructureScreenElevation.setText(scr.getStructureScreenElevationMm() > 0
                         ? UiKit.fmt(scr.getStructureScreenElevationMm()) : "");
                 pStructureNotes.setText(scr.getStructureNotes() != null ? scr.getStructureNotes() : "");
+                populateStructureCurveFields(scr);
+                updateStructureCurveUi();
                 populateStructureFrameCombo(pFloorFrameType,
                         com.vjstb.ledscheme.model.StructureFrameType.Kind.FRAME, scr.getStructureFrameTypeId());
                 populateStructureFrameCombo(pFloorCupType,
