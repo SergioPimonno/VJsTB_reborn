@@ -407,6 +407,22 @@ public class SettingsManager {
         persist();
     }
 
+    /** Нужно ли показать приветственный тур при запуске: в первый раз, а также после
+     *  каждого обновления — когда версия, на которой его закрывали, не совпадает с
+     *  текущей (запрос 2026-10-01). Пользователям, поставившим обновление поверх
+     *  старых настроек (поля версии ещё нет), тур тоже покажется один раз. */
+    public boolean isOnboardingDue(String currentVersion) {
+        return !settings.isOnboardingCompleted()
+                || !java.util.Objects.equals(settings.getOnboardingSeenVersion(), currentVersion);
+    }
+
+    /** Тур пройден или пропущен на версии {@code currentVersion} — одним сохранением. */
+    public void markOnboardingDone(String currentVersion) {
+        settings.setOnboardingCompleted(true);
+        settings.setOnboardingSeenVersion(currentVersion);
+        persist();
+    }
+
     public boolean isControllerLibraryMigrated() {
         return settings.isControllerLibraryMigrated();
     }

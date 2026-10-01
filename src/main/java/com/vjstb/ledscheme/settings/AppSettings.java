@@ -92,6 +92,21 @@ public class AppSettings {
         return onboardingCompleted;
     }
 
+    /** Версия приложения ({@code AppInfo.VERSION}), на которой пользователь в последний
+     *  раз дошёл до конца приветственного тура или пропустил его. null — у файлов
+     *  настроек, сохранённых до появления поля: для них тур покажется один раз после
+     *  обновления (запрос 2026-10-01: приветствие снова после каждого обновления — там
+     *  страница «Что нового» и переход к интерактивным сценариям). */
+    private String onboardingSeenVersion;
+
+    public String getOnboardingSeenVersion() {
+        return onboardingSeenVersion;
+    }
+
+    public void setOnboardingSeenVersion(String onboardingSeenVersion) {
+        this.onboardingSeenVersion = onboardingSeenVersion;
+    }
+
     public void setOnboardingCompleted(boolean onboardingCompleted) {
         this.onboardingCompleted = onboardingCompleted;
     }
