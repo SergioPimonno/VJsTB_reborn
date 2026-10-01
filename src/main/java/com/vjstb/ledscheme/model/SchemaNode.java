@@ -90,6 +90,14 @@ public class SchemaNode {
      *  — используется стандартный размер (см. {@code SchemaLayoutMetrics}/шрифты
      *  {@code SchemaCanvasPanel} по умолчанию). */
     private Integer fontSize;
+    /** Лист (блок-схема, {@link SchemaSheet#getId()}) сцены, на котором стоит узел —
+     *  запрос пользователя 2026-09-30, несколько схем на сцену. {@code null} или
+     *  ссылка на несуществующий лист — узел из старого проекта (до листов) или
+     *  пересохранённый старым клиентом: миграция ({@code service.SchemaSheetMigration})
+     *  относит его к ПЕРВОМУ листу своего режима. Координаты {@link #x}/{@link #y}
+     *  в памяти — ЛОКАЛЬНЫЕ для листа (сдвиг раскладки листов в файле, решение D5,
+     *  применяется/снимается только при (де)сериализации в {@link Scene}). */
+    private String sheetId;
 
     public SchemaNode() {
     }
@@ -274,6 +282,14 @@ public class SchemaNode {
         this.fontSize = fontSize;
     }
 
+    public String getSheetId() {
+        return sheetId;
+    }
+
+    public void setSheetId(String sheetId) {
+        this.sheetId = sheetId;
+    }
+
     public SchemaNode copy() {
         SchemaNode n = new SchemaNode();
         n.id = id;
@@ -305,6 +321,7 @@ public class SchemaNode {
         n.onlyUsedPorts = onlyUsedPorts;
         n.networkDeviceTypeId = networkDeviceTypeId;
         n.fontSize = fontSize;
+        n.sheetId = sheetId;
         return n;
     }
 }

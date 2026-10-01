@@ -3907,13 +3907,13 @@ public class SchemaCanvasPanel extends JPanel {
         List<Color> colors = new ArrayList<>();
         if (scene != null) {
             if (mode == SchemaMode.SIGNAL) {
-                for (InterfaceRole role : model.lineLegendRoles(scene)) {
+                for (InterfaceRole role : model.lineLegendRoles(scene, n.getSheetId())) {
                     Color c = style.roleLineColor(role);
                     labels.add(role.getLabel());
                     colors.add(c != null ? c : style.defaultEdgeColor);
                 }
             } else {
-                for (String nominal : model.lineLegendPowerNominals(scene)) {
+                for (String nominal : model.lineLegendPowerNominals(scene, n.getSheetId())) {
                     Color c = style.powerNominalLineColor(nominal);
                     labels.add(nominal);
                     colors.add(c != null ? c : style.defaultEdgeColor);
