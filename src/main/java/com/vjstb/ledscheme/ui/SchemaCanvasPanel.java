@@ -2086,9 +2086,11 @@ public class SchemaCanvasPanel extends JPanel {
 
     /** Шрифт подписи ЭТОЙ связи — {@link EDGE_FONT}, изменённый на {@link
      *  SchemaEdge#getFontSize()}, если размер задан вручную через контекстное меню
-     *  линии («Размер шрифта…»), иначе стандартный {@link #EDGE_FONT} как раньше. */
-    private static Font edgeFont(SchemaEdge edge) {
-        Integer size = edge.getFontSize();
+     *  линии («Размер шрифта…»), иначе на умолчание схемы для линий («Шрифт схемы…»,
+     *  запрос 2026-09-30, пункт 1), иначе стандартный {@link #EDGE_FONT} как раньше.
+     *  Разрешение — единое, {@link AppModel#schemaEdgeFontSizeOverride}. */
+    private Font edgeFont(SchemaEdge edge) {
+        Integer size = model.schemaEdgeFontSizeOverride(edge);
         return size != null ? EDGE_FONT.deriveFont((float) size) : EDGE_FONT;
     }
 
@@ -2251,7 +2253,7 @@ public class SchemaCanvasPanel extends JPanel {
         }
         javax.swing.JMenuItem fontSizeItem = new javax.swing.JMenuItem("Размер шрифта…");
         fontSizeItem.addActionListener(ev -> promptFontSize("Размер шрифта подписи шины",
-                sharedFontSize(hit.edges()), size -> {
+                sharedFontSize(hit.edges()), schemeEdgeFontSize(), size -> {
                     model.setSchemaEdgesFontSize(hit.edges(), size);
                     onChanged.run();
                     repaint();
@@ -2644,7 +2646,7 @@ public class SchemaCanvasPanel extends JPanel {
             selectedNodes.clear();
             selectSingleEdge(chipHit);
             repaint();
-            promptFontSize("Размер шрифта подписи связи", chipHit.getFontSize(), size -> {
+            promptFontSize("Размер шрифта подписи связи", chipHit.getFontSize(), schemeEdgeFontSize(), size -> {
                 model.setSchemaEdgeFontSize(chipHit, size);
                 onChanged.run();
                 repaint();
@@ -3015,7 +3017,7 @@ public class SchemaCanvasPanel extends JPanel {
         }
         menu.addSeparator();
         javax.swing.JMenuItem fontSizeItem = new javax.swing.JMenuItem("Размер шрифта…");
-        fontSizeItem.addActionListener(ev -> promptFontSize("Размер шрифта блока", node.getFontSize(), size -> {
+        fontSizeItem.addActionListener(ev -> promptFontSize("Размер шрифта блока", node.getFontSize(), schemeNodeFontSize(), size -> {
             model.setSchemaNodesFontSize(List.of(node), size);
             onChanged.run();
             repaint();
@@ -3108,17 +3110,37 @@ public class SchemaCanvasPanel extends JPanel {
                 "Готово", JOptionPane.INFORMATION_MESSAGE);
     }
 
+    /** Размер шрифта блоков ТЕКУЩЕЙ схемы по умолчанию (то, к чему возвращает «0 —
+     *  как у схемы» в диалоге «Размер шрифта…» блока), запрос 2026-09-30, пункт 1. */
+    private int schemeNodeFontSize() {
+        com.vjstb.ledscheme.model.SchemaSheet sheet = model.currentSchemaSheet(mode);
+        Integer d = sheet != null ? sheet.getDefaultFontSize() : null;
+        return d != null ? d : com.vjstb.ledscheme.service.schemalayout.SchemaLayoutMetrics.LABEL_FONT_SIZE;
+    }
+
+    /** То же для подписей линий текущей схемы. */
+    private int schemeEdgeFontSize() {
+        com.vjstb.ledscheme.model.SchemaSheet sheet = model.currentSchemaSheet(mode);
+        Integer d = sheet != null ? sheet.getDefaultEdgeFontSize() : null;
+        return d != null ? d : com.vjstb.ledscheme.service.schemalayout.SchemaFontSizes.EDGE_FONT_SIZE;
+    }
+
     /** Диалог «Размер шрифта…» — общий для пункта меню узла и связи (docs/schema-
      *  ports-rework — размер шрифта переехал из библиотеки/админ-консоли сюда,
-     *  задаётся per-instance прямо на холсте). Спиннер 0..72, 0 = «стандартный
-     *  размер» ({@code null} в модели) — {@code apply} вызывается только по ОК,
+     *  задаётся per-instance прямо на холсте). Спиннер 0..72, 0 = «как у схемы»
+     *  ({@code null} в модели; {@code schemeSize} — этот размер для подписи) — {@code apply} вызывается только по ОК,
      *  отмена диалога ничего не меняет. */
-    private void promptFontSize(String title, Integer current, java.util.function.Consumer<Integer> apply) {
+    private void promptFontSize(String title, Integer current, int schemeSize,
+                                java.util.function.Consumer<Integer> apply) {
         javax.swing.SpinnerNumberModel spinnerModel =
                 new javax.swing.SpinnerNumberModel(current != null ? current : 0, 0, 72, 1);
         javax.swing.JSpinner spinner = new javax.swing.JSpinner(spinnerModel);
         JPanel panel = new JPanel(new java.awt.BorderLayout(6, 6));
-        panel.add(new javax.swing.JLabel("Размер шрифта, пункты (0 — стандартный):"), java.awt.BorderLayout.WEST);
+        // «0 — как у схемы» (запрос 2026-09-30, пункт 1): с появлением «Шрифта схемы…»
+        // ноль больше не «стандартный», а «не переопределять размер схемы»; сам
+        // размер схемы показываем в подписи, чтобы было понятно, к чему вернётся блок
+        panel.add(new javax.swing.JLabel("Размер шрифта, пункты (0 — как у схемы, сейчас " + schemeSize + "):"),
+                java.awt.BorderLayout.WEST);
         panel.add(spinner, java.awt.BorderLayout.CENTER);
         int result = JOptionPane.showConfirmDialog(this, panel, title, JOptionPane.OK_CANCEL_OPTION,
                 JOptionPane.PLAIN_MESSAGE);
@@ -3178,7 +3200,7 @@ public class SchemaCanvasPanel extends JPanel {
         }
 
         javax.swing.JMenuItem fontSizeItem = new javax.swing.JMenuItem("Размер шрифта…");
-        fontSizeItem.addActionListener(ev -> promptFontSize("Размер шрифта подписи связи", edge.getFontSize(), size -> {
+        fontSizeItem.addActionListener(ev -> promptFontSize("Размер шрифта подписи связи", edge.getFontSize(), schemeEdgeFontSize(), size -> {
             model.setSchemaEdgeFontSize(edge, size);
             onChanged.run();
             repaint();
@@ -4101,10 +4123,12 @@ public class SchemaCanvasPanel extends JPanel {
     }
 
     /** Шрифт заголовка блока — {@link SchemaNode#getFontSize()}+2pt (жирный), если
-     *  размер задан вручную через контекстное меню блока («Размер шрифта…»), иначе
+     *  размер задан вручную через контекстное меню блока («Размер шрифта…») ИЛИ
+     *  для всей схемы («Шрифт схемы…», запрос 2026-09-30, пункт 1 — тогда это размер
+     *  схемы, см. {@link AppModel#schemaNodeFontSizeOverride}), иначе
      *  стандартные 12pt (как метка/гнёзда узла — см. {@link #nodeMetaFont}). */
     private Font nodeTitleFont(SchemaNode n) {
-        Integer size = n.getFontSize();
+        Integer size = model.schemaNodeFontSizeOverride(n);
         return getFont().deriveFont(Font.BOLD, size != null ? size + 2f : 12f);
     }
 
@@ -4112,7 +4136,7 @@ public class SchemaCanvasPanel extends JPanel {
      *  SchemaNode#getFontSize()}, если задан, иначе стандартные 10pt. Тот же размер
      *  передаётся в {@link #drawNodeSockets} для подписей гнёзд/карт этого узла. */
     private Font nodeMetaFont(SchemaNode n) {
-        Integer size = n.getFontSize();
+        Integer size = model.schemaNodeFontSizeOverride(n);
         return getFont().deriveFont(size != null ? (float) size : 10f);
     }
 
@@ -4157,8 +4181,9 @@ public class SchemaCanvasPanel extends JPanel {
                 case ALWAYS_EXPANDED -> Boolean.FALSE;
                 case AUTO -> null;
             };
-            int labelFontSize = node.getFontSize() != null ? node.getFontSize()
-                    : com.vjstb.ledscheme.service.schemalayout.SchemaLayoutMetrics.LABEL_FONT_SIZE;
+            // тот же размер, что у отрисовки подписей и у AppModel.autoFitNodeToPorts —
+            // иначе гнёзда разложатся под один шрифт, а подписаны будут другим
+            int labelFontSize = model.effectiveNodeFontSize(node);
             var in = new com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Input(mode, node.getType(),
                     orientation, groups, edges(), node.getPortPlacements(), node.isOnlyUsedPorts(), defaultCollapsed,
                     model.getInterfaceTypes(), com.vjstb.ledscheme.service.schemalayout.TextMeasure.awt(),
@@ -4175,7 +4200,7 @@ public class SchemaCanvasPanel extends JPanel {
     private void drawNodeSockets(Graphics2D g2, SchemaNode n) {
         var layout = nodeLayout(n);
         double ox = n.getX(), oy = n.getY();
-        Integer nodeFontSize = n.getFontSize();
+        Integer nodeFontSize = model.schemaNodeFontSizeOverride(n);
         for (var bay : layout.bays()) {
             drawBayBackground(g2, bay, layout.pins(), ox, oy, (int) n.getWidth(), (int) n.getHeight());
         }
@@ -4306,7 +4331,8 @@ public class SchemaCanvasPanel extends JPanel {
      *  свёрнутой).
      *
      * <p>{@code nodeFontSize} -- {@link SchemaNode#getFontSize()} узла, если задан
-     *  через контекстное меню блока («Размер шрифта…»), иначе {@code null} и
+     *  через контекстное меню блока («Размер шрифта…»), либо размер всей схемы
+     *  («Шрифт схемы…», {@link AppModel#schemaNodeFontSizeOverride}), иначе {@code null} и
      *  используется унаследованный шрифт. Отступ — см. {@link #labelPaddingPx()}. */
     private void drawBay(Graphics2D g2, com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Bay bay,
                           List<com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Pin> pins,
@@ -4796,6 +4822,11 @@ public class SchemaCanvasPanel extends JPanel {
             g2.fillOval((int) Math.round(pinX - dotD / 2.0), (int) Math.round(pinY - dotD / 2.0), dotD, dotD);
 
             Integer bundleSize = sharedFontSize(bundle);
+            if (bundleSize == null && !bundle.isEmpty()) {
+                // ни у одной связи пучка нет своего размера (или они расходятся) —
+                // чип рисуется размером схемы для линий («Шрифт схемы…», 2026-09-30)
+                bundleSize = model.schemaEdgeFontSizeOverride(bundle.get(0));
+            }
             g2.setFont(bundleSize != null ? EDGE_FONT.deriveFont((float) bundleSize) : EDGE_FONT);
             boolean editable = bundleLabelEditable(bundle);
             String sharedType = sharedWireType(bundle);
