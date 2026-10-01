@@ -1336,6 +1336,37 @@ public final class SchemeRenderer {
                     st.physicalWidthMm(), st.physicalHeightMm()));
         }
 
+        // Легенда типов кабинетов и статистика сцены (запрос 2026-10-01: «в экспорте экранов
+        // тоже выделять цветами разные типы кабинетов и рисовать справа в углу легенду кабинетов»):
+        // фактический тип каждого видимого кабинета (с переопределением по ячейке), число кабинетов
+        // по типам и суммарные характеристики ПЕРЕДАННЫХ экранов (а не всей сцены — экспорт может
+        // получить подмножество).
+        java.util.LinkedHashMap<String, CabinetType> typesById = new java.util.LinkedHashMap<>();
+        java.util.Map<String, Integer> countByTypeId = new java.util.HashMap<>();
+        int totalCabinets = 0;
+        double totalWeightKg = 0;
+        double totalPowerW = 0;
+        for (Screen s : screens) {
+            CabinetType defaultType = model.typeOf(s);
+            ScreenStats st = ScreenLogic.stats(s, defaultType, model.getWorkspace());
+            totalCabinets += st.activeCabinetCount();
+            totalWeightKg += st.totalWeightKg();
+            totalPowerW += st.totalPowerW();
+            for (CabinetInstance c : s.getCabinets()) {
+                if (c.isHidden()) {
+                    continue;
+                }
+                CabinetType eff = ScreenLogic.effectiveType(c, defaultType, model.getWorkspace());
+                if (eff != null) {
+                    typesById.putIfAbsent(eff.getId(), eff);
+                    countByTypeId.merge(eff.getId(), 1, Integer::sum);
+                }
+            }
+        }
+        // Окрашиваем кабинеты по типу только когда типов больше одного: при единственном типе
+        // заливка ничего не различает (и закрасила бы всю площадку одним цветом)
+        boolean tintByType = typesById.size() >= 2;
+
         Font titleFont = new Font(Font.SANS_SERIF, Font.BOLD, 20);
         Font headerFont = new Font(Font.SANS_SERIF, Font.BOLD, 15);
         Font rowFont = new Font(Font.SANS_SERIF, Font.PLAIN, 15);
@@ -1363,7 +1394,9 @@ public final class SchemeRenderer {
         // длины (свободный текст) — ограничиваем её отдельным максимумом, а не
         // даём разрастись до ширины самой длинной записи, иначе одно длинное
         // примечание растягивало бы всю картинку на всю его длину.
-        int notesMaxW = 420;
+        // Было 420: запрос 2026-10-01 — область примечаний вдвое уже, освободившееся место
+        // отдано правой панели (легенда типов кабинетов + статистика сцены)
+        int notesMaxW = 210;
         pg.setFont(rowFont);
         java.awt.FontMetrics rowFm = pg.getFontMetrics();
         for (Row r : rows) {
@@ -1377,6 +1410,38 @@ public final class SchemeRenderer {
             colW[7] = Math.min(notesMaxW, Math.max(colW[7], rowFm.stringWidth(r.notes())));
         }
         int rowH = rowFm.getHeight() + 10;
+
+        // Правая панель: «Типы кабинетов» (цветной квадратик + имя + число) и «Статистика сцены».
+        // Шрифт строк — тот же rowFont, что у таблицы («соответствующая высота шрифта»).
+        int panelPad = 14;
+        int swatchSize = 14;
+        int swatchGap = 8;
+        boolean hasPanel = !screens.isEmpty();
+        List<String> typeLines = new ArrayList<>();
+        List<String> statLines = new ArrayList<>();
+        int panelW = 0;
+        if (hasPanel) {
+            for (CabinetType t : typesById.values()) {
+                String name = t.getName() == null || t.getName().isBlank() ? "(без названия)" : t.getName();
+                typeLines.add(name + " — " + countByTypeId.getOrDefault(t.getId(), 0) + " шт.");
+            }
+            statLines.add("Экранов: " + screens.size());
+            statLines.add("Кабинетов: " + totalCabinets);
+            statLines.add("Вес: " + trim(totalWeightKg) + " кг");
+            statLines.add("Нагрузка: " + formatLoad(totalPowerW));
+            int content = headerFm.stringWidth("Статистика сцены");
+            content = Math.max(content, headerFm.stringWidth("Типы кабинетов"));
+            for (String l : typeLines) {
+                content = Math.max(content, swatchSize + swatchGap + rowFm.stringWidth(l));
+            }
+            for (String l : statLines) {
+                content = Math.max(content, rowFm.stringWidth(l));
+            }
+            panelW = Math.min(460, Math.max(220, content + panelPad * 2));
+        }
+        int typeTextMaxW = panelW - panelPad * 2 - swatchSize - swatchGap;
+        int panelH = hasPanel ? panelPad * 2 + headerH + 6 + typeLines.size() * rowH + 12 + headerH + 6
+                + statLines.size() * rowH : 0;
         pg.dispose();
 
         int pad = 24;
@@ -1422,7 +1487,9 @@ public final class SchemeRenderer {
         int planPxW = hasScreens ? Math.max(40, (int) Math.round(boundW * scale)) : 0;
         int planPxH = hasScreens ? Math.max(40, (int) Math.round(boundH * scale)) : 0;
 
-        int w = Math.max(titleW, Math.max(tableW, planPxW)) + pad * 2;
+        int panelGap = 28;
+        int leftW = Math.max(titleW, Math.max(tableW, planPxW));
+        int w = leftW + (hasPanel ? panelGap + panelW : 0) + pad * 2;
         int titleY = pad + titleH - 6;
         int screensY = titleY + 24;
         int tableTop = rows.isEmpty() ? screensY : screensY + planPxH + 40;
@@ -1430,6 +1497,9 @@ public final class SchemeRenderer {
         int firstRowY = headerY + 16;
         int h = rows.isEmpty() ? headerY + pad
                 : firstRowY + (rows.size() - 1) * rowH + rowFm.getDescent() + pad;
+        if (hasPanel) {
+            h = Math.max(h, pad + panelH + pad);
+        }
 
         BufferedImage img = new BufferedImage(Math.max(1, (int) Math.round(w * dpiScale)),
                 Math.max(1, (int) Math.round(h * dpiScale)), BufferedImage.TYPE_INT_RGB);
@@ -1463,6 +1533,23 @@ public final class SchemeRenderer {
                 // включительно, и раньше его «дорисовывала» общая рамка экрана.
                 Graphics2D clipped = (Graphics2D) g2.create();
                 clipped.clipRect(sx, sy, sw + 1, sh + 1);
+                if (tintByType) {
+                    // заливка цветом типа ПОД линиями сетки (тот же стабильный цвет по id типа,
+                    // что и у переопределений на холсте сцены — Palette.stableColorFor)
+                    for (CabinetInstance cab : scr.getCabinets()) {
+                        if (cab.isHidden()) {
+                            continue;
+                        }
+                        CabinetType eff = ScreenLogic.effectiveType(cab, type, model.getWorkspace());
+                        if (eff == null) {
+                            continue;
+                        }
+                        Color base = Palette.stableColorFor(eff.getId());
+                        clipped.setColor(new Color(base.getRed(), base.getGreen(), base.getBlue(), TINT_ALPHA));
+                        java.awt.Rectangle r = cabinetScreenRect(cab, type, cellW, cellH, gx, gy, model.getWorkspace());
+                        clipped.fillRect(r.x, r.y, r.width, r.height);
+                    }
+                }
                 paintScheme(clipped, scr, type, false, cellW, cellH, gx, gy, model.getWorkspace(),
                         List.of(), List.of(), List.of(), false, false);
                 clipped.dispose();
@@ -1504,9 +1591,55 @@ public final class SchemeRenderer {
             y += rowH;
         }
 
+        if (hasPanel) {
+            int px = w - pad - panelW;
+            int py = pad;
+            g2.setColor(new Color(255, 255, 255, 14));
+            g2.fillRoundRect(px, py, panelW, panelH, 10, 10);
+            g2.setColor(Palette.MUTED);
+            g2.setStroke(new java.awt.BasicStroke(1f));
+            g2.drawRoundRect(px, py, panelW, panelH, 10, 10);
+            int ty = py + panelPad + headerH - 4;
+            g2.setFont(headerFont);
+            g2.setColor(Palette.TEXT);
+            g2.drawString("Типы кабинетов", px + panelPad, ty);
+            ty += 6 + rowH - 4;
+            g2.setFont(rowFont);
+            int ti = 0;
+            for (CabinetType t : typesById.values()) {
+                int rowTop = ty - rowFm.getAscent();
+                if (tintByType) {
+                    Color base = Palette.stableColorFor(t.getId());
+                    g2.setColor(new Color(base.getRed(), base.getGreen(), base.getBlue(), 255));
+                    g2.fillRect(px + panelPad, rowTop + 1, swatchSize, swatchSize);
+                } else {
+                    g2.setColor(Palette.MUTED);
+                    g2.drawRect(px + panelPad, rowTop + 1, swatchSize - 1, swatchSize - 1);
+                }
+                g2.setColor(Palette.TEXT);
+                g2.drawString(clipToWidth(g2, typeLines.get(ti), typeTextMaxW),
+                        px + panelPad + swatchSize + swatchGap, ty);
+                ty += rowH;
+                ti++;
+            }
+            ty += 12;
+            g2.setFont(headerFont);
+            g2.setColor(Palette.TEXT);
+            g2.drawString("Статистика сцены", px + panelPad, ty);
+            ty += 6 + rowH - 4;
+            g2.setFont(rowFont);
+            for (String l : statLines) {
+                g2.drawString(l, px + panelPad, ty);
+                ty += rowH;
+            }
+        }
+
         g2.dispose();
         return img;
     }
+
+    /** Непрозрачность заливки кабинета цветом его типа в экспорте таблицы экранов. */
+    private static final int TINT_ALPHA = 150;
 
     /** Электрическая нагрузка экрана для таблицы (см. {@link #renderScreensOverviewImage}) —
      *  в кВт с одним знаком после запятой при 1 кВт и больше (обычный диапазон для
