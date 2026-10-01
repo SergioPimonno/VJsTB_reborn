@@ -33,15 +33,29 @@ import javax.swing.JPanel;
  * СЛЕДУЮЩАЯ ячейка при клике по призраку в 3D (например, короткая рама на крайней башне,
  * где номинальная не помещается впритык к краю экрана, или конкретная метровая рама для
  * усиления в зоне выноса) — см. {@link Structure3DPanel#setActiveNewCellFrameTypeId}.
+ *
+ * <p><b>Ползунки формы/радиуса/зазора/числа башен</b> (запрос 2026-10-01: «продублируем в 3д
+ * редакторе … ползунками, это очень удобно») — {@link Structure3DControlsPanel}: пересчёт тем же
+ * путём, что «Предварительный расчёт», одна запись отмены на жест, предупреждения расчёта строкой
+ * под ползунками. Окно подписано на модель, поэтому поля «Сетапа» и ползунки всегда показывают
+ * одно состояние.
  */
 public class Structure3DDialog extends JDialog {
 
     private final Structure3DPanel panel;
+    private final Structure3DControlsPanel controls;
+    private final AppModel model;
+    /** Подписка на модель (2026-10-01, ползунки радиуса/зазора/числа башен): 3D-вид и ползунки
+     *  перерисовываются после ЛЮБОГО изменения — полей «Сетапа», Ctrl+Z, самих ползунков.
+     *  Снимается при закрытии окна ({@link AppModel#removeListener}). */
+    private final AppModel.Listener modelListener = this::refresh;
 
     public Structure3DDialog(Window owner, AppModel model) {
         super(owner, "3D-превью конструктива", ModalityType.MODELESS);
+        this.model = model;
 
         panel = new Structure3DPanel(model);
+        controls = new Structure3DControlsPanel(model);
 
         JPanel content = new JPanel(new BorderLayout(0, 8));
         content.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
@@ -72,6 +86,10 @@ public class Structure3DDialog extends JDialog {
         JPanel topStack = new JPanel();
         topStack.setLayout(new BoxLayout(topStack, BoxLayout.Y_AXIS));
         topStack.add(viewRow);
+        // Ползунки формы/радиуса/зазора/числа башен (запрос 2026-10-01) -- своей строкой между
+        // кнопками видов и легендой осей, над GL-видом: клики по рамам и орбита камеры их не
+        // задевают.
+        topStack.add(controls);
         topStack.add(legendRow);
         content.add(topStack, BorderLayout.NORTH);
 
@@ -106,17 +124,24 @@ public class Structure3DDialog extends JDialog {
         content.add(bottom, BorderLayout.SOUTH);
 
         setContentPane(content);
-        setSize(new Dimension(900, 720));
+        setSize(new Dimension(980, 780));
         setLocationRelativeTo(owner);
+        setDefaultCloseOperation(DISPOSE_ON_CLOSE);
+        model.addListener(modelListener);
     }
 
-    /** Обновляет 3D-вид (например, после пересчёта конструктива, пока диалог уже открыт) —
-     *  {@code AppModel} не поддерживает {@code removeListener}, а новая панель создаётся при
-     *  каждом открытии диалога, поэтому подписка на {@code addListener} здесь не заводится
-     *  (утекла бы) — вызывающий код (см. {@code SetupStagePanel#calculateStructure}) явно
-     *  дёргает этот метод, если диалог уже показан. */
+    @Override
+    public void dispose() {
+        model.removeListener(modelListener);
+        super.dispose();
+    }
+
+    /** Обновляет 3D-вид и ползунки. С 2026-10-01 окно само подписано на модель (у {@code
+     *  AppModel} появился {@code removeListener} — подписка снимается в {@link #dispose()}, не
+     *  утекает); явный вызов из {@code SetupStagePanel#calculateStructure} оставлен — безвреден. */
     public void refresh() {
         panel.refresh();
+        controls.syncFromModel();
     }
 
     private static JButton viewButton(Structure3DPanel panel, String label, double yawDeg, double pitchDeg) {
