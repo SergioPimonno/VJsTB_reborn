@@ -490,7 +490,9 @@ public class Structure3DPanel extends JPanel {
         FrameEnvelope env = frameEnvelope(screen, g);
         List<StructureFrameCell> cells = screen.getStructureFrameCells();
         List<Candidate> result = new ArrayList<>();
-        int coreSections = StructureCalc.CORE_BASE_SECTION_COUNT;
+        // Round 25 -- усилительная рама только над НАСТОЯЩИМ выносом, не над секцией, на
+        // которой уже стоит задний ряд (см. StructureCalc#baseFootprintSectionCount).
+        int coreSections = StructureCalc.baseFootprintSectionCount(screen.getStructureBackRowSegments());
         for (int t = env.minTower(); t <= env.maxTower(); t++) {
             for (int section = coreSections; section <= env.maxSection(); section++) {
                 final int ft = t;

@@ -155,8 +155,10 @@ public class SetupStagePanel extends JPanel {
     /** «Вынос базы под балласт, мм» — заменил бывший «Шаг башен» (2026-08-19, тот ни на что не
      *  влиял в итоговой ведомости материалов, см. StructureCalc.DEFAULT_TOWER_SPACING_MM):
      *  насколько дополнительно база выступает под балласт, инженер вводит вручную — формула
-     *  оказалась ненадёжной ("аппаратно не получается его просчитывать эффективно"). */
-    private final JSpinner pStructureBaseExtension = new JSpinner(new SpinnerNumberModel(500.0, 0.0, 50_000.0, 50.0));
+     *  оказалась ненадёжной ("аппаратно не получается его просчитывать эффективно"). Round 25
+     *  (2026-10-01): шаг стрелок — 500 мм (каталожный модуль рамы основания), т.к. глубина базы
+     *  всё равно округляется вверх до целых модулей (StructureCalc#totalBaseSections). */
+    private final JSpinner pStructureBaseExtension = new JSpinner(new SpinnerNumberModel(500.0, 0.0, 50_000.0, 500.0));
     /** Коэффициент отношения требуемого веса балласта к весу экрана (2026-08-19) — раньше
      *  жёстко 1:1, теперь редактируемый (дефолт 0.6 — "в реальности хорошо если 6:10"). */
     private final JSpinner pStructureBallastRatio = new JSpinner(new SpinnerNumberModel(0.6, 0.05, 5.0, 0.05));
@@ -1418,9 +1420,13 @@ public class SetupStagePanel extends JPanel {
                 + " указанное значение выше высоты экрана, «Рассчитать конструктив» покажет предупреждение.");
         structureFieldsPanel.add(UiKit.formRow("Высота башни, мм", pStructureTowerHeight));
         structureFieldsPanel.add(UiKit.vgap());
-        pStructureBaseExtension.setToolTipText("Полная глубина базы под балласт (ВКЛЮЧАЯ обязательный модуль"
+        pStructureBaseExtension.setToolTipText("<html>Полная глубина базы под балласт (ВКЛЮЧАЯ обязательный модуль"
                 + " под самой башней, не сверх него) — площадь опоры/рычаг устойчивости. Формулой не считается"
-                + " («аппаратно не получается его просчитывать эффективно») — вводится вручную по месту.");
+                + " («аппаратно не получается его просчитывать эффективно») — вводится вручную по месту.<br>"
+                + "База собирается из тех же рам, лежащих плашмя, модулями по ширине рамы (500 мм): глубина"
+                + " округляется ВВЕРХ до целого модуля (1 + ⌈(вынос − 500) / 500⌉ секций) и не бывает меньше"
+                + " глубины самой башни (передний + задний ряд = 1000 мм) — под каждой вертикальной рамой"
+                + " всегда есть рама основания.</html>");
         structureFieldsPanel.add(UiKit.formRow("Вынос базы под балласт, мм", pStructureBaseExtension));
         structureFieldsPanel.add(UiKit.vgap());
 
@@ -2375,9 +2381,15 @@ public class SetupStagePanel extends JPanel {
         boolean warnScreen = result.exceedsScreenHeightWarning();
 
         StringBuilder msg = new StringBuilder();
+        // Round 25: показываем ИТОГОВУЮ глубину базы (целые модули, не меньше глубины башни),
+        // а не только введённое число -- иначе "ввёл 500, а построено 1000" выглядит как сбой.
+        int baseSections = com.vjstb.ledscheme.service.StructureCalc.CORE_BASE_SECTION_COUNT
+                + scr.getStructureExtendedBaseSections();
         msg.append(String.format("Стартовая сетка построена: %d башен, %d сегментов переднего ряда, %d заднего,"
-                + " %d уровней перемычек, вынос базы %.0f мм.%n", towers, vertical, backRowSegments,
-                peremychkaLevels, baseExtensionMm));
+                + " %d уровней перемычек, вынос базы %.0f мм (база: %d секц. = %.0f мм в глубину).%n", towers,
+                vertical, backRowSegments, peremychkaLevels, baseExtensionMm, baseSections,
+                baseSections * (frameType != null && frameType.getWidthMm() != null && frameType.getWidthMm() > 0
+                        ? frameType.getWidthMm() : com.vjstb.ledscheme.service.StructureCalc.DEFAULT_FRAME_WIDTH_MM)));
         msg.append("Дальнейшая точная расстановка (добавить/убрать раму, перемычку, секцию) — кликами в"
                 + " 3D-превью. Итоговую ведомость материалов смотрите через «" + buildStructureSpecBtn.getText()
                 + "» после того, как закончите правки.");
