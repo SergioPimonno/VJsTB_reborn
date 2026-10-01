@@ -159,7 +159,19 @@ public class SchemaPanel extends JPanel {
                 model.clearSchema(mode);
             }
         });
+        JButton fitBtn = new JButton("Подогнать блоки");
+        fitBtn.setToolTipText("Подогнать размер ВСЕХ блоков открытой схемы под их содержимое (по текущим настройкам"
+                + " отображения групп гнёзд). Размеры, заданные вручную, будут заменены; отменяется Ctrl+Z."
+                + " Для одного блока — ПКМ → «Подогнать размер под содержимое».");
+        fitBtn.addActionListener(e -> {
+            if (JOptionPane.showConfirmDialog(this,
+                    "Подогнать размер всех блоков схемы под содержимое? Размеры, заданные вручную, будут заменены.",
+                    "Подтверждение", JOptionPane.OK_CANCEL_OPTION) == JOptionPane.OK_OPTION) {
+                canvas.fitNodesToContent(model.schemaNodesForCurrentScene(mode));
+            }
+        });
         JPanel bar = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 4, 2));
+        bar.add(fitBtn);
         bar.add(fontBtn);
         bar.add(clear);
         return bar;

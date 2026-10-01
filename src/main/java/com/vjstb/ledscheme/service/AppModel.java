@@ -421,30 +421,26 @@ public class AppModel {
         }
         SchemaSheetMigration.ensure(s);
         currentScene = s;
-        refitSchemaNodesOnce(s);
         currentScreen = null;
         undoStack.clear();
         fireChanged();
     }
 
-    /** Сцены, у которых блоки схем уже подогнаны под текущие метрики раскладки в этой сессии. */
-    private final Set<Scene> refitScenes = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
-
-    /** Однократная (за сессию) подгонка размеров блоков схем под метрики раскладки при открытии
-     *  сцены. Зазоры между картами и под названием блока (запрос 2026-10-01) увеличили
-     *  минимальный размер блока, а у сохранённых проектов размер блока записан в файле — без
-     *  подгонки гнёзда в тесных блоках ушли бы в «+N ещё…». Блоки только РАСТУТ
-     *  ({@link #autoFitNodeToPorts}), без записи отмены; сохраняется вместе с проектом. */
-    private void refitSchemaNodesOnce(Scene scene) {
-        if (scene == null || !refitScenes.add(scene)) {
+    /** «Подогнать размер» блоков под содержимое: каждому узлу задаётся РОВНО указанный размер
+     *  (рассчитанный холстом по ТЕКУЩИМ настройкам отображения групп гнёзд), как вырост, так и
+     *  усадка — одна запись отмены. Нужна, когда размер блока записан «с запасом» (после
+     *  добавления карт блок растёт под развёрнутые группы, а в схеме они свёрнуты) или когда
+     *  после смены метрик раскладки у тесного блока пропали строки. */
+    public void setSchemaNodesSizes(java.util.Map<SchemaNode, double[]> sizes) {
+        if (sizes == null || sizes.isEmpty()) {
             return;
         }
-        for (SchemaNode n : new ArrayList<>(scene.getSchemaNodes())) {
-            if (n.isAutoPortLegend() || n.isAutoLineLegend() || n.getType() == SchemaNodeType.SCREEN) {
-                continue;
-            }
-            autoFitNodeToPorts(n);
-        }
+        pushUndo("Подогнать размер блоков");
+        sizes.forEach((node, wh) -> {
+            node.setWidth(Math.max(SCHEMA_NODE_MIN_WIDTH, wh[0]));
+            node.setHeight(Math.max(SCHEMA_NODE_MIN_HEIGHT, wh[1]));
+        });
+        changed();
     }
 
     public void selectScreen(Screen s) {
