@@ -16,9 +16,11 @@ import com.vjstb.ledscheme.model.StructureFrameType;
 import com.vjstb.ledscheme.model.Workspace;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.StructureCalc;
+import com.vjstb.ledscheme.service.StructureCurveMath;
 import com.vjstb.ledscheme.service.StructurePickMath;
 import com.vjstb.ledscheme.service.StructurePickMath.Ray;
 import com.vjstb.ledscheme.service.StructurePickMath.Vec3;
+import com.vjstb.ledscheme.service.StructurePickMath.YawTransform;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.event.MouseAdapter;
@@ -89,6 +91,15 @@ import javax.swing.SwingUtilities;
  * CPU-side raycast, математика — {@link StructurePickMath}. Тестируется не один луч через
  * курсор, а небольшой крест точек вокруг него ("толстый курсор" — тонкие стойки в перспективе
  * иначе почти невозможно зацепить мышью).
+ *
+ * <p><b>Изогнутые экраны и раздельные башни (запрос 2026-10-01)</b>: экран рисуется колоннами
+ * повёрнутых кабинетов по дуге ({@link StructureCurveMath#cabinetColumns}), а каждая
+ * раздельная башня (пара столбов {@code 2k}/{@code 2k+1}) — жёсткий блок, построенный ТЕМ ЖЕ
+ * кодом кандидатов в координатах стены и перенесённый/повёрнутый одним преобразованием
+ * {@link YawTransform} ({@link #towerTransform}); picking переводит луч в локальную систему
+ * башни (OBB, {@link StructurePickMath#intersectObb}). Между раздельными башнями нет ни
+ * перемычек/оснований, ни их призраков, призраков лишнего столба сбоку тоже нет. Прямой экран
+ * с зазором 0 идёт прежним путём: преобразование {@code null}, ни одного лишнего вызова GL.
  */
 public class Structure3DPanel extends JPanel {
 
@@ -96,8 +107,9 @@ public class Structure3DPanel extends JPanel {
     private static final double DEFAULT_FRAME_WIDTH_MM = 500;
     private static final double DEFAULT_FRAME_DEPTH_MM = 51;
     /** Гарантированный зазор (мм) между задней гранью экрана и передним рядом конструктива —
-     *  см. javadoc {@code computeGeometry}. */
-    private static final double SCREEN_CLEARANCE_MM = 400;
+     *  см. javadoc {@code computeGeometry}. С 2026-10-01 — общее число с геометрией изогнутых
+     *  экранов ({@link StructureCurveMath#SCREEN_CLEARANCE_MM}), значение не менялось. */
+    private static final double SCREEN_CLEARANCE_MM = StructureCurveMath.SCREEN_CLEARANCE_MM;
     private static final java.awt.Color CABINET_CHASSIS_COLOR = new java.awt.Color(0x1c, 0x1e, 0x22);
     private static final java.awt.Color CUP_COLOR = new java.awt.Color(0xc7, 0x8a, 0x2e);
     private static final double FOV_DEG = 45;
@@ -127,9 +139,19 @@ public class Structure3DPanel extends JPanel {
     private String activeNewCellFrameTypeId;
 
     public Structure3DPanel(AppModel model) {
+        this(model, true);
+    }
+
+    /** {@code createGl == false} — без GL-канваса (только геометрия кандидатов и picking):
+     *  для тестов picking'а повёрнутых башен (2026-10-01), которые должны идти и в headless-
+     *  среде, где JOGL не инициализируется. */
+    Structure3DPanel(AppModel model, boolean createGl) {
         super(new BorderLayout());
         this.model = model;
         setPreferredSize(new Dimension(700, 560));
+        if (!createGl) {
+            return;
+        }
         try {
             GLProfile profile = GLProfile.get(GLProfile.GL2);
             GLCapabilities caps = new GLCapabilities(profile);
@@ -278,9 +300,39 @@ public class Structure3DPanel extends JPanel {
         return new CameraState(new Vec3(eyeX, eyeY, eyeZ), new Vec3(centerX, centerY, centerZ));
     }
 
+    /** {@code curveSetup} — раздельные башни изогнутого экрана / прямого с зазором (запрос
+     *  2026-10-01, {@link StructureCurveMath}); {@code null} — прежняя «стена», все кандидаты
+     *  строятся и рисуются ровно как до изгиба (единичное преобразование). */
     private record StructureGeometry(double frameH, double frameW, double frameD, double sectionDepthMm,
             double baseThickness, double peremychkaThickness, double spacing,
-            double frontZ, double backZ, double peremychkaIntervalMm, double reinforcementHeightMm) {
+            double frontZ, double backZ, double peremychkaIntervalMm, double reinforcementHeightMm,
+            StructureCurveMath.Setup curveSetup) {
+
+        boolean separate() {
+            return curveSetup != null;
+        }
+    }
+
+    /** Общий слой «локальная система башни» (запрос 2026-10-01): все кандидаты по-прежнему
+     *  строятся в координатах СТЕНЫ (столб {@code p} на {@code x = p·spacing}, передний ряд от
+     *  {@code z = −SCREEN_CLEARANCE_MM}), а для раздельной башни {@code k} (столбы {@code 2k},
+     *  {@code 2k+1}) это преобразование переносит и поворачивает её целиком на своё место на
+     *  дуге ({@link StructureCurveMath#placement}). В режиме стены — {@code null}: рендер и
+     *  picking идут прежним путём без единой лишней операции. */
+    private static YawTransform towerTransform(StructureGeometry g, int userTower) {
+        if (!g.separate()) {
+            return null;
+        }
+        StructureCurveMath.Setup s = g.curveSetup();
+        StructureCurveMath.Placement p = StructureCurveMath.placement(s.curve(), s.tower(), s.towerCount(),
+                s.gapMm(), userTower);
+        return new YawTransform(p.anchorX(), p.anchorZ(), p.yawDeg(), (2 * userTower + 0.5) * g.spacing(),
+                -SCREEN_CLEARANCE_MM);
+    }
+
+    /** Преобразование для СТОЛБА {@code post} (раздельная башня = пара столбов). */
+    private static YawTransform postTransform(StructureGeometry g, int post) {
+        return g.separate() ? towerTransform(g, Math.floorDiv(post, 2)) : null;
     }
 
     private StructureGeometry computeGeometry(Screen screen) {
@@ -325,8 +377,11 @@ public class Structure3DPanel extends JPanel {
         // совпадает с ближней гранью заднего (backZ+frameW/2).
         double backZ = frontZ - frameW;
         double peremychkaIntervalMm = StructureCalc.peremychkaIntervalMm(frameH);
+        StructureCurveMath.Setup curveSetup = StructureCurveMath.separateTowers(screen)
+                ? StructureCurveMath.setupOf(screen, model.typeOf(screen), ws) : null;
         return new StructureGeometry(frameH, frameW, frameD, sectionDepthMm, baseThickness,
-                peremychkaThickness, spacing, frontZ, backZ, peremychkaIntervalMm, reinforcementHeightMm);
+                peremychkaThickness, spacing, frontZ, backZ, peremychkaIntervalMm, reinforcementHeightMm,
+                curveSetup);
     }
 
     private static double dim(Double value, double fallback) {
@@ -378,6 +433,14 @@ public class Structure3DPanel extends JPanel {
                 maxSection = Math.max(maxSection, c.getSegmentIndex());
             }
         }
+        if (g.separate()) {
+            // Раздельные башни (2026-10-01): «призраков» лишнего столба сбоку нет -- столб вне
+            // пары не образует башню, а между башнями соединений нет по правилу пользователя.
+            // Диапазон столбов -- целыми парами (башнями); число башен задаётся в форме.
+            int lo = Math.floorDiv(Math.min(0, minTower), 2) * 2;
+            int hi = Math.floorDiv(Math.max(maxTower, 2 * g.curveSetup().towerCount() - 1), 2) * 2 + 1;
+            return new FrameEnvelope(lo, hi, maxFrontSeg + 1, maxBackSeg + 1, maxLevel + 1, maxSection + 1);
+        }
         return new FrameEnvelope(minTower - 1, maxTower + 1, maxFrontSeg + 1, maxBackSeg + 1, maxLevel + 1,
                 maxSection + 1);
     }
@@ -387,9 +450,12 @@ public class Structure3DPanel extends JPanel {
 
     /** {@code bounds} — {x,y,z,w,h,d}, номинальный прямоугольник ячейки (контур для
      *  "призраков"). {@code pickBoxes} — чем ИМЕННО тестируется луч (для существующих
-     *  вертикальных сегментов — две тонкие коробки стоек, иначе совпадает с {@code bounds}). */
+     *  вертикальных сегментов — две тонкие коробки стоек, иначе совпадает с {@code bounds}).
+     *  {@code xf} — локальная система раздельной башни ({@link #towerTransform}): {@code bounds}/
+     *  {@code pickBoxes} заданы в координатах стены, рисуются под этим преобразованием, а луч
+     *  picking'а переводится в них ({@link StructurePickMath#intersectObb}); {@code null} — стена. */
     private record Candidate(PickKey key, double[] bounds, List<double[]> pickBoxes, boolean exists,
-            Runnable toggle) {
+            Runnable toggle, YawTransform xf) {
     }
 
     /** Реальные габариты рамы для конкретной ЯЧЕЙКИ — если у неё задано переопределение типа
@@ -474,7 +540,8 @@ public class Structure3DPanel extends JPanel {
                             : List.of(bounds);
                     String newCellType = activeNewCellFrameTypeId;
                     result.add(new Candidate(new PickKey("frame", ft, frow, fs), bounds, pickBoxes, exists,
-                            () -> model.toggleStructureFrameCell(screen, ft, frow, fs, newCellType)));
+                            () -> model.toggleStructureFrameCell(screen, ft, frow, fs, newCellType),
+                            postTransform(g, ft)));
                 }
             }
         }
@@ -519,7 +586,8 @@ public class Structure3DPanel extends JPanel {
                         : List.of(bounds);
                 String newCellType = activeNewCellFrameTypeId;
                 result.add(new Candidate(new PickKey("reinforcement", ft, fsec, 0), bounds, pickBoxes, exists,
-                        () -> model.toggleStructureFrameCell(screen, ft, 2, fsec, newCellType)));
+                        () -> model.toggleStructureFrameCell(screen, ft, 2, fsec, newCellType),
+                        postTransform(g, ft)));
             }
         }
         return result;
@@ -547,6 +615,11 @@ public class Structure3DPanel extends JPanel {
         var cells = screen.getStructurePeremychkaCells();
         List<Candidate> result = new ArrayList<>();
         for (int gapIdx = env.minTower(); gapIdx < env.maxTower(); gapIdx++) {
+            // Раздельные башни (2026-10-01): перемычка только ВНУТРИ башни (2k → 2k+1), в
+            // промежутке между башнями -- ни ячеек, ни призраков.
+            if (g.separate() && Math.floorMod(gapIdx, 2) != 0) {
+                continue;
+            }
             for (int row = 0; row < 2; row++) {
                 double zCenter = row == 0 ? g.frontZ() : g.backZ();
                 // Баг-репорт: "изменение типа рамы не влияет на перемычки, а должно, башня
@@ -581,7 +654,7 @@ public class Structure3DPanel extends JPanel {
                                     new double[]{x, y, z + zDepth - rail, xSpan, g.peremychkaThickness(), rail})
                             : List.of(bounds);
                     result.add(new Candidate(new PickKey("peremychka", fg, fr, fl), bounds, pickBoxes, exists,
-                            () -> model.toggleStructurePeremychkaCell(screen, fg, fr, fl)));
+                            () -> model.toggleStructurePeremychkaCell(screen, fg, fr, fl), postTransform(g, fg)));
                 }
             }
         }
@@ -618,6 +691,9 @@ public class Structure3DPanel extends JPanel {
         var cells = screen.getStructureBaseFrameCells();
         List<Candidate> result = new ArrayList<>();
         for (int gapIdx = env.minTower(); gapIdx < env.maxTower(); gapIdx++) {
+            if (g.separate() && Math.floorMod(gapIdx, 2) != 0) {
+                continue; // основание только внутри раздельной башни, как и перемычка
+            }
             // Баг-репорт: "изменение типа рамы не влияет на перемычки/базу, а должно" -- та же
             // причина, что у peremychkaCandidates (см. её javadoc): зазор считался от НОМИНАЛЬНОГО
             // g.frameD(), игнорируя per-cell override реальной стойки. База лежит ПОД обоими
@@ -650,7 +726,7 @@ public class Structure3DPanel extends JPanel {
                                         g.baseThickness(), rail})
                         : List.of(bounds);
                 result.add(new Candidate(new PickKey("base", fg, fsec, 0), bounds, pickBoxes, exists,
-                        () -> model.toggleStructureBaseFrameSection(screen, fg, fsec)));
+                        () -> model.toggleStructureBaseFrameSection(screen, fg, fsec), postTransform(g, fg)));
             }
         }
         return result;
@@ -689,8 +765,10 @@ public class Structure3DPanel extends JPanel {
                         continue;
                     }
                     for (double[] b : c.pickBoxes()) {
-                        Double t = StructurePickMath.intersectAabb(ray, new Vec3(b[0], b[1], b[2]),
-                                new Vec3(b[0] + b[3], b[1] + b[4], b[2] + b[5]));
+                        // OBB (2026-10-01): у раздельной башни луч переводится в её локальную
+                        // систему; у стены xf == null -- ровно прежний intersectAabb.
+                        Double t = StructurePickMath.intersectObb(ray, new Vec3(b[0], b[1], b[2]),
+                                new Vec3(b[0] + b[3], b[1] + b[4], b[2] + b[5]), c.xf());
                         if (t != null && t < bestT) {
                             bestT = t;
                             best = c;
@@ -700,6 +778,64 @@ public class Structure3DPanel extends JPanel {
             }
         }
         return best;
+    }
+
+    // ---- тестовые хуки picking'а (2026-10-01): без GL, на текущем экране модели ----
+
+    private static String keyString(PickKey k) {
+        return k.kind() + ":" + k.a() + ":" + k.b() + ":" + k.c();
+    }
+
+    /** Ключи всех кандидатов текущего экрана ({@code kind:a:b:c}), только существующие или
+     *  только призраки. */
+    List<String> candidateKeys(boolean existing) {
+        Screen screen = model.getCurrentScreen();
+        StructureGeometry g = computeGeometry(screen);
+        List<String> keys = new ArrayList<>();
+        for (Candidate c : allCandidates(screen, g)) {
+            if (c.exists() == existing) {
+                keys.add(keyString(c.key()));
+            }
+        }
+        return keys;
+    }
+
+    /** Мировой центр первой pick-коробки кандидата {@code key} (через его локальную систему). */
+    double[] pickBoxWorldCenter(String key) {
+        Screen screen = model.getCurrentScreen();
+        StructureGeometry g = computeGeometry(screen);
+        for (Candidate c : allCandidates(screen, g)) {
+            if (keyString(c.key()).equals(key)) {
+                double[] b = c.pickBoxes().get(0);
+                Vec3 local = new Vec3(b[0] + b[3] / 2.0, b[1] + b[4] / 2.0, b[2] + b[5] / 2.0);
+                Vec3 w = c.xf() != null ? c.xf().toWorld(local) : local;
+                return new double[]{w.x(), w.y(), w.z()};
+            }
+        }
+        return null;
+    }
+
+    /** Ближайший по лучу кандидат — тот же тест, что у клика ({@link #raycastAtCursor}), но для
+     *  готового луча. {@code null} — промах. */
+    String pickKeyAlongRay(Ray ray, boolean existing) {
+        Screen screen = model.getCurrentScreen();
+        StructureGeometry g = computeGeometry(screen);
+        Candidate best = null;
+        double bestT = Double.POSITIVE_INFINITY;
+        for (Candidate c : allCandidates(screen, g)) {
+            if (c.exists() != existing) {
+                continue;
+            }
+            for (double[] b : c.pickBoxes()) {
+                Double t = StructurePickMath.intersectObb(ray, new Vec3(b[0], b[1], b[2]),
+                        new Vec3(b[0] + b[3], b[1] + b[4], b[2] + b[5]), c.xf());
+                if (t != null && t < bestT) {
+                    bestT = t;
+                    best = c;
+                }
+            }
+        }
+        return best != null ? keyString(best.key()) : null;
     }
 
     /** Round 17 (баг-репорт: "рейтрейсинг от курсора — вместо удаления рам часто добавляются
@@ -894,6 +1030,17 @@ public class Structure3DPanel extends JPanel {
             double cellW = defaultType.getWidthMm();
             double cellH = defaultType.getHeightMm();
             double totalHeight = screen.getRows() * cellH;
+            // Изогнутый экран наземного конструктива (2026-10-01): каждая колонна кабинетов —
+            // повёрнутая коробка реальной глубины кабинета, лицевые грани — хорды окружности
+            // радиуса R (StructureCurveMath#cabinetColumns; клин-зазоры между тыльными углами
+            // соседних колонн — так и есть у плоских кабинетов). Прямой экран рисуется как раньше.
+            List<StructureCurveMath.Placement> columns = null;
+            double curveDepth = 0;
+            if (screen.getMountType() == ScreenMountType.STRUCTURE && screen.getStructureCurveType().isCurved()) {
+                StructureCurveMath.Curve curve = StructureCurveMath.curveOf(screen, defaultType);
+                columns = StructureCurveMath.cabinetColumns(curve);
+                curveDepth = curve.cabinetDepthMm();
+            }
             for (var cab : screen.getCabinets()) {
                 if (cab.isHidden()) {
                     continue;
@@ -910,6 +1057,16 @@ public class Structure3DPanel extends JPanel {
                 double x = cab.getColIndex() * cellW;
                 double yTop = totalHeight - cab.getRowIndex() * cellH;
                 java.awt.Color front = screen.maskColor((cab.getRowIndex() + cab.getColIndex()) % 2);
+                if (columns != null && cab.getColIndex() >= 0 && cab.getColIndex() < columns.size()) {
+                    StructureCurveMath.Placement col = columns.get(cab.getColIndex());
+                    gl.glPushMatrix();
+                    gl.glTranslated(col.anchorX(), 0, col.anchorZ());
+                    gl.glRotated(col.yawDeg(), 0, 1, 0);
+                    boxFrontColored(gl, -cellW / 2.0, elevationMm + yTop - h, -curveDepth, w, h, curveDepth, front,
+                            CABINET_CHASSIS_COLOR);
+                    gl.glPopMatrix();
+                    continue;
+                }
                 boxFrontColored(gl, x, elevationMm + yTop - h, -15, w, h, 15, front, CABINET_CHASSIS_COLOR);
             }
         }
@@ -924,42 +1081,71 @@ public class Structure3DPanel extends JPanel {
             gl.glColor3f(0.6f, 0.61f, 0.63f);
             for (Candidate c : frames) {
                 double[] b = c.bounds();
+                boolean pushed = beginTransform(gl, c.xf());
                 if (c.exists()) {
                     drawTowerSegment(gl, b[0], b[1], b[2], b[3], b[4], b[5]);
                 } else if (c.key().equals(hoveredGhostKey)) {
                     drawWireBoxGhost(gl, b[0], b[1], b[2], b[3], b[4], b[5]);
                 }
+                endTransform(gl, pushed);
             }
 
             gl.glColor3f(0.58f, 0.59f, 0.61f);
             for (Candidate c : reinforcements) {
                 double[] b = c.bounds();
+                boolean pushed = beginTransform(gl, c.xf());
                 if (c.exists()) {
                     drawTowerSegment(gl, b[0], b[1], b[2], b[3], b[4], b[5]);
                 } else if (c.key().equals(hoveredGhostKey)) {
                     drawWireBoxGhost(gl, b[0], b[1], b[2], b[3], b[4], b[5]);
                 }
+                endTransform(gl, pushed);
             }
 
             for (Candidate c : peremychki) {
                 double[] b = c.bounds();
+                boolean pushed = beginTransform(gl, c.xf());
                 if (c.exists()) {
                     drawInterTowerPeremychka(gl, b[0], b[1], b[2], b[3], b[4], b[5]);
                 } else if (c.key().equals(hoveredGhostKey)) {
                     drawWireBoxGhost(gl, b[0], b[1], b[2], b[3], b[4], b[5]);
                 }
+                endTransform(gl, pushed);
             }
 
             for (Candidate c : bases) {
                 double[] b = c.bounds();
+                boolean pushed = beginTransform(gl, c.xf());
                 if (c.exists()) {
                     drawBaseFrame(gl, b[0], b[1], b[2], b[3], b[4], b[5]);
                 } else if (c.key().equals(hoveredGhostKey)) {
                     drawWireBoxGhost(gl, b[0], b[1], b[2], b[3], b[4], b[5]);
                 }
+                endTransform(gl, pushed);
             }
 
             drawCups(gl, screen, g);
+        }
+
+        /** Локальная система раздельной башни (2026-10-01) — то же преобразование, что
+         *  {@link YawTransform#toWorld} (перенос в anchor, поворот вокруг вертикали, сдвиг
+         *  координат стены в начало башни). {@code null}/единичное — стена: матрица не
+         *  трогается вовсе, кадр рисуется теми же вызовами GL, что и раньше. */
+        private boolean beginTransform(GL2 gl, YawTransform xf) {
+            if (xf == null || xf.isIdentity()) {
+                return false;
+            }
+            gl.glPushMatrix();
+            gl.glTranslated(xf.anchorX(), 0, xf.anchorZ());
+            gl.glRotated(xf.yawDeg(), 0, 1, 0);
+            gl.glTranslated(-xf.localOffsetX(), 0, -xf.localOffsetZ());
+            return true;
+        }
+
+        private void endTransform(GL2 gl, boolean pushed) {
+            if (pushed) {
+                gl.glPopMatrix();
+            }
         }
 
         /** Стаканы (соединители) на РЕАЛЬНЫХ стыках — та же логика смежности, что
@@ -1002,6 +1188,7 @@ public class Structure3DPanel extends JPanel {
                 double cupX = towerX - cupSize / 2.0;
                 double nearCupZ = zCenter - g.frameW() / 2.0 + frameRail / 2.0 - cupSize / 2.0;
                 double farCupZ = zCenter + g.frameW() / 2.0 - frameRail / 2.0 - cupSize / 2.0;
+                boolean pushed = beginTransform(gl, postTransform(g, tower));
                 for (int seg : entry.getValue()) {
                     if (entry.getValue().contains(seg + 1)) {
                         double y = (seg + 1) * g.frameH() - cupSize / 2.0;
@@ -1009,6 +1196,7 @@ public class Structure3DPanel extends JPanel {
                         box(gl, cupX, y, farCupZ, cupSize, cupSize, cupSize);
                     }
                 }
+                endTransform(gl, pushed);
             }
 
             // Round 10 (баг-репорт: "теперь стаканы появляются на 0 высоте, они там не нужны.
