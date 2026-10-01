@@ -187,6 +187,18 @@ public class Screen {
     private List<StructurePeremychkaCell> structurePeremychkaCells = new ArrayList<>();
     private List<StructureBaseFrameCell> structureBaseFrameCells = new ArrayList<>();
 
+    /** Напольный каркас ({@link ScreenMountType#FLOOR}, {@code service.FloorCalc}, запрос
+     *  2026-10-01): сколько «зубов» (фиксаторов кабинета к раме) ставится на один опёртый
+     *  кабинет — настройка ПОЛЬЗОВАТЕЛЯ на экран, 2..4 (по умолчанию 4, зажим в сеттере и
+     *  геттере — старый JSON без поля или с мусорным значением открывается с корректным
+     *  числом). Тип рамы и стакана для пола — НЕ отдельные поля: переиспользуются {@link
+     *  #structureFrameTypeId}/{@link #structureCupTypeId} (это те же самые библиотечные
+     *  записи, что и у наземного конструктива; у экрана одновременно действует только один
+     *  способ монтажа, так что конфликта нет), а защищённое удаление/перенос ссылок
+     *  библиотеки ({@code AppModel#isStructureFrameTypeReferenced}) работает для пола без
+     *  единой правки. */
+    private int floorTeethPerCabinet = 4;
+
     /** Контроллеры, обслуживающие экран (может быть несколько). Если список не пуст,
      *  суммарное число их портов определяет доступные порты сигнала вместо signalPortCount. */
     private List<ControllerInstance> controllers = new ArrayList<>();
@@ -581,6 +593,20 @@ public class Screen {
         this.structureBaseFrameCells = structureBaseFrameCells != null ? structureBaseFrameCells : new ArrayList<>();
     }
 
+    public int getFloorTeethPerCabinet() {
+        return clampFloorTeeth(floorTeethPerCabinet);
+    }
+
+    public void setFloorTeethPerCabinet(int floorTeethPerCabinet) {
+        this.floorTeethPerCabinet = clampFloorTeeth(floorTeethPerCabinet);
+    }
+
+    /** Та же граница 2..4, что {@code service.FloorCalc#clampTeeth} — продублирована здесь,
+     *  чтобы модель не зависела от сервисного слоя. */
+    private static int clampFloorTeeth(int v) {
+        return Math.max(2, Math.min(4, v));
+    }
+
     public List<ControllerInstance> getControllers() {
         return controllers;
     }
@@ -701,6 +727,7 @@ public class Screen {
             copy.setHidden(c.isHidden());
             s.structureBaseFrameCells.add(copy);
         }
+        s.floorTeethPerCabinet = floorTeethPerCabinet;
         s.controllers = new ArrayList<>();
         for (ControllerInstance c : controllers) {
             s.controllers.add(c.copy());
