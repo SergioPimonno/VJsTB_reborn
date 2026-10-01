@@ -64,9 +64,15 @@ description: >-
    jpackage --type app-image --input dist-input --dest dist \
      --name "AVE_ToolBox" --main-jar led-scheme.jar \
      --main-class com.vjstb.ledscheme.App --app-version "X.Y" \
+     --java-options "-XX:MaxRAMPercentage=75" \
      --vendor "AVE_ToolBox" --icon packaging/icon-main.ico
    # затем упаковать dist/ в .zip
    ```
+   `--java-options "-XX:MaxRAMPercentage=75"` — по умолчанию JVM берёт под heap
+   только 25% RAM, а маски/канвасы до 30000 px (v2.6, снят предел 16k — решение
+   D7 от 2026-09-30) требуют больше; тот же флаг — в обоих workflow (`.deb`/`.dmg`).
+   Проверка: `dist/AVE_ToolBox/app/AVE_ToolBox.cfg` содержит строку
+   `java-options=-XX:MaxRAMPercentage=75`.
    Иконка `packaging/icon-main.{ico,icns,png}` закоммичена. Рантайм-иконка окна
    — `ui.AppIcons.loadAppIconImages()` + `setIconImages(...)` в `MainFrame`.
 7. **Тег** — новый `vX.Y` или перенесён на актуальный коммит (см. ниже) — и

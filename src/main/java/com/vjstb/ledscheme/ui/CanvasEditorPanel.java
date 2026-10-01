@@ -62,8 +62,23 @@ public class CanvasEditorPanel extends JPanel {
      *  расточительно во время перетаскивания размещения мышью (repaint() при
      *  drag не проходит через setCanvas — см. ниже, поэтому кэш переживает
      *  drag не инвалидируясь, и пересчитывается только когда снаружи реально
-     *  могло что-то измениться). */
-    private final Map<String, BufferedImage> maskCache = new HashMap<>();
+     *  могло что-то измениться).
+     *
+     *  <p>2026-09-30 (запрос «убрать ограничение 16k», решение D7): маска размещения может
+     *  быть до 30000×30000 px, и держать её здесь в ПОЛНОМ разрешении больше нельзя. Теперь
+     *  маска рисуется в масштабе пресета «Разрешение превью» ({@link MaskPreviewResolution},
+     *  как в After Effects; «Авто» — ровно в размере отображения), ключ кэша — id размещения
+     *  + фактический масштаб рендера; кэш сбрасывается при смене пресета, а в «Авто» — и при
+     *  смене масштаба окна ({@link #cacheEpoch}). */
+    private final Map<String, CachedMask> maskCache = new HashMap<>();
+
+    /** Отрендеренная маска превью и то, как был выбран её масштаб (для пометки о понижении). */
+    private record CachedMask(BufferedImage image, MaskPreviewResolution.Choice choice) {
+    }
+
+    /** «Эпоха» кэша масок: пресет (+ масштаб окна для «Авто») на момент заполнения. Сменилась —
+     *  кэш сбрасывается целиком, чтобы не копить картинки старых масштабов. */
+    private String cacheEpoch;
 
     public CanvasEditorPanel(AppModel model, SettingsManager settings) {
         this.model = model;
@@ -250,6 +265,12 @@ public class CanvasEditorPanel extends JPanel {
         return null;
     }
 
+    /** Пресет «Разрешение превью» из профиля (см. {@link MaskPreviewResolution}); смена
+     *  пресета приходит через слушатель настроек (сброс кэша + repaint). */
+    private MaskPreviewResolution previewResolution() {
+        return MaskPreviewResolution.fromName(settings.activeProfile().getMaskPreviewResolution());
+    }
+
     /** Размер маски размещения в px канваса — см. class-javadoc. */
     private MaskGeometry geometry(Screen scr) {
         return MaskGeometry.of(scr, model.typeOf(scr), model.getWorkspace());
@@ -315,6 +336,13 @@ public class CanvasEditorPanel extends JPanel {
 
         Font labelFont = getFont().deriveFont(Font.BOLD, 12f);
         Font metaFont = getFont().deriveFont(10f);
+        MaskPreviewResolution preset = previewResolution();
+        String epoch = preset == MaskPreviewResolution.AUTO ? preset + "@" + scale : preset.name();
+        if (!epoch.equals(cacheEpoch)) {
+            maskCache.clear();
+            cacheEpoch = epoch;
+        }
+        int downgradedTo = 0;
         for (CanvasPlacement pl : canvas.getPlacements()) {
             Screen scr = screenById(pl.getScreenId());
             if (scr == null) {
@@ -332,10 +360,18 @@ public class CanvasEditorPanel extends JPanel {
             // отмасштабированная под текущий вид канваса — вместо плоского
             // прямоугольника-заглушки видно реальный чек-борд, цвет пресета,
             // сетку и подписи кабинетов, как это будет выглядеть у контентщика.
-            BufferedImage maskImg = maskCache.computeIfAbsent(pl.getId(),
-                    id -> PixelGridRenderer.renderMask(scr, type, model.getWorkspace(),
-                            PixelGridRenderer.GridRenderOptions.of(scr, pl, canvas, settings)));
-            g2.drawImage(maskImg, x, y, w, h, null);
+            // 2026-09-30: рисуется в масштабе пресета «Разрешение превью» (см. maskCache), а
+            // не в полном разрешении; при превышении бюджета памяти — с понижением дроби.
+            MaskPreviewResolution.Choice choice = MaskPreviewResolution.choose(preset, scale,
+                    geo.width(), geo.height());
+            CachedMask cached = maskCache.computeIfAbsent(pl.getId() + "@" + choice.scale(),
+                    id -> new CachedMask(MaskImage.screen(scr, type, model.getWorkspace(),
+                            PixelGridRenderer.GridRenderOptions.of(scr, pl, canvas, settings))
+                            .render(choice.scale()), choice));
+            if (cached.choice().downgraded()) {
+                downgradedTo = Math.max(downgradedTo, cached.choice().divisor());
+            }
+            g2.drawImage(cached.image(), x, y, w, h, null);
             g2.setColor(isSelected ? Color.WHITE : Palette.BORDER);
             g2.setStroke(new BasicStroke(isSelected ? 2.5f : 1.4f));
             g2.drawRect(x, y, w, h);
@@ -363,6 +399,17 @@ public class CanvasEditorPanel extends JPanel {
         g2.setFont(metaFont);
         g2.drawString(canvas.getName() + " — " + canvas.getWidthPx() + "×" + canvas.getHeightPx() + " px",
                 PADDING, PADDING + ch + 16);
+        if (downgradedTo > 0) {
+            // Пометка в углу холста (решение D7): превью какого-то размещения не влезло в
+            // бюджет памяти при выбранной дроби и нарисовано грубее, чем выбрано.
+            String note = "превью понижено до 1/" + downgradedTo;
+            g2.setFont(metaFont);
+            int nw = g2.getFontMetrics().stringWidth(note);
+            g2.setColor(new Color(0, 0, 0, 190));
+            g2.fillRect(PADDING + cw - nw - 12, PADDING + 4, nw + 8, 16);
+            g2.setColor(Palette.WARN);
+            g2.drawString(note, PADDING + cw - nw - 8, PADDING + 16);
+        }
 
         drawSnapGuides(g2, PADDING, PADDING, cw, ch);
 

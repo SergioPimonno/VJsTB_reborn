@@ -324,6 +324,13 @@ public class SettingsManager {
         persist();
     }
 
+    /** Разрешение превью масок (имя {@code ui.MaskPreviewResolution}), см.
+     *  {@link UserProfile#getMaskPreviewResolution()}. */
+    public void setMaskPreviewResolution(String name) {
+        activeProfile().setMaskPreviewResolution(name);
+        persist();
+    }
+
     public void setExportRootFolder(String path) {
         activeProfile().setExportRootFolder(path);
         persist();

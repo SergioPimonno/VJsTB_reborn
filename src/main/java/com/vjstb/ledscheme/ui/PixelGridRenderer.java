@@ -20,6 +20,8 @@ import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import javax.imageio.ImageIO;
 
 /**
@@ -36,6 +38,13 @@ import javax.imageio.ImageIO;
  * берутся ТОЛЬКО из {@link MaskGeometry} (учитывает экран-«сетку» с множителем высоты);
  * цвет клетки — через пару {@link GridRenderOptions#colorEven()}/{@code colorOdd()},
  * полученную из {@link Screen#maskColor(int)} (пресет или собственная пара).
+ *
+ * <p>2026-09-30 (запрос «убрать ограничение 16k», решение D7): основная форма — paint-методы
+ * ({@link #paintMask}, {@link #paintCanvasMask}, {@link #paintCanvasGapMask},
+ * {@link #paintCanvasOverlay}), которые рисуют в любой Graphics2D в координатах изображения;
+ * маски экранов рисуются прямо в канвас, без промежуточных картинок. Экспорт и превью идут
+ * через {@link MaskImage} (полосы / масштаб); {@code render*}-методы, возвращающие
+ * {@code BufferedImage} целиком, оставлены обёртками для тестов и мелких размеров.
  */
 public final class PixelGridRenderer {
 
@@ -100,64 +109,114 @@ public final class PixelGridRenderer {
         }
     }
 
+    /** Шрифт по умолчанию у {@code BufferedImage.createGraphics()} — все размеры шрифтов
+     *  маски выводятся из него ({@code deriveFont}). paint-методы ставят его явно: им может
+     *  прийти Graphics компонента Swing (превью) со шрифтом Look&amp;Feel, и маска в превью
+     *  разошлась бы с экспортом. */
+    private static final Font BASE_FONT = new Font(Font.DIALOG, Font.PLAIN, 12);
+
+    /** Маска экрана целиком в отдельном изображении — обёртка над {@link #paintMask} для
+     *  тестов и мелких размеров. Большие маски — через {@link MaskImage} (полосами). */
     public static BufferedImage renderMask(Screen screen, CabinetType defaultType, Workspace workspace,
                                             GridRenderOptions opts) {
         MaskGeometry geo = MaskGeometry.of(screen, defaultType, workspace);
-        int w = geo.width();
-        int h = geo.height();
-        BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+        BufferedImage img = new BufferedImage(geo.width(), geo.height(), BufferedImage.TYPE_INT_RGB);
         Graphics2D g2 = img.createGraphics();
+        try {
+            paintMask(g2, screen, geo, opts);
+        } finally {
+            g2.dispose();
+        }
+        return img;
+    }
+
+    /** Рисует маску экрана в ЛОКАЛЬНЫХ координатах маски ({@code 0..width × 0..height}) в
+     *  переданный Graphics — без промежуточного {@code BufferedImage}.
+     *
+     *  <p>2026-09-30 (запрос пользователя: «убрать ограничение 16k», решение D7): раньше
+     *  маска рисовалась только целиком в картинку (4 Б/px), а в маску канваса вклеивалась
+     *  {@code drawImage}-ом — память ∝ площади. Теперь один и тот же код рисует и в полную
+     *  картинку ({@link #renderMask}), и в полосу потоковой записи ({@link MaskImage#writePng},
+     *  через {@code translate}+{@code clip}), и в уменьшенное превью (через {@code scale}).
+     *  Кабинеты вне текущего clip пропускаются — при записи полосами это главный выигрыш
+     *  по скорости. Состояние {@code g} (transform/clip/цвет/шрифт) не меняется. */
+    public static void paintMask(Graphics2D g, Screen screen, CabinetType defaultType, Workspace workspace,
+                                 GridRenderOptions opts) {
+        paintMask(g, screen, MaskGeometry.of(screen, defaultType, workspace), opts);
+    }
+
+    static void paintMask(Graphics2D g, Screen screen, MaskGeometry geo, GridRenderOptions opts) {
+        Graphics2D g2 = (Graphics2D) g.create();
+        try {
+            int w = geo.width();
+            int h = geo.height();
+            prepare(g2);
+            g2.setColor(Color.BLACK);
+            g2.fillRect(0, 0, w, h);
+
+            int cellW = geo.cellW();
+            int cellH = geo.cellH();
+            Font cellFont = g2.getFont().deriveFont(Font.BOLD, Math.max(10f, Math.min(cellW, cellH) * 0.16f));
+            // Запас вокруг ячейки для отсечения по clip: обводка сетки/меток (2 px) выходит за
+            // ячейку на 1 px, а подпись номера «r,c» на мелких ячейках шире самой ячейки.
+            int margin = 4 + (opts.showIds() ? (int) Math.ceil(cellFont.getSize2D() * 4) : 0);
+            java.awt.Rectangle clip = g2.getClipBounds();
+
+            for (CabinetInstance cab : screen.getCabinets()) {
+                if (cab.isHidden()) {
+                    continue;
+                }
+                int x = geo.cabinetX(cab);
+                int y = geo.cabinetY(cab);
+                if (clip != null && !clip.intersects(x - margin, y - margin, cellW + 2 * margin,
+                        cellH + 2 * margin)) {
+                    continue;
+                }
+
+                g2.setColor((cab.getRowIndex() + cab.getColIndex()) % 2 == 0 ? opts.colorEven() : opts.colorOdd());
+                g2.fillRect(x, y, cellW, cellH);
+
+                if (opts.showGrid()) {
+                    g2.setColor(new Color(255, 255, 255, 200));
+                    g2.setStroke(new BasicStroke(2f));
+                    g2.drawRect(x, y, cellW, cellH);
+                }
+
+                if (opts.showCircle()) {
+                    drawCircleMark(g2, x, y, cellW, cellH);
+                }
+                if (opts.showCross()) {
+                    drawCrossMark(g2, x, y, cellW, cellH);
+                }
+                if (opts.showCorner()) {
+                    drawCornerMarks(g2, x, y, cellW, cellH);
+                }
+
+                if (opts.showIds()) {
+                    g2.setColor(Color.WHITE);
+                    g2.setFont(cellFont);
+                    String label = cab.getDisplayRow() + "," + cab.getDisplayCol();
+                    g2.drawString(label, x + 6, y + cellFont.getSize() + 4);
+                }
+            }
+
+            if (opts.showLogo() && opts.logoImage() != null) {
+                drawLogo(g2, w, h, opts.logoImage());
+            }
+
+            drawCenterLabel(g2, w, h, opts.displayName(), geo.sizeLabel(), opts);
+        } finally {
+            g2.dispose();
+        }
+    }
+
+    /** Общие настройки Graphics для всех масок — прежде их ставил каждый render*-метод на
+     *  свежей картинке; paint-методам может прийти чужой Graphics (см. {@link #BASE_FONT}). */
+    private static void prepare(Graphics2D g2) {
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-        g2.setColor(Color.BLACK);
-        g2.fillRect(0, 0, w, h);
-
-        int cellW = geo.cellW();
-        int cellH = geo.cellH();
-        Font cellFont = g2.getFont().deriveFont(Font.BOLD, Math.max(10f, Math.min(cellW, cellH) * 0.16f));
-
-        for (CabinetInstance cab : screen.getCabinets()) {
-            if (cab.isHidden()) {
-                continue;
-            }
-            int x = geo.cabinetX(cab);
-            int y = geo.cabinetY(cab);
-
-            g2.setColor((cab.getRowIndex() + cab.getColIndex()) % 2 == 0 ? opts.colorEven() : opts.colorOdd());
-            g2.fillRect(x, y, cellW, cellH);
-
-            if (opts.showGrid()) {
-                g2.setColor(new Color(255, 255, 255, 200));
-                g2.setStroke(new BasicStroke(2f));
-                g2.drawRect(x, y, cellW, cellH);
-            }
-
-            if (opts.showCircle()) {
-                drawCircleMark(g2, x, y, cellW, cellH);
-            }
-            if (opts.showCross()) {
-                drawCrossMark(g2, x, y, cellW, cellH);
-            }
-            if (opts.showCorner()) {
-                drawCornerMarks(g2, x, y, cellW, cellH);
-            }
-
-            if (opts.showIds()) {
-                g2.setColor(Color.WHITE);
-                g2.setFont(cellFont);
-                String label = cab.getDisplayRow() + "," + cab.getDisplayCol();
-                g2.drawString(label, x + 6, y + cellFont.getSize() + 4);
-            }
-        }
-
-        if (opts.showLogo() && opts.logoImage() != null) {
-            drawLogo(g2, w, h, opts.logoImage());
-        }
-
-        drawCenterLabel(g2, w, h, opts.displayName(), geo.sizeLabel(), opts);
-
-        g2.dispose();
-        return img;
+        g2.setFont(BASE_FONT);
+        g2.setComposite(AlphaComposite.SrcOver);
     }
 
     /** Окружность, вписанная в ячейку кабинета — для физической выверки центровки. */
@@ -316,38 +375,92 @@ public final class PixelGridRenderer {
         int h = Math.max(1, canvas.getHeightPx());
         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
         Graphics2D g2 = img.createGraphics();
-        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-        g2.setColor(Color.BLACK);
-        g2.fillRect(0, 0, w, h);
+        try {
+            paintCanvasMask(g2, w, h, resolvePlacements(canvas, scene, model, settings));
+        } finally {
+            g2.dispose();
+        }
+        return img;
+    }
 
-        Font offsetFont = g2.getFont().deriveFont(Font.PLAIN, 11f);
+    /** Экран, размещённый на канвасе, с уже посчитанной геометрией и настройками маски.
+     *  Считается ОДИН раз на задание экспорта ({@link MaskImage}), а не на каждую полосу:
+     *  {@link GridRenderOptions#of} читает файл лого с диска. */
+    record PlacedScreen(CanvasPlacement placement, Screen screen, MaskGeometry geo, GridRenderOptions opts) {
+    }
+
+    /** Размещения канваса, чьи экраны есть в {@code scene} (удалённые экраны пропускаются,
+     *  как и раньше). {@code settings == null} — без настроек маски (для пустот/оверлея). */
+    static List<PlacedScreen> resolvePlacements(ContentCanvas canvas, Scene scene, AppModel model,
+                                                SettingsManager settings) {
+        List<PlacedScreen> out = new ArrayList<>();
         for (CanvasPlacement pl : canvas.getPlacements()) {
             Screen scr = screenById(scene, pl.getScreenId());
             if (scr == null) {
                 continue;
             }
-            CabinetType type = model.typeOf(scr);
-            GridRenderOptions opts = GridRenderOptions.of(scr, pl, canvas, settings);
-            BufferedImage screenImg = renderMask(scr, type, model.getWorkspace(), opts);
-            g2.drawImage(screenImg, pl.getX(), pl.getY(), null);
-
-            // Оффсет экрана в пикселях канваса — вместо общего названия/разрешения
-            // канваса в углу (контентщику нужна именно позиция каждого экрана).
-            // Рисуем на непрозрачной подложке: без неё текст сливался с пиксельной
-            // сеткой и номером кабинета «1,1» в том же углу и был нечитаем.
-            g2.setFont(offsetFont);
-            FontMetrics offsetFm = g2.getFontMetrics();
-            String offsetLabel = pl.getX() + ", " + pl.getY() + " px";
-            int labelW = offsetFm.stringWidth(offsetLabel);
-            g2.setColor(new Color(0, 0, 0, 210));
-            g2.fillRect(pl.getX(), pl.getY(), labelW + 8, offsetFont.getSize() + 6);
-            g2.setColor(Color.WHITE);
-            g2.drawString(offsetLabel, pl.getX() + 4, pl.getY() + offsetFont.getSize() + 2);
+            MaskGeometry geo = MaskGeometry.of(scr, model.typeOf(scr), model.getWorkspace());
+            GridRenderOptions opts = settings != null ? GridRenderOptions.of(scr, pl, canvas, settings) : null;
+            out.add(new PlacedScreen(pl, scr, geo, opts));
         }
+        return out;
+    }
 
-        g2.dispose();
-        return img;
+    /** Маска канваса в координатах канваса — см. {@link #renderCanvasMask}. Маски экранов
+     *  рисуются ПРЯМО в канвас ({@code translate} + {@code clip} по прямоугольнику маски — то,
+     *  что раньше обрезала отдельная картинка экрана, обрезается так же; чёрная подложка под
+     *  скрытыми кабинетами — внутри {@link #paintMask}, как раньше), без промежуточного
+     *  {@code BufferedImage} размером с экран (2026-09-30, решение D7). Размещения вне clip
+     *  пропускаются. */
+    public static void paintCanvasMask(Graphics2D g, ContentCanvas canvas, Scene scene, AppModel model,
+                                       SettingsManager settings) {
+        paintCanvasMask(g, Math.max(1, canvas.getWidthPx()), Math.max(1, canvas.getHeightPx()),
+                resolvePlacements(canvas, scene, model, settings));
+    }
+
+    static void paintCanvasMask(Graphics2D g, int w, int h, List<PlacedScreen> placed) {
+        Graphics2D g2 = (Graphics2D) g.create();
+        try {
+            prepare(g2);
+            g2.setColor(Color.BLACK);
+            g2.fillRect(0, 0, w, h);
+
+            Font offsetFont = g2.getFont().deriveFont(Font.PLAIN, 11f);
+            FontMetrics offsetFm = g2.getFontMetrics(offsetFont);
+            java.awt.Rectangle clip = g2.getClipBounds();
+            for (PlacedScreen ps : placed) {
+                CanvasPlacement pl = ps.placement();
+                int sw = ps.geo().width();
+                int sh = ps.geo().height();
+                String offsetLabel = pl.getX() + ", " + pl.getY() + " px";
+                int labelW = offsetFm.stringWidth(offsetLabel);
+                int labelH = offsetFont.getSize() + 6;
+                if (clip != null && !clip.intersects(pl.getX(), pl.getY(), Math.max(sw, labelW + 8),
+                        Math.max(sh, labelH))) {
+                    continue;
+                }
+                Graphics2D gs = (Graphics2D) g2.create();
+                try {
+                    gs.translate(pl.getX(), pl.getY());
+                    gs.clipRect(0, 0, sw, sh);
+                    paintMask(gs, ps.screen(), ps.geo(), ps.opts());
+                } finally {
+                    gs.dispose();
+                }
+
+                // Оффсет экрана в пикселях канваса — вместо общего названия/разрешения
+                // канваса в углу (контентщику нужна именно позиция каждого экрана).
+                // Рисуем на непрозрачной подложке: без неё текст сливался с пиксельной
+                // сеткой и номером кабинета «1,1» в том же углу и был нечитаем.
+                g2.setFont(offsetFont);
+                g2.setColor(new Color(0, 0, 0, 210));
+                g2.fillRect(pl.getX(), pl.getY(), labelW + 8, labelH);
+                g2.setColor(Color.WHITE);
+                g2.drawString(offsetLabel, pl.getX() + 4, pl.getY() + offsetFont.getSize() + 2);
+            }
+        } finally {
+            g2.dispose();
+        }
     }
 
     /** Маска «пустоты» канваса для After Effects — по образцу pixl Grid (пользователь
@@ -361,26 +474,50 @@ public final class PixelGridRenderer {
         int h = Math.max(1, canvas.getHeightPx());
         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g2 = img.createGraphics();
-        g2.setColor(Color.BLACK);
-        g2.fillRect(0, 0, w, h);
-        g2.setComposite(AlphaComposite.Clear);
-        for (CanvasPlacement pl : canvas.getPlacements()) {
-            Screen scr = screenById(scene, pl.getScreenId());
-            if (scr == null) {
-                continue;
-            }
-            // Размеры ячейки -- только через MaskGeometry (2026-09-30: экран-«сетка» даёт
-            // ячейки выше в N раз, и «дыры» должны совпадать с ними, а не с реальным разрешением).
-            MaskGeometry geo = MaskGeometry.of(scr, model.typeOf(scr), model.getWorkspace());
-            for (CabinetInstance cab : scr.getCabinets()) {
-                if (cab.isHidden()) {
-                    continue;
-                }
-                g2.fillRect(pl.getX() + geo.cabinetX(cab), pl.getY() + geo.cabinetY(cab), geo.cellW(), geo.cellH());
-            }
+        try {
+            paintCanvasGapMask(g2, w, h, resolvePlacements(canvas, scene, model, null));
+        } finally {
+            g2.dispose();
         }
-        g2.dispose();
         return img;
+    }
+
+    /** То же, что {@link #renderCanvasGapMask}, рисованием в Graphics (2026-09-30, D7: запись
+     *  полосами). Рисовать в изображение С АЛЬФОЙ: «дыры» над кабинетами вырезаются
+     *  {@link AlphaComposite#Clear}. */
+    public static void paintCanvasGapMask(Graphics2D g, ContentCanvas canvas, Scene scene, AppModel model) {
+        paintCanvasGapMask(g, Math.max(1, canvas.getWidthPx()), Math.max(1, canvas.getHeightPx()),
+                resolvePlacements(canvas, scene, model, null));
+    }
+
+    static void paintCanvasGapMask(Graphics2D g, int w, int h, List<PlacedScreen> placed) {
+        Graphics2D g2 = (Graphics2D) g.create();
+        try {
+            g2.setComposite(AlphaComposite.SrcOver);
+            g2.setColor(Color.BLACK);
+            g2.fillRect(0, 0, w, h);
+            g2.setComposite(AlphaComposite.Clear);
+            java.awt.Rectangle clip = g2.getClipBounds();
+            for (PlacedScreen ps : placed) {
+                // Размеры ячейки -- только через MaskGeometry (2026-09-30: экран-«сетка» даёт
+                // ячейки выше в N раз, и «дыры» должны совпадать с ними, а не с реальным разрешением).
+                MaskGeometry geo = ps.geo();
+                CanvasPlacement pl = ps.placement();
+                for (CabinetInstance cab : ps.screen().getCabinets()) {
+                    if (cab.isHidden()) {
+                        continue;
+                    }
+                    int x = pl.getX() + geo.cabinetX(cab);
+                    int y = pl.getY() + geo.cabinetY(cab);
+                    if (clip != null && !clip.intersects(x, y, geo.cellW(), geo.cellH())) {
+                        continue;
+                    }
+                    g2.fillRect(x, y, geo.cellW(), geo.cellH());
+                }
+            }
+        } finally {
+            g2.dispose();
+        }
     }
 
     /** Оверлей-«курсор» канваса для After Effects — по образцу pixl Grid: прозрачный PNG
@@ -392,37 +529,52 @@ public final class PixelGridRenderer {
         int h = Math.max(1, canvas.getHeightPx());
         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g2 = img.createGraphics();
-        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-        Font font = g2.getFont().deriveFont(Font.PLAIN, 14f);
-        g2.setFont(font);
-        FontMetrics fm = g2.getFontMetrics();
-        int lineH = fm.getHeight();
-        g2.setStroke(new BasicStroke(1f));
-
-        g2.setColor(new Color(255, 255, 255, 200));
-        g2.drawRect(0, 0, w - 1, h - 1);
-        String canvasLabel = "Canvas: " + w + "px x " + h + "px";
-        drawLabel(g2, fm, canvasLabel, 0, 0);
-
-        for (CanvasPlacement pl : canvas.getPlacements()) {
-            Screen scr = screenById(scene, pl.getScreenId());
-            if (scr == null) {
-                continue;
-            }
-            MaskGeometry geo = MaskGeometry.of(scr, model.typeOf(scr), model.getWorkspace());
-            int sw = geo.width();
-            int sh = geo.height();
-            g2.setColor(new Color(255, 255, 255, 160));
-            g2.drawRect(pl.getX(), pl.getY(), sw - 1, sh - 1);
-            // Подписи экрана — второй/третьей строкой: первая строка в (0,0) занята
-            // подписью канваса, и у экрана в левом верхнем углу они бы наложились.
-            int ty = pl.getY() + lineH + 2;
-            drawLabel(g2, fm, scr.getName() + " " + sw + "x" + sh, pl.getX(), ty);
-            drawLabel(g2, fm, "TL:" + pl.getX() + "," + pl.getY(), pl.getX(), ty + lineH + 2);
+        try {
+            paintCanvasOverlay(g2, w, h, resolvePlacements(canvas, scene, model, null));
+        } finally {
+            g2.dispose();
         }
-        g2.dispose();
         return img;
+    }
+
+    /** То же, что {@link #renderCanvasOverlay}, рисованием в Graphics (2026-09-30, D7). Фон
+     *  не заливается — рисовать в прозрачное изображение. */
+    public static void paintCanvasOverlay(Graphics2D g, ContentCanvas canvas, Scene scene, AppModel model) {
+        paintCanvasOverlay(g, Math.max(1, canvas.getWidthPx()), Math.max(1, canvas.getHeightPx()),
+                resolvePlacements(canvas, scene, model, null));
+    }
+
+    static void paintCanvasOverlay(Graphics2D g, int w, int h, List<PlacedScreen> placed) {
+        Graphics2D g2 = (Graphics2D) g.create();
+        try {
+            prepare(g2);
+            Font font = g2.getFont().deriveFont(Font.PLAIN, 14f);
+            g2.setFont(font);
+            FontMetrics fm = g2.getFontMetrics();
+            int lineH = fm.getHeight();
+            g2.setStroke(new BasicStroke(1f));
+
+            g2.setColor(new Color(255, 255, 255, 200));
+            g2.drawRect(0, 0, w - 1, h - 1);
+            String canvasLabel = "Canvas: " + w + "px x " + h + "px";
+            drawLabel(g2, fm, canvasLabel, 0, 0);
+
+            for (PlacedScreen ps : placed) {
+                CanvasPlacement pl = ps.placement();
+                Screen scr = ps.screen();
+                int sw = ps.geo().width();
+                int sh = ps.geo().height();
+                g2.setColor(new Color(255, 255, 255, 160));
+                g2.drawRect(pl.getX(), pl.getY(), sw - 1, sh - 1);
+                // Подписи экрана — второй/третьей строкой: первая строка в (0,0) занята
+                // подписью канваса, и у экрана в левом верхнем углу они бы наложились.
+                int ty = pl.getY() + lineH + 2;
+                drawLabel(g2, fm, scr.getName() + " " + sw + "x" + sh, pl.getX(), ty);
+                drawLabel(g2, fm, "TL:" + pl.getX() + "," + pl.getY(), pl.getX(), ty + lineH + 2);
+            }
+        } finally {
+            g2.dispose();
+        }
     }
 
     /** Подпись на полупрозрачной тёмной плашке — иначе белый текст не читается поверх
