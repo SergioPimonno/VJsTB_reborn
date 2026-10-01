@@ -53,6 +53,13 @@ public class SchemaPanel extends JPanel {
      *  библиотека, не годится смешивать с общим списком пресетов категории. */
     private final JComboBox<NetworkDeviceType> networkDeviceCombo = new JComboBox<>();
     private final JTextField labelField = new JTextField();
+    /** Подпись и зазор над {@link #labelField} -- прячутся вместе с полем, см.
+     *  {@link #updateAddFormEnablement()}. */
+    private final JLabel labelCaption = new JLabel("Подпись (свой текст)");
+    private final java.awt.Component labelGap = UiKit.vgap();
+    /** Секция «Добавить узел» -- её максимальную высоту надо пересчитывать, когда
+     *  поле подписи появляется/исчезает (иначе BoxLayout отдаёт лишнее место полю). */
+    private javax.swing.JComponent addSection;
     private final JToggleButton moveBtn = new JToggleButton("Перемещение", true);
     private final JToggleButton connectBtn = new JToggleButton("Соединение");
     private final JLabel selectionHint = new JLabel(" ");
@@ -80,7 +87,13 @@ public class SchemaPanel extends JPanel {
         sideScroll.setBorder(null);
         sideScroll.setMinimumSize(new Dimension(180, 100));
 
-        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, canvasScroll, sideScroll);
+        // Строка действий над холстом, по правому краю (запрос 2026-10-01): «Шрифт схемы…» и
+        // «Очистить схему» -- действия над схемой целиком, не над выбранными блоками.
+        JPanel canvasArea = new JPanel(new BorderLayout());
+        canvasArea.add(buildSchemeActionsBar(), BorderLayout.NORTH);
+        canvasArea.add(canvasScroll, BorderLayout.CENTER);
+
+        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, canvasArea, sideScroll);
         split.setContinuousLayout(true);
         split.setResizeWeight(1.0);
         UiKit.persistentDivider(settings, "schema." + mode.name().toLowerCase() + ".split", split,
@@ -126,6 +139,42 @@ public class SchemaPanel extends JPanel {
         canvas.setInteraction(next);
         moveBtn.setSelected(next == SchemaCanvasPanel.Interaction.MOVE);
         connectBtn.setSelected(next == SchemaCanvasPanel.Interaction.CONNECT);
+    }
+
+    /** Строка «Шрифт схемы…» / «Очистить схему» над холстом, прижатая вправо.
+     *  «Шрифт схемы…» (запрос 2026-09-30, пункт 1) -- размер по умолчанию для блоков и
+     *  подписей линий ТЕКУЩЕЙ схемы; «Очистить схему» -- только текущая схема режима.
+     *  Раньше обе кнопки стояли внизу боковой панели под длинным списком других
+     *  (запрос 2026-10-01: вынести наверх, строкой над холстом, вправо). */
+    private JPanel buildSchemeActionsBar() {
+        JButton fontBtn = new JButton("Шрифт схемы…");
+        fontBtn.setToolTipText("Размер шрифта по умолчанию для блоков и подписей линий этой схемы."
+                + " Блоки и линии с собственным размером (ПКМ → «Размер шрифта…») не меняются.");
+        fontBtn.addActionListener(e -> editSchemeFont());
+        JButton clear = new JButton("Очистить схему");
+        clear.addActionListener(e -> {
+            if (JOptionPane.showConfirmDialog(this,
+                    "Удалить все узлы и связи этой схемы (" + (mode == SchemaMode.POWER ? "питание" : "сигнал") + ")?",
+                    "Подтверждение", JOptionPane.OK_CANCEL_OPTION) == JOptionPane.OK_OPTION) {
+                model.clearSchema(mode);
+            }
+        });
+        JPanel bar = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 4, 2));
+        bar.add(fontBtn);
+        bar.add(clear);
+        return bar;
+    }
+
+    /** Выравнивает всех потомков вертикального BoxLayout-бокса по левому краю
+     *  (запрос 2026-10-01). Без этого подписи, кнопки и поле ввода с выравниванием по
+     *  умолчанию (центр) в BoxLayout смещались вправо относительно комбобоксов,
+     *  растянутых на всю ширину секции. */
+    private static void leftAlignChildren(JPanel box) {
+        for (java.awt.Component c : box.getComponents()) {
+            if (c instanceof javax.swing.JComponent jc) {
+                jc.setAlignmentX(LEFT_ALIGNMENT);
+            }
+        }
     }
 
     private JPanel buildSide() {
@@ -180,14 +229,22 @@ public class SchemaPanel extends JPanel {
         presetCombo.addActionListener(e -> updateAddFormEnablement());
         addBody.add(presetCombo);
         addBody.add(UiKit.vgap());
-        addBody.add(new JLabel("Подпись (свой текст)"));
+        // Поле подписи нужно только при выборе «Другое (свой текст)» (запрос
+        // 2026-10-01): иначе оно просто занимает место, а раньше ещё и растягивалось на
+        // всю свободную высоту панели -- поэтому высота поля ограничена одной строкой.
+        addBody.add(labelGap);
+        addBody.add(labelCaption);
         labelField.putClientProperty("JTextField.placeholderText", "например, «Щит А1»…");
+        labelField.setMaximumSize(new Dimension(Integer.MAX_VALUE, labelField.getPreferredSize().height));
+        labelField.setAlignmentX(LEFT_ALIGNMENT);
         addBody.add(labelField);
         addBody.add(UiKit.vgap());
         JButton addBtn = new JButton("+ Добавить узел");
         addBtn.addActionListener(e -> addNode());
         addBody.add(addBtn);
-        body.add(UiKit.dynamicSection("Добавить узел", addBody));
+        leftAlignChildren(addBody);
+        addSection = UiKit.dynamicSection("Добавить узел", addBody);
+        body.add(addSection);
         body.add(UiKit.vgap());
 
         JButton lineLegendBtn = new JButton("+ Легенда линий");
@@ -225,12 +282,21 @@ public class SchemaPanel extends JPanel {
                     return this;
                 }
             });
+            // Высота комбобокса и секции ограничена одной строкой (запрос 2026-10-01): без
+            // предела BoxLayout отдавал секции свободное место панели, и комбобокс
+            // растягивался на пол-экрана.
+            networkDeviceCombo.setMaximumSize(
+                    new Dimension(Integer.MAX_VALUE, networkDeviceCombo.getPreferredSize().height));
+            networkDeviceCombo.setAlignmentX(LEFT_ALIGNMENT);
             netBody.add(networkDeviceCombo);
             netBody.add(UiKit.vgap());
             JButton addNetworkBtn = new JButton("+ Добавить из библиотеки");
             addNetworkBtn.addActionListener(e -> addNetworkDeviceNode());
             netBody.add(addNetworkBtn);
-            body.add(UiKit.dynamicSection("Сетевое оборудование", netBody));
+            leftAlignChildren(netBody);
+            javax.swing.JComponent netSection = UiKit.dynamicSection("Сетевое оборудование", netBody);
+            UiKit.recapHeight(netSection);
+            body.add(netSection);
             body.add(UiKit.vgap());
         }
 
@@ -271,25 +337,6 @@ public class SchemaPanel extends JPanel {
         rerouteAllBtn.addActionListener(e -> canvas.rerouteAll());
         body.add(rerouteAllBtn);
 
-        // «Шрифт схемы…» (запрос 2026-09-30, пункт 1): размер по умолчанию для блоков
-        // и подписей линий ТЕКУЩЕЙ схемы; блоки/линии со своим размером не трогает
-        body.add(UiKit.vgap());
-        JButton fontBtn = new JButton("Шрифт схемы…");
-        fontBtn.setToolTipText("Размер шрифта по умолчанию для блоков и подписей линий этой схемы."
-                + " Блоки и линии с собственным размером (ПКМ → «Размер шрифта…») не меняются.");
-        fontBtn.addActionListener(e -> editSchemeFont());
-        body.add(fontBtn);
-
-        JButton clear = new JButton("Очистить схему");
-        clear.addActionListener(e -> {
-            if (JOptionPane.showConfirmDialog(this,
-                    "Удалить все узлы и связи этой схемы (" + (mode == SchemaMode.POWER ? "питание" : "сигнал") + ")?",
-                    "Подтверждение", JOptionPane.OK_CANCEL_OPTION) == JOptionPane.OK_OPTION) {
-                model.clearSchema(mode);
-            }
-        });
-        body.add(UiKit.vgap());
-        body.add(clear);
         body.add(javax.swing.Box.createVerticalGlue());
 
         return body;
@@ -317,6 +364,17 @@ public class SchemaPanel extends JPanel {
         boolean customText = isScreen || presetCombo.getSelectedItem() == null
                 || OTHER_SENTINEL.equals(presetCombo.getSelectedItem());
         labelField.setEnabled(!isScreen && customText);
+        // видно только когда подпись реально вводится: «Другое (свой текст)» либо в
+        // библиотеке для категории нет ни одного пресета (тогда другого способа
+        // задать подпись нет); у типа «Экран» подпись берётся из имени экрана
+        boolean showLabel = !isScreen && customText;
+        labelCaption.setVisible(showLabel);
+        labelField.setVisible(showLabel);
+        labelGap.setVisible(showLabel);
+        if (addSection != null) {
+            addSection.revalidate();
+            UiKit.recapHeight(addSection);
+        }
     }
 
     /** Пресеты библиотеки для выбранной категории узла + сентинел «свой текст» —
