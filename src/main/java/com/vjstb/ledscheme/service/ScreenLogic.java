@@ -460,6 +460,7 @@ public final class ScreenLogic {
     public static void regenerateStructureCells(Screen screen, CabinetType type, int towerCount,
             int verticalFramesPerTower, int backRowSegments, int peremychkaLevels, int extendedBaseSections,
             int coreBaseSectionCount, List<double[]> separateTowerSpansMm) {
+        dedupeStructureCells(screen);
         double spacing = StructureCalc.DEFAULT_TOWER_SPACING_MM;
         boolean separate = separateTowerSpansMm != null;
         Set<Integer> validTowers = new HashSet<>();
@@ -586,6 +587,95 @@ public final class ScreenLogic {
             }
         }
         screen.setStructureBaseFrameCells(keptBase);
+    }
+
+    /** Сбрасывает ВСЕ ячейки конструктива экрана (рамы, перемычки, основание) — следующая
+     *  {@link #regenerateStructureCells} построит полную видимую сетку с нуля.
+     *
+     * <p><b>Зачем (баг-репорт 2026-10-01, «у раздельных башен не рисуются перемычки»)</b>:
+     *  индексы ячеек в режиме «стена» и в режиме раздельных башен обозначают РАЗНЫЕ физические
+     *  детали. У стены столб {@code t} стоит на {@code x = t·1000} и делит соседние промежутки,
+     *  перемычка {@code t} — между общими столбами {@code t}/{@code t+1}; у раздельных башен
+     *  столбы {@code 2k}/{@code 2k+1} — башня {@code k} на своём месте на дуге, а перемычка
+     *  {@code 2k} — внутри этой башни. Merge-not-overwrite (Phase 2) при переключении «стена» →
+     *  «раздельные башни» сохранял записи чётных промежутков стены КАК ЕСТЬ, вместе с
+     *  {@code hidden}: всё, что пользователь убрал кликами в стене (в его проекте стена из 15
+     *  столбов была отредактирована — следы видны в данных: скрытые верхние рамы заднего ряда
+     *  ровно на 15 первых столбах), переезжало в новые башни 0…6, а «чистыми» получались только
+     *  башни на месте промежутков, которых в стене не было (крайние 7–8) — картинка со
+     *  скриншота пользователя: перемычки и основание только у крайней башни. Правки стены к раздельным
+     *  башням не относятся, поэтому при смене режима сетка строится заново (вызывает
+     *  {@code AppModel#updateScreenStructure}, в той же записи отмены — Ctrl+Z вернёт стену с её
+     *  правками). Внутри одного режима (пересчёт стены; изменение радиуса/зазора/числа башен у
+     *  раздельных) ручные правки по-прежнему сохраняются. */
+    public static void clearStructureCells(Screen screen) {
+        screen.setStructureFrameCells(new ArrayList<>());
+        screen.setStructurePeremychkaCells(new ArrayList<>());
+        screen.setStructureBaseFrameCells(new ArrayList<>());
+    }
+
+    /** Убирает из списков ячеек конструктива записи с ОДИНАКОВЫМ ключом (рама — столб/ряд/
+     *  сегмент, перемычка — промежуток/ряд/уровень, основание — промежуток/секция), оставляя по
+     *  одной на ключ. Правило выбора: если среди дублей есть ВИДИМАЯ запись — остаётся она
+     *  (первая видимая, со своим переопределением типа рамы): видимая запись рядом со скрытой
+     *  означает, что деталь вернули/добавили руками, а рендер и спецификация и так считали её
+     *  стоящей ({@code anyMatch(!hidden)}); иначе — первая по списку. Позиция в списке — позиция
+     *  первого вхождения ключа.
+     *
+     * <p>Нормализация (запрос 2026-10-01): сами {@code AppModel#toggle*} и регенерация дублей не
+     *  создают (ищут запись по полному ключу), но список приходит и из JSON (облако, импорт,
+     *  ручная правка файла) — с дублем клик в 3D переключал бы только ПЕРВУЮ запись, а вторая
+     *  продолжала бы рисоваться/прятаться независимо. Вызывается при загрузке проекта, в начале
+     *  {@link #regenerateStructureCells} и перед каждым переключением ячейки в 3D.
+     *
+     * @return сколько записей удалено (0 — дублей не было, список не трогается). */
+    public static int dedupeStructureCells(Screen screen) {
+        int removed = 0;
+        java.util.Map<String, StructureFrameCell> frames = new java.util.LinkedHashMap<>();
+        for (StructureFrameCell c : screen.getStructureFrameCells()) {
+            String key = c.getTowerIndex() + "/" + c.getRow() + "/" + c.getSegmentIndex();
+            StructureFrameCell kept = frames.get(key);
+            if (kept == null) {
+                frames.put(key, c);
+            } else {
+                removed++;
+                if (kept.isHidden() && !c.isHidden()) {
+                    frames.put(key, c);
+                }
+            }
+        }
+        java.util.Map<String, StructurePeremychkaCell> peremychki = new java.util.LinkedHashMap<>();
+        for (StructurePeremychkaCell c : screen.getStructurePeremychkaCells()) {
+            String key = c.getTowerIndex() + "/" + c.getRow() + "/" + c.getLevelIndex();
+            StructurePeremychkaCell kept = peremychki.get(key);
+            if (kept == null) {
+                peremychki.put(key, c);
+            } else {
+                removed++;
+                if (kept.isHidden() && !c.isHidden()) {
+                    peremychki.put(key, c);
+                }
+            }
+        }
+        java.util.Map<String, StructureBaseFrameCell> bases = new java.util.LinkedHashMap<>();
+        for (StructureBaseFrameCell c : screen.getStructureBaseFrameCells()) {
+            String key = c.getTowerIndex() + "/" + c.getSectionIndex();
+            StructureBaseFrameCell kept = bases.get(key);
+            if (kept == null) {
+                bases.put(key, c);
+            } else {
+                removed++;
+                if (kept.isHidden() && !c.isHidden()) {
+                    bases.put(key, c);
+                }
+            }
+        }
+        if (removed > 0) {
+            screen.setStructureFrameCells(new ArrayList<>(frames.values()));
+            screen.setStructurePeremychkaCells(new ArrayList<>(peremychki.values()));
+            screen.setStructureBaseFrameCells(new ArrayList<>(bases.values()));
+        }
+        return removed;
     }
 
     /** Фактический тип кабинета: переопределение по ячейке (если задано и разрешимо
