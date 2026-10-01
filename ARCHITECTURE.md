@@ -232,6 +232,58 @@ NovaLCT, что подтверждено реальной загрузкой, ч
   чуть неоптимальный размер для новых блоков (существующие проекты не
   затронуты, у них уже сохранённый размер).
 
+### Несколько схем на сцену (v2.6, `model.SchemaSheet`, `service.SchemaSheetMigration`)
+
+План и решения — `docs/masks-and-schema-sheets/PLAN.md` (D1, D2, D5, D6).
+
+- У каждой `Scene` есть `schemaSheets` (`SchemaSheet`: id, имя, `SchemaMode`,
+  `orderIndex`, `defaultFontSize`/`defaultEdgeFontSize`); у `SchemaNode`/`SchemaEdge`
+  — `sheetId`. Узлы и связи остаются ПЛОСКИМИ списками сцены (админка
+  `ProjectSummary` читает `scene.schemaNodes` из JSON напрямую). Инвариант
+  `SchemaSheetMigration`: на каждый режим ≥ 1 схема; узел без `sheetId` или со
+  ссылкой на несуществующую/чужого режима схему уходит в первую схему своего режима.
+- Текущая схема режима — transient-состояние `AppModel` (`currentSchemaSheet(mode)`);
+  `schemaNodesForCurrentScene`/`schemaEdgesForCurrentScene` фильтруют по ней, поэтому
+  UI почти не менялся. Всё, что считается «по схеме» (легенды линий, `SchemaLoadCalc`,
+  граф сети `networkGraphFromSheet`, спецификация), работает в пределах схемы узла.
+  `autoPopulateSchema` заполняет только ПЕРВУЮ схему режима (D2).
+- **Формат файла (D5, совместимость со старыми клиентами).** `Scene` на уровне
+  Jackson отдаёт схемы одного режима со сдвигом `SchemaNode.x`/`EdgeWaypoint.x` (ширина
+  предыдущих схем + зазор 400) и хранит `storageOffsetX`; приватные `@JsonProperty`-
+  методы пишут сдвинутые КОПИИ, чтение принимает «сырые» значения и лениво
+  вычитает сдвиг один раз при первом обращении (Jackson не гарантирует порядок ключей,
+  поэтому явный post-load не годится). Обычные `get/setSchema*` — `@JsonIgnore`, живые
+  списки в локальных координатах. Файл без `schemaSheets` (старый клиент пересохранил)
+  читается без вычитания. Старый клиент видит схемы рядом, но при пересохранении теряет
+  разбивку на схемы.
+- **Спецификация (D1/D6).** Один файл на сцену (`OutputPaths.sceneSpecFile`), агрегация
+  — `service.SceneSpecCalc` (без POI): оборудование и коммутация разнесены по колонкам-
+  схемам, колонки «Итого» нет намеренно (одни и те же блоки могут быть нарисованы на
+  нескольких схемах — итог вводил бы в заблуждение).
+- Размер шрифта схемы — единый резолвер `service.schemalayout.SchemaFontSizes`
+  (свой → схема → стандарт); числа схемы в узлы/связи не пишутся.
+- Отмена: `AppModel.UndoEntry` несёт листы схем и свойства масок всех экранов сцены
+  (`MaskProps`); добавляя в снимок новые поля сцены — расширяй оба конца
+  (`pushUndo`/`restore`), тест `UndoMaskPropsAndSchemaSheetsTest`.
+
+### Маски: геометрия и потоковая запись (v2.6, `service.MaskGeometry`, `ui.StreamingPngWriter`)
+
+- Размер маски экрана/ячейки — ТОЛЬКО через `MaskGeometry` (учитывает множитель
+  экрана-«сетки» `Screen.maskHeightMultiplier`): рендерер, редактор канваса, Resolume,
+  After Effects. Расчёты сигнала/питания множитель не видят.
+- Пределы — `service.MaskLimits` (≥ 16384 px — предупреждение, > 30000 — запрет;
+  30000 — предел композиции After Effects). Предупреждения перед экспортом собирает
+  `ui.MaskExportSet.confirm` вместе с `service.CanvasFit` (обрезка канвасом) — одно
+  подтверждение.
+- `PixelGridRenderer.paint*` рисуют в `Graphics2D` в координатах изображения (без
+  промежуточных `BufferedImage`); `render*` — обёртки для небольших размеров/тестов.
+  `ui.MaskImage` = задание (размер, альфа, painter) с `render(scale)`/`thumbnail`/
+  `writePng` (полосами через `StreamingPngWriter`, память ∝ ширине). Любая запись масок
+  идёт через `writePng` в `ExportProgressDialog.runInBackground`.
+- Цвет клетки маски — `Screen.maskColor(parity)` (пресет или своя пара,
+  `MaskColorPreset.CUSTOM`); JS-массив `MASK_PRESETS` на веб-странице — ручная копия
+  enum БЕЗ CUSTOM (золотое правило 4), «Свои цвета…» там отдельной логикой формы.
+
 ### Проверка обновлений (`update.*`, `ui.UpdateNoticeDialog`)
 
 `VersionManifest.fetch()` читает JSON синглтона `VERSION_MANIFEST` с сервера (не
