@@ -44,6 +44,17 @@ public final class OutputPaths {
         return dir;
     }
 
+    /** Файл спецификации СЦЕНЫ: {@code <папка>/<Сцена>/<Проект>_<Сцена>_спецификация.xlsx}
+     *  — та же папка сцены, что пакет документации уже создаёт для схем и масок
+     *  (запрос пользователя 2026-09-30, решение D6: спецификация считается на каждую
+     *  сцену отдельно, общепроектного файла больше нет). Папки не создаёт — это делает
+     *  вызывающая сторона перед записью, как и для остальных файлов пакета. */
+    public static File sceneSpecFile(File root, Project project, Scene scene) {
+        File sceneFolder = new File(root, sanitize(scene.getName()));
+        return new File(sceneFolder,
+                sanitize(project.getName()) + "_" + sanitize(scene.getName()) + "_спецификация.xlsx");
+    }
+
     /** Package-private ради теста (см. {@code OutputPathsTest}) — не запускает
      *  {@code mkdirs()}, в отличие от {@link #defaultFolder}, поэтому тест
      *  builtin-дефолта не создаёт реальных папок в домашней директории машины,
