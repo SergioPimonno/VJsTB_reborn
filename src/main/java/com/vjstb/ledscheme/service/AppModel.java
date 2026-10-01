@@ -421,9 +421,30 @@ public class AppModel {
         }
         SchemaSheetMigration.ensure(s);
         currentScene = s;
+        refitSchemaNodesOnce(s);
         currentScreen = null;
         undoStack.clear();
         fireChanged();
+    }
+
+    /** Сцены, у которых блоки схем уже подогнаны под текущие метрики раскладки в этой сессии. */
+    private final Set<Scene> refitScenes = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+
+    /** Однократная (за сессию) подгонка размеров блоков схем под метрики раскладки при открытии
+     *  сцены. Зазоры между картами и под названием блока (запрос 2026-10-01) увеличили
+     *  минимальный размер блока, а у сохранённых проектов размер блока записан в файле — без
+     *  подгонки гнёзда в тесных блоках ушли бы в «+N ещё…». Блоки только РАСТУТ
+     *  ({@link #autoFitNodeToPorts}), без записи отмены; сохраняется вместе с проектом. */
+    private void refitSchemaNodesOnce(Scene scene) {
+        if (scene == null || !refitScenes.add(scene)) {
+            return;
+        }
+        for (SchemaNode n : new ArrayList<>(scene.getSchemaNodes())) {
+            if (n.isAutoPortLegend() || n.isAutoLineLegend() || n.getType() == SchemaNodeType.SCREEN) {
+                continue;
+            }
+            autoFitNodeToPorts(n);
+        }
     }
 
     public void selectScreen(Screen s) {
@@ -2780,6 +2801,62 @@ public class AppModel {
         edge.setWireCount(null);
         edge.setWireType(null);
         edge.setLengthM(null);
+        if (label != null && !label.isBlank()) {
+            dropBusMergeAtEdgeEnds(edge);
+        }
+        changed();
+    }
+
+    /** Подпись у отдельной линии выключает шину этой группы (запрос пользователя 2026-10-01:
+     *  «появление подписи линии выключает подпись шины») — вызывается из правки ПОДПИСИ ОДНОЙ
+     *  связи; общая подпись шины ({@link #updateSchemaEdgesWireShared}) сюда не попадает.
+     *  Не пишет отдельной записи отмены: вызывается внутри уже начатой правки подписи. */
+    private void dropBusMergeAtEdgeEnds(SchemaEdge edge) {
+        if (currentScene == null) {
+            return;
+        }
+        for (SchemaNode n : currentScene.getSchemaNodes()) {
+            if (n.getMergedBusPortIds().isEmpty()) {
+                continue;
+            }
+            if (n.getId().equals(edge.getFromNodeId())) {
+                n.getMergedBusPortIds().remove(edge.getFromPortId());
+            }
+            if (n.getId().equals(edge.getToNodeId())) {
+                n.getMergedBusPortIds().remove(edge.getToPortId());
+            }
+        }
+    }
+
+    /** «Объединить в шину» / «Разделить шину» для гнезда {@code portId} узла {@code node}
+     *  (запрос пользователя 2026-10-01): по умолчанию шина выключена, подписи отдельных
+     *  линий видны; объединение включает шину (общий ствол, подпись шины), подписи линий при
+     *  этом НЕ стираются, а только не показываются. Одна запись отмены. */
+    public void setSchemaBusMerged(SchemaNode node, String portId, boolean merged) {
+        if (node == null || portId == null || node.isBusMerged(portId) == merged) {
+            return;
+        }
+        pushUndo(merged ? "Объединить в шину" : "Разделить шину");
+        if (merged) {
+            node.getMergedBusPortIds().add(portId);
+        } else {
+            node.getMergedBusPortIds().remove(portId);
+        }
+        changed();
+    }
+
+    /** Смещение подписи шины гнезда {@code portId} (перетаскивание чипа мышью) — как
+     *  {@link #setSchemaEdgeLabelOffset} для линии. Нулевое смещение удаляет запись. */
+    public void setSchemaBusLabelOffset(SchemaNode node, String portId, double dx, double dy) {
+        if (node == null || portId == null) {
+            return;
+        }
+        pushUndo("Сдвиг подписи шины");
+        if (dx == 0 && dy == 0) {
+            node.getBusLabelOffsets().remove(portId);
+        } else {
+            node.getBusLabelOffsets().put(portId, new double[]{dx, dy});
+        }
         changed();
     }
 
@@ -2797,6 +2874,7 @@ public class AppModel {
         edge.setWireType(wireType.trim());
         edge.setLengthM(lengthM != null && lengthM > 0 ? lengthM : null);
         edge.setLabel(edge.displayLabel());
+        dropBusMergeAtEdgeEnds(edge);
         changed();
     }
 

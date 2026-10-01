@@ -111,6 +111,14 @@ public class SchemaCanvasPanel extends JPanel {
      *  по-прежнему открывать редактор подписи (см. draggingLabelMoved), а не просто
      *  сбрасывать смещение в исходное. */
     private SchemaEdge draggingLabelEdge;
+    /** Перетаскивание чипа подписи ОБЪЕДИНЁННОЙ шины (запрос 2026-10-01, «ее тоже я должен
+     *  мочь двигать»): та же схема, что у {@link #draggingLabelEdge} — клик без сдвига
+     *  открывает редактор общей подписи, перетаскивание сохраняет смещение. */
+    private BundleChipHit draggingBusHit;
+    private double draggingBusStartDx;
+    private double draggingBusStartDy;
+    private Point draggingBusPressMp;
+    private boolean draggingBusMoved;
     private double draggingLabelStartDx;
     private double draggingLabelStartDy;
     private Point draggingLabelPressMp;
@@ -266,7 +274,7 @@ public class SchemaCanvasPanel extends JPanel {
      *  общая не имеет смысла — пользователь подписывает каждый кабель отдельно,
      *  как раньше, через обычное меню связи). */
     private record BundleChipHit(SchemaNode node, String portId, java.awt.Rectangle rect,
-                                  List<SchemaEdge> edges, boolean editable) { }
+                                  List<SchemaEdge> edges, boolean editable, boolean merged) { }
 
     private final List<BundleChipHit> bundleChipHits = new ArrayList<>();
 
@@ -512,6 +520,19 @@ public class SchemaCanvasPanel extends JPanel {
                     repaint();
                     return;
                 }
+                BundleChipHit busChip = bundleChipAt(mp);
+                if (busChip != null && busChip.merged() && busChip.editable()) {
+                    selectedNodes.clear();
+                    selectSingleEdge(null);
+                    double[] off = busChip.node().getBusLabelOffsets().get(busChip.portId());
+                    draggingBusHit = busChip;
+                    draggingBusStartDx = off != null ? off[0] : 0;
+                    draggingBusStartDy = off != null ? off[1] : 0;
+                    draggingBusPressMp = mp;
+                    draggingBusMoved = false;
+                    repaint();
+                    return;
+                }
                 SchemaEdge chipHit = edgeLabelChipAt(mp);
                 if (chipHit != null) {
                     selectedNodes.clear();
@@ -682,6 +703,15 @@ public class SchemaCanvasPanel extends JPanel {
                     wb.setX(draggingSegmentStartB[0] + dx);
                     wb.setY(draggingSegmentStartB[1] + dy);
                     repaint();
+                } else if (draggingBusHit != null) {
+                    double dx = draggingBusStartDx + (mp.x - draggingBusPressMp.x);
+                    double dy = draggingBusStartDy + (mp.y - draggingBusPressMp.y);
+                    if (!draggingBusMoved
+                            && Math.hypot(mp.x - draggingBusPressMp.x, mp.y - draggingBusPressMp.y) > 3) {
+                        draggingBusMoved = true;
+                    }
+                    draggingBusHit.node().getBusLabelOffsets().put(draggingBusHit.portId(), new double[]{dx, dy});
+                    repaint();
                 } else if (draggingLabelEdge != null) {
                     double dx = draggingLabelStartDx + (mp.x - draggingLabelPressMp.x);
                     double dy = draggingLabelStartDy + (mp.y - draggingLabelPressMp.y);
@@ -827,6 +857,29 @@ public class SchemaCanvasPanel extends JPanel {
                     draggingSegmentMoved = false;
                     snapGuideX = null;
                     snapGuideY = null;
+                } else if (draggingBusHit != null) {
+                    BundleChipHit hit = draggingBusHit;
+                    double[] now = hit.node().getBusLabelOffsets().get(hit.portId());
+                    double nx = now != null ? now[0] : 0;
+                    double ny = now != null ? now[1] : 0;
+                    // вернуть исходное смещение, чтобы запись отмены снимала СТАРОЕ состояние
+                    if (draggingBusStartDx == 0 && draggingBusStartDy == 0) {
+                        hit.node().getBusLabelOffsets().remove(hit.portId());
+                    } else {
+                        hit.node().getBusLabelOffsets().put(hit.portId(),
+                                new double[]{draggingBusStartDx, draggingBusStartDy});
+                    }
+                    draggingBusHit = null;
+                    draggingBusPressMp = null;
+                    boolean moved = draggingBusMoved;
+                    draggingBusMoved = false;
+                    if (moved) {
+                        model.setSchemaBusLabelOffset(hit.node(), hit.portId(), nx, ny);
+                        onChanged.run();
+                    } else {
+                        editBundleLabel(hit);
+                    }
+                    repaint();
                 } else if (draggingLabelEdge != null) {
                     if (draggingLabelMoved) {
                         model.setSchemaEdgeLabelOffset(draggingLabelEdge,
@@ -2246,10 +2299,41 @@ public class SchemaCanvasPanel extends JPanel {
      *  #updateSchemaEdgesWireShared}. */
     private void showBundleChipMenu(BundleChipHit hit, int x, int y) {
         JPopupMenu menu = new JPopupMenu();
-        if (hit.editable()) {
-            javax.swing.JMenuItem label = new javax.swing.JMenuItem("Подпись шины…");
-            label.addActionListener(ev -> editBundleLabel(hit));
-            menu.add(label);
+        if (hit.merged()) {
+            if (hit.editable()) {
+                javax.swing.JMenuItem label = new javax.swing.JMenuItem("Подпись шины…");
+                label.addActionListener(ev -> editBundleLabel(hit));
+                menu.add(label);
+            }
+            javax.swing.JMenuItem split = new javax.swing.JMenuItem("Разделить шину (подписи линий)");
+            split.addActionListener(ev -> {
+                model.setSchemaBusMerged(hit.node(), hit.portId(), false);
+                onChanged.run();
+                repaint();
+            });
+            menu.add(split);
+            if (hit.node().getBusLabelOffsets().containsKey(hit.portId())) {
+                javax.swing.JMenuItem reset = new javax.swing.JMenuItem("Вернуть подпись шины на место");
+                reset.addActionListener(ev -> {
+                    model.setSchemaBusLabelOffset(hit.node(), hit.portId(), 0, 0);
+                    onChanged.run();
+                    repaint();
+                });
+                menu.add(reset);
+            }
+        } else {
+            javax.swing.JMenuItem merge = new javax.swing.JMenuItem("Объединить в шину");
+            boolean canMerge = bundleLabelEditable(hit.edges());
+            merge.setEnabled(canMerge);
+            merge.setToolTipText(canMerge
+                    ? "Нарисовать общую шину и заменить подписи линий общей подписью шины"
+                    : "Кабели подписаны разными типами — общую подпись шины не составить");
+            merge.addActionListener(ev -> {
+                model.setSchemaBusMerged(hit.node(), hit.portId(), true);
+                onChanged.run();
+                repaint();
+            });
+            menu.add(merge);
         }
         javax.swing.JMenuItem fontSizeItem = new javax.swing.JMenuItem("Размер шрифта…");
         fontSizeItem.addActionListener(ev -> promptFontSize("Размер шрифта подписи шины",
@@ -3663,9 +3747,14 @@ public class SchemaCanvasPanel extends JPanel {
                 String clippedTitle = clipToWidth(g2, title, nw - 16);
                 int titleW = g2.getFontMetrics().stringWidth(clippedTitle);
                 int titleX = (int) n.getX() + (nw - titleW) / 2;
-                int titleY = (int) (n.getY() + topOffset
-                        + com.vjstb.ledscheme.service.schemalayout.SchemaLayoutMetrics.TITLE_BAND - 6)
-                        + labelPaddingPx();
+                // Базовая линия — от ВЕРХА полосы (topOffset) + отступ + ascent этого
+                // шрифта, а не фиксированный "TITLE_BAND - 6": тот подбирался под 12pt
+                // и у жирного заголовка со спусками кириллицы ("Контроллер") съедал
+                // почти весь зазор до первой строки гнезда/шапки карты, расположенной
+                // сразу после TITLE_BAND — текст visuально налезал (баг-репорт со
+                // скриншотом, 2026-10-01). Ascent-привязка держит одинаковый зазор
+                // независимо от размера шрифта (в т.ч. при "Размер шрифта…" на блоке).
+                int titleY = (int) (n.getY() + topOffset) + labelPaddingPx() + g2.getFontMetrics().getAscent();
                 g2.drawString(clippedTitle, titleX, titleY);
             } else {
                 drawClipped(g2, title, (int) n.getX() + 8 + labelPaddingPx(), (int) n.getY() + 20 + labelPaddingPx(),
@@ -4354,12 +4443,12 @@ public class SchemaCanvasPanel extends JPanel {
         switch (bay.side()) {
             case LEFT -> {
                 String clipped = clipToWidth(g2, bay.label(), nw - 16 - pad * 2);
-                g2.drawString(clipped, (int) ox + 4 + pad, (int) (oy + bay.alongStart()) + 9);
+                g2.drawString(clipped, (int) ox + 4 + pad, bayHeaderBaseline(g2, oy, bay));
             }
             case RIGHT -> {
                 String clipped = clipToWidth(g2, bay.label(), nw - 16 - pad * 2);
                 int w = g2.getFontMetrics().stringWidth(clipped);
-                g2.drawString(clipped, (int) (ox + nw) - 4 - pad - w, (int) (oy + bay.alongStart()) + 9);
+                g2.drawString(clipped, (int) (ox + nw) - 4 - pad - w, bayHeaderBaseline(g2, oy, bay));
             }
             case TOP, BOTTOM -> {
                 String clipped = clipToWidth(g2, bay.label(), (int) (bay.alongEnd() - bay.alongStart()));
@@ -4376,6 +4465,19 @@ public class SchemaCanvasPanel extends JPanel {
             }
         }
         g2.setFont(original);
+    }
+
+    /** Базовая линия шапки карты на LEFT/RIGHT: от верхней рамки отсека — внутренний отступ
+     *  + ascent ТЕКУЩЕГО шрифта (запрос 2026-10-01, «заголовки карт сдвинулись»: прежнее
+     *  фиксированное «+9» подбиралось под один размер шрифта, у крупного/serif-шрифта текст
+     *  садился ровно на верхнюю линию рамки). Шапка занимает строку {@code BAY_HEADER_STEP},
+     *  поэтому baseline не уходит ниже неё. */
+    private static int bayHeaderBaseline(Graphics2D g2,
+            double oy, com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Bay bay) {
+        FontMetrics fm = g2.getFontMetrics();
+        double frameTop = oy + bay.alongStart();
+        return (int) Math.round(frameTop + com.vjstb.ledscheme.service.schemalayout.SchemaLayoutMetrics.BAY_PAD
+                + fm.getAscent());
     }
 
     /** {@code true}, если ВСЕ пины отсека (та же сторона и та же карта, что у
@@ -4701,10 +4803,15 @@ public class SchemaCanvasPanel extends JPanel {
             return false;
         }
         SchemaNode node = nodeById(nodeId);
-        if (node == null || bundleCount(node, portId) < 2) {
-            return false;
-        }
-        return sharedWireType(bundledEdges(node, portId)) != null;
+        return node != null && busMerged(node, portId);
+    }
+
+    /** Шина гнезда ОБЪЕДИНЕНА пользователем (запрос 2026-10-01, «подпись шины —
+     *  опциональная»): в пучке 2+ связей И гнездо помечено {@link SchemaNode#isBusMerged}.
+     *  Пока не объединено — каждая связь рисуется и подписывается отдельно, рядом с
+     *  гнездом остаётся лишь значок «×N» с меню «Объединить в шину». */
+    private boolean busMerged(SchemaNode node, String portId) {
+        return node.isBusMerged(portId) && bundleCount(node, portId) >= 2;
     }
 
     /** Можно ли подписать пучок ОДНИМ чипом — да, если связи ещё вовсе не
@@ -4807,7 +4914,8 @@ public class SchemaCanvasPanel extends JPanel {
                     : List.of();
             double[] at = !prefix.isEmpty() ? prefix.get(prefix.size() - 1) : new double[]{pinX, pinY};
 
-            if (prefix.size() >= 2) {
+            boolean merged = busMerged(node, portId);
+            if (merged && prefix.size() >= 2) {
                 g2.setColor(style.accent);
                 g2.setStroke(new BasicStroke(2.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 0,
                         new float[]{6, 4}, 0));
@@ -4816,10 +4924,11 @@ public class SchemaCanvasPanel extends JPanel {
                             (int) Math.round(prefix.get(i + 1)[0]), (int) Math.round(prefix.get(i + 1)[1]));
                 }
             }
-
-            g2.setColor(style.accent);
-            int dotD = PIN_DOT_D + 4;
-            g2.fillOval((int) Math.round(pinX - dotD / 2.0), (int) Math.round(pinY - dotD / 2.0), dotD, dotD);
+            if (merged) {
+                g2.setColor(style.accent);
+                int dotD = PIN_DOT_D + 4;
+                g2.fillOval((int) Math.round(pinX - dotD / 2.0), (int) Math.round(pinY - dotD / 2.0), dotD, dotD);
+            }
 
             Integer bundleSize = sharedFontSize(bundle);
             if (bundleSize == null && !bundle.isEmpty()) {
@@ -4833,12 +4942,15 @@ public class SchemaCanvasPanel extends JPanel {
             String text = sharedType != null ? bundleLabelText(bundle, sharedType) : "×" + bundle.size();
             int atX = (int) Math.round(at[0]);
             int atY = (int) Math.round(at[1]);
-            if (editable) {
+            if (merged && editable) {
+                // ОБЪЕДИНЁННАЯ шина: настоящий чип с общей подписью, который можно двигать
+                // мышью (смещение — SchemaNode#getBusLabelOffsets, как у подписи линии)
                 FontMetrics fm = g2.getFontMetrics();
                 int chipW = fm.stringWidth(text) + 14;
                 int chipH = fm.getHeight() + 6;
-                int chipX = atX + 4;
-                int chipY = atY - chipH - 2;
+                double[] off = node.getBusLabelOffsets().get(portId);
+                int chipX = atX + 4 + (off != null ? (int) Math.round(off[0]) : 0);
+                int chipY = atY - chipH - 2 + (off != null ? (int) Math.round(off[1]) : 0);
                 boolean hasLabel = sharedType != null;
                 g2.setColor(hasLabel ? style.labelChipBackground : style.labelChipBackgroundEmpty);
                 g2.fillRoundRect(chipX, chipY, chipW, chipH, 8, 8);
@@ -4848,13 +4960,12 @@ public class SchemaCanvasPanel extends JPanel {
                 g2.setColor(hasLabel ? style.labelChipText : style.labelChipTextEmpty);
                 g2.drawString(text, chipX + 7, chipY + chipH - fm.getDescent() - 2);
                 bundleChipHits.add(new BundleChipHit(node, portId,
-                        new java.awt.Rectangle(chipX, chipY, chipW, chipH), bundle, true));
-            } else {
-                // Кабели пучка уже подписаны РАЗНЫМИ типами — общую подпись целиком
-                // не предложить (см. javadoc класса), но размер шрифта всё равно
-                // применим ко всем сразу (ортогонален типу кабеля) — поэтому чип
-                // под ПКМ регистрируется и здесь, просто без пункта «Подпись шины…»
-                // в его меню (см. {@link #showBundleChipMenu}).
+                        new java.awt.Rectangle(chipX, chipY, chipW, chipH), bundle, true, true));
+            } else if (!exporting || merged) {
+                // Шина НЕ объединена (по умолчанию) либо объединена, но кабели подписаны
+                // разными типами (общую подпись целиком не показать): значок «×N» без рамки —
+                // ПКМ по нему даёт «Объединить в шину»/«Размер шрифта…». В экспортируемую
+                // картинку значок необъединённой шины не попадает — это элемент редактора.
                 g2.setColor(style.mutedText);
                 FontMetrics fm = g2.getFontMetrics();
                 int textX = atX + 4;
@@ -4863,7 +4974,7 @@ public class SchemaCanvasPanel extends JPanel {
                 bundleChipHits.add(new BundleChipHit(node, portId,
                         new java.awt.Rectangle(textX - 2, textY - fm.getAscent() - 2,
                                 fm.stringWidth(text) + 4, fm.getHeight() + 4),
-                        bundle, false));
+                        bundle, false, merged));
             }
         }
     }
