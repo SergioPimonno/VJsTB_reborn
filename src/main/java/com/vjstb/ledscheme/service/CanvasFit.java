@@ -82,6 +82,31 @@ public final class CanvasFit {
         return head + "\n" + describe(over).replaceAll("(?m)^", "    ");
     }
 
+    /** Отчёт {@link #report(ContentCanvas, Scene, AppModel, boolean)} по всем канвасам
+     *  {@code scenes} (только {@code onlyThese}, если не {@code null}) — одним текстом, или
+     *  {@code null}, если ничего не вылезает. Вынесено из {@code VisualizationStagePanel}
+     *  (2026-09-30): то же подтверждение нужно и пакету документации {@code OutputStagePanel},
+     *  где оно объединено с предупреждением о стороне ≥ 16k в ОДИН диалог. */
+    public static String report(List<Scene> scenes, List<ContentCanvas> onlyThese, AppModel model,
+                                boolean includeSceneName) {
+        StringBuilder sb = new StringBuilder();
+        for (Scene sc : scenes) {
+            for (ContentCanvas c : sc.getCanvases()) {
+                if (onlyThese != null && !onlyThese.contains(c)) {
+                    continue;
+                }
+                String r = report(c, sc, model, includeSceneName);
+                if (r != null) {
+                    if (sb.length() > 0) {
+                        sb.append("\n");
+                    }
+                    sb.append(r);
+                }
+            }
+        }
+        return sb.length() == 0 ? null : sb.toString();
+    }
+
     private static Screen screenById(Scene scene, String id) {
         for (Screen s : scene.getScreens()) {
             if (s.getId().equals(id)) {

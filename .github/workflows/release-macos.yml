@@ -77,6 +77,8 @@ jobs:
 
       - name: Собрать .dmg (jpackage, со встроенным рантаймом)
         run: |
+          # --java-options -XX:MaxRAMPercentage=75: по умолчанию JVM берёт под heap лишь 25% RAM,
+          # а маски/канвасы до 30000 px (снят предел 16k, решение D7 от 2026-09-30) требуют больше.
           jpackage \
             --type dmg \
             --input dist-input \
@@ -84,6 +86,7 @@ jobs:
             --name "AVE_ToolBox" \
             --main-jar led-scheme.jar \
             --main-class com.vjstb.ledscheme.App \
+            --java-options "-XX:MaxRAMPercentage=75" \
             --app-version "${{ steps.ver.outputs.appversion }}" \
             --vendor "AVE_ToolBox" \
             --mac-package-name "AVE_ToolBox" \

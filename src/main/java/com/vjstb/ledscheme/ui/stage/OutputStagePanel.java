@@ -338,6 +338,32 @@ public class OutputStagePanel extends JPanel {
         return report.toString();
     }
 
+    /** Перед пакетом документации — ОДНО общее подтверждение по маскам (запросы пользователя
+     *  2026-09-30): маски, которые канвас обрежет ({@code CanvasFit}; раньше это подтверждение
+     *  было только на этапе «Генерация масок»), маски/канвасы со стороной ≥ 16384 и маски
+     *  экранов больше 30000 px, которые не будут записаны (решение D7, {@code MaskLimits}).
+     *  Размеры масок экранов — через {@code MaskGeometry} (с множителем «сетки»). {@code true} —
+     *  продолжать. Классы — полными именами, чтобы не трогать общий блок импортов (файл
+     *  параллельно правят треки C2/C3). */
+    private boolean confirmMaskSizes(Project project) {
+        com.vjstb.ledscheme.ui.MaskExportSet sizes = new com.vjstb.ledscheme.ui.MaskExportSet();
+        for (Scene scene : project.getScenes()) {
+            for (Screen scr : scene.getScreens()) {
+                com.vjstb.ledscheme.service.MaskGeometry geo =
+                        com.vjstb.ledscheme.service.MaskGeometry.of(scr, model.typeOf(scr), model.getWorkspace());
+                sizes.addSizeOnly(com.vjstb.ledscheme.ui.MaskExportSet.screenLabel(scene, scr, true),
+                        geo.width(), geo.height());
+            }
+            for (ContentCanvas c : scene.getCanvases()) {
+                sizes.addSizeOnly(com.vjstb.ledscheme.ui.MaskExportSet.canvasLabel(scene, c, true),
+                        c.getWidthPx(), c.getHeightPx());
+            }
+        }
+        String crop = com.vjstb.ledscheme.service.CanvasFit.report(project.getScenes(), null, model, true);
+        return com.vjstb.ledscheme.ui.MaskExportSet.confirm(this, crop, sizes,
+                "Всё равно сформировать пакет документации?");
+    }
+
     private void generate() {
         Project project = requireExportableProject();
         if (project == null) {
@@ -351,6 +377,9 @@ public class OutputStagePanel extends JPanel {
         boolean kw = settings.activeProfile().isPowerUnitKw();
 
         String report = buildProjectReport(project, kw);
+        if (!confirmMaskSizes(project)) {
+            return;
+        }
 
         // Рендер схемы сцены целиком (SceneCanvasPanel) читает "текущую" сцену модели, а
         // не параметр — на время экспорта временно переключаем выбор сцены, поэтому
@@ -418,13 +447,24 @@ public class OutputStagePanel extends JPanel {
                             docExportDpi);
                     jpegCount++;
 
-                    progress.step(scene.getName() + " · " + scr.getName() + " · маска");
-                    BufferedImage maskImg = PixelGridRenderer.renderMask(scr, type, model.getWorkspace(),
+                    String maskStep = scene.getName() + " · " + scr.getName() + " · маска";
+                    progress.step(maskStep);
+                    // 2026-09-30 (решение D7): потоковая запись полосами в фоне (окно не замирает,
+                    // есть «Отмена»); маска больше 30000 px не пишется -- пользователь видел её в
+                    // подтверждении перед пакетом (confirmMaskSizes).
+                    com.vjstb.ledscheme.ui.MaskImage maskImg = com.vjstb.ledscheme.ui.MaskImage.screen(scr, type,
+                            model.getWorkspace(),
                             PixelGridRenderer.GridRenderOptions.defaultForScreen(scr));
-                    PixelGridRenderer.writePng(maskImg,
-                            new File(masksFolder, OutputPaths.sanitize(scr.getName()) + "_Маска_"
-                                    + maskImg.getWidth() + "x" + maskImg.getHeight() + ".png"));
-                    maskCount++;
+                    if (!com.vjstb.ledscheme.service.MaskLimits.exceedsMax(maskImg.width(), maskImg.height())) {
+                        File maskFile = new File(masksFolder, OutputPaths.sanitize(scr.getName()) + "_Маска_"
+                                + maskImg.width() + "x" + maskImg.height() + ".png");
+                        progress.runInBackground(maskStep, p -> {
+                            maskImg.writePng(maskFile,
+                                    com.vjstb.ledscheme.ui.MaskImage.defaultStripRows(maskImg.width()), p);
+                            return null;
+                        });
+                        maskCount++;
+                    }
                 }
 
                 // Схема сцены ЦЕЛИКОМ (все экраны сразу, как «Показать все экраны
@@ -471,12 +511,20 @@ public class OutputStagePanel extends JPanel {
                 }
 
                 for (ContentCanvas c : scene.getCanvases()) {
-                    progress.step(scene.getName() + " · маска канваса «" + c.getName() + "»");
-                    BufferedImage img = PixelGridRenderer.renderCanvasMask(c, scene, model, settings);
-                    PixelGridRenderer.writePng(img,
-                            new File(masksFolder, "Канвас_" + OutputPaths.sanitize(c.getName()) + "_"
-                                    + img.getWidth() + "x" + img.getHeight() + ".png"));
-                    maskCount++;
+                    String canvasStep = scene.getName() + " · маска канваса «" + c.getName() + "»";
+                    progress.step(canvasStep);
+                    com.vjstb.ledscheme.ui.MaskImage img =
+                            com.vjstb.ledscheme.ui.MaskImage.canvas(c, scene, model, settings);
+                    if (!com.vjstb.ledscheme.service.MaskLimits.exceedsMax(img.width(), img.height())) {
+                        File canvasFile = new File(masksFolder, "Канвас_" + OutputPaths.sanitize(c.getName()) + "_"
+                                + img.width() + "x" + img.height() + ".png");
+                        progress.runInBackground(canvasStep, p -> {
+                            img.writePng(canvasFile,
+                                    com.vjstb.ledscheme.ui.MaskImage.defaultStripRows(img.width()), p);
+                            return null;
+                        });
+                        maskCount++;
+                    }
                 }
 
                 // Схема загрузки машины(-) кофрами (см. ui.VehicleLoadVisualizerDialog,
