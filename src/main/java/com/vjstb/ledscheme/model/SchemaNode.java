@@ -98,6 +98,18 @@ public class SchemaNode {
      *  в памяти — ЛОКАЛЬНЫЕ для листа (сдвиг раскладки листов в файле, решение D5,
      *  применяется/снимается только при (де)сериализации в {@link Scene}). */
     private String sheetId;
+    /** Гнёзда ({@link CardPort#getId()}), у которых связи ОБЪЕДИНЕНЫ в шину — явное решение
+     *  пользователя (запрос 2026-10-01, «подпись шины — опциональная»): по умолчанию
+     *  связи, сходящиеся в одно гнездо, рисуются и подписываются каждая отдельно, а шина
+     *  (общий ствол, общая подпись «N×Тип», подписи отдельных линий скрыты) включается
+     *  только пунктом «Объединить в шину» в меню значка шины. Раньше шина включалась сама
+     *  и прятала подписи, которые инженер задал отдельным линиям. Пустой список — у всех
+     *  старых проектов (их шины теперь выключены, это сознательное изменение поведения). */
+    private List<String> mergedBusPortIds = new ArrayList<>();
+    /** Смещение подписи шины от расчётной точки по гнезду ({@code portId -> [dx, dy]}, пиксели
+     *  схемы) — пользователь двигает чип подписи шины мышью, как и подписи отдельных линий
+     *  ({@link SchemaEdge#getLabelDx()}); нет записи — чип в расчётном месте. */
+    private java.util.Map<String, double[]> busLabelOffsets = new java.util.HashMap<>();
 
     public SchemaNode() {
     }
@@ -290,6 +302,27 @@ public class SchemaNode {
         this.sheetId = sheetId;
     }
 
+    public List<String> getMergedBusPortIds() {
+        return mergedBusPortIds;
+    }
+
+    public void setMergedBusPortIds(List<String> mergedBusPortIds) {
+        this.mergedBusPortIds = mergedBusPortIds != null ? mergedBusPortIds : new ArrayList<>();
+    }
+
+    public java.util.Map<String, double[]> getBusLabelOffsets() {
+        return busLabelOffsets;
+    }
+
+    public void setBusLabelOffsets(java.util.Map<String, double[]> busLabelOffsets) {
+        this.busLabelOffsets = busLabelOffsets != null ? busLabelOffsets : new java.util.HashMap<>();
+    }
+
+    /** Шина гнезда {@code portId} объединена пользователем (см. {@link #mergedBusPortIds}). */
+    public boolean isBusMerged(String portId) {
+        return portId != null && mergedBusPortIds.contains(portId);
+    }
+
     public SchemaNode copy() {
         SchemaNode n = new SchemaNode();
         n.id = id;
@@ -322,6 +355,9 @@ public class SchemaNode {
         n.networkDeviceTypeId = networkDeviceTypeId;
         n.fontSize = fontSize;
         n.sheetId = sheetId;
+        n.mergedBusPortIds = new ArrayList<>(mergedBusPortIds);
+        n.busLabelOffsets = new java.util.HashMap<>();
+        busLabelOffsets.forEach((k, v) -> n.busLabelOffsets.put(k, v.clone()));
         return n;
     }
 }

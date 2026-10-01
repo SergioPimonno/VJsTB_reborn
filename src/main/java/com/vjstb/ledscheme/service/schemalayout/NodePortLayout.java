@@ -329,7 +329,9 @@ public final class NodePortLayout {
         // отдельно только в realPin: иначе along-координаты у Bay (которые строятся
         // из ЭТОГО along, не проходя через realPin) не совпали бы с along-координатами
         // у Pin того же отсека, и рамка отсека уехала бы относительно своих гнёзд.
-        double along = horizontal ? 0 : SchemaLayoutMetrics.TITLE_BAND + topDepth;
+        // + BAY_TOP_GAP: рамка первой карты не должна прилегать к названию узла (запрос
+        // 2026-10-01); одинаково для сторон с картами и без — раскладка гнёзд едина
+        double along = horizontal ? 0 : SchemaLayoutMetrics.TITLE_BAND + SchemaLayoutMetrics.BAY_TOP_GAP + topDepth;
         String prevCardKey = null;
         double bayStart = 0;
         String bayCardId = null;

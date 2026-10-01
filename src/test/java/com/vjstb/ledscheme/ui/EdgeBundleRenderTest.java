@@ -1,5 +1,6 @@
 package com.vjstb.ledscheme.ui;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -94,6 +95,8 @@ class EdgeBundleRenderTest {
         SchemaEdge e2 = model.addSchemaEdge(SchemaMode.POWER, source.getId(), out.getId(), t2.getId(), in2.getId(), null);
         model.setSchemaEdgeWaypoints(e1, List.of(new EdgeWaypoint(250, 200)));
         model.setSchemaEdgeWaypoints(e2, List.of(new EdgeWaypoint(250, 200)));
+        // шина включается ЯВНО (запрос 2026-10-01); необъединённый значок «×N» — элемент редактора
+        model.setSchemaBusMerged(source, out.getId(), true);
 
         SchemaCanvasPanel canvas = new SchemaCanvasPanel(model, SchemaMode.POWER, settings);
         canvas.renderImage(1200, 800, false);
@@ -130,6 +133,9 @@ class EdgeBundleRenderTest {
         SchemaEdge e2 = model.addSchemaEdge(SchemaMode.POWER, source.getId(), out.getId(), t2.getId(), in2.getId(), null);
         model.updateSchemaEdgeWire(e1, 1, "CEE 32A · 3ф", null);
         model.updateSchemaEdgeWire(e2, 1, "Schuko", null);
+        // объединение вручную невозможно (пункт меню неактивен), но на уровне модели состояние
+        // «объединено» допустимо — маркер остаётся, общей подписи у него нет
+        model.setSchemaBusMerged(source, out.getId(), true);
 
         SchemaCanvasPanel canvas = new SchemaCanvasPanel(model, SchemaMode.POWER, settings);
         canvas.renderImage(1200, 800, false);
@@ -174,10 +180,13 @@ class EdgeBundleRenderTest {
         assertNull(e2.getLabel());
     }
 
-    /** Запрос пользователя 2026-09-30: "если я подписал чип шины, то чипы каждой
-     *  отдельной линии... нужно скрывать". */
+    /** Запрос пользователя 2026-10-01 (заменяет поведение 2026-09-30): подпись шины —
+     *  ОПЦИОНАЛЬНАЯ. По умолчанию подписи отдельных линий видны, даже если у всех связей
+     *  одинаковый тип (раньше шина включалась сама и прятала подписи, которые инженер
+     *  задал отдельным линиям). Объединение в шину — явное действие и прячет подписи линий;
+     *  появление подписи у отдельной линии шину выключает. */
     @Test
-    void individualEdgeChipsAreSuppressedOnceTheBundleHasASharedLabel(@TempDir Path dir) {
+    void individualLabelsStayVisibleUntilTheBusIsMergedExplicitly(@TempDir Path dir) {
         AppModel model = new AppModel(new com.vjstb.ledscheme.store.WorkspaceStore(
                 new File(dir.toFile(), "workspace.json")));
         model.selectProject(model.addProject("P"));
@@ -196,21 +205,121 @@ class EdgeBundleRenderTest {
 
         SchemaCanvasPanel canvas = new SchemaCanvasPanel(model, SchemaMode.POWER, settings);
 
-        // Ещё не подписаны -- своих отдельных чипов у них и так не было (пустая
-        // подпись), подавление пока неприменимо ни в ту, ни в другую сторону.
-        assertFalse(canvas.suppressedByBundleLabelForTest(e1));
-
+        // две связи одним и тем же типом (сценарий пользователя) — шина НЕ включается сама
         model.updateSchemaEdgesWireShared(List.of(e1, e2), "CEE 32A · 3ф", null);
+        assertFalse(source.isBusMerged(out.getId()), "по умолчанию шина выключена");
+        assertFalse(canvas.suppressedByBundleLabelForTest(e1),
+                "подписи отдельных линий видны, пока шина не объединена");
+        assertFalse(canvas.suppressedByBundleLabelForTest(e2));
+
+        model.setSchemaBusMerged(source, out.getId(), true);
         assertTrue(canvas.suppressedByBundleLabelForTest(e1),
-                "общая подпись шины уже есть -- свой чип каждой связи избыточен");
+                "после «Объединить в шину» подписи линий заменяет подпись шины");
         assertTrue(canvas.suppressedByBundleLabelForTest(e2));
 
-        // Пользователь вручную переподписал ОДНУ связь другим типом -- общая
-        // подпись шины перестаёт быть единой, подавление снимается для ОБЕИХ
-        // связей пучка (запрос: "если разные -- подпишет каждый кабель отдельно").
+        // подпись у отдельной линии выключает шину этой группы
         model.updateSchemaEdgeWire(e2, 1, "Schuko", null);
+        assertFalse(source.isBusMerged(out.getId()), "появление подписи линии выключает шину");
         assertFalse(canvas.suppressedByBundleLabelForTest(e1));
         assertFalse(canvas.suppressedByBundleLabelForTest(e2));
+    }
+
+    /** Общая подпись шины ({@code updateSchemaEdgesWireShared}) НЕ считается «подписью
+     *  отдельной линии» — шину она не выключает, иначе нельзя было бы подписать шину. */
+    @Test
+    void editingTheBusLabelKeepsTheBusMerged(@TempDir Path dir) {
+        AppModel model = new AppModel(new com.vjstb.ledscheme.store.WorkspaceStore(
+                new File(dir.toFile(), "workspace.json")));
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("Зал"));
+        SchemaNode source = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "Источник", 0, 200, null);
+        CardPort out = model.addPowerConnectorToNode(source, "CEE 32A", PortDirection.OUT, 2, 1, null);
+        model.setGroupCollapsed(source, out.getId(), Boolean.TRUE);
+        SchemaNode t1 = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "A", 500, 0, null);
+        CardPort in1 = model.addPowerConnectorToNode(t1, "CEE 32A", PortDirection.IN, 1, 1, null);
+        SchemaNode t2 = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "B", 500, 400, null);
+        CardPort in2 = model.addPowerConnectorToNode(t2, "CEE 32A", PortDirection.IN, 1, 1, null);
+        SchemaEdge e1 = model.addSchemaEdge(SchemaMode.POWER, source.getId(), out.getId(), t1.getId(), in1.getId(), null);
+        SchemaEdge e2 = model.addSchemaEdge(SchemaMode.POWER, source.getId(), out.getId(), t2.getId(), in2.getId(), null);
+
+        model.setSchemaBusMerged(source, out.getId(), true);
+        model.updateSchemaEdgesWireShared(List.of(e1, e2), "CEE 32A · 3ф", 5.0);
+
+        assertTrue(source.isBusMerged(out.getId()), "подпись шины не выключает шину");
+    }
+
+    /** Запрос 2026-10-01 («ее тоже я должен мочь двигать»): смещение подписи шины
+     *  хранится в проекте, двигает чип, отменяется одной записью, копируется со снимком. */
+    @Test
+    void busLabelOffsetMovesTheChipAndIsUndoable(@TempDir Path dir) {
+        AppModel model = new AppModel(new com.vjstb.ledscheme.store.WorkspaceStore(
+                new File(dir.toFile(), "workspace.json")));
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("Зал"));
+        SettingsManager settings = new SettingsManager(new SettingsStore(new File(dir.toFile(), "settings.json")));
+        SchemaNode source = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "Источник", 0, 200, null);
+        CardPort out = model.addPowerConnectorToNode(source, "CEE 32A", PortDirection.OUT, 2, 1, null);
+        model.setGroupCollapsed(source, out.getId(), Boolean.TRUE);
+        SchemaNode t1 = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "A", 500, 0, null);
+        CardPort in1 = model.addPowerConnectorToNode(t1, "CEE 32A", PortDirection.IN, 1, 1, null);
+        SchemaNode t2 = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "B", 500, 400, null);
+        CardPort in2 = model.addPowerConnectorToNode(t2, "CEE 32A", PortDirection.IN, 1, 1, null);
+        model.addSchemaEdge(SchemaMode.POWER, source.getId(), out.getId(), t1.getId(), in1.getId(), null);
+        model.addSchemaEdge(SchemaMode.POWER, source.getId(), out.getId(), t2.getId(), in2.getId(), null);
+        model.setSchemaBusMerged(source, out.getId(), true);
+
+        SchemaCanvasPanel canvas = new SchemaCanvasPanel(model, SchemaMode.POWER, settings);
+        canvas.renderImage(1200, 800, false);
+        Rectangle before = canvas.bundleChipRectForTest(source, out.getId());
+
+        model.setSchemaBusLabelOffset(source, out.getId(), 40, -25);
+        canvas.renderImage(1200, 800, false);
+        Rectangle moved = canvas.bundleChipRectForTest(source, out.getId());
+        assertEquals(before.x + 40, moved.x);
+        assertEquals(before.y - 25, moved.y);
+        assertArrayEquals(new double[]{40, -25}, source.copy().getBusLabelOffsets().get(out.getId()));
+
+        model.undo();
+        canvas.renderImage(1200, 800, false);
+        assertEquals(before, canvas.bundleChipRectForTest(fresh(model, source), out.getId()),
+                "сдвиг подписи шины отменяется одной записью");
+    }
+
+    private static SchemaNode fresh(AppModel model, SchemaNode node) {
+        return model.getCurrentScene().getSchemaNodes().stream()
+                .filter(n -> n.getId().equals(node.getId())).findFirst().orElseThrow();
+    }
+
+    /** «Объединить в шину»/«Разделить шину» — по одной записи отмены (снимок возвращает копии
+     *  узлов, поэтому проверяем по свежему экземпляру из сцены). */
+    @Test
+    void mergingAndSplittingTheBusAreSingleUndoSteps(@TempDir Path dir) {
+        AppModel model = new AppModel(new com.vjstb.ledscheme.store.WorkspaceStore(
+                new File(dir.toFile(), "workspace.json")));
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("Зал"));
+        SchemaNode source = model.addSchemaNode(SchemaMode.POWER, SchemaNodeType.DISTRO, "Источник", 0, 200, null);
+        CardPort out = model.addPowerConnectorToNode(source, "CEE 32A", PortDirection.OUT, 2, 1, null);
+
+        model.setSchemaBusMerged(source, out.getId(), true);
+        assertTrue(fresh(model, source).isBusMerged(out.getId()));
+        model.undo();
+        assertFalse(fresh(model, source).isBusMerged(out.getId()), "объединение отменяется одной записью");
+
+        model.setSchemaBusMerged(fresh(model, source), out.getId(), true);
+        model.setSchemaBusMerged(fresh(model, source), out.getId(), false);
+        assertFalse(fresh(model, source).isBusMerged(out.getId()));
+        model.undo();
+        assertTrue(fresh(model, source).isBusMerged(out.getId()), "разделение тоже отменяется");
+    }
+
+    /** Старый проект (до явной шины): у узла нет полей шины — все шины выключены. */
+    @Test
+    void oldNodesHaveNoMergedBuses() {
+        SchemaNode n = new SchemaNode();
+        assertTrue(n.getMergedBusPortIds().isEmpty());
+        assertTrue(n.getBusLabelOffsets().isEmpty());
+        assertFalse(n.isBusMerged("any"));
     }
 
     /** Запрос пользователя 2026-09-30: "для плашки шины недоступно изменение
