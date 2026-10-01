@@ -219,6 +219,19 @@ class StructureSeparateTowersCellsTest {
         assertEquals(18, r.baseFrameCount());
     }
 
+    /** Гипотеза «авто-генерация раздельных башен сама не даёт видимых перемычек» проверена на
+     *  параметрах экрана пользователя С НУЛЯ (новый экран, сразу вогнутый) и не подтвердилась:
+     *  все 9 башен — перемычки обоих рядов и основание, видимые. */
+    @Test
+    void freshConcaveCalculationWithUserParametersBuildsVisiblePeremychkiEverywhere(@TempDir Path dir) {
+        Screen s = screen(dir);
+        calc(s, ScreenCurveType.CONCAVE, 10_000, 500);
+        assertEquals(18, s.getStructureTowerCount());
+        assertEquals(everyTower(9), visiblePeremychki(s));
+        assertEquals(everyTower(9), visibleBases(s));
+        assertEquals(18, s.getStructurePeremychkaCells().size(), "ни скрытых, ни лишних записей");
+    }
+
     @Test
     void switchingSeparateTowersBackToWallAlsoStartsFromAFullGrid(@TempDir Path dir) {
         Screen s = screen(dir);
