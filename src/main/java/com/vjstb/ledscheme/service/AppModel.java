@@ -1959,6 +1959,81 @@ public class AppModel {
         return result;
     }
 
+    // ---- размер шрифта схемы (запрос 2026-09-30, пункт 1, трек C4) ----
+
+    /** Лист, к которому относится узел/связь режима {@code mode}, БЕЗ наведения
+     *  инварианта листов ({@link SchemaSheetMigration#ensure} обходит все узлы и связи
+     *  сцены — а это вызывается на КАЖДЫЙ узел и КАЖДУЮ связь при каждой перерисовке
+     *  холста, получился бы квадрат). Узел без/с битым {@code sheetId} принадлежит
+     *  первому листу режима — то же правило, что у самого инварианта. */
+    private SchemaSheet sheetForFontLookup(SchemaMode mode, String sheetId) {
+        if (currentScene == null) {
+            return null;
+        }
+        SchemaSheet sheet = SchemaSheetMigration.sheetById(currentScene, sheetId);
+        if (sheet != null && (mode == null || sheet.getMode() == mode)) {
+            return sheet;
+        }
+        List<SchemaSheet> sheets = SchemaSheetMigration.sheetsOf(currentScene, mode != null ? mode : SchemaMode.POWER);
+        return sheets.isEmpty() ? null : sheets.get(0);
+    }
+
+    /** Размер шрифта блока, заданный явно: свой {@link SchemaNode#getFontSize()},
+     *  иначе умолчание его схемы ({@link SchemaSheet#getDefaultFontSize()}); {@code
+     *  null} — стандартный (в этом случае холст не подменяет унаследованный шрифт). */
+    public Integer schemaNodeFontSizeOverride(SchemaNode node) {
+        return com.vjstb.ledscheme.service.schemalayout.SchemaFontSizes.nodeOverride(node,
+                sheetForFontLookup(node.getMode(), node.getSheetId()));
+    }
+
+    /** Итоговый размер шрифта подписей блока (пункты): свой → умолчание схемы →
+     *  стандарт. ЕДИНАЯ точка чтения — отрисовка, раскладка гнёзд и минимальный
+     *  размер блока обязаны брать размер отсюда, иначе блок нарисуется одним шрифтом,
+     *  а подогнан будет под другой. */
+    public int effectiveNodeFontSize(SchemaNode node) {
+        return com.vjstb.ledscheme.service.schemalayout.SchemaFontSizes.nodeSize(node,
+                sheetForFontLookup(node.getMode(), node.getSheetId()));
+    }
+
+    /** Размер шрифта подписи линии, заданный явно: свой, иначе умолчание схемы
+     *  ({@link SchemaSheet#getDefaultEdgeFontSize()}); {@code null} — стандартный. */
+    public Integer schemaEdgeFontSizeOverride(SchemaEdge edge) {
+        return com.vjstb.ledscheme.service.schemalayout.SchemaFontSizes.edgeOverride(edge,
+                sheetForFontLookup(edge.getMode(), edge.getSheetId()));
+    }
+
+    /** Итоговый размер шрифта подписи линии (пункты): свой → умолчание схемы →
+     *  стандарт. См. {@link #effectiveNodeFontSize}. */
+    public int effectiveEdgeFontSize(SchemaEdge edge) {
+        return com.vjstb.ledscheme.service.schemalayout.SchemaFontSizes.edgeSize(edge,
+                sheetForFontLookup(edge.getMode(), edge.getSheetId()));
+    }
+
+    /** Кнопка «Шрифт схемы…»: размер шрифта по умолчанию для блоков ({@code
+     *  nodeSize}) и подписей линий ({@code edgeSize}) листа; {@code null}/0 —
+     *  стандартный. Блоки и линии с СОБСТВЕННЫМ размером (контекстное меню) не
+     *  меняются, а число в узлы/связи не пишется вовсе — иначе они стали бы
+     *  «кастомными» (см. {@link com.vjstb.ledscheme.service.schemalayout.SchemaFontSizes}).
+     *  Блоки листа затем подгоняются под новый шрифт ({@link #autoFitNodeToPorts},
+     *  только растут — как после смены шрифта одного блока), всё одной записью
+     *  отмены. Без изменений (оба значения те же) — ни отмены, ни оповещения. */
+    public void setSchemaSheetFontSizes(SchemaSheet sheet, Integer nodeSize, Integer edgeSize) {
+        SchemaSheet live = requireLiveSheet(sheet);
+        Integer n = com.vjstb.ledscheme.service.schemalayout.SchemaFontSizes.normalize(nodeSize);
+        Integer e = com.vjstb.ledscheme.service.schemalayout.SchemaFontSizes.normalize(edgeSize);
+        if (java.util.Objects.equals(n, live.getDefaultFontSize())
+                && java.util.Objects.equals(e, live.getDefaultEdgeFontSize())) {
+            return;
+        }
+        pushUndo("Размер шрифта схемы");
+        live.setDefaultFontSize(n);
+        live.setDefaultEdgeFontSize(e);
+        for (SchemaNode node : schemaNodesOfSheet(currentScene, live.getId())) {
+            autoFitNodeToPorts(node);
+        }
+        changed();
+    }
+
     public void autoFitNodeToPorts(SchemaNode node) {
         List<com.vjstb.ledscheme.service.schemalayout.NodePortLayout.CardGroup> cardGroups = new ArrayList<>();
         for (SchemaCard c : node.getCards()) {
@@ -1974,8 +2049,9 @@ public class AppModel {
         }
         com.vjstb.ledscheme.model.NodeOrientation orientation = node.getOrientation() != null
                 ? node.getOrientation() : com.vjstb.ledscheme.model.NodeOrientation.RIGHT;
-        int labelFontSize = node.getFontSize() != null ? node.getFontSize()
-                : com.vjstb.ledscheme.service.schemalayout.SchemaLayoutMetrics.LABEL_FONT_SIZE;
+        // размер шрифта блока -- единое разрешение «свой -> умолчание схемы -> стандарт»
+        // (запрос 2026-09-30, пункт 1, трек C4), а не node.getFontSize() напрямую
+        int labelFontSize = effectiveNodeFontSize(node);
         // labelPaddingPx -- как и ориентация выше, AppModel не видит текущий профиль
         // (SettingsManager -- дело UI); берём максимум спиннера "Отступ подписей..."
         // в PreferencesDialog (0..20), а не 0 -- тем же принципом "заведомо не
@@ -2184,7 +2260,8 @@ public class AppModel {
 
     /** Размер шрифта заголовка/подписей блока(ов) — на многовыделение, одна запись
      *  отмены, как {@link #setSchemaNodesOrientation}. {@code fontSize == null}
-     *  возвращает блок к стандартному размеру (см. {@link SchemaNode#getFontSize()}). */
+     *  возвращает блок к размеру ЕГО СХЕМЫ (а если у схемы он не задан — к стандартному,
+     *  см. {@link #effectiveNodeFontSize}). */
     public void setSchemaNodesFontSize(Collection<SchemaNode> nodes, Integer fontSize) {
         if (nodes.isEmpty()) {
             return;
@@ -2192,6 +2269,10 @@ public class AppModel {
         pushUndo("Размер шрифта блока");
         for (SchemaNode n : nodes) {
             n.setFontSize(fontSize);
+            // как и при смене шрифта схемы (setSchemaSheetFontSizes, запрос 2026-09-30):
+            // блок подгоняется под новый размер подписей (только растёт) — иначе
+            // «0 = как у схемы» мог бы оставить блок тесным
+            autoFitNodeToPorts(n);
         }
         changed();
     }

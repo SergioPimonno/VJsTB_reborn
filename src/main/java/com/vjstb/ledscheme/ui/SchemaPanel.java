@@ -271,6 +271,15 @@ public class SchemaPanel extends JPanel {
         rerouteAllBtn.addActionListener(e -> canvas.rerouteAll());
         body.add(rerouteAllBtn);
 
+        // «Шрифт схемы…» (запрос 2026-09-30, пункт 1): размер по умолчанию для блоков
+        // и подписей линий ТЕКУЩЕЙ схемы; блоки/линии со своим размером не трогает
+        body.add(UiKit.vgap());
+        JButton fontBtn = new JButton("Шрифт схемы…");
+        fontBtn.setToolTipText("Размер шрифта по умолчанию для блоков и подписей линий этой схемы."
+                + " Блоки и линии с собственным размером (ПКМ → «Размер шрифта…») не меняются.");
+        fontBtn.addActionListener(e -> editSchemeFont());
+        body.add(fontBtn);
+
         JButton clear = new JButton("Очистить схему");
         clear.addActionListener(e -> {
             if (JOptionPane.showConfirmDialog(this,
@@ -284,6 +293,21 @@ public class SchemaPanel extends JPanel {
         body.add(javax.swing.Box.createVerticalGlue());
 
         return body;
+    }
+
+    /** «Шрифт схемы…»: диалог двух размеров и запись в текущую схему режима одной
+     *  записью отмены ({@link AppModel#setSchemaSheetFontSizes}). */
+    private void editSchemeFont() {
+        com.vjstb.ledscheme.model.SchemaSheet sheet = model.currentSchemaSheet(mode);
+        if (sheet == null) {
+            JOptionPane.showMessageDialog(this, "Сначала выберите сцену", "Нет сцены", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        SchemaFontSizeDialog.Result r = SchemaFontSizeDialog.show(this, sheet.getName(),
+                sheet.getDefaultFontSize(), sheet.getDefaultEdgeFontSize());
+        if (r != null) {
+            model.setSchemaSheetFontSizes(sheet, r.nodeSize(), r.edgeSize());
+        }
     }
 
     private void updateAddFormEnablement() {
