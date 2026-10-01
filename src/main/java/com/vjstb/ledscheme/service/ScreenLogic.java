@@ -370,6 +370,27 @@ public final class ScreenLogic {
         return false;
     }
 
+    /** Раздельная башня (2026-10-01) закрывает отрезок {@code [uMin, uMax]} развёрнутой ширины
+     *  экрана — нужна, если на нём есть хотя бы один видимый кабинет НИЖНЕГО ряда (то же
+     *  правило, что {@link #towerHasCabinetContent} для столба стены). */
+    private static boolean spanHasCabinetContent(Screen screen, CabinetType type, double uMin, double uMax) {
+        if (type == null) {
+            return true;
+        }
+        double cellW = type.getWidthMm();
+        int bottomRow = screen.getRows() - 1;
+        for (CabinetInstance cab : screen.getCabinets()) {
+            if (cab.isHidden() || cab.getRowIndex() != bottomRow) {
+                continue;
+            }
+            double left = cab.getColIndex() * cellW;
+            if (left + cellW > uMin && left < uMax) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Пересобирает списки реально существующих ячеек ОБЪЁМНОЙ башни наземного конструктива
      *  ({@link Screen#getStructureFrameCells()}/{@code getStructurePeremychkaCells()}/
      *  {@code getStructureBaseFrameCells()}) под новые номинальные границы сетки — ТОТ ЖЕ
@@ -421,13 +442,45 @@ public final class ScreenLogic {
     public static void regenerateStructureCells(Screen screen, CabinetType type, int towerCount,
             int verticalFramesPerTower, int backRowSegments, int peremychkaLevels, int extendedBaseSections,
             int coreBaseSectionCount) {
+        regenerateStructureCells(screen, type, towerCount, verticalFramesPerTower, backRowSegments,
+                peremychkaLevels, extendedBaseSections, coreBaseSectionCount, null);
+    }
+
+    /** То же, с поддержкой РАЗДЕЛЬНЫХ башен (изогнутый экран или прямой с зазором, запрос
+     *  2026-10-01, см. {@link StructureCurveMath}). {@code separateTowerSpansMm == null} —
+     *  прежняя «стена»: столбы по шагу {@link StructureCalc#DEFAULT_TOWER_SPACING_MM} от левого
+     *  края, перемычки/основание в КАЖДОМ промежутке между соседними столбами (поведение не
+     *  менялось). Иначе {@code towerCount} — число СТОЛБОВ = 2 × число башен, башня {@code k}
+     *  — столбы {@code 2k}/{@code 2k+1}, элемент списка {@code k} — отрезок развёрнутой
+     *  ширины экрана {@code [uMin, uMax]}, который она закрывает
+     *  ({@link StructureCurveMath#towerScreenSpanMm}). Башня валидна целиком (оба столба), если
+     *  на этом отрезке есть видимый кабинет нижнего ряда — то же правило, что у столба стены.
+     *  Перемычки и основание — ТОЛЬКО внутри башни (промежуток {@code 2k → 2k+1}); между
+     *  башнями (промежуток {@code 2k+1 → 2k+2}) соединений нет — там зазор. */
+    public static void regenerateStructureCells(Screen screen, CabinetType type, int towerCount,
+            int verticalFramesPerTower, int backRowSegments, int peremychkaLevels, int extendedBaseSections,
+            int coreBaseSectionCount, List<double[]> separateTowerSpansMm) {
         double spacing = StructureCalc.DEFAULT_TOWER_SPACING_MM;
+        boolean separate = separateTowerSpansMm != null;
         Set<Integer> validTowers = new HashSet<>();
-        for (int t = 0; t < towerCount; t++) {
-            if (towerHasCabinetContent(screen, type, t * spacing, spacing)) {
-                validTowers.add(t);
+        if (separate) {
+            for (int k = 0; k < separateTowerSpansMm.size() && 2 * k + 1 < towerCount; k++) {
+                double[] span = separateTowerSpansMm.get(k);
+                if (spanHasCabinetContent(screen, type, span[0], span[1])) {
+                    validTowers.add(2 * k);
+                    validTowers.add(2 * k + 1);
+                }
+            }
+        } else {
+            for (int t = 0; t < towerCount; t++) {
+                if (towerHasCabinetContent(screen, type, t * spacing, spacing)) {
+                    validTowers.add(t);
+                }
             }
         }
+        // Раздельные башни: перемычка/основание только в промежутке ВНУТРИ башни (чётный
+        // левый столб), в стене -- в любом промежутке между валидными соседями.
+        java.util.function.IntPredicate gapAllowed = separate ? t -> Math.floorMod(t, 2) == 0 : t -> true;
 
         List<StructureFrameCell> frames = screen.getStructureFrameCells();
         List<StructureFrameCell> keptFrames = new ArrayList<>();
@@ -486,13 +539,14 @@ public final class ScreenLogic {
         List<StructurePeremychkaCell> peremychki = screen.getStructurePeremychkaCells();
         List<StructurePeremychkaCell> keptPeremychki = new ArrayList<>();
         for (StructurePeremychkaCell c : peremychki) {
-            boolean gapValid = validTowers.contains(c.getTowerIndex()) && validTowers.contains(c.getTowerIndex() + 1);
+            boolean gapValid = validTowers.contains(c.getTowerIndex()) && validTowers.contains(c.getTowerIndex() + 1)
+                    && gapAllowed.test(c.getTowerIndex());
             if (gapValid && c.getLevelIndex() < peremychkaLevels) {
                 keptPeremychki.add(c);
             }
         }
         for (int t : validTowers) {
-            if (!validTowers.contains(t + 1)) {
+            if (!validTowers.contains(t + 1) || !gapAllowed.test(t)) {
                 continue;
             }
             for (int row = 0; row < 2; row++) {
@@ -513,13 +567,14 @@ public final class ScreenLogic {
         List<StructureBaseFrameCell> baseCells = screen.getStructureBaseFrameCells();
         List<StructureBaseFrameCell> keptBase = new ArrayList<>();
         for (StructureBaseFrameCell c : baseCells) {
-            boolean gapValid = validTowers.contains(c.getTowerIndex()) && validTowers.contains(c.getTowerIndex() + 1);
+            boolean gapValid = validTowers.contains(c.getTowerIndex()) && validTowers.contains(c.getTowerIndex() + 1)
+                    && gapAllowed.test(c.getTowerIndex());
             if (gapValid && c.getSectionIndex() < sectionCount) {
                 keptBase.add(c);
             }
         }
         for (int t : validTowers) {
-            if (!validTowers.contains(t + 1)) {
+            if (!validTowers.contains(t + 1) || !gapAllowed.test(t)) {
                 continue;
             }
             for (int section = 0; section < sectionCount; section++) {
@@ -920,6 +975,28 @@ public final class ScreenLogic {
         live.setFloorTeethPerCabinet(snapshot.getFloorTeethPerCabinet());
         live.setStructureFrameTypeId(snapshot.getStructureFrameTypeId());
         live.setStructureCupTypeId(snapshot.getStructureCupTypeId());
+        // Изогнутые экраны (запрос 2026-10-01): форма/радиус/зазор/число башен меняют саму
+        // раскладку столбов (стена ↔ раздельные башни), поэтому вместе с ними откатываются и
+        // номинальные границы сетки, и сами ячейки конструктива — иначе после Ctrl+Z экран
+        // снова «прямой», а ячейки остались бы от раздельных башен (перемычки только внутри
+        // пар столбов) и картинка в 3D не совпала бы ни с одним из состояний. Копии ячеек
+        // берутся из снимка через copy() — со своими hidden/frameTypeId.
+        live.setStructureCurveType(snapshot.getStructureCurveType());
+        live.setStructureCurveRadiusMm(snapshot.getStructureCurveRadiusMm());
+        live.setStructureCurveByAngle(snapshot.isStructureCurveByAngle());
+        live.setStructureTowerGapMm(snapshot.getStructureTowerGapMm());
+        live.setStructureSeparateTowerCount(snapshot.getStructureSeparateTowerCount());
+        live.setStructureTowerHeightMm(snapshot.getStructureTowerHeightMm());
+        live.setStructureTowerCount(snapshot.getStructureTowerCount());
+        live.setStructureVerticalFramesPerTower(snapshot.getStructureVerticalFramesPerTower());
+        live.setStructureBackRowSegments(snapshot.getStructureBackRowSegments());
+        live.setStructurePeremychkaLevels(snapshot.getStructurePeremychkaLevels());
+        live.setStructureExtendedBaseSections(snapshot.getStructureExtendedBaseSections());
+        live.setStructureBaseExtensionMm(snapshot.getStructureBaseExtensionMm());
+        Screen cellsCopy = snapshot.copy();
+        live.setStructureFrameCells(cellsCopy.getStructureFrameCells());
+        live.setStructurePeremychkaCells(cellsCopy.getStructurePeremychkaCells());
+        live.setStructureBaseFrameCells(cellsCopy.getStructureBaseFrameCells());
 
         List<CabinetInstance> cabs = new ArrayList<>();
         for (CabinetInstance c : snapshot.getCabinets()) {

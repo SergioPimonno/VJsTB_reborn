@@ -12,6 +12,9 @@ import java.util.UUID;
  */
 public class Screen {
 
+    /** Радиус изгиба по умолчанию (10 м) — подставляется, пока пользователь не ввёл свой. */
+    public static final double DEFAULT_CURVE_RADIUS_MM = 10_000;
+
     private String id = UUID.randomUUID().toString();
     private String name = "";
     private String cabinetTypeId;
@@ -174,6 +177,32 @@ public class Screen {
      *  та сравнивается с СОБСТВЕННОЙ высотой экрана, не с его положением над землёй. */
     private double structureScreenElevationMm;
     private String structureNotes;
+    /** Форма экрана в плане для наземного конструктива (запрос 2026-10-01, см. {@link
+     *  ScreenCurveType}, {@code service.StructureCurveMath}). {@code FLAT} по умолчанию —
+     *  старые проекты без поля открываются прямыми и считаются как раньше. */
+    private ScreenCurveType structureCurveType = ScreenCurveType.FLAT;
+    /** Радиус изгиба к ЛИЦЕВОЙ поверхности экрана, мм — канонический параметр изгиба (по
+     *  запросу 2026-10-01 пользователь может задавать изгиб И радиусом, И углом между соседними
+     *  кабинетами; угол пересчитывается из радиуса {@code θ = 2·asin(w / 2R)}, поэтому
+     *  хранится только радиус). Для {@code FLAT} не используется, но сохраняется — переключив
+     *  форму обратно, пользователь получит прежний радиус. */
+    private double structureCurveRadiusMm = DEFAULT_CURVE_RADIUS_MM;
+    /** Изгиб задан УГЛОМ между кабинетами, а не радиусом — только для UI (показать то, что
+     *  вводил пользователь), на расчёт не влияет: источник истины — {@link
+     *  #structureCurveRadiusMm}. */
+    private boolean structureCurveByAngle;
+    /** Зазор между раздельными башнями, мм (запрос 2026-10-01, решение пользователя: у
+     *  изогнутого экрана башни ВСЕГДА раздельные, с зазором от 0,5 м; у прямого 0 = прежняя
+     *  «стена» с общими столбами, > 0 — тоже раздельные башни). 0 по умолчанию — старые
+     *  проекты не меняются. Для изогнутого экрана расчёт использует не меньше
+     *  {@code StructureCurveMath#MIN_TOWER_GAP_MM}, см. {@code StructureCurveMath#effectiveGapMm}. */
+    private double structureTowerGapMm;
+    /** Число БАШЕН (пар столбов) в раздельном режиме, 0 = авто (подбирается по ширине экрана,
+     *  {@code StructureCurveMath#suggestTowerCount}). ОТДЕЛЬНОЕ поле, а не новое значение
+     *  {@link #structureTowerCount}: то хранит число СТОЛБОВ (towerIndex ячеек) и в старых
+     *  проектах трактуется именно так — в раздельном режиме {@code structureTowerCount}
+     *  выводится как 2 × это число (см. {@code AppModel#updateScreenStructure}). */
+    private int structureSeparateTowerCount;
     /** Реально существующие вертикальные сегменты/перемычки/секции базовых рам конструктива
      *  (Phase 2 — интерактивный 3D-редактор, Phase 2.1 — объёмная башня, см.
      *  STRUCTURE_CALC_NOTES.md) — источник истины о том, что физически стоит,
@@ -569,6 +598,49 @@ public class Screen {
         this.structureNotes = structureNotes;
     }
 
+    public ScreenCurveType getStructureCurveType() {
+        return structureCurveType != null ? structureCurveType : ScreenCurveType.FLAT;
+    }
+
+    public void setStructureCurveType(ScreenCurveType structureCurveType) {
+        this.structureCurveType = structureCurveType != null ? structureCurveType : ScreenCurveType.FLAT;
+    }
+
+    /** Мусорное/нулевое значение в JSON — радиус по умолчанию, а не деление на ноль в расчёте. */
+    public double getStructureCurveRadiusMm() {
+        return structureCurveRadiusMm > 0 && Double.isFinite(structureCurveRadiusMm)
+                ? structureCurveRadiusMm : DEFAULT_CURVE_RADIUS_MM;
+    }
+
+    public void setStructureCurveRadiusMm(double structureCurveRadiusMm) {
+        this.structureCurveRadiusMm = structureCurveRadiusMm > 0 && Double.isFinite(structureCurveRadiusMm)
+                ? structureCurveRadiusMm : DEFAULT_CURVE_RADIUS_MM;
+    }
+
+    public boolean isStructureCurveByAngle() {
+        return structureCurveByAngle;
+    }
+
+    public void setStructureCurveByAngle(boolean structureCurveByAngle) {
+        this.structureCurveByAngle = structureCurveByAngle;
+    }
+
+    public double getStructureTowerGapMm() {
+        return structureTowerGapMm;
+    }
+
+    public void setStructureTowerGapMm(double structureTowerGapMm) {
+        this.structureTowerGapMm = Double.isFinite(structureTowerGapMm) ? Math.max(0, structureTowerGapMm) : 0;
+    }
+
+    public int getStructureSeparateTowerCount() {
+        return structureSeparateTowerCount;
+    }
+
+    public void setStructureSeparateTowerCount(int structureSeparateTowerCount) {
+        this.structureSeparateTowerCount = Math.max(0, structureSeparateTowerCount);
+    }
+
     public List<StructureFrameCell> getStructureFrameCells() {
         return structureFrameCells;
     }
@@ -705,6 +777,11 @@ public class Screen {
         s.structureBallastTypeId = structureBallastTypeId;
         s.structureScreenElevationMm = structureScreenElevationMm;
         s.structureNotes = structureNotes;
+        s.structureCurveType = structureCurveType;
+        s.structureCurveRadiusMm = structureCurveRadiusMm;
+        s.structureCurveByAngle = structureCurveByAngle;
+        s.structureTowerGapMm = structureTowerGapMm;
+        s.structureSeparateTowerCount = structureSeparateTowerCount;
         s.structureFrameCells = new ArrayList<>();
         for (StructureFrameCell c : structureFrameCells) {
             // Баг-репорт (найден при переносе на объёмную башню): 2-арг конструктор не сохранял
