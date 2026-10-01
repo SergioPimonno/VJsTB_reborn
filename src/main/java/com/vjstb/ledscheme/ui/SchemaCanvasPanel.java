@@ -1042,6 +1042,33 @@ public class SchemaCanvasPanel extends JPanel {
         repaint();
     }
 
+    /** Id схемы (листа), для которой холст последний раз синхронизировался — см.
+     *  {@link #syncWithCurrentSheet}. */
+    private String shownSheetId;
+
+    /**
+     * Вызывается панелью-хозяином при каждом обновлении модели: если ТЕКУЩАЯ схема
+     * режима сменилась (комбобокс «Схема:» в {@code ContextBar}, «＋», «⧉», удаление
+     * схемы — запрос пользователя 2026-09-30, несколько схем на сцену), сбрасывает
+     * выделение и незавершённое соединение. Без этого выделенные блоки прежней схемы
+     * оставались бы в {@link #selectedNodes}: на экране их уже нет, но «Удалить
+     * выбранное»/Delete удалило бы их по id из ДРУГОЙ схемы.
+     */
+    public void syncWithCurrentSheet() {
+        com.vjstb.ledscheme.model.SchemaSheet cur = model.currentSchemaSheet(mode);
+        String id = cur == null ? null : cur.getId();
+        if (java.util.Objects.equals(id, shownSheetId)) {
+            return;
+        }
+        shownSheetId = id;
+        selectedNodes.clear();
+        selectSingleEdge(null);
+        connectPendingId = null;
+        connectPendingPortId = null;
+        connectPendingCabinetInstanceId = null;
+        repaint();
+    }
+
     public void setOnChanged(Runnable onChanged) {
         this.onChanged = onChanged != null ? onChanged : () -> { };
     }

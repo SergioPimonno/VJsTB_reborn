@@ -69,6 +69,10 @@ public class SignalStagePanel extends JPanel {
     private final JToggleButton chainViewBtn = new JToggleButton("Расключение экрана", true);
     private final JToggleButton schemaViewBtn = new JToggleButton("Общая схема сигнала");
     private final JToggleButton networkViewBtn = new JToggleButton("Сетевой менеджер");
+    /** Верхняя строка «Проект / Сцена / Экран|Схема» — в виде общей схемы показывает
+     *  «Схема:» вместо «Экран:»; в «Расключении» и «Сетевом менеджере» — обычный вид
+     *  с экраном (запрос 2026-09-30, несколько схем на сцену). */
+    private final ContextBar contextBar;
     private final JCheckBox showAllScreens = new JCheckBox("Показать все экраны сцены");
     private final JToggleButton quickConnectBtn = new JToggleButton("⚡ Быстрое подключение");
     private final JButton exportSchemeBtn = new JButton("Экспорт схемы…");
@@ -137,6 +141,7 @@ public class SignalStagePanel extends JPanel {
     public SignalStagePanel(AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings) {
         this.model = model;
         this.settings = settings;
+        this.contextBar = new ContextBar(model, true);
         this.chainCtrl = new ChainInteractionController(model, this::refresh);
         // Клик по непрописанному кабинету сам начинает цепочку для ТЕКУЩЕГО
         // выбранного порта — кнопка порта (или цифровой хоткей) только выбирает
@@ -350,6 +355,7 @@ public class SignalStagePanel extends JPanel {
         schemaPanel.setOnScreenActivated(scr -> {
             model.selectScreen(scr);
             chainViewBtn.setSelected(true);
+            contextBar.setSchemaMode(null);
             viewCards.show(viewContainer, VIEW_CHAIN);
             updateChainOnlyControlsVisibility();
         });
@@ -365,6 +371,7 @@ public class SignalStagePanel extends JPanel {
         viewGroup.add(schemaViewBtn);
         viewGroup.add(networkViewBtn);
         chainViewBtn.addActionListener(e -> {
+            contextBar.setSchemaMode(null);
             viewCards.show(viewContainer, VIEW_CHAIN);
             updateChainOnlyControlsVisibility();
         });
@@ -374,10 +381,12 @@ public class SignalStagePanel extends JPanel {
                         && settings.activeProfile().isSignalChainEndpointSocketsEnabled();
                 model.autoPopulateSchema(SchemaMode.SIGNAL, autoConnect);
             }
+            contextBar.setSchemaMode(SchemaMode.SIGNAL);
             viewCards.show(viewContainer, VIEW_SCHEMA);
             updateChainOnlyControlsVisibility();
         });
         networkViewBtn.addActionListener(e -> {
+            contextBar.setSchemaMode(null);
             viewCards.show(viewContainer, VIEW_NETWORK);
             updateChainOnlyControlsVisibility();
         });
@@ -385,7 +394,7 @@ public class SignalStagePanel extends JPanel {
                 + " шаблон серпантина для быстрой прописки (как в NovaLCT)");
         quickConnectBtn.addActionListener(e -> canvas.setQuickConnectMode(quickConnectBtn.isSelected()));
         exportSchemeBtn.setToolTipText("Сохранить текущую открытую схему (расключение экрана, обзор всех"
-                + " экранов сцены или общую схему сигнала) в JPEG — папка спрашивается каждый раз,"
+                + " экранов сцены или ТЕКУЩУЮ общую схему сигнала) в JPEG — папка спрашивается каждый раз,"
                 + " стартовая папка и качество берутся из настроек пакета документации (этап «Вывод»)");
         exportSchemeBtn.addActionListener(e -> exportCurrentScheme());
         JPanel toggleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
@@ -397,7 +406,7 @@ public class SignalStagePanel extends JPanel {
         toggleRow.add(exportSchemeBtn);
 
         JPanel top = new JPanel(new BorderLayout());
-        top.add(new ContextBar(model, true), BorderLayout.NORTH);
+        top.add(contextBar, BorderLayout.NORTH);
         top.add(toggleRow, BorderLayout.SOUTH);
 
         setLayout(new BorderLayout());
@@ -466,7 +475,9 @@ public class SignalStagePanel extends JPanel {
     private void exportCurrentScheme() {
         Scene scene = model.getCurrentScene();
         if (schemaViewBtn.isSelected()) {
-            String name = (scene != null ? scene.getName() : "Схема") + " Сигнал";
+            com.vjstb.ledscheme.model.SchemaSheet sheet = model.currentSchemaSheet(SchemaMode.SIGNAL);
+            String name = CurrentSchemeExporter.currentSchemaFileName(scene != null ? scene.getName() : null,
+                    sheet != null ? sheet.getName() : null);
             boolean screensAsWiring = settings.activeProfile().isSchemaScreensAsWiringDiagram();
             CurrentSchemeExporter.export(this, model, settings, name, dpiScale -> {
                 com.vjstb.ledscheme.ui.SchemaCanvasPanel c =
