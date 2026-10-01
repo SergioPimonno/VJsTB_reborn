@@ -1375,10 +1375,19 @@ public class AppModel {
         // больше не зависит от frameW (StructureCalc.CORE_BASE_SECTION_COUNT -- всегда 1
         // модуль, см. её javadoc), extendedBaseSectionsFromOverhang сама вычитает этот модуль
         // из baseExtensionMm (значение включает в себя обязательную часть, не идёт сверх неё).
-        int extendedBaseSections = StructureCalc.extendedBaseSectionsFromOverhang(baseExtensionMm, frameW);
+        // Round 25 (баг-репорт 2026-10-01, фото: задний ряд башни стоял без рамы основания) --
+        // база не может быть короче, чем занимают по глубине сами вертикальные рамы
+        // (StructureCalc.totalBaseSections/baseFootprintSectionCount). Персистентное
+        // structureExtendedBaseSections по-прежнему = секции сверх 1 обязательного модуля
+        // (totalSections - CORE, его читает 3D-панель), а регенерации "ядро" передаётся как
+        // ВЕСЬ footprint -- усилительные рамы (row 2) не должны появляться над секцией, на
+        // которой уже стоит задний ряд.
+        int footprintSections = StructureCalc.baseFootprintSectionCount(backRowSegments);
+        int totalBaseSections = StructureCalc.totalBaseSections(baseExtensionMm, frameW, backRowSegments);
+        int extendedBaseSections = totalBaseSections - StructureCalc.CORE_BASE_SECTION_COUNT;
         screen.setStructureExtendedBaseSections(extendedBaseSections);
         ScreenLogic.regenerateStructureCells(screen, typeOf(screen), towerCount, verticalFramesPerTower,
-                backRowSegments, peremychkaLevels, extendedBaseSections, StructureCalc.CORE_BASE_SECTION_COUNT);
+                backRowSegments, peremychkaLevels, totalBaseSections - footprintSections, footprintSections);
         changed();
     }
 
