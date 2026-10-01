@@ -282,11 +282,23 @@ public final class StructureCalc {
      * ОДНИМ числом. {@code verticalFrameCount}/{@code peremychkaCount}/{@code baseFrameCount}
      * остаются в записи (внутренние тесты и 3D-picking по-прежнему опираются на разбивку по
      * ролям) — просто UI-слой (спецификация в диалоге/XLSX) теперь показывает сумму, а не три
-     * строки. */
+     * строки.
+     *
+     * <p><b>{@code curveWarnings} (запрос 2026-10-01)</b> — предупреждения раздельных башен
+     * изогнутого экрана / прямого с зазором ({@link StructureCurveMath#analyze}): пересечение
+     * оснований соседних башен с минимальным допустимым зазором и максимальной глубиной, башни
+     * за краем экрана и т.п. У прямого экрана с зазором 0 («стена») список всегда пуст — его
+     * расчёт этим не затронут. Не блокирует ничего: зазор — параметр пользователя, расчёт его
+     * сам не меняет. */
     public record Result(int verticalFrameCount, int peremychkaCount, int baseFrameCount,
                           int totalFrameCount, int cupCount, int boltCount, double requiredBallastKg,
                           int ballastContainerCount, double totalTowerHeightMm,
-                          boolean exceedsSafeHeightWarning, boolean exceedsScreenHeightWarning) {
+                          boolean exceedsSafeHeightWarning, boolean exceedsScreenHeightWarning,
+                          java.util.List<String> curveWarnings) {
+
+        public Result {
+            curveWarnings = curveWarnings != null ? java.util.List.copyOf(curveWarnings) : java.util.List.of();
+        }
     }
 
     private record TowerRow(int tower, int row) {
@@ -358,9 +370,16 @@ public final class StructureCalc {
         // предупреждения (по прямому указанию пользователя, 2026-08-19: "если высота башни ==
         // экрану, то расчёт производим, если выше — выдаём предупреждение"). Раньше граница
         // была {@code >=} (равенство уже считалось нарушением) — теперь строго {@code >}.
+        // Изогнутый экран / раздельные башни (2026-10-01): количества железа выше считаются
+        // ТЕМ ЖЕ кодом -- раздельность выражена в самих ячейках (2 столба на башню, перемычки
+        // и основание только внутри башни, см. ScreenLogic#regenerateStructureCells), здесь
+        // добавляются только предупреждения геометрии (коллизии оснований и т.п.).
+        java.util.List<String> curveWarnings = StructureCurveMath.separateTowers(screen)
+                ? StructureCurveMath.analyze(StructureCurveMath.setupOf(screen, type, workspace)).warnings()
+                : java.util.List.of();
         return new Result(verticalFrameCount, peremychkaCount, baseFrameCount, totalFrameCount, cupCount,
                 boltCount, requiredBallastKg, ballastContainerCount, towerHeightMm,
                 towerHeightMm > MAX_SAFE_TOWER_HEIGHT_MM,
-                screenHeightMm > 0 && towerHeightMm > screenHeightMm);
+                screenHeightMm > 0 && towerHeightMm > screenHeightMm, curveWarnings);
     }
 }
