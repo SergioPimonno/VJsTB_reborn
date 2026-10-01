@@ -51,6 +51,9 @@ public class PowerStagePanel extends JPanel {
     private final SchemaPanel schemaPanel;
     private final JToggleButton chainViewBtn = new JToggleButton("Расключение экрана", true);
     private final JToggleButton schemaViewBtn = new JToggleButton("Общая схема питания");
+    /** Верхняя строка «Проект / Сцена / Экран|Схема» — в виде общей схемы показывает
+     *  «Схема:» вместо «Экран:» (запрос 2026-09-30, несколько схем на сцену). */
+    private final ContextBar contextBar;
     private final JCheckBox showAllScreens = new JCheckBox("Показать все экраны сцены");
     private final JToggleButton quickConnectBtn = new JToggleButton("⚡ Быстрое подключение");
     private final JButton exportSchemeBtn = new JButton("Экспорт схемы…");
@@ -88,6 +91,7 @@ public class PowerStagePanel extends JPanel {
     public PowerStagePanel(AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings) {
         this.model = model;
         this.settings = settings;
+        this.contextBar = new ContextBar(model, true);
         this.chainCtrl = new ChainInteractionController(model, this::refresh);
         // Клик по непрописанному кабинету сам начинает цепочку для ТЕКУЩЕЙ выбранной
         // фазы — кнопка фазы (или хоткей 1/2/3) только выбирает цель, не запускает
@@ -173,6 +177,7 @@ public class PowerStagePanel extends JPanel {
         schemaPanel.setOnScreenActivated(scr -> {
             model.selectScreen(scr);
             chainViewBtn.setSelected(true);
+            contextBar.setSchemaMode(null);
             viewCards.show(viewContainer, VIEW_CHAIN);
         });
 
@@ -182,7 +187,10 @@ public class PowerStagePanel extends JPanel {
         ButtonGroup viewGroup = new ButtonGroup();
         viewGroup.add(chainViewBtn);
         viewGroup.add(schemaViewBtn);
-        chainViewBtn.addActionListener(e -> viewCards.show(viewContainer, VIEW_CHAIN));
+        chainViewBtn.addActionListener(e -> {
+            contextBar.setSchemaMode(null);
+            viewCards.show(viewContainer, VIEW_CHAIN);
+        });
         schemaViewBtn.addActionListener(e -> {
             if (settings.activeProfile().isPowerSchemaAutoPopulateEnabled()) {
                 // Питание не идёт через порты контроллера (см. PowerChain) — вместо
@@ -192,13 +200,14 @@ public class PowerStagePanel extends JPanel {
                         && settings.activeProfile().isPowerChainEndpointSocketsEnabled();
                 model.autoPopulateSchema(SchemaMode.POWER, autoConnect);
             }
+            contextBar.setSchemaMode(SchemaMode.POWER);
             viewCards.show(viewContainer, VIEW_SCHEMA);
         });
         quickConnectBtn.setToolTipText("Протяжка ЛКМ по холсту выделяет область — радиальное меню предложит"
                 + " шаблон серпантина для быстрой прописки (как в NovaLCT)");
         quickConnectBtn.addActionListener(e -> canvas.setQuickConnectMode(quickConnectBtn.isSelected()));
         exportSchemeBtn.setToolTipText("Сохранить текущую открытую схему (расключение экрана, обзор всех"
-                + " экранов сцены или общую схему питания) в JPEG — папка спрашивается каждый раз,"
+                + " экранов сцены или ТЕКУЩУЮ общую схему питания) в JPEG — папка спрашивается каждый раз,"
                 + " стартовая папка и качество берутся из настроек пакета документации (этап «Вывод»)");
         exportSchemeBtn.addActionListener(e -> exportCurrentScheme());
         JPanel toggleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
@@ -209,7 +218,7 @@ public class PowerStagePanel extends JPanel {
         toggleRow.add(exportSchemeBtn);
 
         JPanel top = new JPanel(new BorderLayout());
-        top.add(new ContextBar(model, true), BorderLayout.NORTH);
+        top.add(contextBar, BorderLayout.NORTH);
         top.add(toggleRow, BorderLayout.SOUTH);
 
         setLayout(new BorderLayout());
@@ -268,7 +277,9 @@ public class PowerStagePanel extends JPanel {
     private void exportCurrentScheme() {
         Scene scene = model.getCurrentScene();
         if (schemaViewBtn.isSelected()) {
-            String name = (scene != null ? scene.getName() : "Схема") + " Сила";
+            com.vjstb.ledscheme.model.SchemaSheet sheet = model.currentSchemaSheet(SchemaMode.POWER);
+            String name = CurrentSchemeExporter.currentSchemaFileName(scene != null ? scene.getName() : null,
+                    sheet != null ? sheet.getName() : null);
             boolean screensAsWiring = settings.activeProfile().isSchemaScreensAsWiringDiagram();
             CurrentSchemeExporter.export(this, model, settings, name, dpiScale -> {
                 com.vjstb.ledscheme.ui.SchemaCanvasPanel c =
