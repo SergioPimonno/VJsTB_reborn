@@ -240,6 +240,36 @@ public final class StructureCalc {
         return (int) Math.ceil(beyondMandatoryMm / sectionDepthMm);
     }
 
+    /** Сколько каталожных модулей базы (секций глубиной {@code sectionDepthMm} = ширина рамы)
+     *  физически занимают по глубине сами вертикальные рамы столба: передний ряд — всегда 1
+     *  модуль ({@link #CORE_BASE_SECTION_COUNT}), задний ряд (Round 5, {@code backRowSegments >
+     *  0}) стоит ВПЛОТНУЮ за ним и занимает ещё ровно 1 модуль (его глубина — та же ширина
+     *  рамы, что и у секции базы, см. Round 16).
+     *
+     * <p><b>Round 25 (баг-репорт 2026-10-01: "при указании для экрана глубины выноса рама
+     *  основания не рисуется, хотя там всегда используется та же самая рама", фото)</b> — на
+     *  фото башня из двух столбов по 2 ряда (глубина 1000 мм), а база — только 1 модуль (500
+     *  мм) под передним рядом: задний ряд стоял "в воздухе". Причина — Round 19 сократил
+     *  обязательную часть до 1 модуля, а поле «Вынос базы» по умолчанию 500 мм, при этом
+     *  генератор ВСЕГДА ставит задний ряд. Под каждой вертикальной рамой база обязана быть —
+     *  это нижняя граница {@link #totalBaseSections}. */
+    public static int baseFootprintSectionCount(int backRowSegments) {
+        return CORE_BASE_SECTION_COUNT + (backRowSegments > 0 ? 1 : 0);
+    }
+
+    /** ИТОГОВОЕ число секций базы (обязательная + вынос) — глубина базы = результат ×
+     *  {@code sectionDepthMm}, то есть ВСЕГДА кратна каталожному модулю (500 мм при реальной
+     *  библиотеке): {@code 1 + ceil((вынос − 500) / 500)} (Round 19, введённое значение =
+     *  ПОЛНАЯ глубина базы), но не меньше, чем занимают по глубине сами вертикальные рамы
+     *  столба ({@link #baseFootprintSectionCount}, Round 25). Пример: вынос 500 мм при башне с
+     *  задним рядом — 2 секции (1000 мм, вся башня стоит на базе, выноса сверх неё нет); 1500
+     *  мм — 3 секции (1500 мм, как и было в Round 19); 750 мм без заднего ряда — 2 секции
+     *  (округление вверх до целого модуля). */
+    public static int totalBaseSections(double baseExtensionMm, double sectionDepthMm, int backRowSegments) {
+        return Math.max(baseFootprintSectionCount(backRowSegments),
+                CORE_BASE_SECTION_COUNT + extendedBaseSectionsFromOverhang(baseExtensionMm, sectionDepthMm));
+    }
+
     /** Итог расчёта количества железа. Все счётчики читают УЖЕ подтверждённые
      *  (возможно, вручную скорректированные пользователем) списки ячеек с {@link Screen} — см.
      *  class-javadoc.

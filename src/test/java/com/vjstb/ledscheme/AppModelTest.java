@@ -3599,11 +3599,90 @@ class AppModelTest {
         assertTrue(screen.getStructureFrameCells().stream().noneMatch(com.vjstb.ledscheme.model.StructureFrameCell::isHidden),
                 "свежесгенерированная сетка целиком видима");
         assertEquals(4, screen.getStructurePeremychkaCells().size(), "1 зазор x 2 ряда x 2 уровня перемычек");
-        // Round 19: ядро -- фиксированная StructureCalc.CORE_BASE_SECTION_COUNT = 1 модуль,
-        // не зависит от габаритов рамы; baseExtensionMm=0 не добавляет секций сверх неё.
-        assertEquals(1, screen.getStructureBaseFrameCells().size(), "1 зазор x 1 секция (ядро)");
+        // Round 19: обязательная часть -- StructureCalc.CORE_BASE_SECTION_COUNT = 1 модуль;
+        // Round 25: но база не короче самой башни -- задний ряд (backRowSegments=3) стоит
+        // вплотную за передним, под ним тоже рама основания -> 2 секции даже при выносе 0.
+        assertEquals(2, screen.getStructureBaseFrameCells().size(), "1 зазор x 2 секции (под обоими рядами)");
         assertTrue(screen.getStructureBaseFrameCells().stream()
                 .noneMatch(com.vjstb.ledscheme.model.StructureBaseFrameCell::isHidden));
+    }
+
+    /** Round 25 — баг-репорт 2026-10-01: «при указании для экрана глубины выноса рама
+     *  основания не рисуется, хотя там всегда используется та же самая рама» (фото: башня из
+     *  двух столбов по 2 ряда рам, глубина 1000мм, а серая рама основания — только 500мм под
+     *  передним рядом). Тот же порядок вызовов, что «Предварительный расчёт конструктива»
+     *  ({@code SetupStagePanel#calculateStructure}: suggestTowerCount → suggest... →
+     *  {@code updateScreenStructure}), с ПОВТОРНЫМИ пересчётами на одном экране (Round 18) и
+     *  разным числом столбов. До фикса при выносе ≤ 1000мм (в т.ч. дефолтные 500мм) задний ряд
+     *  оставался без базы. */
+    @Test
+    void baseFramesCoverWholeTowerAndEveryRequestedOverhangSectionAcrossRecalculations(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType()); // 500x500
+        com.vjstb.ledscheme.model.StructureFrameType frame = new com.vjstb.ledscheme.model.StructureFrameType();
+        frame.setName("Рама 500x950");
+        frame.setKind(com.vjstb.ledscheme.model.StructureFrameType.Kind.FRAME);
+        frame.setWidthMm(500.0);
+        frame.setHeightMm(950.0);
+        frame.setDepthMm(51.0);
+        model.addStructureFrameType(frame);
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        double[] overhangs = {0, 250, 500, 750, 1000, 1500, 2000, 3500, 1000, 500};
+        int[] expectedSections = {2, 2, 2, 2, 2, 3, 4, 7, 2, 2};
+        for (int cols : new int[]{2, 4, 8}) {
+            for (String frameTypeId : new String[]{null, frame.getId()}) {
+                Screen screen = model.addScreen("E" + cols, type.getId(), 5, cols, 0, 0,
+                        com.vjstb.ledscheme.model.ScreenMountType.STRUCTURE);
+                int towers = com.vjstb.ledscheme.service.StructureCalc.suggestTowerCount(screen, type);
+                int backRow = com.vjstb.ledscheme.service.StructureCalc.suggestBackRowSegments(950);
+                for (int i = 0; i < overhangs.length; i++) {
+                    model.updateScreenStructure(screen, 2500, towers, 2, backRow, 1, overhangs[i], 0.6,
+                            frameTypeId, null, null, 0, null);
+                    String ctx = "cols=" + cols + " frame=" + frameTypeId + " вынос=" + overhangs[i];
+                    int gaps = towers - 1;
+                    for (int gap = 0; gap < gaps; gap++) {
+                        int g = gap;
+                        long visible = screen.getStructureBaseFrameCells().stream()
+                                .filter(c -> c.getTowerIndex() == g && !c.isHidden()).count();
+                        assertEquals(expectedSections[i], visible, ctx + " зазор " + gap);
+                        for (int s = 0; s < expectedSections[i]; s++) {
+                            int fs = s;
+                            assertTrue(screen.getStructureBaseFrameCells().stream()
+                                    .anyMatch(c -> c.matches(g, fs) && !c.isHidden()), ctx + " секция " + s);
+                        }
+                    }
+                    assertEquals(expectedSections[i] - com.vjstb.ledscheme.service.StructureCalc.CORE_BASE_SECTION_COUNT,
+                            screen.getStructureExtendedBaseSections(), ctx);
+                    // Усилительные рамы (row 2) -- только над НАСТОЯЩИМ выносом, за пределами
+                    // footprint'а башни (секции 0/1 заняты передним/задним рядом).
+                    assertTrue(screen.getStructureFrameCells().stream()
+                            .filter(c -> c.getRow() == 2).allMatch(c -> c.getSegmentIndex() >= 2), ctx);
+                    assertEquals((long) towers * (expectedSections[i] - 2), screen.getStructureFrameCells().stream()
+                            .filter(c -> c.getRow() == 2).count(), ctx);
+                    // Спецификация считает все эти секции.
+                    assertEquals(gaps * expectedSections[i], com.vjstb.ledscheme.service.StructureCalc
+                            .compute(screen, type, model.getWorkspace()).baseFrameCount(), ctx);
+                }
+            }
+        }
+    }
+
+    @Test
+    void towerWithoutBackRowKeepsStrictlyOneMandatoryBaseModule(@TempDir Path dir) {
+        // Round 19 ("обязательная часть базы -- строго 500мм") остаётся в силе, когда заднего
+        // ряда нет: footprint башни = 1 модуль, вынос 500 -> 1 секция, 750 -> 2 (вверх).
+        AppModel model = freshModel(dir);
+        CabinetType type = model.addCabinetType(sampleType());
+        model.selectProject(model.addProject("P"));
+        model.selectScene(model.addScene("S"));
+        Screen screen = model.addScreen("E", type.getId(), 2, 2, 0, 0);
+        model.updateScreenStructure(screen, 1000, 2, 1, 0, 0, 500, 0.6, null, null, null, 0, null);
+        assertEquals(1, screen.getStructureBaseFrameCells().size());
+        model.updateScreenStructure(screen, 1000, 2, 1, 0, 0, 750, 0.6, null, null, null, 0, null);
+        assertEquals(2, screen.getStructureBaseFrameCells().size());
+        assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(0, 2, 1)),
+                "без заднего ряда первая секция выноса -- индекс 1, усилительная рама над ней");
     }
 
     @Test
@@ -3760,13 +3839,18 @@ class AppModelTest {
         // StructureCalcTest.reinforcementFramesInExtensionSectionsCounts...). Секции выноса
         // начинаются СРАЗУ ПОСЛЕ ядра -- ядро теперь фиксированно 1 модуль (не 2, как до Round
         // 19), значит первая (и единственная) секция выноса тут -- индекс 1, а не 2.
-        model.updateScreenStructure(screen, 3000, 2, 3, 3, 0, 1000, 0.6, null, null, null, 0, null);
+        // Round 25: у этой башни есть задний ряд (backRowSegments=3) -- он занимает секцию 1,
+        // база не короче башни (1000мм), поэтому НАСТОЯЩИЙ вынос начинается с секции 2:
+        // 1500мм = 3 секции, усилительная рама -- над секцией 2.
+        model.updateScreenStructure(screen, 3000, 2, 3, 3, 0, 1500, 0.6, null, null, null, 0, null);
 
-        assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(0, 2, 1) && !c.isHidden()),
+        assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(0, 2, 2) && !c.isHidden()),
                 "усилительная рама башни 0 в первой секции выноса сгенерирована и видима");
+        assertTrue(screen.getStructureFrameCells().stream().noneMatch(c -> c.matches(0, 2, 1)),
+                "над секцией 1 стоит задний ряд -- усилительная рама там не нужна");
 
-        model.toggleStructureFrameCell(screen, 0, 2, 1);
-        assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(0, 2, 1) && c.isHidden()),
+        model.toggleStructureFrameCell(screen, 0, 2, 2);
+        assertTrue(screen.getStructureFrameCells().stream().anyMatch(c -> c.matches(0, 2, 2) && c.isHidden()),
                 "клик по существующей усилительной раме прячет её");
     }
 

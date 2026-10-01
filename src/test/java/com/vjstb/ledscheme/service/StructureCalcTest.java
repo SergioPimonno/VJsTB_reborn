@@ -300,6 +300,36 @@ class StructureCalcTest {
     }
 
     @Test
+    void totalBaseSectionsIsWholeModulesAndNeverShorterThanTowerFootprint() {
+        // Round 25 (баг-репорт 2026-10-01, фото: башня из 2 рядов глубиной 1000мм, а рама
+        // основания -- только 500мм под передним рядом, задний ряд "в воздухе"). Глубина базы
+        // = целое число модулей 1 + ceil((вынос - 500)/500), но не меньше footprint'а самих
+        // вертикальных рам: 1 модуль без заднего ряда, 2 -- с ним.
+        assertEquals(1, StructureCalc.baseFootprintSectionCount(0), "только передний ряд");
+        assertEquals(2, StructureCalc.baseFootprintSectionCount(2), "передний + задний ряд вплотную");
+
+        // С задним рядом (как генерирует «Предварительный расчёт»): вынос меньше глубины
+        // башни -- база всё равно под всей башней.
+        assertEquals(2, StructureCalc.totalBaseSections(0, 500, 2));
+        assertEquals(2, StructureCalc.totalBaseSections(250, 500, 2));
+        assertEquals(2, StructureCalc.totalBaseSections(500, 500, 2), "регрессия Round 25: было 1");
+        assertEquals(2, StructureCalc.totalBaseSections(750, 500, 2));
+        assertEquals(2, StructureCalc.totalBaseSections(1000, 500, 2));
+        assertEquals(3, StructureCalc.totalBaseSections(1500, 500, 2), "Round 19 (ДКФ): 1500мм = 3 секции");
+        assertEquals(4, StructureCalc.totalBaseSections(2000, 500, 2));
+        assertEquals(7, StructureCalc.totalBaseSections(3500, 500, 2));
+        assertEquals(4, StructureCalc.totalBaseSections(1501, 500, 2), "не кратно 500 -- округление вверх");
+
+        // Без заднего ряда -- прежняя формула Round 19 без изменений ("обязательная часть
+        // строго 500мм").
+        assertEquals(1, StructureCalc.totalBaseSections(0, 500, 0));
+        assertEquals(1, StructureCalc.totalBaseSections(250, 500, 0));
+        assertEquals(1, StructureCalc.totalBaseSections(500, 500, 0));
+        assertEquals(2, StructureCalc.totalBaseSections(750, 500, 0));
+        assertEquals(3, StructureCalc.totalBaseSections(1500, 500, 0));
+    }
+
+    @Test
     void reinforcementFramesInExtensionSectionsCountTowardVerticalFramesAndJoints(@TempDir Path dir) {
         AppModel model = freshModel(dir);
         CabinetType t = model.addCabinetType(type(500, 500));
