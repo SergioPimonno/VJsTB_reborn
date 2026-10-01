@@ -883,6 +883,7 @@ public class OutputStagePanel extends JPanel {
 
         addWiringSheets(wb, sheets, columns);
         addStructureSheet(wb, scene);
+        addFloorSheet(wb, scene);
         addTrussSheet(wb, scene);
         addOverallEquipmentSheet(wb, scene, cabinets, equipment, sheets, columns);
         // Лист "Общий список" физически создаётся последним (нужны уже посчитанные
@@ -947,6 +948,43 @@ public class OutputStagePanel extends JPanel {
         com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(sheet, 7);
     }
 
+    /** Название рамы/стакана пола для спецификации: запись библиотеки не выбрана (или
+     *  удалена) — явная пометка, а не пустая ячейка, чтобы позиция не потерялась в закупке. */
+    private static String floorFrameLabel(com.vjstb.ledscheme.service.FloorCalc.Result r) {
+        return r.frameTypeName() != null ? r.frameTypeName() : "Рама (не выбрана в библиотеке)";
+    }
+
+    private static String floorCupLabel(com.vjstb.ledscheme.service.FloorCalc.Result r) {
+        return r.cupTypeName() != null ? r.cupTypeName() : "Стакан (не выбран в библиотеке)";
+    }
+
+    /** Спецификация напольного каркаса (см. {@code service.FloorCalc}, запрос 2026-10-01) —
+     *  по строке на каждый экран сцены с {@code mountType == FLOOR}, тот же {@code
+     *  FloorCalc.compute}, что и «Рассчитать пол» в «Сетапе». ОТДЕЛЬНЫЙ лист, а не строки в
+     *  «Конструктиве»: у башен свои столбцы (балласт/отгрузы), у пола — ножки/зубы, смешение в
+     *  одной таблице давало бы пустые столбцы у половины строк, а сумма «Рам» по листу
+     *  складывала бы башенные и напольные рамы, которые считаются по разным правилам.
+     *
+     * <p>Только ПОЗИЦИИ закупки — рамы, стаканы, болты, ножки, зубы. Число стыков и
+     * неопёртые кабинеты сюда сознательно не выводятся (правка пользователя 2026-10-01: это
+     * вспомогательная информация калькулятора, она есть в окне «Рассчитать пол»). */
+    private void addFloorSheet(Workbook wb, Scene scene) {
+        Sheet sheet = com.vjstb.ledscheme.service.SpecXlsxWriter.addSheet(wb, "Напольный каркас",
+                "Сцена", "Экран", "Рама", "Рам, шт", "Стакан", "Стаканов, шт", "Болтов, шт", "Ножек, шт",
+                "Зубов, шт");
+        for (Screen scr : scene.getScreens()) {
+            if (scr.getMountType() != com.vjstb.ledscheme.model.ScreenMountType.FLOOR) {
+                continue;
+            }
+            com.vjstb.ledscheme.service.FloorCalc.Result r =
+                    com.vjstb.ledscheme.service.FloorCalc.compute(scr, model.typeOf(scr), model.getWorkspace());
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, scene.getName(), scr.getName(),
+                    floorFrameLabel(r), r.frameCount(), floorCupLabel(r), r.cupCount(), r.boltCount(),
+                    r.legCount(), r.toothCount());
+        }
+        com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(sheet, 9);
+    }
+
     /** Спецификация фермы подвеса (см. {@code service.TrussCalc}, RIGGING_CALC_NOTES.md) —
      *  по одной строке на каждый экран сцены с {@code mountType == RIGGED} и выбранным {@code
      *  riggingTrussProfileId} (по образцу {@link #addStructureSheet} — экраны без выбранного
@@ -997,6 +1035,9 @@ public class OutputStagePanel extends JPanel {
      *  <li>Конструктив — просуммированные по ВСЕМ экранам сцены с {@code mountType == STRUCTURE}
      *  счётчики {@code StructureCalc.compute} (детализация по экранам — на листе
      *  «Конструктив»);</li>
+     *  <li>Напольный каркас — экраны с {@code mountType == FLOOR}, {@code FloorCalc.compute}:
+     *  рамы и стаканы по названию из библиотеки, болты/ножки/зубы суммами (детализация — лист
+     *  «Напольный каркас»; стыки не выводятся);</li>
      *  <li>Коммутация — по типу провода число линий по схемам (детальная разбивка на
      *  куски определённой длины — на листе «Коммутация — сводная»/«Коммутация —
      *  сплайсовка»).</li>
@@ -1127,6 +1168,50 @@ public class OutputStagePanel extends JPanel {
             com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Конструктив", "Болты", structureBolts, "шт");
             com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Конструктив", "Отгрузы",
                     structureBallastContainers, "шт (" + UiKit.fmt(structureBallastKg) + " кг балласта)");
+        }
+
+        // Напольный каркас (FLOOR, см. addFloorSheet) -- своя категория, НЕ слита с
+        // «Конструктивом»: башенные рамы выше считаются по другим правилам, и пользователь
+        // должен видеть, сколько рам уходит именно под пол. Рамы и стаканы -- по названию
+        // записи библиотеки (у разных экранов могут быть разные), болты/ножки/зубы -- общими
+        // суммами. Стыки не выводятся (правка пользователя 2026-10-01, см. addFloorSheet).
+        java.util.LinkedHashMap<String, Integer> floorFrames = new java.util.LinkedHashMap<>();
+        java.util.LinkedHashMap<String, Integer> floorCups = new java.util.LinkedHashMap<>();
+        int floorBolts = 0;
+        int floorLegs = 0;
+        int floorTeeth = 0;
+        for (Screen scr : scene.getScreens()) {
+            if (scr.getMountType() != com.vjstb.ledscheme.model.ScreenMountType.FLOOR) {
+                continue;
+            }
+            com.vjstb.ledscheme.service.FloorCalc.Result r =
+                    com.vjstb.ledscheme.service.FloorCalc.compute(scr, model.typeOf(scr), model.getWorkspace());
+            if (r.frameCount() > 0) {
+                floorFrames.merge(floorFrameLabel(r), r.frameCount(), Integer::sum);
+            }
+            if (r.cupCount() > 0) {
+                floorCups.merge(floorCupLabel(r), r.cupCount(), Integer::sum);
+            }
+            floorBolts += r.boltCount();
+            floorLegs += r.legCount();
+            floorTeeth += r.toothCount();
+        }
+        for (var entry : floorFrames.entrySet()) {
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Напольный каркас", "Рамы: " + entry.getKey(),
+                    entry.getValue(), "шт");
+        }
+        for (var entry : floorCups.entrySet()) {
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Напольный каркас",
+                    "Стаканы: " + entry.getKey(), entry.getValue(), "шт");
+        }
+        if (floorBolts > 0) {
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Напольный каркас", "Болты", floorBolts, "шт");
+        }
+        if (floorLegs > 0) {
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Напольный каркас", "Ножки", floorLegs, "шт");
+        }
+        if (floorTeeth > 0) {
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Напольный каркас", "Зубы", floorTeeth, "шт");
         }
 
         for (var row : com.vjstb.ledscheme.service.SceneSpecCalc.wireTotals(sheets)) {
