@@ -9,10 +9,16 @@ import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.CanvasFit;
+import com.vjstb.ledscheme.service.MaskGeometry;
+import com.vjstb.ledscheme.service.MaskLimits;
 import com.vjstb.ledscheme.ui.AfterEffectsJsxWriter;
 import com.vjstb.ledscheme.ui.CanvasEditorPanel;
 import com.vjstb.ledscheme.ui.ContextBar;
 import com.vjstb.ledscheme.ui.MaskCustomColorsDialog;
+import com.vjstb.ledscheme.ui.MaskExportSet;
+import com.vjstb.ledscheme.ui.MaskImage;
+import com.vjstb.ledscheme.ui.MaskPreviewResolution;
+import com.vjstb.ledscheme.ui.MaskPreviewViewer;
 import com.vjstb.ledscheme.ui.OutputPaths;
 import com.vjstb.ledscheme.ui.Palette;
 import com.vjstb.ledscheme.ui.PixelGridRenderer;
@@ -23,10 +29,7 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
-import java.awt.Image;
-import java.awt.image.BufferedImage;
 import java.io.File;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import javax.swing.BorderFactory;
@@ -95,6 +98,10 @@ public class VisualizationStagePanel extends JPanel {
      *  под выбором канваса, скрыто, пока всё вмещается. См. {@link CanvasFit}. */
     private final JLabel canvasOverflowLabel = new JLabel();
 
+    /** Предупреждение у спиннеров размера канваса: сторона ≥ 16384 (или отказ при &gt; 30000) —
+     *  обновляется прямо при вводе (запрос 2026-09-30, решение D7, см. {@link MaskLimits}). */
+    private final JLabel canvasSizeHintLabel = new JLabel();
+
     private ContentCanvas currentCanvas;
 
     public VisualizationStagePanel(AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings) {
@@ -106,7 +113,10 @@ public class VisualizationStagePanel extends JPanel {
         setLayout(new BorderLayout());
 
         JPanel canvasSide = buildCanvasSide();
-        JSplitPane canvasSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, canvasEditor, canvasSide);
+        JPanel editorWithBar = new JPanel(new BorderLayout());
+        editorWithBar.add(buildPreviewResolutionBar(), BorderLayout.NORTH);
+        editorWithBar.add(canvasEditor, BorderLayout.CENTER);
+        JSplitPane canvasSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, editorWithBar, canvasSide);
         canvasSplit.setContinuousLayout(true);
         canvasSplit.setResizeWeight(0.62);
         UiKit.persistentDivider(settings, "visualization.canvasSplitV", canvasSplit, 0.62);
@@ -118,6 +128,28 @@ public class VisualizationStagePanel extends JPanel {
 
         model.addListener(this::refreshCanvasSide);
         refreshCanvasSide();
+    }
+
+    /** Комбобокс «Разрешение превью» над холстом — пресеты как «Resolution» в After Effects
+     *  (запрос 2026-09-30, решение D7, см. {@link MaskPreviewResolution}); значение — в
+     *  профиле пользователя, холст перерисовывается через слушатель настроек. */
+    private JPanel buildPreviewResolutionBar() {
+        JComboBox<MaskPreviewResolution> combo = new JComboBox<>(MaskPreviewResolution.values());
+        combo.setSelectedItem(MaskPreviewResolution.fromName(settings.activeProfile().getMaskPreviewResolution()));
+        combo.setToolTipText("<html>Как «Resolution» в After Effects: «Авто» — маски рисуются в размере"
+                + " отображения;<br>дробь — в доле реального разрешения (видно, что теряется при уменьшении)."
+                + "<br>Превью одного экрана больше ~64 Мпикс автоматически понижается до следующей дроби."
+                + "<br>На экспорт не влияет — файлы всегда пишутся в полном разрешении.</html>");
+        combo.addActionListener(e -> {
+            MaskPreviewResolution r = (MaskPreviewResolution) combo.getSelectedItem();
+            if (r != null && !r.name().equals(settings.activeProfile().getMaskPreviewResolution())) {
+                settings.setMaskPreviewResolution(r.name());
+            }
+        });
+        JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        bar.add(new JLabel("Разрешение превью:"));
+        bar.add(combo);
+        return bar;
     }
 
     // ---- канвасы ----
@@ -154,10 +186,18 @@ public class VisualizationStagePanel extends JPanel {
         canvasRow.add(new JLabel("Канвас:"));
         canvasRow.add(canvasCombo);
         JTextField nameField = new JTextField("Резолюм 1080p", 14);
-        JSpinner wSpin = new JSpinner(new SpinnerNumberModel(1920, 1, 16384, 1));
-        JSpinner hSpin = new JSpinner(new SpinnerNumberModel(1080, 1, 16384, 1));
+        // 2026-09-30 (запрос «убрать ограничение 16k», решение D7): предел спиннеров — 30000
+        // (MaskLimits.MAX_SIDE_PX, предел композиции After Effects) вместо 16384; сторона
+        // ≥ 16384 — только предупреждение (строка ниже + подтверждение при создании/изменении).
+        JSpinner wSpin = new JSpinner(new SpinnerNumberModel(1920, 1, MaskLimits.MAX_SIDE_PX, 1));
+        JSpinner hSpin = new JSpinner(new SpinnerNumberModel(1080, 1, MaskLimits.MAX_SIDE_PX, 1));
         com.vjstb.ledscheme.ui.MathFields.enableExpressions(wSpin);
         com.vjstb.ledscheme.ui.MathFields.enableExpressions(hSpin);
+        canvasSizeHintLabel.setForeground(Palette.WARN);
+        canvasSizeHintLabel.setBorder(BorderFactory.createEmptyBorder(0, 8, 2, 8));
+        canvasSizeHintLabel.setAlignmentX(LEFT_ALIGNMENT);
+        canvasSizeHintLabel.setVisible(false);
+        installCanvasSizeHint(wSpin, hSpin);
         canvasRow.add(new JLabel("Имя"));
         canvasRow.add(nameField);
         canvasRow.add(new JLabel("Ширина, px"));
@@ -166,6 +206,13 @@ public class VisualizationStagePanel extends JPanel {
         canvasRow.add(hSpin);
         JButton addCanvasBtn = new JButton("+ Новый канвас");
         addCanvasBtn.addActionListener(e -> {
+            int nw = (Integer) wSpin.getValue();
+            int nh = (Integer) hSpin.getValue();
+            if (MaskLimits.isLarge(nw, nh) && !MaskLimits.exceedsMax(nw, nh) && !confirmText("Большой канвас",
+                    "Сторона канваса ≥ " + MaskLimits.WARN_SIDE_PX + " px:",
+                    largeCanvasDetails(nw, nh), "Всё равно создать канвас?")) {
+                return;
+            }
             try {
                 ContentCanvas c = model.addCanvas(nameField.getText().trim().isEmpty()
                                 ? "Канвас" : nameField.getText().trim(),
@@ -181,16 +228,36 @@ public class VisualizationStagePanel extends JPanel {
             // Запрос 2026-09-30: если НОВЫЙ размер обрежет уже размещённые маски -- предупредить
             // до применения, а не после экспорта.
             Scene curScene = model.getCurrentScene();
-            List<CanvasFit.Overflow> willCrop = CanvasFit.overflows(currentCanvas,
-                    (Integer) wSpin.getValue(), (Integer) hSpin.getValue(), curScene, model);
-            if (!willCrop.isEmpty() && !confirmText("Новый размер канваса обрежет маски",
-                    "При размере " + wSpin.getValue() + "×" + hSpin.getValue()
-                            + " px эти маски выйдут за границы канваса и в его экспорте будут обрезаны:",
-                    CanvasFit.describe(willCrop), "Всё равно применить размер?")) {
-                return;
+            int nw = (Integer) wSpin.getValue();
+            int nh = (Integer) hSpin.getValue();
+            List<CanvasFit.Overflow> willCrop = CanvasFit.overflows(currentCanvas, nw, nh, curScene, model);
+            // 2026-09-30 (D7): обрезка и сторона ≥ 16k -- ОДНО подтверждение, не два диалога подряд.
+            // Только если размер реально меняется -- переименование уже большого канваса не спрашиваем.
+            boolean large = MaskLimits.isLarge(nw, nh) && !MaskLimits.exceedsMax(nw, nh)
+                    && (nw != currentCanvas.getWidthPx() || nh != currentCanvas.getHeightPx());
+            if (!willCrop.isEmpty() || large) {
+                StringBuilder details = new StringBuilder();
+                if (!willCrop.isEmpty()) {
+                    details.append("Маски выйдут за границы канваса и в его экспорте будут обрезаны:\n")
+                            .append(CanvasFit.describe(willCrop).replaceAll("(?m)^", "    "));
+                }
+                if (large) {
+                    if (details.length() > 0) {
+                        details.append("\n\n");
+                    }
+                    details.append(largeCanvasDetails(nw, nh));
+                }
+                if (!confirmText(willCrop.isEmpty() ? "Большой канвас" : "Новый размер канваса обрежет маски",
+                        "Новый размер канваса " + nw + "×" + nh + " px:", details.toString(),
+                        "Всё равно применить размер?")) {
+                    return;
+                }
             }
-            model.updateCanvas(currentCanvas, nameField.getText().trim(),
-                    (Integer) wSpin.getValue(), (Integer) hSpin.getValue());
+            try {
+                model.updateCanvas(currentCanvas, nameField.getText().trim(), nw, nh);
+            } catch (RuntimeException ex) {
+                JOptionPane.showMessageDialog(this, ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
+            }
         });
         JButton deleteCanvasBtn = new JButton("Удалить канвас");
         deleteCanvasBtn.addActionListener(e -> {
@@ -205,6 +272,7 @@ public class VisualizationStagePanel extends JPanel {
         canvasRow.add(resizeBtn);
         canvasRow.add(deleteCanvasBtn);
         controls.add(canvasRow);
+        controls.add(canvasSizeHintLabel);
 
         canvasOverflowLabel.setForeground(Palette.WARN);
         canvasOverflowLabel.setBorder(BorderFactory.createEmptyBorder(0, 8, 2, 8));
@@ -286,6 +354,7 @@ public class VisualizationStagePanel extends JPanel {
         placementsTable.getColumnModel().getColumn(10).setPreferredWidth(70);
         placementsTable.getColumnModel().getColumn(12).setPreferredWidth(60);
         placementsTable.getColumnModel().getColumn(13).setPreferredWidth(90);
+        placementsTable.getColumnModel().getColumn(0).setCellRenderer(new ScreenSizeWarningRenderer());
         placementsTable.getColumnModel().getColumn(5)
                 .setCellEditor(com.vjstb.ledscheme.ui.MathFields.integerCellEditor());
         placementsTable.getColumnModel().getColumn(6)
@@ -411,6 +480,59 @@ public class VisualizationStagePanel extends JPanel {
         canvasOverflowLabel.setVisible(true);
     }
 
+    /** Подписывает строку {@link #canvasSizeHintLabel} на ввод в спиннеры: читается сам текст
+     *  поля (с выражениями, как в {@code MathFields}), а не только закоммиченное значение —
+     *  иначе на 30001 (спиннер его не примет) пользователь не увидел бы, почему. */
+    private void installCanvasSizeHint(JSpinner wSpin, JSpinner hSpin) {
+        Runnable update = () -> {
+            int w = typedValue(wSpin);
+            int h = typedValue(hSpin);
+            String hint = MaskLimits.canvasSizeHint(w, h);
+            canvasSizeHintLabel.setText(hint != null ? "⚠ " + hint : "");
+            canvasSizeHintLabel.setVisible(hint != null);
+        };
+        for (JSpinner s : new JSpinner[]{wSpin, hSpin}) {
+            s.addChangeListener(e -> update.run());
+            if (s.getEditor() instanceof JSpinner.DefaultEditor ed) {
+                ed.getTextField().getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+                    @Override
+                    public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                        SwingUtilities.invokeLater(update);
+                    }
+
+                    @Override
+                    public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                        SwingUtilities.invokeLater(update);
+                    }
+
+                    @Override
+                    public void changedUpdate(javax.swing.event.DocumentEvent e) {
+                        SwingUtilities.invokeLater(update);
+                    }
+                });
+            }
+        }
+    }
+
+    /** Значение, набранное в поле спиннера (выражение или число с разделителями), иначе —
+     *  текущее значение спиннера. */
+    private static int typedValue(JSpinner spinner) {
+        if (spinner.getEditor() instanceof JSpinner.DefaultEditor ed) {
+            String text = ed.getTextField().getText().replaceAll("[\\s\\u00a0\\u202f]", "");
+            Double v = com.vjstb.ledscheme.ui.MathExpr.tryEval(text);
+            if (v != null && !v.isNaN() && !v.isInfinite()) {
+                return (int) Math.round(Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, v)));
+            }
+        }
+        return (Integer) spinner.getValue();
+    }
+
+    private static String largeCanvasDetails(int w, int h) {
+        return w + "×" + h + " px — сторона ≥ " + MaskLimits.WARN_SIDE_PX + " px. Маски такого размера экспортируются"
+                + " (потоково, без ограничения 16k), но не все медиасерверы и видеокарты их откроют:"
+                + " Resolume и многие плееры ограничены 16384 px на сторону.";
+    }
+
     /** Подтверждение с прокручиваемым списком (предупреждения про обрезку масок). */
     private boolean confirmText(String title, String intro, String details, String question) {
         JTextArea area = new JTextArea(details, Math.min(12, details.split("\n").length + 1), 50);
@@ -424,33 +546,15 @@ public class VisualizationStagePanel extends JPanel {
                 JOptionPane.WARNING_MESSAGE) == JOptionPane.YES_OPTION;
     }
 
-    /** Перед экспортом: если в экспортируемых канвасах есть маски, выходящие за их границы,
-     *  — одно подтверждение со списком (запрос пользователя 2026-09-30). {@code true} —
-     *  можно продолжать (вылезающих нет или пользователь согласился). */
-    private boolean confirmCanvasCropForExport(List<Scene> scenes, List<ContentCanvas> onlyThese,
-                                               boolean includeSceneName, String question) {
-        StringBuilder report = new StringBuilder();
-        for (Scene sc : scenes) {
-            for (ContentCanvas c : sc.getCanvases()) {
-                if (onlyThese != null && !onlyThese.contains(c)) {
-                    continue;
-                }
-                String r = CanvasFit.report(c, sc, model, includeSceneName);
-                if (r != null) {
-                    if (report.length() > 0) {
-                        report.append("\n");
-                    }
-                    report.append(r);
-                }
-            }
-        }
-        if (report.length() == 0) {
-            return true;
-        }
-        return confirmText("Канвас обрежет маски",
-                "В экспортируемых канвасах часть масок выходит за их границы — в PNG канваса она будет"
-                        + " обрезана (в пресетах Resolume/After Effects координаты останутся как есть):",
-                report.toString(), question);
+    /** Перед экспортом — ОДНО общее подтверждение со списками (запросы пользователя
+     *  2026-09-30): маски, выходящие за границы экспортируемых канвасов ({@link CanvasFit}),
+     *  маски/канвасы со стороной ≥ 16384 и маски экранов больше 30000, которые не будут
+     *  записаны ({@link MaskExportSet}, решение D7). {@code true} — можно продолжать
+     *  (предупреждать не о чем или пользователь согласился). */
+    private boolean confirmExport(List<Scene> scenes, List<ContentCanvas> onlyThese, boolean includeSceneName,
+                                  MaskExportSet set, String question) {
+        String crop = CanvasFit.report(scenes, onlyThese, model, includeSceneName);
+        return MaskExportSet.confirm(this, crop, set, question);
     }
 
     private Screen screenById(String id) {
@@ -654,6 +758,43 @@ public class VisualizationStagePanel extends JPanel {
         }
     }
 
+    /** Ячейка «Экран»: значок и подсказка, если маска экрана (с множителем «сетки», через
+     *  {@link MaskGeometry}) со стороной ≥ 16384 — предупреждение, &gt; 30000 — маска не будет
+     *  экспортироваться. Запрос 2026-09-30, решение D7: размер экрана задаётся на «Сетапе», здесь
+     *  его не запретить — только показать заранее, до нажатия «Экспорт». */
+    private final class ScreenSizeWarningRenderer extends DefaultTableCellRenderer {
+        @Override
+        public java.awt.Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected,
+                boolean hasFocus, int row, int column) {
+            // DefaultTableCellRenderer запоминает цвет из setForeground для ВСЕХ следующих ячеек —
+            // сбрасываем, иначе после одной строки с предупреждением окрасились бы и остальные.
+            setForeground(null);
+            super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+            setToolTipText(null);
+            Screen scr = placementsTableModel.screenAtRow(row);
+            if (scr == null) {
+                return this;
+            }
+            MaskGeometry geo = MaskGeometry.of(scr, model.typeOf(scr), model.getWorkspace());
+            if (MaskLimits.exceedsMax(geo.width(), geo.height())) {
+                setText("⛔ " + value);
+                if (!isSelected) {
+                    setForeground(new Color(0xf85149));
+                }
+                setToolTipText("Маска " + geo.sizeLabel() + " — сторона больше " + MaskLimits.MAX_SIDE_PX
+                        + " px: при экспорте этот экран будет пропущен (предел After Effects).");
+            } else if (MaskLimits.isLarge(geo.width(), geo.height())) {
+                setText("⚠ " + value);
+                if (!isSelected) {
+                    setForeground(Palette.WARN);
+                }
+                setToolTipText("Маска " + geo.sizeLabel() + " — сторона ≥ " + MaskLimits.WARN_SIDE_PX
+                        + " px: не все медиасерверы/GPU откроют такой файл.");
+            }
+            return this;
+        }
+    }
+
     /** «Высота ×»: серым, пока экран не «сетка» (редактировать нельзя). */
     private final class MeshMultiplierRenderer extends DefaultTableCellRenderer {
         MeshMultiplierRenderer() {
@@ -663,6 +804,7 @@ public class VisualizationStagePanel extends JPanel {
         @Override
         public java.awt.Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected,
                 boolean hasFocus, int row, int column) {
+            setForeground(null); // см. ScreenSizeWarningRenderer: иначе серый «залипал» на следующих строках
             super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
             if (!isSelected && !placementsTableModel.isCellEditable(row, column)) {
                 setForeground(Palette.MUTED);
@@ -698,39 +840,47 @@ public class VisualizationStagePanel extends JPanel {
         }
     }
 
-    private record NamedImage(String filename, BufferedImage image) {
+    /** Файлы масок экранов сцены — общий для {@link #exportMasks()} и
+     *  {@link #exportSelectedCanvasMask()} (одинаковые имена файлов). */
+    private void addScreenMask(MaskExportSet set, Scene scene, Screen scr, boolean labelWithScene) {
+        CabinetType type = model.typeOf(scr);
+        MaskImage img = MaskImage.screen(scr, type, model.getWorkspace(),
+                PixelGridRenderer.GridRenderOptions.defaultForScreen(scr));
+        String fname = OutputPaths.sanitize(scene.getName()) + "_" + OutputPaths.sanitize(scr.getName())
+                + "_Маска_" + img.width() + "x" + img.height() + ".png";
+        set.add(fname, MaskExportSet.screenLabel(scene, scr, labelWithScene), img);
+    }
+
+    private void addCanvasMask(MaskExportSet set, Scene scene, ContentCanvas c, boolean labelWithScene) {
+        MaskImage img = MaskImage.canvas(c, scene, model, settings);
+        String fname = OutputPaths.sanitize(scene.getName()) + "_канвас_" + OutputPaths.sanitize(c.getName())
+                + "_" + img.width() + "x" + img.height() + ".png";
+        set.add(fname, MaskExportSet.canvasLabel(scene, c, labelWithScene), img);
     }
 
     /** Маски: по одной на каждый экран ВСЕХ сцен проекта + по одной на каждый канвас
      *  ВСЕХ сцен проекта — единая кнопка, как и раньше на этапе «Вывод». Сначала
      *  показываем превью (нельзя экспортировать то, что нельзя сначала увидеть в
      *  приложении) — запись на диск происходит только по кнопке «Сохранить» в
-     *  диалоге предпросмотра. */
+     *  диалоге предпросмотра.
+     *
+     *  <p>2026-09-30 (решение D7): вместо готовых картинок — задания {@link MaskImage}
+     *  (пиксели появляются только в миниатюрах и при потоковой записи), маски экранов
+     *  больше 30000 px в набор не попадают и перечисляются в общем подтверждении. */
     private void exportMasks() {
         Project project = model.getCurrentProject();
         if (project == null) {
             JOptionPane.showMessageDialog(this, "Сначала выберите проект", "Нет проекта", JOptionPane.WARNING_MESSAGE);
             return;
         }
-        if (!confirmCanvasCropForExport(project.getScenes(), null, true, "Всё равно экспортировать?")) {
-            return;
-        }
-        List<NamedImage> images = new ArrayList<>();
+        MaskExportSet set = new MaskExportSet();
         try {
             for (Scene scene : project.getScenes()) {
                 for (Screen scr : scene.getScreens()) {
-                    CabinetType type = model.typeOf(scr);
-                    BufferedImage img = PixelGridRenderer.renderMask(scr, type, model.getWorkspace(),
-                            PixelGridRenderer.GridRenderOptions.defaultForScreen(scr));
-                    String fname = OutputPaths.sanitize(scene.getName()) + "_" + OutputPaths.sanitize(scr.getName())
-                            + "_Маска_" + img.getWidth() + "x" + img.getHeight() + ".png";
-                    images.add(new NamedImage(fname, img));
+                    addScreenMask(set, scene, scr, true);
                 }
                 for (ContentCanvas c : scene.getCanvases()) {
-                    BufferedImage img = PixelGridRenderer.renderCanvasMask(c, scene, model, settings);
-                    String fname = OutputPaths.sanitize(scene.getName()) + "_канвас_" + OutputPaths.sanitize(c.getName())
-                            + "_" + img.getWidth() + "x" + img.getHeight() + ".png";
-                    images.add(new NamedImage(fname, img));
+                    addCanvasMask(set, scene, c, true);
                 }
             }
         } catch (Exception ex) {
@@ -738,7 +888,10 @@ public class VisualizationStagePanel extends JPanel {
                     JOptionPane.ERROR_MESSAGE);
             return;
         }
-        showMaskPreviewDialog("Предпросмотр масок (экраны + канвасы)", images);
+        if (!confirmExport(project.getScenes(), null, true, set, "Всё равно экспортировать?")) {
+            return;
+        }
+        showMaskPreviewDialog("Предпросмотр масок (экраны + канвасы)", set);
     }
 
     /** Маски ТОЛЬКО выбранного сейчас канваса ({@link #currentCanvas}) + маски
@@ -758,35 +911,25 @@ public class VisualizationStagePanel extends JPanel {
             JOptionPane.showMessageDialog(this, "Сначала выберите сцену", "Нет сцены", JOptionPane.WARNING_MESSAGE);
             return;
         }
-        if (!confirmCanvasCropForExport(List.of(scene), List.of(currentCanvas), false,
-                "Всё равно экспортировать?")) {
-            return;
-        }
-        List<NamedImage> images = new ArrayList<>();
+        MaskExportSet set = new MaskExportSet();
         try {
-            BufferedImage canvasImg = PixelGridRenderer.renderCanvasMask(currentCanvas, scene, model, settings);
-            String canvasFname = OutputPaths.sanitize(scene.getName()) + "_канвас_"
-                    + OutputPaths.sanitize(currentCanvas.getName()) + "_" + canvasImg.getWidth() + "x"
-                    + canvasImg.getHeight() + ".png";
-            images.add(new NamedImage(canvasFname, canvasImg));
+            addCanvasMask(set, scene, currentCanvas, false);
             for (CanvasPlacement placement : currentCanvas.getPlacements()) {
                 Screen scr = screenById(placement.getScreenId());
                 if (scr == null) {
                     continue; // экран с тех пор удалён из сцены -- та же защита, что и в exportMasks()
                 }
-                CabinetType type = model.typeOf(scr);
-                BufferedImage img = PixelGridRenderer.renderMask(scr, type, model.getWorkspace(),
-                        PixelGridRenderer.GridRenderOptions.defaultForScreen(scr));
-                String fname = OutputPaths.sanitize(scene.getName()) + "_" + OutputPaths.sanitize(scr.getName())
-                        + "_Маска_" + img.getWidth() + "x" + img.getHeight() + ".png";
-                images.add(new NamedImage(fname, img));
+                addScreenMask(set, scene, scr, false);
             }
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(this, "Ошибка формирования масок: " + ex.getMessage(), "Ошибка",
                     JOptionPane.ERROR_MESSAGE);
             return;
         }
-        showMaskPreviewDialog("Предпросмотр маски канваса «" + currentCanvas.getName() + "»", images);
+        if (!confirmExport(List.of(scene), List.of(currentCanvas), false, set, "Всё равно экспортировать?")) {
+            return;
+        }
+        showMaskPreviewDialog("Предпросмотр маски канваса «" + currentCanvas.getName() + "»", set);
     }
 
     /** Отдельная кнопка-пресет (не входит в общий пакет и НЕ генерирует маску —
@@ -815,7 +958,13 @@ public class VisualizationStagePanel extends JPanel {
                     "Нет папки", JOptionPane.WARNING_MESSAGE);
             return;
         }
-        if (!confirmCanvasCropForExport(List.of(scene), null, false, "Всё равно экспортировать пресет?")) {
+        // Пресет -- текст, PNG не пишется; проверяем только размеры канвасов (≥ 16k -- Resolume
+        // может не открыть, см. MaskLimits) -- в том же общем подтверждении, что и обрезка.
+        MaskExportSet sizes = new MaskExportSet();
+        for (ContentCanvas c : scene.getCanvases()) {
+            sizes.addSizeOnly(MaskExportSet.canvasLabel(scene, c, false), c.getWidthPx(), c.getHeightPx());
+        }
+        if (!confirmExport(List.of(scene), null, false, sizes, "Всё равно экспортировать пресет?")) {
             return;
         }
         folder.mkdirs();
@@ -838,13 +987,7 @@ public class VisualizationStagePanel extends JPanel {
                 "Готово.\nФайлов Resolume Screen Setup сохранено: " + count + "\n\nОткрыть папку?",
                 "Пресет Resolume сформирован", JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE);
         if (answer == JOptionPane.YES_OPTION) {
-            try {
-                if (java.awt.Desktop.isDesktopSupported()) {
-                    java.awt.Desktop.getDesktop().open(folder);
-                }
-            } catch (Exception ignored) {
-                // не критично
-            }
+            openFolder(folder);
         }
     }
 
@@ -854,7 +997,11 @@ public class VisualizationStagePanel extends JPanel {
      *  ТЕКУЩЕЙ сцены (тот же принцип, что {@link #exportResolumePreset()}), плюс сами
      *  PNG-маски экранов, на которые ссылается скрипт, — те же файлы/то же содержимое, что
      *  и «Экспорт масок» (перезаписываются свежими при каждом запуске, чтобы .jsx никогда
-     *  не сослался на устаревшую картинку). */
+     *  не сослался на устаревшую картинку).
+     *
+     *  <p>2026-09-30 (решение D7): PNG пишутся потоково ({@link MaskImage#writePng}) в фоне с
+     *  окном прогресса и кнопкой «Отмена»; маска экрана больше 30000 px не пишется (и .jsx на
+     *  неё не ссылается — {@link AfterEffectsJsxWriter} пропускает такие экраны). */
     private void exportAfterEffectsPreset() {
         Scene scene = model.getCurrentScene();
         if (scene == null) {
@@ -872,67 +1019,91 @@ public class VisualizationStagePanel extends JPanel {
                     "Нет папки", JOptionPane.WARNING_MESSAGE);
             return;
         }
-        if (!confirmCanvasCropForExport(List.of(scene), null, false, "Всё равно экспортировать пресет?")) {
+        String sceneNameSanitized = OutputPaths.sanitize(scene.getName());
+        MaskExportSet set = new MaskExportSet();
+        int maskCount = 0;
+        for (ContentCanvas c : scene.getCanvases()) {
+            for (CanvasPlacement pl : c.getPlacements()) {
+                Screen scr = screenById(pl.getScreenId());
+                if (scr == null) {
+                    continue;
+                }
+                MaskImage img = MaskImage.screen(scr, model.typeOf(scr), model.getWorkspace(),
+                        PixelGridRenderer.GridRenderOptions.defaultForScreen(scr));
+                int before = set.entries().size();
+                set.add(AfterEffectsJsxWriter.maskFilename(sceneNameSanitized, scr, img.width(), img.height()),
+                        MaskExportSet.screenLabel(scene, scr, false), img);
+                maskCount += set.entries().size() - before;
+            }
+            set.add(AfterEffectsJsxWriter.gapMaskFilename(sceneNameSanitized, c),
+                    MaskExportSet.canvasLabel(scene, c, false) + " (пустоты)", MaskImage.canvasGap(c, scene, model));
+            set.add(AfterEffectsJsxWriter.overlayFilename(sceneNameSanitized, c),
+                    MaskExportSet.canvasLabel(scene, c, false) + " (разметка)", MaskImage.canvasOverlay(c, scene, model));
+        }
+        if (!confirmExport(List.of(scene), null, false, set, "Всё равно экспортировать пресет?")) {
             return;
         }
         folder.mkdirs();
-        String sceneNameSanitized = OutputPaths.sanitize(scene.getName());
         int scriptCount = 0;
-        int maskCount = 0;
         try {
+            set.writeAll(this, "Экспорт под After Effects", folder);
             for (ContentCanvas c : scene.getCanvases()) {
-                for (CanvasPlacement pl : c.getPlacements()) {
-                    Screen scr = screenById(pl.getScreenId());
-                    if (scr == null) {
-                        continue;
-                    }
-                    CabinetType type = model.typeOf(scr);
-                    BufferedImage img = PixelGridRenderer.renderMask(scr, type, model.getWorkspace(),
-                            PixelGridRenderer.GridRenderOptions.defaultForScreen(scr));
-                    String fname = AfterEffectsJsxWriter.maskFilename(sceneNameSanitized, scr, img.getWidth(),
-                            img.getHeight());
-                    javax.imageio.ImageIO.write(img, "png", new File(folder, fname));
-                    maskCount++;
-                }
-                PixelGridRenderer.writePng(PixelGridRenderer.renderCanvasGapMask(c, scene, model),
-                        new File(folder, AfterEffectsJsxWriter.gapMaskFilename(sceneNameSanitized, c)));
-                PixelGridRenderer.writePng(PixelGridRenderer.renderCanvasOverlay(c, scene, model),
-                        new File(folder, AfterEffectsJsxWriter.overlayFilename(sceneNameSanitized, c)));
                 String jsx = AfterEffectsJsxWriter.buildJsx(c, scene, model, sceneNameSanitized);
                 String jsxName = "AE_" + sceneNameSanitized + "_" + OutputPaths.sanitize(c.getName()) + ".jsx";
                 // BOM обязателен: без него ExtendScript читает файл в системной кодировке, и
                 // кириллица в именах PNG («Маска», «Пустоты») превращается в мусор -> «файл не найден».
-                java.nio.file.Files.writeString(new File(folder, jsxName).toPath(), "﻿" + jsx,
+                java.nio.file.Files.writeString(new File(folder, jsxName).toPath(), "\uFEFF" + jsx,
                         java.nio.charset.StandardCharsets.UTF_8);
                 scriptCount++;
             }
+        } catch (java.util.concurrent.CancellationException cancelled) {
+            JOptionPane.showMessageDialog(this, "Экспорт отменён — недописанный файл удалён.", "Отменено",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(this, "Ошибка формирования пресета: " + ex.getMessage(), "Ошибка",
                     JOptionPane.ERROR_MESSAGE);
             return;
         }
+        String skippedNote = set.skipped().isEmpty() ? ""
+                : "\nНе экспортировано (сторона больше " + MaskLimits.MAX_SIDE_PX + " px): " + set.skipped().size();
         int answer = JOptionPane.showConfirmDialog(this,
                 "Готово.\nСкриптов .jsx сохранено: " + scriptCount + "\nМасок сохранено: " + maskCount
+                        + skippedNote
                         + "\n\nЗапустите .jsx через File → Scripts → Run Script File в After Effects.\n\n"
                         + "Открыть папку?",
                 "Пресет After Effects сформирован", JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE);
         if (answer == JOptionPane.YES_OPTION) {
-            try {
-                if (java.awt.Desktop.isDesktopSupported()) {
-                    java.awt.Desktop.getDesktop().open(folder);
-                }
-            } catch (Exception ignored) {
-                // не критично
+            openFolder(folder);
+        }
+    }
+
+    private static void openFolder(File folder) {
+        try {
+            if (java.awt.Desktop.isDesktopSupported()) {
+                java.awt.Desktop.getDesktop().open(folder);
             }
+        } catch (Exception ignored) {
+            // не критично
         }
     }
 
     /** Модальный диалог предпросмотра: миниатюры всех изображений, которые БУДУТ
      *  сохранены, и кнопка «Сохранить всё», которая пишет их на диск только по
-     *  явному подтверждению — вместо того чтобы сразу писать файлы вслепую. */
-    private void showMaskPreviewDialog(String title, List<NamedImage> images) {
-        if (images.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "Нечего показывать — нет ни экранов, ни канвасов.",
+     *  явному подтверждению — вместо того чтобы сразу писать файлы вслепую.
+     *
+     *  <p>2026-09-30 (решение D7): диалог держит задания {@link MaskImage} и маленькие
+     *  миниатюры, а не полные картинки (раньше — все маски проекта в полном разрешении
+     *  одновременно). Крупно — двойной клик по строке или кнопка «Просмотр» (окно с
+     *  прокруткой в пресете «Разрешение превью», «Авто» — вписать в окно, см.
+     *  {@link MaskPreviewViewer}); запись на диск — только по «Сохранить», потоково, в фоне
+     *  с прогрессом и «Отменой». */
+    private void showMaskPreviewDialog(String title, MaskExportSet set) {
+        List<MaskExportSet.Entry> entries = set.entries();
+        if (entries.isEmpty()) {
+            JOptionPane.showMessageDialog(this, set.skipped().isEmpty()
+                            ? "Нечего показывать — нет ни экранов, ни канвасов."
+                            : "Нечего сохранять — все маски больше " + MaskLimits.MAX_SIDE_PX + " px.",
                     "Пусто", JOptionPane.WARNING_MESSAGE);
             return;
         }
@@ -948,42 +1119,64 @@ public class VisualizationStagePanel extends JPanel {
             return;
         }
         JDialog dlg = new JDialog(SwingUtilities.getWindowAncestor(this), title, JDialog.ModalityType.APPLICATION_MODAL);
+        MaskPreviewResolution previewPreset =
+                MaskPreviewResolution.fromName(settings.activeProfile().getMaskPreviewResolution());
 
         JPanel list = new JPanel();
         list.setLayout(new BoxLayout(list, BoxLayout.Y_AXIS));
         list.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-        for (NamedImage ni : images) {
+        for (MaskExportSet.Entry entry : entries) {
+            MaskImage img = entry.image();
+            Runnable openViewer = () -> MaskPreviewViewer.show(dlg, entry.filename(), img, previewPreset);
             JPanel row = new JPanel(new BorderLayout(10, 0));
             row.setAlignmentX(LEFT_ALIGNMENT);
             row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 160));
-            Image thumb = ni.image().getScaledInstance(220, -1, Image.SCALE_SMOOTH);
-            JLabel thumbLabel = new JLabel(new ImageIcon(thumb));
+            JLabel thumbLabel = new JLabel(new ImageIcon(img.thumbnail(220, 150)));
             thumbLabel.setBorder(BorderFactory.createLineBorder(Palette.BORDER));
-            JLabel nameLabel = new JLabel("<html>" + ni.filename() + "<br><span style='color:#8b949e'>"
-                    + ni.image().getWidth() + "×" + ni.image().getHeight() + " px</span></html>");
+            thumbLabel.setToolTipText("Двойной клик — просмотр крупно");
+            thumbLabel.addMouseListener(new java.awt.event.MouseAdapter() {
+                @Override
+                public void mouseClicked(java.awt.event.MouseEvent e) {
+                    if (e.getClickCount() == 2) {
+                        openViewer.run();
+                    }
+                }
+            });
+            boolean large = MaskLimits.isLarge(img.width(), img.height());
+            JLabel nameLabel = new JLabel("<html>" + entry.filename() + "<br><span style='color:"
+                    + (large ? "#f0883e" : "#8b949e") + "'>" + img.width() + "×" + img.height() + " px"
+                    + (large ? " — сторона ≥ " + MaskLimits.WARN_SIDE_PX : "") + "</span></html>");
+            JButton viewBtn = new JButton("Просмотр");
+            viewBtn.addActionListener(e -> openViewer.run());
+            JPanel viewWrap = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+            viewWrap.add(viewBtn);
             row.add(thumbLabel, BorderLayout.WEST);
             row.add(nameLabel, BorderLayout.CENTER);
+            row.add(viewWrap, BorderLayout.EAST);
             list.add(row);
             list.add(Box.createVerticalStrut(8));
         }
         JScrollPane scroll = new JScrollPane(list);
-        scroll.setPreferredSize(new Dimension(560, 560));
+        scroll.setPreferredSize(new Dimension(640, 560));
         scroll.getVerticalScrollBar().setUnitIncrement(16);
 
-        JLabel folderLabel = new JLabel("Папка: " + (folder != null ? folder.getAbsolutePath() : "—"));
+        JLabel folderLabel = new JLabel("Папка: " + folder.getAbsolutePath()
+                + (set.skipped().isEmpty() ? "" : "   (пропущено масок больше " + MaskLimits.MAX_SIDE_PX + " px: "
+                + set.skipped().size() + ")"));
         folderLabel.setForeground(Palette.MUTED);
         folderLabel.setBorder(BorderFactory.createEmptyBorder(0, 10, 6, 10));
 
-        JButton save = new JButton("Сохранить всё в папку (" + images.size() + ")");
+        JButton save = new JButton("Сохранить всё в папку (" + entries.size() + ")");
         save.addActionListener(e -> {
             try {
-                for (NamedImage ni : images) {
-                    PixelGridRenderer.writePng(ni.image(), new File(folder, ni.filename()));
-                }
+                int written = set.writeAll(dlg, "Сохранение масок", folder);
                 dlg.dispose();
-                JOptionPane.showMessageDialog(this, "Сохранено файлов: " + images.size(), "Готово",
+                JOptionPane.showMessageDialog(this, "Сохранено файлов: " + written, "Готово",
                         JOptionPane.INFORMATION_MESSAGE);
-            } catch (IOException ex) {
+            } catch (java.util.concurrent.CancellationException cancelled) {
+                JOptionPane.showMessageDialog(dlg, "Сохранение отменено — недописанный файл удалён,"
+                        + " уже записанные остались в папке.", "Отменено", JOptionPane.INFORMATION_MESSAGE);
+            } catch (Exception ex) {
                 JOptionPane.showMessageDialog(dlg, "Ошибка сохранения: " + ex.getMessage(), "Ошибка",
                         JOptionPane.ERROR_MESSAGE);
             }

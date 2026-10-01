@@ -6,6 +6,7 @@ import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.MaskGeometry;
+import com.vjstb.ledscheme.service.MaskLimits;
 
 /**
  * Генератор XML "Screen Setup" (Advanced Output) для Resolume Arena — по образцу
@@ -63,7 +64,11 @@ public final class ResolumePresetExporter {
         sb.append("<Params name=\"Params\">\n");
         sb.append("<ParamRange name=\"Width\" default=\"").append(canvas.getWidthPx()).append("\" value=\"")
                 .append(canvas.getWidthPx()).append("\"/>\n");
-        sb.append("<ValueRange name=\"defaultRange\" min=\"1\" max=\"16384\"/>\n");
+        // Верх диапазона -- как в образце Resolume (16384), но не меньше самого канваса: после
+        // снятия предела 16k (запрос 2026-09-30, решение D7) канвас бывает до 30000 px, и
+        // value больше max Resolume мог бы обрезать до max при импорте.
+        int rangeMax = Math.max(MaskLimits.WARN_SIDE_PX, Math.max(canvas.getWidthPx(), canvas.getHeightPx()));
+        sb.append("<ValueRange name=\"defaultRange\" min=\"1\" max=\"").append(rangeMax).append("\"/>\n");
         sb.append("<ParamRange name=\"Height\" default=\"").append(canvas.getHeightPx()).append("\" value=\"")
                 .append(canvas.getHeightPx()).append("\"/>\n");
         sb.append("</Params>\n");
