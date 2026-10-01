@@ -3100,6 +3100,13 @@ public class SchemaCanvasPanel extends JPanel {
             addBlockLayoutMenuItems(menu, List.of(node));
         }
         menu.addSeparator();
+        if (contentFitSize(node) != null) {
+            javax.swing.JMenuItem fitItem = new javax.swing.JMenuItem(selectedNodes.size() > 1 && selectedNodes.contains(node)
+                    ? "Подогнать размер выделенных блоков" : "Подогнать размер под содержимое");
+            fitItem.addActionListener(ev -> fitNodesToContent(
+                    selectedNodes.size() > 1 && selectedNodes.contains(node) ? new ArrayList<>(selectedNodes) : List.of(node)));
+            menu.add(fitItem);
+        }
         javax.swing.JMenuItem fontSizeItem = new javax.swing.JMenuItem("Размер шрифта…");
         fontSizeItem.addActionListener(ev -> promptFontSize("Размер шрифта блока", node.getFontSize(), schemeNodeFontSize(), size -> {
             model.setSchemaNodesFontSize(List.of(node), size);
@@ -4279,6 +4286,49 @@ public class SchemaCanvasPanel extends JPanel {
                     labelFontSize, labelPaddingPx());
             return com.vjstb.ledscheme.service.schemalayout.NodePortLayout.layout(in, node.getWidth(), node.getHeight());
         });
+    }
+
+    /** Размер блока, ровно вмещающий его гнёзда при ТЕКУЩИХ настройках отображения групп
+     *  (свёрнутые/развёрнутые — как у {@link #nodeLayout}); {@code null}, если у блока нет
+     *  карт/разъёмов (подгонять нечего: экраны, легенды, пустые блоки). */
+    private double[] contentFitSize(SchemaNode node) {
+        List<com.vjstb.ledscheme.service.schemalayout.NodePortLayout.CardGroup> groups = cardGroupsOf(node);
+        if (groups.isEmpty() || node.getType() == SchemaNodeType.SCREEN || node.isAutoPortLegend()
+                || node.isAutoLineLegend()) {
+            return null;
+        }
+        com.vjstb.ledscheme.model.NodeOrientation orientation = node.getOrientation() != null
+                ? node.getOrientation() : settings.activeProfile().getDefaultOrientation(mode);
+        Boolean defaultCollapsed = switch (settings.activeProfile().getGroupDisplay(mode)) {
+            case ALWAYS_COLLAPSED -> Boolean.TRUE;
+            case ALWAYS_EXPANDED -> Boolean.FALSE;
+            case AUTO -> null;
+        };
+        var in = new com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Input(mode, node.getType(),
+                orientation, groups, edges(), node.getPortPlacements(), node.isOnlyUsedPorts(), defaultCollapsed,
+                model.getInterfaceTypes(), com.vjstb.ledscheme.service.schemalayout.TextMeasure.awt(),
+                model.effectiveNodeFontSize(node), labelPaddingPx());
+        var size = com.vjstb.ledscheme.service.schemalayout.NodePortLayout.minimumSize(in);
+        return new double[]{size.width(), size.height()};
+    }
+
+    /** «Подогнать размер» для набора блоков (запрос 2026-10-02: после перезапуска блоки
+     *  оказались раздутыми под развёрнутые группы) — одна запись отмены. Возвращает число
+     *  блоков, которым нашёлся размер. */
+    public int fitNodesToContent(java.util.Collection<SchemaNode> nodes) {
+        java.util.Map<SchemaNode, double[]> sizes = new java.util.LinkedHashMap<>();
+        for (SchemaNode n : nodes) {
+            double[] s = contentFitSize(n);
+            if (s != null) {
+                sizes.put(n, s);
+            }
+        }
+        model.setSchemaNodesSizes(sizes);
+        if (!sizes.isEmpty()) {
+            onChanged.run();
+            repaint();
+        }
+        return sizes.size();
     }
 
     /** Гнёзда узла НА РАМКЕ блока — отсеки карт (шапка/скобка), точки-гнёзда,
