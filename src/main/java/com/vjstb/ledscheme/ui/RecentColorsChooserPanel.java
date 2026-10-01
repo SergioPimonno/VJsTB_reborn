@@ -39,6 +39,33 @@ public class RecentColorsChooserPanel extends AbstractColorChooserPanel {
     private static final int COLS = 8;
     private static final int SWATCH_PX = 26;
     private static final List<Color> RECENT = new LinkedList<>();
+    private static final List<Color> RECENT_MASKS = new LinkedList<>();
+
+    /** Канал памяти «недавних» цветов (2026-09-30, запрос пользователя: «механизм палитры
+     *  из общих схем, но память цветов масок — отдельная») — у каждого канала СВОЙ список
+     *  в памяти процесса и свой персистентный список в профиле. Все прежние вызовы без
+     *  канала остаются на {@link #LINES}, их поведение не менялось. */
+    public enum Channel {
+        /** Цвета линий схем/цепочек/сетевого менеджера (как было до 2026-09-30). */
+        LINES,
+        /** Цвета шахматки масок экранов («Свои цвета…»). */
+        MASKS
+    }
+
+    private static List<Color> listOf(Channel channel) {
+        return channel == Channel.MASKS ? RECENT_MASKS : RECENT;
+    }
+
+    private final Channel channel;
+
+    /** Вкладка канала {@link Channel#LINES} — как раньше (палитра линий). */
+    public RecentColorsChooserPanel() {
+        this(Channel.LINES);
+    }
+
+    public RecentColorsChooserPanel(Channel channel) {
+        this.channel = channel != null ? channel : Channel.LINES;
+    }
 
     /** Регистрирует цвет как «недавно использованный» — вызывать ПОСЛЕ того, как
      *  пользователь подтвердил выбор (OK диалога), а не при каждом промежуточном
@@ -48,13 +75,19 @@ public class RecentColorsChooserPanel extends AbstractColorChooserPanel {
      *  персистентной версии; эта перегрузка оставлена ради теста и на случай
      *  вызова без доступа к настройкам. */
     public static void remember(Color c) {
+        remember(c, Channel.LINES);
+    }
+
+    /** Как {@link #remember(Color)}, но для указанного канала (только память процесса). */
+    public static void remember(Color c, Channel channel) {
         if (c == null) {
             return;
         }
-        RECENT.removeIf(existing -> existing.getRGB() == c.getRGB());
-        RECENT.add(0, c);
-        while (RECENT.size() > MAX_RECENT) {
-            RECENT.remove(RECENT.size() - 1);
+        List<Color> list = listOf(channel);
+        list.removeIf(existing -> existing.getRGB() == c.getRGB());
+        list.add(0, c);
+        while (list.size() > MAX_RECENT) {
+            list.remove(list.size() - 1);
         }
     }
 
@@ -70,17 +103,42 @@ public class RecentColorsChooserPanel extends AbstractColorChooserPanel {
         }
     }
 
+    /** Как {@link #remember(Color, com.vjstb.ledscheme.settings.SettingsManager)}, но для
+     *  указанного канала: {@link Channel#MASKS} пишет в {@code UserProfile.recentMaskColors}
+     *  (отдельно от цветов линий). */
+    public static void remember(Color c, com.vjstb.ledscheme.settings.SettingsManager settings,
+                                Channel channel) {
+        remember(c, channel);
+        if (c != null) {
+            if (channel == Channel.MASKS) {
+                settings.rememberRecentMaskColor(c.getRGB());
+            } else {
+                settings.rememberRecentLineColor(c.getRGB());
+            }
+        }
+    }
+
     /** Подмешивает в память процесса цвета, ранее сохранённые в профиле — только
      *  если общий {@code RECENT} сейчас пуст (первое обращение за эту сессию
      *  приложения): иначе уже накопленные за сессию цвета молча перетёрлись бы
      *  списком из профиля при каждом вызове диалога. Вызывать ПЕРЕД показом
      *  диалога (см. {@link UiKit#showColorChooser}). */
     public static void loadPersisted(com.vjstb.ledscheme.settings.SettingsManager settings) {
-        if (!RECENT.isEmpty()) {
+        loadPersisted(settings, Channel.LINES);
+    }
+
+    /** Как {@link #loadPersisted(com.vjstb.ledscheme.settings.SettingsManager)}, но для
+     *  указанного канала (свой список в памяти, свой — в профиле). */
+    public static void loadPersisted(com.vjstb.ledscheme.settings.SettingsManager settings, Channel channel) {
+        List<Color> list = listOf(channel);
+        if (!list.isEmpty()) {
             return;
         }
-        for (Integer rgb : settings.activeProfile().getRecentLineColors()) {
-            RECENT.add(new Color(rgb));
+        List<Integer> persisted = channel == Channel.MASKS
+                ? settings.activeProfile().getRecentMaskColors()
+                : settings.activeProfile().getRecentLineColors();
+        for (Integer rgb : persisted) {
+            list.add(new Color(rgb));
         }
     }
 
@@ -89,10 +147,16 @@ public class RecentColorsChooserPanel extends AbstractColorChooserPanel {
         return List.copyOf(RECENT);
     }
 
+    /** Только для тестов — снимок списка указанного канала. */
+    static List<Color> recentSnapshotForTests(Channel channel) {
+        return List.copyOf(listOf(channel));
+    }
+
     /** Только для тестов — список статический (общий на процесс), тесты не должны
      *  видеть остатки друг от друга. */
     static void clearForTests() {
         RECENT.clear();
+        RECENT_MASKS.clear();
     }
 
     private JPanel grid;
@@ -115,13 +179,14 @@ public class RecentColorsChooserPanel extends AbstractColorChooserPanel {
 
     private void refreshGrid() {
         grid.removeAll();
-        if (RECENT.isEmpty()) {
+        List<Color> recent = listOf(channel);
+        if (recent.isEmpty()) {
             grid.setLayout(new BorderLayout());
             grid.add(new JLabel("Пока пусто — выбранные цвета появятся здесь"), BorderLayout.NORTH);
             return;
         }
         grid.setLayout(new GridLayout(0, COLS, 4, 4));
-        for (Color c : RECENT) {
+        for (Color c : recent) {
             JButton b = new JButton();
             b.setBackground(c);
             b.setOpaque(true);

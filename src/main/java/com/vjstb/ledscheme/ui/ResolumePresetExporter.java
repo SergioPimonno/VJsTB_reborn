@@ -5,8 +5,7 @@ import com.vjstb.ledscheme.model.ContentCanvas;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
-import com.vjstb.ledscheme.service.ScreenLogic;
-import com.vjstb.ledscheme.service.ScreenStats;
+import com.vjstb.ledscheme.service.MaskGeometry;
 
 /**
  * Генератор XML "Screen Setup" (Advanced Output) для Resolume Arena — по образцу
@@ -45,11 +44,13 @@ public final class ResolumePresetExporter {
             if (scr == null) {
                 continue;
             }
-            ScreenStats stats = ScreenLogic.stats(scr, model.typeOf(scr), model.getWorkspace());
+            // Размер слайса -- размер МАСКИ экрана (2026-09-30: у экрана-«сетки» она выше
+            // реального разрешения в N раз, слайс должен совпадать с тем, что лежит в PNG).
+            MaskGeometry geo = MaskGeometry.of(scr, model.typeOf(scr), model.getWorkspace());
             int x0 = pl.getX();
             int y0 = pl.getY();
-            int x1 = x0 + stats.resolutionWidthPx();
-            int y1 = y0 + stats.resolutionHeightPx();
+            int x1 = x0 + geo.width();
+            int y1 = y0 + geo.height();
             appendSlice(sb, scr.getName(), x0, y0, x1, y1);
         }
 

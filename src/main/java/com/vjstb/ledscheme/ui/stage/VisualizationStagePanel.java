@@ -8,9 +8,11 @@ import com.vjstb.ledscheme.model.Project;
 import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.service.CanvasFit;
 import com.vjstb.ledscheme.ui.AfterEffectsJsxWriter;
 import com.vjstb.ledscheme.ui.CanvasEditorPanel;
 import com.vjstb.ledscheme.ui.ContextBar;
+import com.vjstb.ledscheme.ui.MaskCustomColorsDialog;
 import com.vjstb.ledscheme.ui.OutputPaths;
 import com.vjstb.ledscheme.ui.Palette;
 import com.vjstb.ledscheme.ui.PixelGridRenderer;
@@ -32,6 +34,7 @@ import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.DefaultCellEditor;
 import javax.swing.DefaultComboBoxModel;
+import javax.swing.Icon;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -46,11 +49,13 @@ import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.JSplitPane;
 import javax.swing.JTable;
+import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingUtilities;
 import javax.swing.table.AbstractTableModel;
+import javax.swing.table.DefaultTableCellRenderer;
 
 /**
  * Этап «Генерация масок»: канвасы — виртуальные выходные кадры для компоновки
@@ -85,6 +90,10 @@ public class VisualizationStagePanel extends JPanel {
      *  глобальных настроек маски под смену выбранного канваса (см. syncCanvasMaskSettingsControls) —
      *  тот же приём, что раньше использовался для комбобокса цвета маски экрана. */
     private boolean syncingCanvasMaskControls;
+
+    /** Предупреждение «канвас меньше размещённых в нём масок» (запрос пользователя 2026-09-30):
+     *  под выбором канваса, скрыто, пока всё вмещается. См. {@link CanvasFit}. */
+    private final JLabel canvasOverflowLabel = new JLabel();
 
     private ContentCanvas currentCanvas;
 
@@ -169,6 +178,17 @@ public class VisualizationStagePanel extends JPanel {
         JButton resizeBtn = new JButton("Применить размер/имя");
         resizeBtn.addActionListener(e -> {
             if (currentCanvas == null) return;
+            // Запрос 2026-09-30: если НОВЫЙ размер обрежет уже размещённые маски -- предупредить
+            // до применения, а не после экспорта.
+            Scene curScene = model.getCurrentScene();
+            List<CanvasFit.Overflow> willCrop = CanvasFit.overflows(currentCanvas,
+                    (Integer) wSpin.getValue(), (Integer) hSpin.getValue(), curScene, model);
+            if (!willCrop.isEmpty() && !confirmText("Новый размер канваса обрежет маски",
+                    "При размере " + wSpin.getValue() + "×" + hSpin.getValue()
+                            + " px эти маски выйдут за границы канваса и в его экспорте будут обрезаны:",
+                    CanvasFit.describe(willCrop), "Всё равно применить размер?")) {
+                return;
+            }
             model.updateCanvas(currentCanvas, nameField.getText().trim(),
                     (Integer) wSpin.getValue(), (Integer) hSpin.getValue());
         });
@@ -185,6 +205,12 @@ public class VisualizationStagePanel extends JPanel {
         canvasRow.add(resizeBtn);
         canvasRow.add(deleteCanvasBtn);
         controls.add(canvasRow);
+
+        canvasOverflowLabel.setForeground(Palette.WARN);
+        canvasOverflowLabel.setBorder(BorderFactory.createEmptyBorder(0, 8, 2, 8));
+        canvasOverflowLabel.setAlignmentX(LEFT_ALIGNMENT);
+        canvasOverflowLabel.setVisible(false);
+        controls.add(canvasOverflowLabel);
 
         addScreenCombo.setRenderer(new javax.swing.DefaultListCellRenderer() {
             @Override
@@ -249,6 +275,17 @@ public class VisualizationStagePanel extends JPanel {
         placementsTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         placementsTable.getColumnModel().getColumn(8)
                 .setCellEditor(new DefaultCellEditor(new JComboBox<>(MaskColorPreset.values())));
+        // Фон -- название пресета + два образца цветов пары (запрос 2026-09-30: у «Свои цвета…»
+        // пара не видна по названию, а у пресетов полезно видеть, чем именно красится экран).
+        placementsTable.getColumnModel().getColumn(8).setCellRenderer(new MaskColorCellRenderer());
+        // Высота × -- целое; недоступно (серым), пока экран не «сетка».
+        placementsTable.getColumnModel().getColumn(10)
+                .setCellEditor(com.vjstb.ledscheme.ui.MathFields.integerCellEditor());
+        placementsTable.getColumnModel().getColumn(10).setCellRenderer(new MeshMultiplierRenderer());
+        placementsTable.getColumnModel().getColumn(9).setPreferredWidth(90);
+        placementsTable.getColumnModel().getColumn(10).setPreferredWidth(70);
+        placementsTable.getColumnModel().getColumn(12).setPreferredWidth(60);
+        placementsTable.getColumnModel().getColumn(13).setPreferredWidth(90);
         placementsTable.getColumnModel().getColumn(5)
                 .setCellEditor(com.vjstb.ledscheme.ui.MathFields.integerCellEditor());
         placementsTable.getColumnModel().getColumn(6)
@@ -339,6 +376,7 @@ public class VisualizationStagePanel extends JPanel {
         canvasEditor.setCanvas(currentCanvas);
         syncCanvasMaskSettingsControls();
         placementsTableModel.fireTableDataChanged();
+        refreshOverflowWarning();
 
         DefaultComboBoxModel<Screen> sm = new DefaultComboBoxModel<>();
         Scene scene = model.getCurrentScene();
@@ -355,6 +393,64 @@ public class VisualizationStagePanel extends JPanel {
                     ? OutputPaths.defaultFolder(project, model.getCurrentScene(), settings).getAbsolutePath()
                     : "(сначала выберите проект)");
         }
+    }
+
+    /** Строка-предупреждение под выбором канваса: какие экраны выходят за его границы (см.
+     *  {@link CanvasFit}). Обновляется по слушателю модели вместе со всем остальным. */
+    private void refreshOverflowWarning() {
+        Scene scene = model.getCurrentScene();
+        List<CanvasFit.Overflow> over = currentCanvas != null && scene != null
+                ? CanvasFit.overflows(currentCanvas, scene, model) : List.of();
+        if (over.isEmpty()) {
+            canvasOverflowLabel.setVisible(false);
+            canvasOverflowLabel.setText("");
+            return;
+        }
+        canvasOverflowLabel.setText("<html>⚠ Канвас меньше размещённых в нём масок — в экспорте канваса они"
+                + " будут обрезаны: " + CanvasFit.describe(over).replace("\n", "; ") + "</html>");
+        canvasOverflowLabel.setVisible(true);
+    }
+
+    /** Подтверждение с прокручиваемым списком (предупреждения про обрезку масок). */
+    private boolean confirmText(String title, String intro, String details, String question) {
+        JTextArea area = new JTextArea(details, Math.min(12, details.split("\n").length + 1), 50);
+        area.setEditable(false);
+        area.setCaretPosition(0);
+        JPanel panel = new JPanel(new BorderLayout(0, 6));
+        panel.add(new JLabel("<html><body style='width:420px'>" + intro + "</body></html>"), BorderLayout.NORTH);
+        panel.add(new JScrollPane(area), BorderLayout.CENTER);
+        panel.add(new JLabel(question), BorderLayout.SOUTH);
+        return JOptionPane.showConfirmDialog(this, panel, title, JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE) == JOptionPane.YES_OPTION;
+    }
+
+    /** Перед экспортом: если в экспортируемых канвасах есть маски, выходящие за их границы,
+     *  — одно подтверждение со списком (запрос пользователя 2026-09-30). {@code true} —
+     *  можно продолжать (вылезающих нет или пользователь согласился). */
+    private boolean confirmCanvasCropForExport(List<Scene> scenes, List<ContentCanvas> onlyThese,
+                                               boolean includeSceneName, String question) {
+        StringBuilder report = new StringBuilder();
+        for (Scene sc : scenes) {
+            for (ContentCanvas c : sc.getCanvases()) {
+                if (onlyThese != null && !onlyThese.contains(c)) {
+                    continue;
+                }
+                String r = CanvasFit.report(c, sc, model, includeSceneName);
+                if (r != null) {
+                    if (report.length() > 0) {
+                        report.append("\n");
+                    }
+                    report.append(r);
+                }
+            }
+        }
+        if (report.length() == 0) {
+            return true;
+        }
+        return confirmText("Канвас обрежет маски",
+                "В экспортируемых канвасах часть масок выходит за их границы — в PNG канваса она будет"
+                        + " обрезана (в пресетах Resolume/After Effects координаты останутся как есть):",
+                report.toString(), question);
     }
 
     private Screen screenById(String id) {
@@ -378,14 +474,25 @@ public class VisualizationStagePanel extends JPanel {
      *  нужно для актуальности; правки самой таблицы идут через AppModel-мутаторы,
      *  которые тоже вызывают model.addListener и приходят сюда тем же путём. */
     private final class PlacementsTableModel extends AbstractTableModel {
+        /** 2026-09-30: колонки «Растр» больше нет (запрос пользователя — не используется);
+         *  вместо неё «Плашка» (имя на плашке маски) и «Разрешение» (вторая строка той же
+         *  плашки); «Экран-сетка»/«Высота ×» — свойство ЭКРАНА (маска выше в N раз, как цвет
+         *  — одинаково во всех канвасах). «Сетка» — по-прежнему рамки кабинетов (showGrid),
+         *  не путать с «Экран-сетка». */
         private final String[] columns = {
                 "Экран", "Кабинет X,px", "Кабинет Y,px", "Колонн", "Строк",
                 "X,px", "Y,px", "Имя", "Фон",
-                "Сетка", "Растр", "Номера", "Круг", "Крест", "Угол", "Лого"
+                "Экран-сетка", "Высота ×",
+                "Сетка", "Плашка", "Разрешение", "Номера", "Круг", "Крест", "Угол", "Лого"
         };
 
         private List<CanvasPlacement> placements() {
             return currentCanvas != null ? currentCanvas.getPlacements() : List.of();
+        }
+
+        Screen screenAtRow(int row) {
+            List<CanvasPlacement> list = placements();
+            return row >= 0 && row < list.size() ? screenById(list.get(row).getScreenId()) : null;
         }
 
         @Override
@@ -406,15 +513,19 @@ public class VisualizationStagePanel extends JPanel {
         @Override
         public Class<?> getColumnClass(int col) {
             return switch (col) {
-                case 1, 2, 3, 4, 5, 6 -> Integer.class;
+                case 1, 2, 3, 4, 5, 6, 10 -> Integer.class;
                 case 8 -> MaskColorPreset.class;
-                case 9, 10, 11, 12, 13, 14, 15 -> Boolean.class;
+                case 9, 11, 12, 13, 14, 15, 16, 17, 18 -> Boolean.class;
                 default -> String.class;
             };
         }
 
         @Override
         public boolean isCellEditable(int row, int col) {
+            if (col == 10) {
+                Screen scr = screenAtRow(row);
+                return scr != null && scr.isMaskMesh();
+            }
             return col >= 5;
         }
 
@@ -433,13 +544,16 @@ public class VisualizationStagePanel extends JPanel {
                 case 6 -> pl.getY();
                 case 7 -> pl.getName() != null ? pl.getName() : "";
                 case 8 -> scr != null ? scr.getBackground() : MaskColorPreset.NORMAL;
-                case 9 -> pl.isShowGrid();
-                case 10 -> pl.isShowRaster();
-                case 11 -> pl.isShowIds();
-                case 12 -> pl.isShowCircle();
-                case 13 -> pl.isShowCross();
-                case 14 -> pl.isShowCorner();
-                case 15 -> pl.isShowLogo();
+                case 9 -> scr != null && scr.isMaskMesh();
+                case 10 -> scr != null ? scr.getMaskHeightMultiplier() : 2;
+                case 11 -> pl.isShowGrid();
+                case 12 -> pl.isShowNameLabel();
+                case 13 -> pl.isShowResolution();
+                case 14 -> pl.isShowIds();
+                case 15 -> pl.isShowCircle();
+                case 16 -> pl.isShowCross();
+                case 17 -> pl.isShowCorner();
+                case 18 -> pl.isShowLogo();
                 default -> null;
             };
         }
@@ -447,47 +561,113 @@ public class VisualizationStagePanel extends JPanel {
         @Override
         public void setValueAt(Object value, int row, int col) {
             CanvasPlacement pl = placements().get(row);
+            Screen scr = screenById(pl.getScreenId());
             switch (col) {
                 case 5 -> model.movePlacement(pl, (Integer) value, pl.getY());
                 case 6 -> model.movePlacement(pl, pl.getX(), (Integer) value);
                 case 7 -> {
                     String name = value == null || ((String) value).isBlank() ? null : (String) value;
-                    model.updatePlacementMaskConfig(pl, name, pl.isShowGrid(), pl.isShowRaster(),
-                            pl.isShowIds(), pl.isShowCircle(), pl.isShowCross(), pl.isShowCorner(), pl.isShowLogo());
+                    model.updatePlacementMask(pl, p -> p.setName(name));
                 }
                 case 8 -> {
                     // Цвет маски -- ОБЩИЙ для экрана (не per-placement, см. class-javadoc
                     // Screen#getBackground) -- пишем через экран, не через это размещение,
                     // чтобы то же самое значение сразу отразилось во ВСЕХ канвасах, где
                     // этот экран тоже размещён (см. AppModel.setMaskColor).
-                    Screen scr = screenById(pl.getScreenId());
-                    if (scr != null) {
+                    if (scr == null) {
+                        return;
+                    }
+                    if (value == MaskColorPreset.CUSTOM) {
+                        // «Свои цвета…» -- диалог с двумя образцами; открываем после выхода из
+                        // редактирования ячейки, не внутри editingStopped.
+                        SwingUtilities.invokeLater(() -> pickCustomMaskColors(scr));
+                    } else {
                         model.setMaskColor(scr, (MaskColorPreset) value);
                     }
                 }
-                case 9 -> model.updatePlacementMaskConfig(pl, pl.getName(), (Boolean) value,
-                        pl.isShowRaster(), pl.isShowIds(), pl.isShowCircle(), pl.isShowCross(), pl.isShowCorner(),
-                        pl.isShowLogo());
-                case 10 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.isShowGrid(),
-                        (Boolean) value, pl.isShowIds(), pl.isShowCircle(), pl.isShowCross(), pl.isShowCorner(),
-                        pl.isShowLogo());
-                case 11 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.isShowGrid(),
-                        pl.isShowRaster(), (Boolean) value, pl.isShowCircle(), pl.isShowCross(), pl.isShowCorner(),
-                        pl.isShowLogo());
-                case 12 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.isShowGrid(),
-                        pl.isShowRaster(), pl.isShowIds(), (Boolean) value, pl.isShowCross(), pl.isShowCorner(),
-                        pl.isShowLogo());
-                case 13 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.isShowGrid(),
-                        pl.isShowRaster(), pl.isShowIds(), pl.isShowCircle(), (Boolean) value, pl.isShowCorner(),
-                        pl.isShowLogo());
-                case 14 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.isShowGrid(),
-                        pl.isShowRaster(), pl.isShowIds(), pl.isShowCircle(), pl.isShowCross(), (Boolean) value,
-                        pl.isShowLogo());
-                case 15 -> model.updatePlacementMaskConfig(pl, pl.getName(), pl.isShowGrid(),
-                        pl.isShowRaster(), pl.isShowIds(), pl.isShowCircle(), pl.isShowCross(), pl.isShowCorner(),
-                        (Boolean) value);
+                case 9 -> {
+                    if (scr != null) {
+                        model.setMaskMesh(scr, (Boolean) value);
+                    }
+                }
+                case 10 -> {
+                    if (scr != null) {
+                        model.setMaskHeightMultiplier(scr, Math.max(1, (Integer) value));
+                    }
+                }
+                case 11 -> model.updatePlacementMask(pl, p -> p.setShowGrid((Boolean) value));
+                case 12 -> model.updatePlacementMask(pl, p -> p.setShowNameLabel((Boolean) value));
+                case 13 -> model.updatePlacementMask(pl, p -> p.setShowResolution((Boolean) value));
+                case 14 -> model.updatePlacementMask(pl, p -> p.setShowIds((Boolean) value));
+                case 15 -> model.updatePlacementMask(pl, p -> p.setShowCircle((Boolean) value));
+                case 16 -> model.updatePlacementMask(pl, p -> p.setShowCross((Boolean) value));
+                case 17 -> model.updatePlacementMask(pl, p -> p.setShowCorner((Boolean) value));
+                case 18 -> model.updatePlacementMask(pl, p -> p.setShowLogo((Boolean) value));
                 default -> { }
             }
+        }
+    }
+
+    /** «Свои цвета…» для экрана: стартовая пара — ранее выбранная своя (если есть), иначе
+     *  цвета, которыми экран красится сейчас. Отмена диалога ничего не меняет. */
+    private void pickCustomMaskColors(Screen scr) {
+        Color a = scr.getMaskColorA() != null ? new Color(scr.getMaskColorA()) : scr.maskColor(0);
+        Color b = scr.getMaskColorB() != null ? new Color(scr.getMaskColorB()) : scr.maskColor(1);
+        Color[] picked = MaskCustomColorsDialog.show(this, scr.getName(), a, b, settings);
+        if (picked != null) {
+            model.setMaskCustomColors(scr, picked[0], picked[1]);
+        }
+    }
+
+    /** Ячейка «Фон»: название пресета и два образца пары цветов экрана (для «Свои цвета…» —
+     *  именно его пара, см. {@link Screen#maskColor(int)}). */
+    private final class MaskColorCellRenderer extends DefaultTableCellRenderer {
+        @Override
+        public java.awt.Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected,
+                boolean hasFocus, int row, int column) {
+            super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+            Screen scr = placementsTableModel.screenAtRow(row);
+            Color c0 = scr != null ? scr.maskColor(0) : MaskColorPreset.NORMAL.color(0);
+            Color c1 = scr != null ? scr.maskColor(1) : MaskColorPreset.NORMAL.color(1);
+            setIcon(new Icon() {
+                @Override
+                public void paintIcon(java.awt.Component c, java.awt.Graphics g, int x, int y) {
+                    g.setColor(c0);
+                    g.fillRect(x, y, 10, 12);
+                    g.setColor(c1);
+                    g.fillRect(x + 10, y, 10, 12);
+                    g.setColor(Palette.BORDER);
+                    g.drawRect(x, y, 20, 12);
+                }
+
+                @Override
+                public int getIconWidth() {
+                    return 21;
+                }
+
+                @Override
+                public int getIconHeight() {
+                    return 13;
+                }
+            });
+            return this;
+        }
+    }
+
+    /** «Высота ×»: серым, пока экран не «сетка» (редактировать нельзя). */
+    private final class MeshMultiplierRenderer extends DefaultTableCellRenderer {
+        MeshMultiplierRenderer() {
+            setHorizontalAlignment(RIGHT);
+        }
+
+        @Override
+        public java.awt.Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected,
+                boolean hasFocus, int row, int column) {
+            super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+            if (!isSelected && !placementsTableModel.isCellEditable(row, column)) {
+                setForeground(Palette.MUTED);
+            }
+            return this;
         }
     }
 
@@ -532,6 +712,9 @@ public class VisualizationStagePanel extends JPanel {
             JOptionPane.showMessageDialog(this, "Сначала выберите проект", "Нет проекта", JOptionPane.WARNING_MESSAGE);
             return;
         }
+        if (!confirmCanvasCropForExport(project.getScenes(), null, true, "Всё равно экспортировать?")) {
+            return;
+        }
         List<NamedImage> images = new ArrayList<>();
         try {
             for (Scene scene : project.getScenes()) {
@@ -573,6 +756,10 @@ public class VisualizationStagePanel extends JPanel {
         Scene scene = model.getCurrentScene();
         if (scene == null) {
             JOptionPane.showMessageDialog(this, "Сначала выберите сцену", "Нет сцены", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        if (!confirmCanvasCropForExport(List.of(scene), List.of(currentCanvas), false,
+                "Всё равно экспортировать?")) {
             return;
         }
         List<NamedImage> images = new ArrayList<>();
@@ -628,6 +815,9 @@ public class VisualizationStagePanel extends JPanel {
                     "Нет папки", JOptionPane.WARNING_MESSAGE);
             return;
         }
+        if (!confirmCanvasCropForExport(List.of(scene), null, false, "Всё равно экспортировать пресет?")) {
+            return;
+        }
         folder.mkdirs();
         int count = 0;
         try {
@@ -680,6 +870,9 @@ public class VisualizationStagePanel extends JPanel {
         if (folder == null) {
             JOptionPane.showMessageDialog(this, "Не удалось определить папку сохранения — выберите её вручную",
                     "Нет папки", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        if (!confirmCanvasCropForExport(List.of(scene), null, false, "Всё равно экспортировать пресет?")) {
             return;
         }
         folder.mkdirs();
