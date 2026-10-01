@@ -207,6 +207,8 @@ public class SetupStagePanel extends JPanel {
     private final JButton showFloorPlanBtn = new JButton("Показать план");
     private JPanel floorCard;
     private JButton floorQuickBtn;
+    /** Открытое окно плана пола (2D/3D, запрос 2026-10-01) — см. {@link #openFloorPlanDialog}. */
+    private com.vjstb.ledscheme.ui.FloorPlanDialog floorPlanDialog;
 
     // ---- «Параметры по умолчанию» сцены (см. model.ScreenDefaults) ----
     // Стартовые значения для НОВЫХ экранов ЭТОЙ сцены — отдельная карточка
@@ -2695,9 +2697,11 @@ public class SetupStagePanel extends JPanel {
 
     /** Содержимое карточки «Напольный каркас» ({@link #floorCard}, кнопка {@link
      *  #floorQuickBtn}, видна только при {@code mountType == FLOOR}) — по образцу блока
-     *  «Конструктив», но без 3D и без стартовой сетки: расстановка рам целиком выводится
-     *  из формы экрана ({@code FloorCalc}), хранить в модели нечего, кроме выбора рамы/
-     *  стакана и числа зубов. */
+     *  «Конструктив», но без стартовой сетки: расстановка рам генерируется из формы экрана
+     *  ({@code FloorCalc}). С 2026-10-01 рамы ещё и хранятся списком ({@code
+     *  Screen#floorFrameCells}) — «Показать план» открывает окно с переключателем «2D схема» /
+     *  «3D редактор», где рамы прячутся/добавляются кликом (см. {@code ui.FloorPlanViewPanel}),
+     *  а «Рассчитать пол» сохраняет список с merge ручных правок. */
     private JPanel buildFloorFieldsPanel() {
         JPanel p = UiKit.vbox();
         setStructureFrameRenderer(pFloorFrameType);
@@ -2721,7 +2725,10 @@ public class SetupStagePanel extends JPanel {
         calcFloorBtn.addActionListener(e -> calculateFloor());
         p.add(calcFloorBtn);
         p.add(UiKit.vgap());
-        showFloorPlanBtn.setToolTipText("2D-план пола сверху: рамы, стаканы, кабинеты без опоры — оранжевым.");
+        showFloorPlanBtn.setToolTipText("<html>План пола: «2D схема» сверху (рамы, стаканы, кабинеты без опоры —"
+                + " оранжевым) или «3D редактор» (выбор запоминается).<br>В 3D: клик по раме — убрать её, Ctrl+клик"
+                + " по зелёному призраку — вернуть/добавить, Ctrl+Z — отменить. Расчёт и спецификация"
+                + " пересчитываются сразу.</html>");
         showFloorPlanBtn.addActionListener(e -> showFloorPlan());
         p.add(showFloorPlanBtn);
         return p;
@@ -2746,7 +2753,7 @@ public class SetupStagePanel extends JPanel {
                 result.warnings().isEmpty() ? JOptionPane.INFORMATION_MESSAGE : JOptionPane.WARNING_MESSAGE,
                 null, options, options[0]);
         if (choice == 0) {
-            new com.vjstb.ledscheme.ui.FloorPlanDialog(topWindow(), scr, type, result).setVisible(true);
+            openFloorPlanDialog(scr);
         }
     }
 
@@ -2756,10 +2763,24 @@ public class SetupStagePanel extends JPanel {
         if (scr == null) {
             return;
         }
-        CabinetType type = model.typeOf(scr);
-        com.vjstb.ledscheme.service.FloorCalc.Result result =
-                com.vjstb.ledscheme.service.FloorCalc.compute(scr, type, model.getWorkspace());
-        new com.vjstb.ledscheme.ui.FloorPlanDialog(topWindow(), scr, type, result).setVisible(true);
+        openFloorPlanDialog(scr);
+    }
+
+    /** Одно окно плана на экран: уже открытое для этого же экрана — пересчитывается и
+     *  выводится наверх, а не плодится второе (с 2026-10-01 окно — ещё и 3D-редактор рам, два
+     *  редактора одного пола только путали бы). Окно само подписано на модель и обновляется
+     *  после правок/отмены. */
+    private void openFloorPlanDialog(Screen scr) {
+        if (floorPlanDialog != null && floorPlanDialog.isDisplayable() && floorPlanDialog.getScreen() == scr) {
+            floorPlanDialog.refresh();
+            floorPlanDialog.toFront();
+            return;
+        }
+        if (floorPlanDialog != null) {
+            floorPlanDialog.dispose();
+        }
+        floorPlanDialog = new com.vjstb.ledscheme.ui.FloorPlanDialog(topWindow(), model, scr, settings);
+        floorPlanDialog.setVisible(true);
     }
 
     // ---- параметры экрана ----

@@ -384,6 +384,13 @@ public class SettingsManager {
         persist();
     }
 
+    /** Режим окна плана пола (2D схема / 3D редактор), запрос 2026-10-01 — см. {@link
+     *  UserProfile#getFloorPlanViewMode()}. */
+    public void setFloorPlanViewMode(FloorPlanViewMode mode) {
+        activeProfile().setFloorPlanViewMode(mode);
+        persist();
+    }
+
     public KeyCombo bindingFor(HotkeyAction action) {
         return activeProfile().bindingFor(action);
     }

@@ -998,6 +998,17 @@ public final class ScreenLogic {
         live.setStructurePeremychkaCells(cellsCopy.getStructurePeremychkaCells());
         live.setStructureBaseFrameCells(cellsCopy.getStructureBaseFrameCells());
 
+        // Рамы напольного каркаса (3D-редактор пола, запрос 2026-10-01): без этого Ctrl+Z после
+        // клика по раме в 3D ничего не возвращал бы — снимок их хранит (copy()), а восстановление
+        // многих других полей здесь исторически пропущено. Глубокая копия: снимок может быть
+        // восстановлен повторно (undo(count) берёт самый старый), его записи не должны стать
+        // живыми.
+        List<com.vjstb.ledscheme.model.FloorFrameCell> floorCells = new ArrayList<>();
+        for (com.vjstb.ledscheme.model.FloorFrameCell c : snapshot.getFloorFrameCells()) {
+            floorCells.add(c.copy());
+        }
+        live.setFloorFrameCells(floorCells);
+
         List<CabinetInstance> cabs = new ArrayList<>();
         for (CabinetInstance c : snapshot.getCabinets()) {
             cabs.add(c.copy());

@@ -51,8 +51,8 @@ public class FloorPlanPanel extends JPanel {
     private static final int LEGEND_H = 64;
 
     private final Screen screen;
-    private final CabinetType type;
-    private final FloorCalc.Result result;
+    private CabinetType type;
+    private FloorCalc.Result result;
 
     public FloorPlanPanel(Screen screen, CabinetType type, FloorCalc.Result result) {
         this.screen = screen;
@@ -61,6 +61,19 @@ public class FloorPlanPanel extends JPanel {
         setBackground(Color.WHITE);
         setOpaque(true);
         setPreferredSize(new Dimension(900, 560));
+    }
+
+    /** Новый результат расчёта — после правки рам в 3D-редакторе того же окна (запрос
+     *  2026-10-01): план показывает действующий список рам, спрятанные рамы не рисуются, их
+     *  кабинеты — оранжевые. */
+    public void update(CabinetType type, FloorCalc.Result result) {
+        this.type = type;
+        this.result = result;
+        repaint();
+    }
+
+    public FloorCalc.Result getResult() {
+        return result;
     }
 
     /** Масштаб и левый верхний угол сетки кабинетов в текущих размерах панели. */
