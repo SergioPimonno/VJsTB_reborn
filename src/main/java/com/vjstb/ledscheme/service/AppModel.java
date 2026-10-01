@@ -182,6 +182,24 @@ public class AppModel {
             seedScreenMaskColorsFromLegacyPlacements(project);
             ensureSchemaSheets(project);
         }
+        normalizeStructureCells(workspace.getProjects());
+    }
+
+    /** Нормализация ячеек наземного конструктива при загрузке (запрос 2026-10-01): дубли
+     *  одного ключа сводятся к одной записи по правилу {@link ScreenLogic#dedupeStructureCells}
+     *  (видимая побеждает скрытую). Без undo и без сохранения — часть загрузки; на диск
+     *  исправленный список попадёт со следующим сохранением. */
+    private static void normalizeStructureCells(List<Project> projects) {
+        for (Project project : projects) {
+            if (project == null) {
+                continue;
+            }
+            for (Scene scene : project.getScenes()) {
+                for (Screen screen : scene.getScreens()) {
+                    ScreenLogic.dedupeStructureCells(screen);
+                }
+            }
+        }
     }
 
     /** Листы общей схемы у всех сцен проекта (запрос 2026-09-30, см. {@link
@@ -1094,6 +1112,7 @@ public class AppModel {
     public Project importProject(Project incoming) {
         incoming.setId(java.util.UUID.randomUUID().toString());
         ensureSchemaSheets(incoming);
+        normalizeStructureCells(List.of(incoming));
         workspace.getProjects().add(incoming);
         changed();
         return incoming;
@@ -1123,6 +1142,7 @@ public class AppModel {
      *  {@code LocalArchiveDialog} удаляет его отдельно через LocalArchiveStore. */
     public Project restoreProjectFromArchive(Project p) {
         ensureSchemaSheets(p);
+        normalizeStructureCells(List.of(p));
         workspace.getProjects().add(p);
         changed();
         return p;
@@ -1378,7 +1398,11 @@ public class AppModel {
      *  StructureCalc#suggestTowerCount}) игнорируется — столбов ставится {@code 2 × n}, где
      *  {@code n} — {@code separateTowerCount} пользователя или, если там 0, авто-подбор {@link
      *  StructureCurveMath#suggestTowerCount}; {@code Screen.structureTowerCount} сохраняет
-     *  именно число столбов (как и раньше — его читают 3D-панель и регенерация). */
+     *  именно число столбов (как и раньше — его читают 3D-панель и регенерация).
+     *
+     * <p><b>Смена режима «стена» ↔ «раздельные башни»</b> (багфикс 2026-10-01): ячейки строятся
+     *  заново, ручные правки другого режима не переносятся (см. {@link
+     *  ScreenLogic#clearStructureCells}); пересчёт внутри режима по-прежнему их сохраняет. */
     public void updateScreenStructure(Screen screen, double towerHeightMm,
                                        int towerCount, int verticalFramesPerTower, int backRowSegments,
                                        int peremychkaLevels, double baseExtensionMm, double ballastRatio,
@@ -1387,6 +1411,61 @@ public class AppModel {
                                        ScreenCurveType curveType, double curveRadiusMm, boolean curveByAngle,
                                        double towerGapMm, int separateTowerCount) {
         pushUndo("Правка наземного конструктива экрана");
+        applyScreenStructure(screen, towerHeightMm, towerCount, verticalFramesPerTower, backRowSegments,
+                peremychkaLevels, baseExtensionMm, ballastRatio, frameTypeId, cupTypeId, ballastTypeId,
+                screenElevationMm, notes, curveType, curveRadiusMm, curveByAngle, towerGapMm, separateTowerCount);
+        changed();
+    }
+
+    /** Ползунки 3D-редактора конструктива (запрос 2026-10-01: «радиус, зазор и количество башен
+     *  … ползунками»): тот же пересчёт, что {@link #updateScreenStructure}, но запись отмены —
+     *  ОДНА на жест перетаскивания. {@code gestureStart} (первое событие жеста) кладёт снимок
+     *  «до жеста» в стек отмены, остальные шаги считают поверх живого экрана без новых записей;
+     *  Ctrl+Z после отпускания возвращает состояние до начала перетаскивания целиком.
+     *  Промежуточные шаги только оповещают слушателей (3D и форма перерисовываются), а файл
+     *  рабочей области пишется один раз — на {@code gestureEnd}: иначе каждое событие ползунка
+     *  перезаписывало бы весь workspace.json. Одиночный щелчок по шкале — оба флага сразу.
+     *  Почему не «считать на копии, а сохранить по отпусканию»: 3D-панель рисует модель, а
+     *  пересчёт ячеек (merge-not-overwrite) должен идти от тех же данных, что и итог, — иначе
+     *  картинка во время перетаскивания расходилась бы с результатом. */
+    public void updateScreenStructureLive(Screen screen, boolean gestureStart, boolean gestureEnd,
+                                           double towerHeightMm,
+                                           int towerCount, int verticalFramesPerTower, int backRowSegments,
+                                           int peremychkaLevels, double baseExtensionMm, double ballastRatio,
+                                           String frameTypeId, String cupTypeId, String ballastTypeId,
+                                           double screenElevationMm, String notes,
+                                           ScreenCurveType curveType, double curveRadiusMm, boolean curveByAngle,
+                                           double towerGapMm, int separateTowerCount) {
+        if (gestureStart) {
+            pushUndo("Правка наземного конструктива экрана (ползунок)");
+        }
+        applyScreenStructure(screen, towerHeightMm, towerCount, verticalFramesPerTower, backRowSegments,
+                peremychkaLevels, baseExtensionMm, ballastRatio, frameTypeId, cupTypeId, ballastTypeId,
+                screenElevationMm, notes, curveType, curveRadiusMm, curveByAngle, towerGapMm, separateTowerCount);
+        if (gestureEnd) {
+            changed();
+        } else {
+            fireChanged();
+        }
+    }
+
+    private void applyScreenStructure(Screen screen, double towerHeightMm,
+                                      int towerCount, int verticalFramesPerTower, int backRowSegments,
+                                      int peremychkaLevels, double baseExtensionMm, double ballastRatio,
+                                      String frameTypeId, String cupTypeId, String ballastTypeId,
+                                      double screenElevationMm, String notes,
+                                      ScreenCurveType curveType, double curveRadiusMm, boolean curveByAngle,
+                                      double towerGapMm, int separateTowerCount) {
+        // Баг-репорт 2026-10-01 («у раздельных башен не рисуются перемычки»): ячейки стены и
+        // раздельных башен с одинаковыми индексами -- РАЗНЫЕ детали (см. ScreenLogic
+        // #clearStructureCells). При смене режима сетка строится заново, а не мержится со
+        // скрытыми записями другого режима. Режим «до» -- по полям, сохранённым вместе с
+        // ячейками прошлым расчётом (форма/зазор меняются только здесь и в undo-restore).
+        boolean wasSeparate = StructureCurveMath.separateTowers(screen);
+        boolean nowSeparate = StructureCurveMath.separateTowers(curveType, towerGapMm);
+        if (wasSeparate != nowSeparate) {
+            ScreenLogic.clearStructureCells(screen);
+        }
         screen.setStructureCurveType(curveType);
         screen.setStructureCurveRadiusMm(curveRadiusMm);
         screen.setStructureCurveByAngle(curveByAngle);
@@ -1448,7 +1527,6 @@ public class AppModel {
         ScreenLogic.regenerateStructureCells(screen, cabinetType, posts, verticalFramesPerTower,
                 backRowSegments, peremychkaLevels, totalBaseSections - footprintSections, footprintSections,
                 separateSpans);
-        changed();
     }
 
     /** Параметры напольного каркаса ({@link ScreenMountType#FLOOR}, см. {@link FloorCalc},
@@ -1519,6 +1597,7 @@ public class AppModel {
     public void toggleStructureFrameCell(Screen screen, int towerIndex, int row, int segmentIndex,
             String frameTypeIdForNewCell) {
         pushUndo("Правка рамы конструктива");
+        ScreenLogic.dedupeStructureCells(screen); // дубль ключа -> переключалась бы не та запись
         List<com.vjstb.ledscheme.model.StructureFrameCell> cells = screen.getStructureFrameCells();
         var existing = cells.stream().filter(c -> c.matches(towerIndex, row, segmentIndex)).findFirst();
         if (existing.isPresent()) {
@@ -1538,6 +1617,7 @@ public class AppModel {
      *  StructurePeremychkaCell} class-javadoc) — см. {@link #toggleStructureFrameCell}. */
     public void toggleStructurePeremychkaCell(Screen screen, int towerIndex, int row, int levelIndex) {
         pushUndo("Правка перемычек конструктива");
+        ScreenLogic.dedupeStructureCells(screen); // дубль ключа -> переключалась бы не та запись
         List<com.vjstb.ledscheme.model.StructurePeremychkaCell> cells = screen.getStructurePeremychkaCells();
         var existing = cells.stream().filter(c -> c.matches(towerIndex, row, levelIndex)).findFirst();
         if (existing.isPresent()) {
@@ -1552,6 +1632,7 @@ public class AppModel {
      *  объёмом башни, 1+ = вынос под балласт) — см. {@link #toggleStructureFrameCell}. */
     public void toggleStructureBaseFrameSection(Screen screen, int towerIndex, int sectionIndex) {
         pushUndo("Правка базовой рамы конструктива");
+        ScreenLogic.dedupeStructureCells(screen); // дубль ключа -> переключалась бы не та запись
         List<com.vjstb.ledscheme.model.StructureBaseFrameCell> cells = screen.getStructureBaseFrameCells();
         var existing = cells.stream().filter(c -> c.matches(towerIndex, sectionIndex)).findFirst();
         if (existing.isPresent()) {
