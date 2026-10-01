@@ -1391,6 +1391,22 @@ public class AppModel {
         changed();
     }
 
+    /** Параметры напольного каркаса ({@link ScreenMountType#FLOOR}, см. {@link FloorCalc},
+     *  запрос 2026-10-01) одним вызовом с записью отмены — по образцу {@link
+     *  #updateScreenStructure}/{@link #updateScreenMount}. Рама и стакан пишутся в ТЕ ЖЕ поля
+     *  {@code structureFrameTypeId}/{@code structureCupTypeId}, что и у наземного конструктива
+     *  (одни и те же библиотечные записи; у экрана активен только один способ монтажа — см.
+     *  javadoc {@code Screen#floorTeethPerCabinet}), поэтому ячейки башен и прочие поля
+     *  STRUCTURE здесь не трогаются. Число зубов зажимается в 2..4. Расстановка рам нигде не
+     *  хранится — {@link FloorCalc#compute} считает её заново от текущей формы экрана. */
+    public void updateScreenFloor(Screen screen, String frameTypeId, String cupTypeId, int teethPerCabinet) {
+        pushUndo("Правка напольного каркаса экрана");
+        screen.setStructureFrameTypeId(frameTypeId);
+        screen.setStructureCupTypeId(cupTypeId);
+        screen.setFloorTeethPerCabinet(teethPerCabinet);
+        changed();
+    }
+
     /** Точечно включает/выключает ОДИН сегмент вертикальной рамы башни, в переднем ИЛИ заднем
      *  ряду, либо усилительную раму выноса ({@code row == 2}, Phase 2.2 — см.
      *  STRUCTURE_CALC_NOTES.md) — клик по существующему сегменту в {@code ui.Structure3DPanel}

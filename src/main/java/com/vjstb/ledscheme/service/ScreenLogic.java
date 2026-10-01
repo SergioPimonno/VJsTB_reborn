@@ -913,6 +913,13 @@ public final class ScreenLogic {
         live.setRiggingSafetyFactorMin(snapshot.getRiggingSafetyFactorMin());
         live.setRiggingHoistCapacityKg(snapshot.getRiggingHoistCapacityKg());
         live.setNotes(snapshot.getNotes());
+        // Напольный каркас (2026-10-01, AppModel#updateScreenFloor): число зубов и выбор
+        // рамы/стакана — без этого Ctrl+Z после «Рассчитать пол» молча ничего не возвращал
+        // (снимок copy() их хранил, но сюда они не переносились). Рама/стакан — общие поля с
+        // наземным конструктивом (см. javadoc Screen#floorTeethPerCabinet).
+        live.setFloorTeethPerCabinet(snapshot.getFloorTeethPerCabinet());
+        live.setStructureFrameTypeId(snapshot.getStructureFrameTypeId());
+        live.setStructureCupTypeId(snapshot.getStructureCupTypeId());
 
         List<CabinetInstance> cabs = new ArrayList<>();
         for (CabinetInstance c : snapshot.getCabinets()) {

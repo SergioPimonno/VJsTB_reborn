@@ -175,6 +175,23 @@ public class SetupStagePanel extends JPanel {
      *  ещё не открывалось в этой сессии редактора экрана. */
     private com.vjstb.ledscheme.ui.Structure3DDialog structure3DDialog;
 
+    // ---- напольный каркас (см. service.FloorCalc, STRUCTURE_CALC_NOTES.md «Напольный каркас») ----
+    // Своя карточка «Напольный каркас» (кнопка «Пол…»), видна только при mountType == FLOOR —
+    // отдельная от «Конструктив…», чтобы не трогать блок наземного конструктива. Рама/стакан
+    // сохраняются в те же Screen.structureFrameTypeId/structureCupTypeId (см. javadoc
+    // Screen#floorTeethPerCabinet), но комбобоксы свои: иначе один Swing-компонент пришлось
+    // бы делить между двумя карточками.
+    private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pFloorFrameType = new JComboBox<>();
+    private final JComboBox<com.vjstb.ledscheme.model.StructureFrameType> pFloorCupType = new JComboBox<>();
+    private final JSpinner pFloorTeeth = new JSpinner(new SpinnerNumberModel(
+            com.vjstb.ledscheme.service.FloorCalc.DEFAULT_TEETH_PER_CABINET,
+            com.vjstb.ledscheme.service.FloorCalc.MIN_TEETH_PER_CABINET,
+            com.vjstb.ledscheme.service.FloorCalc.MAX_TEETH_PER_CABINET, 1));
+    private final JButton calcFloorBtn = new JButton("Рассчитать пол");
+    private final JButton showFloorPlanBtn = new JButton("Показать план");
+    private JPanel floorCard;
+    private JButton floorQuickBtn;
+
     // ---- «Параметры по умолчанию» сцены (см. model.ScreenDefaults) ----
     // Стартовые значения для НОВЫХ экранов ЭТОЙ сцены — отдельная карточка
     // инспектора, СЦЕНОВОГО, а не поэкранного уровня (не привязана к
@@ -1143,11 +1160,16 @@ public class SetupStagePanel extends JPanel {
         structureQuickBtn = new JButton("Конструктив…");
         structureQuickBtn.setToolTipText("Наземный конструктив (башня/рама/балласт) выбранного экрана.");
         structureQuickBtn.addActionListener(e -> showInspector("structure"));
+        floorQuickBtn = new JButton("Пол…");
+        floorQuickBtn.setToolTipText("Напольный каркас (рамы плашмя на ножках, стаканы, болты, зубы) выбранного"
+                + " напольного экрана.");
+        floorQuickBtn.addActionListener(e -> showInspector("floor"));
         JPanel quickButtonsRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         quickButtonsRow.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
         quickButtonsRow.add(screenParamsQuickBtn);
         quickButtonsRow.add(riggingQuickBtn);
         quickButtonsRow.add(structureQuickBtn);
+        quickButtonsRow.add(floorQuickBtn);
         // «Параметры по умолчанию…» — сценовый (не поэкранный) уровень, выровнен
         // ПРАВЕЕ трёх кнопок выше (запрос пользователя), чтобы визуально читаться
         // отдельно от них: те правят выбранный экран, эта — стартовые значения
@@ -1504,6 +1526,7 @@ public class SetupStagePanel extends JPanel {
         riggingCombined.add(trussFieldsPanel);
         riggingCard = wrapAsInspectorCard("Подвес", riggingCombined);
         structureCard = wrapAsInspectorCard("Конструктив", structureFieldsPanel);
+        floorCard = wrapAsInspectorCard("Напольный каркас", buildFloorFieldsPanel());
         buildScreenDefaultsCard();
 
         return (JPanel) UiKit.dynamicSection("Прериг сцены", canvasArea);
@@ -1743,6 +1766,9 @@ public class SetupStagePanel extends JPanel {
         if ("structure".equals(level)) {
             return structureCard;
         }
+        if ("floor".equals(level)) {
+            return floorCard;
+        }
         if ("defaults".equals(level)) {
             return defaultsCard;
         }
@@ -1899,7 +1925,7 @@ public class SetupStagePanel extends JPanel {
     }
 
     /** Показывает/скрывает быстрые кнопки уровней (rigging для RIGGED, конструктив
-     *  для STRUCTURE, ни одной — для LAYER/FLOOR/{@code null}; {@link
+     *  для STRUCTURE, «Пол…» для FLOOR — с 2026-10-01, ни одной — для LAYER/{@code null}; {@link
      *  #screenParamsQuickBtn} не зависит от способа монтажа — включена/выключена
      *  просто по наличию выбранного экрана, {@code hasScreen}) и ПРЯЧЕТ (см. {@link
      *  #hideInspector()} — признак "закреплено" не трогаем) открытую панель уровня,
@@ -1910,9 +1936,11 @@ public class SetupStagePanel extends JPanel {
     private void applyMountTypeVisibility(com.vjstb.ledscheme.model.ScreenMountType mountType, boolean hasScreen) {
         boolean rigged = mountType == com.vjstb.ledscheme.model.ScreenMountType.RIGGED;
         boolean structure = mountType == com.vjstb.ledscheme.model.ScreenMountType.STRUCTURE;
+        boolean floor = mountType == com.vjstb.ledscheme.model.ScreenMountType.FLOOR;
         if (riggingQuickBtn != null) {
             riggingQuickBtn.setVisible(rigged);
             structureQuickBtn.setVisible(structure);
+            floorQuickBtn.setVisible(floor);
         }
         if (screenParamsQuickBtn != null) {
             screenParamsQuickBtn.setEnabled(hasScreen);
@@ -1920,6 +1948,7 @@ public class SetupStagePanel extends JPanel {
         if (openInspectorLevel != null) {
             boolean stillValid = (rigged && "rigging".equals(openInspectorLevel))
                     || (structure && "structure".equals(openInspectorLevel))
+                    || (floor && "floor".equals(openInspectorLevel))
                     || (hasScreen && "screen".equals(openInspectorLevel))
                     // Сценовый уровень — не зависит ни от способа монтажа, ни от того,
                     // выбран ли конкретный экран, только от того, что «Прериг сцены»
@@ -2439,6 +2468,77 @@ public class SetupStagePanel extends JPanel {
         msg.append("\nТребует независимой инженерной перепроверки перед монтажом — см. STRUCTURE_CALC_NOTES.md.");
         JOptionPane.showMessageDialog(this, msg.toString(), "Спецификация конструктива",
                 JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    // ---- напольный каркас ----
+
+    /** Содержимое карточки «Напольный каркас» ({@link #floorCard}, кнопка {@link
+     *  #floorQuickBtn}, видна только при {@code mountType == FLOOR}) — по образцу блока
+     *  «Конструктив», но без 3D и без стартовой сетки: расстановка рам целиком выводится
+     *  из формы экрана ({@code FloorCalc}), хранить в модели нечего, кроме выбора рамы/
+     *  стакана и числа зубов. */
+    private JPanel buildFloorFieldsPanel() {
+        JPanel p = UiKit.vbox();
+        setStructureFrameRenderer(pFloorFrameType);
+        setStructureFrameRenderer(pFloorCupType);
+        pFloorFrameType.setToolTipText("Рама из общей библиотеки конструктива (та же, что у наземного"
+                + " конструктива) — кладётся плашмя: длинная сторона вдоль ширины экрана. «Не выбрано» — размеры"
+                + " по умолчанию 950×500 мм, вес рам в нагрузке не учитывается.");
+        p.add(UiKit.formRow("Рама (библиотека)", pFloorFrameType));
+        p.add(UiKit.vgap());
+        pFloorCupType.setToolTipText("Стакан на стыках коротких сторон рам — добавляет зазор между рамами (берётся"
+                + " из высоты стакана в библиотеке, иначе 50 мм).");
+        p.add(UiKit.formRow("Стакан (библиотека)", pFloorCupType));
+        p.add(UiKit.vgap());
+        pFloorTeeth.setToolTipText("Сколько «зубов» (фиксаторов кабинета к раме) ставится на один кабинет, 2–4."
+                + " Считаются только кабинеты, под которыми есть рама.");
+        p.add(UiKit.formRow("Зубов на кабинет", pFloorTeeth));
+        p.add(UiKit.vgap());
+        calcFloorBtn.setToolTipText("Сохраняет выбор рамы/стакана/зубов и считает каркас пола: рамы, стаканы, болты,"
+                + " ножки, зубы, кабинеты без опоры, среднюю нагрузку кг/м². Тот же список попадает в спецификацию"
+                + " сцены (лист «Напольный каркас» и «Общий список», этап «Вывод»).");
+        calcFloorBtn.addActionListener(e -> calculateFloor());
+        p.add(calcFloorBtn);
+        p.add(UiKit.vgap());
+        showFloorPlanBtn.setToolTipText("2D-план пола сверху: рамы, стаканы, кабинеты без опоры — оранжевым.");
+        showFloorPlanBtn.addActionListener(e -> showFloorPlan());
+        p.add(showFloorPlanBtn);
+        return p;
+    }
+
+    /** «Рассчитать пол»: сохраняет параметры через {@link AppModel#updateScreenFloor} (одна
+     *  запись отмены) и показывает сводку с кнопкой «Показать план». */
+    private void calculateFloor() {
+        Screen scr = model.getCurrentScreen();
+        if (scr == null) {
+            return;
+        }
+        model.updateScreenFloor(scr, structureFrameTypeId(pFloorFrameType), structureFrameTypeId(pFloorCupType),
+                ((Number) pFloorTeeth.getValue()).intValue());
+        CabinetType type = model.typeOf(scr);
+        com.vjstb.ledscheme.service.FloorCalc.Result result =
+                com.vjstb.ledscheme.service.FloorCalc.compute(scr, type, model.getWorkspace());
+        Object[] options = {"Показать план", "Закрыть"};
+        int choice = JOptionPane.showOptionDialog(this,
+                com.vjstb.ledscheme.ui.FloorPlanDialog.summaryText(scr.getName(), result), "Расчёт пола",
+                JOptionPane.DEFAULT_OPTION,
+                result.warnings().isEmpty() ? JOptionPane.INFORMATION_MESSAGE : JOptionPane.WARNING_MESSAGE,
+                null, options, options[0]);
+        if (choice == 0) {
+            new com.vjstb.ledscheme.ui.FloorPlanDialog(topWindow(), scr, type, result).setVisible(true);
+        }
+    }
+
+    /** План по текущему СОХРАНЁННОМУ состоянию экрана (без пересохранения полей карточки). */
+    private void showFloorPlan() {
+        Screen scr = model.getCurrentScreen();
+        if (scr == null) {
+            return;
+        }
+        CabinetType type = model.typeOf(scr);
+        com.vjstb.ledscheme.service.FloorCalc.Result result =
+                com.vjstb.ledscheme.service.FloorCalc.compute(scr, type, model.getWorkspace());
+        new com.vjstb.ledscheme.ui.FloorPlanDialog(topWindow(), scr, type, result).setVisible(true);
     }
 
     // ---- параметры экрана ----
@@ -2975,6 +3075,11 @@ public class SetupStagePanel extends JPanel {
                 pStructureScreenElevation.setText(scr.getStructureScreenElevationMm() > 0
                         ? UiKit.fmt(scr.getStructureScreenElevationMm()) : "");
                 pStructureNotes.setText(scr.getStructureNotes() != null ? scr.getStructureNotes() : "");
+                populateStructureFrameCombo(pFloorFrameType,
+                        com.vjstb.ledscheme.model.StructureFrameType.Kind.FRAME, scr.getStructureFrameTypeId());
+                populateStructureFrameCombo(pFloorCupType,
+                        com.vjstb.ledscheme.model.StructureFrameType.Kind.CUP, scr.getStructureCupTypeId());
+                pFloorTeeth.setValue(scr.getFloorTeethPerCabinet());
             }
             applyMountTypeVisibility(scr != null ? scr.getMountType() : null, scr != null);
 
