@@ -199,7 +199,8 @@ public final class UpdateManager {
 
     /** Готовит и запускает detached-скрипт, который: дожидается завершения ТЕКУЩЕГО
      *  процесса (по PID), копирует скачанный jar на место старого, перезапускает
-     *  приложение через {@code javaw -jar}. Вызывать ПОСЛЕДНИМ действием перед
+     *  приложение через {@code javaw -jar} (в jpackage-сборке — через лаунчер
+     *  {@code jpackage.app-path}, см. {@link #restartCommand}). Вызывать ПОСЛЕДНИМ действием перед
      *  System.exit(0) — сам скрипт ничего не делает, пока этот процесс жив. */
     public static void applyAndRestartWindows(Path downloadedJar) throws IOException {
         Path currentJar = currentJarPath();
@@ -207,6 +208,7 @@ public final class UpdateManager {
             throw new IllegalStateException("Автообновление недоступно — приложение запущено не из jar-файла");
         }
         long pid = ProcessHandle.current().pid();
+        Path launcher = appLauncherPath();
         Path scriptFile = Files.createTempFile("led-scheme-update-", ".bat");
         // Баг-репорт: "скачало, перезапустилось, осталась старая версия" — copy
         // сразу после выхода процесса иногда молча не срабатывает (антивирус ещё
@@ -222,10 +224,58 @@ public final class UpdateManager {
         // одной, за доли секунды, пока файл ещё гарантированно занят. `ping`
         // такой зависимости от консоли не имеет — стандартный приём для паузы в
         // detached/service-скриптах на Windows.
-        String script = "@echo off\r\n"
+        String script = buildUpdateScript(pid, launcher != null);
+        Files.writeString(scriptFile, script, java.nio.charset.StandardCharsets.US_ASCII);
+        // cmd /c <script> напрямую — НЕ через "start" (при заголовке в кавычках
+        // start ошибочно трактует его как рабочую директорию, известная особенность
+        // Windows, воспроизведённая и исправленная в другом приложении автора).
+        // Вывод — в NUL, иначе не читаемый до конца пайп подвешивает detached-процесс.
+        ProcessBuilder pb = new ProcessBuilder("cmd", "/c", scriptFile.toAbsolutePath().toString());
+        // Пути — через переменные окружения, а НЕ строками внутри .bat (запрос
+        // 2026-09-30, пункт 7, «запуск с диска D:»): скрипт пишется в US_ASCII, и
+        // кириллица/не-ASCII в пути (X:\Программы\..., C:\Users\Сергей\...) раньше
+        // превращалась в «?» — подмена jar молча не срабатывала, а перезапуск шёл
+        // по несуществующему пути. Переменные окружения Windows передаёт в UTF-16
+        // (CreateProcessW), кодировка .bat-файла на них не влияет.
+        pb.environment().put(ENV_UPDATE_TARGET, currentJar.toAbsolutePath().toString());
+        pb.environment().put(ENV_UPDATE_SOURCE, downloadedJar.toAbsolutePath().toString());
+        if (launcher != null) {
+            pb.environment().put(ENV_UPDATE_LAUNCHER, launcher.toAbsolutePath().toString());
+        }
+        pb.redirectOutput(ProcessBuilder.Redirect.to(new java.io.File("NUL")));
+        pb.redirectError(ProcessBuilder.Redirect.to(new java.io.File("NUL")));
+        pb.start();
+    }
+
+    /** Имена переменных окружения, через которые {@link #applyAndRestartWindows}
+     *  передаёт пути в .bat-скрипт (см. комментарий там — почему не строками в
+     *  самом скрипте). */
+    static final String ENV_UPDATE_TARGET = "LEDSCHEME_UPDATE_TARGET";
+    static final String ENV_UPDATE_SOURCE = "LEDSCHEME_UPDATE_SOURCE";
+    static final String ENV_UPDATE_LAUNCHER = "LEDSCHEME_UPDATE_LAUNCHER";
+
+    /**
+     * Текст .bat-скрипта автообновления: ждёт завершения процесса {@code pid},
+     * копирует скачанный jar поверх старого (с повторами) и перезапускает
+     * приложение. Чистая функция (без запуска процессов) — чтобы тестировать
+     * формирование скрипта; пути скрипт берёт из переменных окружения
+     * {@code ENV_UPDATE_*} и сам остаётся строго ASCII.
+     *
+     * @param viaLauncher true — перезапуск через jpackage-лаунчер
+     *                    ({@code jpackage.app-path}, запрос 2026-09-30, пункт 7:
+     *                    во встроенном рантайме jpackage-сборки системной Java
+     *                    ({@code javaw}) может не быть вовсе, тогда приложение после
+     *                    обновления просто не поднималось); false — как раньше,
+     *                    {@code javaw -jar} (запуск из обычного jar)
+     */
+    static String buildUpdateScript(long pid, boolean viaLauncher) {
+        String relaunch = viaLauncher
+                ? "start \"\" \"%" + ENV_UPDATE_LAUNCHER + "%\"\r\n"
+                : "start \"\" javaw -jar %TARGET%\r\n";
+        return "@echo off\r\n"
                 + "setlocal enabledelayedexpansion\r\n"
-                + "set TARGET=\"" + currentJar.toAbsolutePath() + "\"\r\n"
-                + "set SOURCE=\"" + downloadedJar.toAbsolutePath() + "\"\r\n"
+                + "set TARGET=\"%" + ENV_UPDATE_TARGET + "%\"\r\n"
+                + "set SOURCE=\"%" + ENV_UPDATE_SOURCE + "%\"\r\n"
                 + ":waitloop\r\n"
                 + "tasklist /FI \"PID eq " + pid + "\" | find \"" + pid + "\" >nul\r\n"
                 + "if not errorlevel 1 (\r\n"
@@ -245,18 +295,9 @@ public final class UpdateManager {
                 + "    goto copyloop\r\n"
                 + "  )\r\n"
                 + ")\r\n"
-                + "start \"\" javaw -jar %TARGET%\r\n"
+                + relaunch
                 + "del %SOURCE% >nul 2>&1\r\n"
                 + "(goto) 2>nul & del \"%~f0\"\r\n";
-        Files.writeString(scriptFile, script, java.nio.charset.StandardCharsets.US_ASCII);
-        // cmd /c <script> напрямую — НЕ через "start" (при заголовке в кавычках
-        // start ошибочно трактует его как рабочую директорию, известная особенность
-        // Windows, воспроизведённая и исправленная в другом приложении автора).
-        // Вывод — в NUL, иначе не читаемый до конца пайп подвешивает detached-процесс.
-        ProcessBuilder pb = new ProcessBuilder("cmd", "/c", scriptFile.toAbsolutePath().toString());
-        pb.redirectOutput(ProcessBuilder.Redirect.to(new java.io.File("NUL")));
-        pb.redirectError(ProcessBuilder.Redirect.to(new java.io.File("NUL")));
-        pb.start();
     }
 
     /** Перезапускает ТЕКУЩИЙ jar как есть, без подмены файла (см. {@link
@@ -271,13 +312,61 @@ public final class UpdateManager {
      *  applyAndRestartWindows. */
     public static void restartCurrentJar() throws IOException {
         Path currentJar = currentJarPath();
-        if (currentJar == null) {
+        Path launcher = appLauncherPath();
+        if (currentJar == null && launcher == null) {
             throw new IllegalStateException("Автоперезапуск недоступен — приложение запущено не из jar-файла");
         }
-        ProcessBuilder pb = new ProcessBuilder("javaw", "-jar", currentJar.toAbsolutePath().toString());
+        ProcessBuilder pb = new ProcessBuilder(restartCommand(currentJar, launcher));
         pb.redirectOutput(ProcessBuilder.Redirect.to(new java.io.File("NUL")));
         pb.redirectError(ProcessBuilder.Redirect.to(new java.io.File("NUL")));
         pb.start();
+    }
+
+    /** Путь к jpackage-лаунчеру ({@code AVE_ToolBox.exe}), если приложение
+     *  запущено из jpackage-сборки (свойство {@code jpackage.app-path} выставляет
+     *  сам лаунчер), иначе null. Проверяется существование файла — свойство могло
+     *  указывать на уже перемещённую/удалённую папку. */
+    public static Path appLauncherPath() {
+        return launcherFromProperty(System.getProperty("jpackage.app-path"));
+    }
+
+    /** Разбор значения {@code jpackage.app-path} — отдельно от чтения свойства,
+     *  чтобы тестироваться. null/пусто/несуществующий файл → null. */
+    static Path launcherFromProperty(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            Path path = Path.of(value.trim());
+            return Files.isRegularFile(path) ? path : null;
+        } catch (RuntimeException ex) {
+            return null;
+        }
+    }
+
+    /**
+     * Команда перезапуска приложения. Чистая функция — чтобы тестироваться без
+     * запуска процессов.
+     *
+     * <p>Запрос пользователя 2026-09-30 (пункт 7, «запуск с диска D:»): раньше
+     * перезапуск всегда шёл через {@code javaw -jar}, а в jpackage-сборке
+     * (папка {@code AVE_ToolBox.exe + app\ + runtime\}) системной Java на машине
+     * может не быть вообще — тогда после «Перезапустить»/автообновления приложение
+     * просто не поднималось. Если известен лаунчер ({@code jpackage.app-path}) —
+     * перезапускаем им (он использует встроенный рантайм); иначе — прежнее
+     * поведение для запуска из обычного jar.
+     *
+     * @param currentJar jar, из которого запущено приложение (или null)
+     * @param appLauncher jpackage-лаунчер (или null, если запуск не из jpackage)
+     */
+    static List<String> restartCommand(Path currentJar, Path appLauncher) {
+        if (appLauncher != null) {
+            return List.of(appLauncher.toAbsolutePath().toString());
+        }
+        if (currentJar == null) {
+            throw new IllegalStateException("Автоперезапуск недоступен — приложение запущено не из jar-файла");
+        }
+        return List.of("javaw", "-jar", currentJar.toAbsolutePath().toString());
     }
 
     /** Для случаев без автоподмены (macOS, запуск не из jar-а) — просто открывает
