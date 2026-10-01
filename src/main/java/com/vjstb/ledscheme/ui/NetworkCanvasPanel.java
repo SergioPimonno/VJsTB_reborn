@@ -867,13 +867,33 @@ public class NetworkCanvasPanel extends JPanel {
      *  вызывающего места в основном коде). Разбивка на группы — по связным
      *  компонентам (решение пользователя: "по связным компонентам графа"), а
      *  не в одну сеть и не поштучным опросом — так автоперенос отражает
-     *  физическую топологию схемы напрямую. */
+     *  физическую топологию схемы напрямую.
+     *
+     *  <p>Версия без аргумента — ПЕРВАЯ схема сигнала сцены (прежнее поведение, когда
+     *  схема была одна; {@link AppModel#networkGraphFromScene}). С несколькими схемами
+     *  сигнала на сцену (запрос 2026-09-30, пункт 8) диалог импорта сам выбирает схему,
+     *  см. {@link #previewSchemaImport(String)}. */
     public SchemaImportPreview previewSchemaImport() {
         Scene scene = model.getCurrentScene();
         if (scene == null) {
             return new SchemaImportPreview(List.of(), 0);
         }
-        AppModel.NetworkGraph graph = model.networkGraphFromScene(scene);
+        return previewSchemaImport(
+                com.vjstb.ledscheme.service.SchemaSheetMigration.firstSheet(scene,
+                        com.vjstb.ledscheme.model.SchemaMode.SIGNAL).getId());
+    }
+
+    /** {@link #previewSchemaImport()} для ОДНОЙ схемы сигнала {@code sheetId} текущей
+     *  сцены ({@link AppModel#networkGraphFromSheet}): устройства и связи других схем
+     *  сигнала в предпросмотр не попадают — это и есть смысл выбора схемы в диалоге
+     *  «Перенести из схемы…» (запрос 2026-09-30). Дедупликация «уже в плане» по-прежнему
+     *  по всему плану (узлы разных схем имеют разные id). */
+    public SchemaImportPreview previewSchemaImport(String sheetId) {
+        Scene scene = model.getCurrentScene();
+        if (scene == null) {
+            return new SchemaImportPreview(List.of(), 0);
+        }
+        AppModel.NetworkGraph graph = model.networkGraphFromSheet(scene, sheetId);
         java.util.Set<String> usedAnywhere = plan.getDevices().stream()
                 .map(NetworkDevicePlacement::getLinkedSchemaNodeId)
                 .filter(java.util.Objects::nonNull)
@@ -1008,7 +1028,10 @@ public class NetworkCanvasPanel extends JPanel {
     }
 
     /** id типа сетевого устройства узла схемы текущей сцены, если он ещё есть в библиотеке
-     *  (иначе {@code null} — с несуществующим типом у блока было бы 0 портов). */
+     *  (иначе {@code null} — с несуществующим типом у блока было бы 0 портов). Узел
+     *  ищется по всем схемам сцены (плоский список, id уникальны); импортируется только
+     *  узел выбранной схемы, но тип читается тем же поиском — устойчиво и к узлу,
+     *  исчезнувшему вместе с удалённой схемой (тогда {@code null}). */
     private String networkDeviceTypeIdOfNode(String schemaNodeId) {
         Scene scene = model.getCurrentScene();
         if (scene == null) {
