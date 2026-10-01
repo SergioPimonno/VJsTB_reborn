@@ -391,6 +391,11 @@ public class UserProfile {
      *  ("залипания"), только для геометрии, а не цвета. */
     private int uiScalePercent = 100;
 
+    /** Режим окна плана напольного каркаса — 2D схема или 3D редактор (запрос 2026-10-01).
+     *  {@code null} (профиль сохранён до этой настройки) трактуется как {@link
+     *  FloorPlanViewMode#PLAN_2D} — прежнее поведение окна. */
+    private FloorPlanViewMode floorPlanViewMode;
+
     public UserProfile() {
     }
 
@@ -970,6 +975,14 @@ public class UserProfile {
         this.uiScalePercent = uiScalePercent > 0 ? uiScalePercent : 100;
     }
 
+    public FloorPlanViewMode getFloorPlanViewMode() {
+        return floorPlanViewMode != null ? floorPlanViewMode : FloorPlanViewMode.PLAN_2D;
+    }
+
+    public void setFloorPlanViewMode(FloorPlanViewMode mode) {
+        this.floorPlanViewMode = mode != null ? mode : FloorPlanViewMode.PLAN_2D;
+    }
+
     /** true — тёмный бакет цветов Palette (см. Palette#applyTheme); ПРОИЗВОДНОЕ от
      *  {@link #lafStyle}, не отдельное состояние (Darcula считается тёмным,
      *  IntelliJ — светлым, см. {@code ui.LafStyle#isDark}). */
@@ -1054,6 +1067,7 @@ public class UserProfile {
         p.docExportFormat = docExportFormat;
         p.docExportQuality = docExportQuality;
         p.uiScalePercent = uiScalePercent;
+        p.floorPlanViewMode = floorPlanViewMode;
         p.keyBindings = new LinkedHashMap<>();
         for (Map.Entry<String, KeyCombo> en : keyBindings.entrySet()) {
             p.keyBindings.put(en.getKey(), en.getValue().copy());
