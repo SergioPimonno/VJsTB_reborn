@@ -363,6 +363,10 @@ public class OutputStagePanel extends JPanel {
         // оставлено — оно всё ещё нужно SceneCanvasPanel выше.)
         Scene origScene = model.getCurrentScene();
         Screen origScreen = model.getCurrentScreen();
+        // Экспорт общих схем переключает текущую схему режима (см. ниже), поэтому
+        // запоминаем выбранные до него, чтобы вернуть (запрос 2026-09-30, несколько схем на сцену).
+        com.vjstb.ledscheme.model.SchemaSheet origPowerSheet = model.currentSchemaSheet(SchemaMode.POWER);
+        com.vjstb.ledscheme.model.SchemaSheet origSignalSheet = model.currentSchemaSheet(SchemaMode.SIGNAL);
 
         int jpegCount = 0;
         int maskCount = 0;
@@ -371,7 +375,9 @@ public class OutputStagePanel extends JPanel {
             int total = 2; // отчёт + спецификация
             for (Scene scene : project.getScenes()) {
                 int n = scene.getScreens().size();
-                total += n * 3 + (n > 1 ? 2 : 0) + SchemaMode.values().length + scene.getCanvases().size();
+                total += n * 3 + (n > 1 ? 2 : 0) + scene.getCanvases().size()
+                        + model.schemaSheets(scene, SchemaMode.POWER).size()
+                        + model.schemaSheets(scene, SchemaMode.SIGNAL).size();
                 if (scene.getVehicleLoadPlan() != null) {
                     total += scene.getVehicleLoadPlan().getSections().size();
                 }
@@ -458,16 +464,28 @@ public class OutputStagePanel extends JPanel {
                 // тому же переключателю Персонализации, что и в живом редакторе схемы
                 // (см. Task #83/#84/v1.4), а не всегда обоими вариантами сразу.
                 boolean screensAsWiring = settings.activeProfile().isSchemaScreensAsWiringDiagram();
+                // На сцене может быть несколько общих схем одного режима (запрос
+                // 2026-09-30, пункт 8) — каждая отдельным файлом с её именем (см.
+                // CurrentSchemeExporter#packageSchemaBaseNames). Холст рисует ТЕКУЩУЮ
+                // схему режима, поэтому перед каждым рендером она выбирается.
                 for (SchemaMode schemaMode : SchemaMode.values()) {
                     File modeFolder = schemaMode == SchemaMode.POWER ? powerFolder : signalFolder;
-                    progress.step(scene.getName() + " · общая схема "
-                            + (schemaMode == SchemaMode.POWER ? "питания" : "сигнала"));
-                    SchemaCanvasPanel schemaCanvas = new SchemaCanvasPanel(model, schemaMode, settings);
-                    Dimension size = schemaCanvas.getPreferredSize();
-                    BufferedImage img = schemaCanvas.renderImage(size.width, size.height, screensAsWiring, dpiScale);
-                    String modeSuffix = schemaMode == SchemaMode.POWER ? " Сила" : " Сигнал";
-                    writeScheme(img, modeFolder, OutputPaths.sanitize(scene.getName() + modeSuffix), docExportDpi);
-                    jpegCount++;
+                    List<com.vjstb.ledscheme.model.SchemaSheet> sheets = model.schemaSheets(scene, schemaMode);
+                    List<String> fileNames = CurrentSchemeExporter.packageSchemaBaseNames(scene.getName(),
+                            schemaMode, sheets);
+                    for (int i = 0; i < sheets.size(); i++) {
+                        com.vjstb.ledscheme.model.SchemaSheet sheet = sheets.get(i);
+                        progress.step(scene.getName() + " · общая схема "
+                                + (schemaMode == SchemaMode.POWER ? "питания" : "сигнала")
+                                + (sheets.size() > 1 ? " «" + sheet.getName() + "»" : ""));
+                        model.selectSchemaSheet(sheet);
+                        SchemaCanvasPanel schemaCanvas = new SchemaCanvasPanel(model, schemaMode, settings);
+                        Dimension size = schemaCanvas.getPreferredSize();
+                        BufferedImage img = schemaCanvas.renderImage(size.width, size.height, screensAsWiring,
+                                dpiScale);
+                        writeScheme(img, modeFolder, fileNames.get(i), docExportDpi);
+                        jpegCount++;
+                    }
                 }
 
                 for (ContentCanvas c : scene.getCanvases()) {
@@ -549,6 +567,8 @@ public class OutputStagePanel extends JPanel {
             }
             model.selectScene(origScene);
             model.selectScreen(origScreen);
+            model.selectSchemaSheet(origPowerSheet);
+            model.selectSchemaSheet(origSignalSheet);
         }
     }
 
@@ -571,13 +591,15 @@ public class OutputStagePanel extends JPanel {
 
         Scene origScene = model.getCurrentScene();
         Screen origScreen = model.getCurrentScreen();
+        SchemaMode exportMode = power ? SchemaMode.POWER : SchemaMode.SIGNAL;
+        com.vjstb.ledscheme.model.SchemaSheet origSheet = model.currentSchemaSheet(exportMode);
         int jpegCount = 0;
         ExportProgressDialog progress = null;
         try {
             int total = 0;
             for (Scene scene : project.getScenes()) {
                 int n = scene.getScreens().size();
-                total += n + (n > 1 ? 1 : 0) + 1;
+                total += n + (n > 1 ? 1 : 0) + model.schemaSheets(scene, exportMode).size();
             }
             progress = new ExportProgressDialog(this, "Экспорт схем этапа «" + modeFolderName + "»", total);
             for (Scene scene : project.getScenes()) {
@@ -611,13 +633,24 @@ public class OutputStagePanel extends JPanel {
                 }
 
                 boolean screensAsWiring = settings.activeProfile().isSchemaScreensAsWiringDiagram();
-                SchemaMode schemaMode = power ? SchemaMode.POWER : SchemaMode.SIGNAL;
-                progress.step(scene.getName() + " · общая схема");
-                SchemaCanvasPanel schemaCanvas = new SchemaCanvasPanel(model, schemaMode, settings);
-                Dimension size = schemaCanvas.getPreferredSize();
-                BufferedImage img = schemaCanvas.renderImage(size.width, size.height, screensAsWiring, dpiScale);
-                writeScheme(img, modeFolder, OutputPaths.sanitize(scene.getName() + modeSuffix), docExportDpi);
-                jpegCount++;
+                SchemaMode schemaMode = exportMode;
+                // Каждая общая схема режима — отдельным файлом (запрос 2026-09-30,
+                // пункт 8; см. CurrentSchemeExporter#packageSchemaBaseNames).
+                List<com.vjstb.ledscheme.model.SchemaSheet> sheets = model.schemaSheets(scene, schemaMode);
+                List<String> fileNames = CurrentSchemeExporter.packageSchemaBaseNames(scene.getName(),
+                        schemaMode, sheets);
+                for (int i = 0; i < sheets.size(); i++) {
+                    com.vjstb.ledscheme.model.SchemaSheet sheet = sheets.get(i);
+                    progress.step(scene.getName() + " · общая схема"
+                            + (sheets.size() > 1 ? " «" + sheet.getName() + "»" : ""));
+                    model.selectSchemaSheet(sheet);
+                    SchemaCanvasPanel schemaCanvas = new SchemaCanvasPanel(model, schemaMode, settings);
+                    Dimension size = schemaCanvas.getPreferredSize();
+                    BufferedImage img = schemaCanvas.renderImage(size.width, size.height, screensAsWiring,
+                            dpiScale);
+                    writeScheme(img, modeFolder, fileNames.get(i), docExportDpi);
+                    jpegCount++;
+                }
             }
 
             progress.close();
@@ -640,6 +673,7 @@ public class OutputStagePanel extends JPanel {
             }
             model.selectScene(origScene);
             model.selectScreen(origScreen);
+            model.selectSchemaSheet(origSheet);
         }
     }
 

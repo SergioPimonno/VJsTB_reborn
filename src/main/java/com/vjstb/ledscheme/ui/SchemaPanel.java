@@ -427,6 +427,9 @@ public class SchemaPanel extends JPanel {
     }
 
     private void refresh() {
+        // Смена текущей схемы режима сбрасывает выделение холста (см.
+        // SchemaCanvasPanel#syncWithCurrentSheet) — до чтения выделения ниже.
+        canvas.syncWithCurrentSheet();
         Scene scene = model.getCurrentScene();
         DefaultComboBoxModel<Screen> screenModel = new DefaultComboBoxModel<>();
         if (scene != null) {
