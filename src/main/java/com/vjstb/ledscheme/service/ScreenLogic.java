@@ -75,6 +75,40 @@ public final class ScreenLogic {
         return new double[]{minX, minY, maxX, maxY};
     }
 
+    /** ФАКТИЧЕСКИЙ физический размер экрана, мм — {@code {ширина, высота}} прямоугольника,
+     *  описанного вокруг ВИДИМЫХ кабинетов: скрытые («вырезанные») ячейки в него не входят,
+     *  учитываются мм-смещения и фактический тип каждой ячейки (запрос 2026-10-02: Left 2 по
+     *  настройкам — 14 колонок × 500 = 7 м, а кабинеты, реально стоящие в экране, дают 6,5 м, и
+     *  таблица экранов/подписи/ригтех должны показывать именно эту цифру). Нет видимых
+     *  кабинетов или типа — номинальная сетка ({@code cols × ширина, rows × высота}).
+     *  Разрешение ({@link ScreenStats#resolutionWidthPx()}) и маски по-прежнему считаются по
+     *  номинальной сетке — это размер холста, на который контент накладывается целиком. */
+    public static double[] physicalSizeMm(Screen s, CabinetType t, Workspace workspace) {
+        if (t == null) {
+            return new double[]{0, 0};
+        }
+        double minX = Double.POSITIVE_INFINITY, minY = Double.POSITIVE_INFINITY;
+        double maxX = Double.NEGATIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY;
+        for (CabinetInstance cab : s.getCabinets()) {
+            if (cab.isHidden()) {
+                continue;
+            }
+            CabinetType eff = effectiveType(cab, t, workspace);
+            double ew = eff != null ? eff.getWidthMm() : t.getWidthMm();
+            double eh = eff != null ? eff.getHeightMm() : t.getHeightMm();
+            double x0 = cab.getColIndex() * t.getWidthMm() + cab.getOffsetXMm();
+            double y0 = cab.getRowIndex() * t.getHeightMm() + cab.getOffsetYMm();
+            minX = Math.min(minX, x0);
+            minY = Math.min(minY, y0);
+            maxX = Math.max(maxX, x0 + ew);
+            maxY = Math.max(maxY, y0 + eh);
+        }
+        if (minX == Double.POSITIVE_INFINITY) {
+            return new double[]{s.getCols() * t.getWidthMm(), s.getRows() * t.getHeightMm()};
+        }
+        return new double[]{maxX - minX, maxY - minY};
+    }
+
     /** Перегрузка без workspace — не разрешает переопределение типа по ячейке
      *  (только свободное смещение). Оставлена для мест, где workspace недоступен
      *  или разрешение типа заведомо не нужно. */

@@ -1130,9 +1130,10 @@ public final class SchemeRenderer {
         g2.setColor(Palette.TEXT);
         g2.setFont(g2.getFont().deriveFont(Font.BOLD, titleSize));
         g2.drawString(title, pad, 48);
+        double[] physicalMm = ScreenLogic.physicalSizeMm(scr, type, workspace);
         String sub = scr.getCols() + "×" + scr.getRows() + " каб. · "
                 + stats.resolutionWidthPx() + "×" + stats.resolutionHeightPx() + " px · "
-                + trim(stats.physicalWidthMm()) + "×" + trim(stats.physicalHeightMm()) + " мм · "
+                + trim(physicalMm[0]) + "×" + trim(physicalMm[1]) + " мм · "
                 + UiKit.fmtPower(stats.totalPowerW(), powerUnitKw) + " · " + trim(stats.totalWeightKg()) + " кг";
         float subSize = fitFontToWidth(g2, sub, Font.PLAIN, 24f, 11f, availW);
         g2.setColor(Palette.MUTED);
@@ -1324,16 +1325,17 @@ public final class SchemeRenderer {
             Screen s = screens.get(i);
             CabinetType type = model.typeOf(s);
             ScreenStats st = ScreenLogic.stats(s, type, model.getWorkspace());
+            double[] physical = ScreenLogic.physicalSizeMm(s, type, model.getWorkspace());
             String notes = s.getNotes();
             rows.add(new Row(String.valueOf(i + 1),
                     s.getName() == null || s.getName().isEmpty() ? "—" : s.getName(),
-                    trim(st.physicalWidthMm()) + "×" + trim(st.physicalHeightMm()) + " мм",
+                    trim(physical[0]) + "×" + trim(physical[1]) + " мм",
                     st.resolutionWidthPx() + "×" + st.resolutionHeightPx() + " px",
                     trim(st.totalWeightKg()) + " кг",
                     formatLoad(st.totalPowerW()),
                     s.getMountType().getLabel(),
                     notes == null || notes.isBlank() ? "—" : notes,
-                    st.physicalWidthMm(), st.physicalHeightMm()));
+                    physical[0], physical[1]));
         }
 
         // Легенда типов кабинетов и статистика сцены (запрос 2026-10-01: «в экспорте экранов

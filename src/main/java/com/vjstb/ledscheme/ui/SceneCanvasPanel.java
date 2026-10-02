@@ -1356,8 +1356,8 @@ public class SceneCanvasPanel extends JPanel {
             g2.setColor(Palette.MUTED);
             g2.setFont(getFont().deriveFont(Font.PLAIN, 10f));
             g2.drawString(st.resolutionWidthPx() + "×" + st.resolutionHeightPx() + " px", x + 4, y + 30);
-            g2.drawString(Math.round(s.getCols() * t.getWidthMm()) + "×" + Math.round(s.getRows() * t.getHeightMm())
-                    + " мм", x + 4, y + 43);
+            double[] physicalMm = ScreenLogic.physicalSizeMm(s, t, model.getWorkspace());
+            g2.drawString(Math.round(physicalMm[0]) + "×" + Math.round(physicalMm[1]) + " мм", x + 4, y + 43);
         }
 
         // Сам переход цепочки через границу между экранами — единственное, что
