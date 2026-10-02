@@ -479,7 +479,8 @@ public class PowerStagePanel extends JPanel {
             boolean kw = settings.activeProfile().isPowerUnitKw();
             statCabinetType.setText(ct != null ? ct.getName() : "—");
             statRes.setText(s.resolutionWidthPx() + " × " + s.resolutionHeightPx() + " px");
-            statSize.setText(UiKit.fmt(s.physicalWidthMm()) + " × " + UiKit.fmt(s.physicalHeightMm()) + " мм");
+            double[] physicalMm = ScreenLogic.physicalSizeMm(scr, ct, model.getWorkspace());
+            statSize.setText(UiKit.fmt(physicalMm[0]) + " × " + UiKit.fmt(physicalMm[1]) + " мм");
             statCount.setText(String.valueOf(s.activeCabinetCount()));
             statPower.setText(UiKit.fmtPower(s.totalPowerW(), kw));
             statWeight.setText(UiKit.fmt(s.totalWeightKg()) + " кг");

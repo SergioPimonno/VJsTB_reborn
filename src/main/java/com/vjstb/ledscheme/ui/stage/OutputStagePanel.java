@@ -325,9 +325,10 @@ public class OutputStagePanel extends JPanel {
                 report.append("  Экран «").append(scr.getName()).append("»\n");
                 report.append(String.format("    Кабинет: %s, сетка: %d×%d%n",
                         type != null ? type.getName() : "—", scr.getCols(), scr.getRows()));
+                double[] physicalMm = ScreenLogic.physicalSizeMm(scr, type, model.getWorkspace());
                 report.append(String.format("    Разрешение: %d×%d px, физический размер: %s×%s мм%n",
                         st.resolutionWidthPx(), st.resolutionHeightPx(),
-                        UiKit.fmt(st.physicalWidthMm()), UiKit.fmt(st.physicalHeightMm())));
+                        UiKit.fmt(physicalMm[0]), UiKit.fmt(physicalMm[1])));
                 report.append(String.format("    Мощность: %s, вес: %s кг%n",
                         UiKit.fmtPower(st.totalPowerW(), kw), UiKit.fmt(st.totalWeightKg())));
                 report.append(String.format("    Точек подвеса: %d%n", scr.getRiggingPointsCount()));
