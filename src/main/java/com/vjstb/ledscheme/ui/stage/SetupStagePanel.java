@@ -965,10 +965,27 @@ public class SetupStagePanel extends JPanel {
                     "Список пуст", JOptionPane.WARNING_MESSAGE);
             return;
         }
+        // Что печатать справа в углу (запрос 2026-10-02): легенду кабинетов (она же включает окраску
+        // кабинетов по типу) и/или статистику сцены; выбор запоминается в профиле
+        javax.swing.JCheckBox legendBox = new javax.swing.JCheckBox("Легенда кабинетов",
+                settings.activeProfile().isScreensExportLegend());
+        javax.swing.JCheckBox statsBox = new javax.swing.JCheckBox("Статистика по сцене",
+                settings.activeProfile().isScreensExportStats());
+        JPanel options = new JPanel(new java.awt.GridLayout(0, 1, 0, 4));
+        options.add(new javax.swing.JLabel("Что напечатать справа в углу таблицы экранов?"));
+        options.add(legendBox);
+        options.add(statsBox);
+        if (JOptionPane.showConfirmDialog(this, options, "Экспорт таблицы экранов",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) {
+            return;
+        }
+        final boolean showLegend = legendBox.isSelected();
+        final boolean showStats = statsBox.isSelected();
+        settings.setScreensExportOptions(showLegend, showStats);
         com.vjstb.ledscheme.ui.stage.CurrentSchemeExporter.exportPng(this, model, settings,
                 scene.getName() + " — экраны",
                 dpiScale -> com.vjstb.ledscheme.ui.SchemeRenderer.renderScreensOverviewImage(
-                        scene.getName(), model, screens, dpiScale));
+                        scene.getName(), model, screens, dpiScale, showLegend, showStats));
     }
 
     /** Delete/Backspace, «✕ Удалить» и пункты «Удалить…» контекстного меню. Экраны и

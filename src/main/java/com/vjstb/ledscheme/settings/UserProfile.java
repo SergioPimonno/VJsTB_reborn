@@ -395,6 +395,11 @@ public class UserProfile {
      *  {@code null} (профиль сохранён до этой настройки) трактуется как {@link
      *  FloorPlanViewMode#PLAN_2D} — прежнее поведение окна. */
     private FloorPlanViewMode floorPlanViewMode;
+    /** Что печатать в экспорте таблицы экранов (запрос 2026-10-02: «при экспорте экранов надо
+     *  спрашивать, печатать ли легенду кабинетов и/или статистику по сцене»): последний выбор в
+     *  диалоге, по умолчанию (профиль без полей) — печатать оба блока. */
+    private Boolean screensExportLegend;
+    private Boolean screensExportStats;
 
     public UserProfile() {
     }
@@ -983,6 +988,22 @@ public class UserProfile {
         this.floorPlanViewMode = mode != null ? mode : FloorPlanViewMode.PLAN_2D;
     }
 
+    public boolean isScreensExportLegend() {
+        return screensExportLegend == null || screensExportLegend;
+    }
+
+    public void setScreensExportLegend(boolean value) {
+        this.screensExportLegend = value;
+    }
+
+    public boolean isScreensExportStats() {
+        return screensExportStats == null || screensExportStats;
+    }
+
+    public void setScreensExportStats(boolean value) {
+        this.screensExportStats = value;
+    }
+
     /** true — тёмный бакет цветов Palette (см. Palette#applyTheme); ПРОИЗВОДНОЕ от
      *  {@link #lafStyle}, не отдельное состояние (Darcula считается тёмным,
      *  IntelliJ — светлым, см. {@code ui.LafStyle#isDark}). */
@@ -1068,6 +1089,8 @@ public class UserProfile {
         p.docExportQuality = docExportQuality;
         p.uiScalePercent = uiScalePercent;
         p.floorPlanViewMode = floorPlanViewMode;
+        p.screensExportLegend = screensExportLegend;
+        p.screensExportStats = screensExportStats;
         p.keyBindings = new LinkedHashMap<>();
         for (Map.Entry<String, KeyCombo> en : keyBindings.entrySet()) {
             p.keyBindings.put(en.getKey(), en.getValue().copy());
