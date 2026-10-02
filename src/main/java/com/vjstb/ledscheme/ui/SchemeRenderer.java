@@ -1317,6 +1317,15 @@ public final class SchemeRenderer {
      *  кабинетам (см. {@link ScreenLogic#stats}). */
     public static BufferedImage renderScreensOverviewImage(String sceneName, AppModel model,
             List<Screen> screens, double dpiScale) {
+        return renderScreensOverviewImage(sceneName, model, screens, dpiScale, true, true);
+    }
+
+    /** {@code showLegend} — легенда типов кабинетов в правой панели; {@code showStats} — блок
+     *  «Статистика сцены». Оба выключены — панели нет вовсе (запрос 2026-10-02: перед экспортом
+     *  спрашиваем, что печатать). Окраска кабинетов по типам от легенды НЕ зависит: при двух и
+     *  более типах на сцене она всегда есть (запрос 2026-10-02). */
+    public static BufferedImage renderScreensOverviewImage(String sceneName, AppModel model,
+            List<Screen> screens, double dpiScale, boolean showLegend, boolean showStats) {
         record Row(String number, String name, String size, String resolution, String weight, String load,
                    String mount, String notes, double widthMm, double heightMm) {
         }
@@ -1418,21 +1427,30 @@ public final class SchemeRenderer {
         int panelPad = 14;
         int swatchSize = 14;
         int swatchGap = 8;
-        boolean hasPanel = !screens.isEmpty();
+        boolean hasPanel = !screens.isEmpty() && (showLegend || showStats);
         List<String> typeLines = new ArrayList<>();
         List<String> statLines = new ArrayList<>();
         int panelW = 0;
         if (hasPanel) {
-            for (CabinetType t : typesById.values()) {
-                String name = t.getName() == null || t.getName().isBlank() ? "(без названия)" : t.getName();
-                typeLines.add(name + " — " + countByTypeId.getOrDefault(t.getId(), 0) + " шт.");
+            if (showLegend) {
+                for (CabinetType t : typesById.values()) {
+                    String name = t.getName() == null || t.getName().isBlank() ? "(без названия)" : t.getName();
+                    typeLines.add(name + " — " + countByTypeId.getOrDefault(t.getId(), 0) + " шт.");
+                }
             }
-            statLines.add("Экранов: " + screens.size());
-            statLines.add("Кабинетов: " + totalCabinets);
-            statLines.add("Вес: " + trim(totalWeightKg) + " кг");
-            statLines.add("Нагрузка: " + formatLoad(totalPowerW));
-            int content = headerFm.stringWidth("Статистика сцены");
-            content = Math.max(content, headerFm.stringWidth("Типы кабинетов"));
+            if (showStats) {
+                statLines.add("Экранов: " + screens.size());
+                statLines.add("Кабинетов: " + totalCabinets);
+                statLines.add("Вес: " + trim(totalWeightKg) + " кг");
+                statLines.add("Нагрузка: " + formatLoad(totalPowerW));
+            }
+            int content = 0;
+            if (showStats) {
+                content = Math.max(content, headerFm.stringWidth("Статистика сцены"));
+            }
+            if (showLegend) {
+                content = Math.max(content, headerFm.stringWidth("Типы кабинетов"));
+            }
             for (String l : typeLines) {
                 content = Math.max(content, swatchSize + swatchGap + rowFm.stringWidth(l));
             }
@@ -1442,8 +1460,19 @@ public final class SchemeRenderer {
             panelW = Math.min(460, Math.max(220, content + panelPad * 2));
         }
         int typeTextMaxW = panelW - panelPad * 2 - swatchSize - swatchGap;
-        int panelH = hasPanel ? panelPad * 2 + headerH + 6 + typeLines.size() * rowH + 12 + headerH + 6
-                + statLines.size() * rowH : 0;
+        int panelH = 0;
+        if (hasPanel) {
+            panelH = panelPad * 2;
+            if (showLegend) {
+                panelH += headerH + 6 + typeLines.size() * rowH;
+            }
+            if (showLegend && showStats) {
+                panelH += 12;
+            }
+            if (showStats) {
+                panelH += headerH + 6 + statLines.size() * rowH;
+            }
+        }
         pg.dispose();
 
         int pad = 24;
@@ -1534,7 +1563,12 @@ public final class SchemeRenderer {
                 // +1 px справа/снизу: контур крайних кабинетов рисуется по x+w/y+h
                 // включительно, и раньше его «дорисовывала» общая рамка экрана.
                 Graphics2D clipped = (Graphics2D) g2.create();
-                clipped.clipRect(sx, sy, sw + 1, sh + 1);
+                // Отсечение — не меньше НОМИНАЛЬНОЙ сетки в пикселях: высота/ширина ячейки округляется до
+                // целого, и у широкого экрана (много рядов) сетка из rows × cellH px выходила за округлённый
+                // габарит экрана на 1-2 px — нижняя/правая линия рамки обрезалась (баг-репорт 2026-10-02,
+                // экран 10 «Upper Front»).
+                clipped.clipRect(sx, sy, Math.max(sw, scr.getCols() * cellW) + 2,
+                        Math.max(sh, scr.getRows() * cellH) + 2);
                 if (tintByType) {
                     // заливка цветом типа ПОД линиями сетки (тот же стабильный цвет по id типа,
                     // что и у переопределений на холсте сцены — Palette.stableColorFor)
@@ -1602,37 +1636,43 @@ public final class SchemeRenderer {
             g2.setStroke(new java.awt.BasicStroke(1f));
             g2.drawRoundRect(px, py, panelW, panelH, 10, 10);
             int ty = py + panelPad + headerH - 4;
-            g2.setFont(headerFont);
-            g2.setColor(Palette.TEXT);
-            g2.drawString("Типы кабинетов", px + panelPad, ty);
-            ty += 6 + rowH - 4;
-            g2.setFont(rowFont);
-            int ti = 0;
-            for (CabinetType t : typesById.values()) {
-                int rowTop = ty - rowFm.getAscent();
-                if (tintByType) {
-                    Color base = Palette.stableColorFor(t.getId());
-                    g2.setColor(new Color(base.getRed(), base.getGreen(), base.getBlue(), 255));
-                    g2.fillRect(px + panelPad, rowTop + 1, swatchSize, swatchSize);
-                } else {
-                    g2.setColor(Palette.MUTED);
-                    g2.drawRect(px + panelPad, rowTop + 1, swatchSize - 1, swatchSize - 1);
-                }
+            if (showLegend) {
+                g2.setFont(headerFont);
                 g2.setColor(Palette.TEXT);
-                g2.drawString(clipToWidth(g2, typeLines.get(ti), typeTextMaxW),
-                        px + panelPad + swatchSize + swatchGap, ty);
-                ty += rowH;
-                ti++;
+                g2.drawString("Типы кабинетов", px + panelPad, ty);
+                ty += 6 + rowH - 4;
+                g2.setFont(rowFont);
+                int ti = 0;
+                for (CabinetType t : typesById.values()) {
+                    int rowTop = ty - rowFm.getAscent();
+                    if (tintByType) {
+                        Color base = Palette.stableColorFor(t.getId());
+                        g2.setColor(new Color(base.getRed(), base.getGreen(), base.getBlue(), 255));
+                        g2.fillRect(px + panelPad, rowTop + 1, swatchSize, swatchSize);
+                    } else {
+                        g2.setColor(Palette.MUTED);
+                        g2.drawRect(px + panelPad, rowTop + 1, swatchSize - 1, swatchSize - 1);
+                    }
+                    g2.setColor(Palette.TEXT);
+                    g2.drawString(clipToWidth(g2, typeLines.get(ti), typeTextMaxW),
+                            px + panelPad + swatchSize + swatchGap, ty);
+                    ty += rowH;
+                    ti++;
+                }
+                if (showStats) {
+                    ty += 12;
+                }
             }
-            ty += 12;
-            g2.setFont(headerFont);
-            g2.setColor(Palette.TEXT);
-            g2.drawString("Статистика сцены", px + panelPad, ty);
-            ty += 6 + rowH - 4;
-            g2.setFont(rowFont);
-            for (String l : statLines) {
-                g2.drawString(l, px + panelPad, ty);
-                ty += rowH;
+            if (showStats) {
+                g2.setFont(headerFont);
+                g2.setColor(Palette.TEXT);
+                g2.drawString("Статистика сцены", px + panelPad, ty);
+                ty += 6 + rowH - 4;
+                g2.setFont(rowFont);
+                for (String l : statLines) {
+                    g2.drawString(l, px + panelPad, ty);
+                    ty += rowH;
+                }
             }
         }
 

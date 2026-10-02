@@ -391,6 +391,13 @@ public class SettingsManager {
         persist();
     }
 
+    /** Запоминает выбор диалога экспорта таблицы экранов (легенда кабинетов / статистика сцены). */
+    public void setScreensExportOptions(boolean legend, boolean stats) {
+        activeProfile().setScreensExportLegend(legend);
+        activeProfile().setScreensExportStats(stats);
+        persist();
+    }
+
     public KeyCombo bindingFor(HotkeyAction action) {
         return activeProfile().bindingFor(action);
     }

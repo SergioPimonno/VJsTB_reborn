@@ -145,6 +145,75 @@ class SchemeRendererScreensOverviewImageTest {
         assertTrue(growth <= 210, "колонка примечаний ограничена 210 px, рост ширины " + growth);
     }
 
+
+    /** Запрос 2026-10-02: перед экспортом спрашиваем, что печатать — легенду кабинетов (с окраской по
+     *  типам) и/или статистику сцены. Оба выключены — правой панели нет, ширина как у таблицы. */
+    @Test
+    void legendAndStatsAreOptionalAndSwitchTheRightPanel(@TempDir Path dir) {
+        AppModel model = model(dir);
+        CabinetType a = model.addCabinetType(type("P3 500x500", 500, 500, 128, 128, 12));
+        CabinetType b = model.addCabinetType(type("P2.6 500x1000", 500, 1000, 192, 384, 20));
+        Screen sa = model.addScreen("Экран A", a.getId(), 3, 4, 0, 0);
+        Screen sb = model.addScreen("Экран B", b.getId(), 2, 4, 3000, 0);
+        List<Screen> screens = List.of(sa, sb);
+
+        BufferedImage both = SchemeRenderer.renderScreensOverviewImage("Зал", model, screens, 1.0, true, true);
+        BufferedImage legendOnly = SchemeRenderer.renderScreensOverviewImage("Зал", model, screens, 1.0, true, false);
+        BufferedImage statsOnly = SchemeRenderer.renderScreensOverviewImage("Зал", model, screens, 1.0, false, true);
+        BufferedImage none = SchemeRenderer.renderScreensOverviewImage("Зал", model, screens, 1.0, false, false);
+
+        assertTrue(both.getWidth() > none.getWidth(), "с панелью картинка шире");
+        assertTrue(legendOnly.getWidth() > none.getWidth());
+        assertTrue(statsOnly.getWidth() > none.getWidth());
+        assertTrue(both.getHeight() >= legendOnly.getHeight() && both.getHeight() >= statsOnly.getHeight());
+
+        // окраска по типам не зависит от легенды (запрос 2026-10-02): есть при любом выборе
+        java.awt.Color bg = com.vjstb.ledscheme.ui.Palette.BG;
+        java.awt.Color base = com.vjstb.ledscheme.ui.Palette.stableColorFor(a.getId());
+        java.awt.Color blended = new java.awt.Color(
+                (base.getRed() * 150 + bg.getRed() * 105) / 255,
+                (base.getGreen() * 150 + bg.getGreen() * 105) / 255,
+                (base.getBlue() * 150 + bg.getBlue() * 105) / 255);
+        assertTrue(hasPixelNear(legendOnly, blended, 6), "с легендой кабинеты окрашены");
+        assertTrue(hasPixelNear(statsOnly, blended, 6), "без легенды окраска сохраняется");
+        assertTrue(hasPixelNear(none, blended, 6), "и без панели вовсе");
+    }
+
+
+    /** Баг-репорт 2026-10-02 («почему рамка 10 экрана обрезалась?»): высота ячейки округляется до
+     *  целого пикселя, и у широкого экрана из нескольких рядов сетка (rows × cellH) выходила за
+     *  округлённый габарит экрана — нижняя линия рамки отсекалась. Экран 30 × 5 кабинетов 500×1000
+     *  рядом с далёким экраном (масштаб ~0,035 px/мм) должен показать ВСЕ 6 горизонтальных линий. */
+    @Test
+    void wideScreenKeepsItsBottomFrameLine(@TempDir Path dir) {
+        AppModel model = model(dir);
+        // один тип на оба экрана — без окраски по типам (она залила бы ячейки и скрыла линии сетки)
+        CabinetType tall = model.addCabinetType(type("Tall", 500, 1000, 128, 128, 10));
+        Screen up = model.addScreen("Upper Front", tall.getId(), 5, 30, 0, 0);
+        Screen far = model.addScreen("Far", tall.getId(), 4, 12, 19936, 0);
+
+        BufferedImage img = SchemeRenderer.renderScreensOverviewImage("Зал", model, List.of(up, far), 1.0, false, false);
+
+        // линия сетки заметно ярче и фона, и заливки ячейки
+        int lines = 0;
+        boolean inLine = false;
+        for (int y = 60; y < 262; y++) {
+            int bright = 0;
+            int interior = new java.awt.Color(img.getRGB(100, 75)).getRed();
+            for (int x = 40; x < 440; x++) {
+                if (new java.awt.Color(img.getRGB(x, y)).getRed() > interior + 25) {
+                    bright++;
+                }
+            }
+            boolean line = bright >= 300; // сплошная горизонтальная линия сетки
+            if (line && !inLine) {
+                lines++;
+            }
+            inLine = line;
+        }
+        assertTrue(lines >= 6, "у сетки 5 рядов 6 горизонтальных линий, найдено " + lines);
+    }
+
     @Test
     void dpiScaleMultipliesPixelDimensions(@TempDir Path dir) {
         AppModel model = model(dir);
