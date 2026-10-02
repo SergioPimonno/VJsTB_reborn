@@ -1767,7 +1767,7 @@ public class SceneCanvasPanel extends JPanel {
         segMm.sort(java.util.Comparator.reverseOrder());
 
         int trussH = bottomY - topY;
-        double leftOffsetMm = truss.leftOffsetMm();
+        double leftOffsetMm = truss.gridLeftOffsetMm();
         double cursorMm = 0;
         Color prevColor = g2.getColor();
         for (double len : segMm) {

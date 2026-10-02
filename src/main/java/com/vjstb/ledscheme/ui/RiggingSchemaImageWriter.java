@@ -88,9 +88,9 @@ public final class RiggingSchemaImageWriter {
         // целиком", просто другая причина (не свес, а нехватка подходящей длины в каталоге).
         double kitOverageMm = truss.pieces() != null ? Math.max(0, truss.totalKitLengthMm() - truss.targetLengthMm())
                 : 0;
-        int extraLeftPx = pxPerMm > 0 ? Math.max(0, (int) Math.round(truss.leftOffsetMm() * pxPerMm)) : 0;
+        int extraLeftPx = pxPerMm > 0 ? Math.max(0, (int) Math.round(truss.gridLeftOffsetMm() * pxPerMm)) : 0;
         int extraRightPx = pxPerMm > 0
-                ? Math.max(0, (int) Math.round((truss.rightOffsetMm() + kitOverageMm) * pxPerMm)) : 0;
+                ? Math.max(0, (int) Math.round((truss.gridRightOffsetMm() + kitOverageMm) * pxPerMm)) : 0;
 
         int labelColW = labelColumnWidth();
         int tableW = labelColW + pointCount * POINT_COL_W;
@@ -224,7 +224,7 @@ public final class RiggingSchemaImageWriter {
         }
         segMm.sort(Comparator.reverseOrder());
 
-        double leftOffsetMm = truss.leftOffsetMm();
+        double leftOffsetMm = truss.gridLeftOffsetMm();
         double cursorMm = 0;
         Color prevColor = g2.getColor();
         for (double len : segMm) {

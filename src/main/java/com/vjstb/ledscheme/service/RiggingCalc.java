@@ -307,18 +307,25 @@ public final class RiggingCalc {
      *  смещают распределение к пустому месту. */
     public static List<ColumnWeight> columnWeights(Screen screen, CabinetType defaultType, Workspace workspace) {
         double cellW = defaultType != null ? defaultType.getWidthMm() : 0;
-        TreeMap<Integer, Double> byCol = new TreeMap<>();
+        // Центр кабинета — по ФАКТИЧЕСКОЙ геометрии (запрос 2026-10-02: ригтех считал по номинальной
+        // сетке «колонка × размер кабинета по умолчанию»): левый край = колонка × шаг сетки + мм-смещение
+        // ячейки, ширина — у фактического типа (переопределение по ячейке). Кабинеты с одним центром
+        // (с точностью до микрона) складываются в одну «колонку», как раньше складывались ячейки колонки.
+        TreeMap<Long, double[]> byCenter = new TreeMap<>();
         for (CabinetInstance c : screen.getCabinets()) {
             if (c.isHidden()) {
                 continue;
             }
             CabinetType eff = ScreenLogic.effectiveType(c, defaultType, workspace);
-            byCol.merge(c.getColIndex(), eff != null ? eff.getWeightKg() : 0, Double::sum);
+            double ew = eff != null ? eff.getWidthMm() : cellW;
+            double xCenter = c.getColIndex() * cellW + c.getOffsetXMm() + ew / 2.0;
+            double w = eff != null ? eff.getWeightKg() : 0;
+            byCenter.merge(Math.round(xCenter * 1000.0), new double[]{xCenter, w},
+                    (a, b) -> new double[]{a[0], a[1] + b[1]});
         }
         List<ColumnWeight> result = new ArrayList<>();
-        for (var e : byCol.entrySet()) {
-            double xCenter = e.getKey() * cellW + cellW / 2.0;
-            result.add(new ColumnWeight(xCenter, e.getValue()));
+        for (double[] e : byCenter.values()) {
+            result.add(new ColumnWeight(e[0], e[1]));
         }
         return result;
     }
@@ -347,7 +354,8 @@ public final class RiggingCalc {
         double totalWithHardware = totalCabinetWeight * hardwareFactor;
 
         double trussLengthMm = TrussCalc.builtTrussLengthMm(screen, defaultType, workspace);
-        double leftOffsetMm = TrussCalc.leftOffsetMm(screen, defaultType, workspace);
+        // отступ от НАЧАЛА СЕТКИ — точки считаются в тех же координатах, что центры кабинетов выше
+        double leftOffsetMm = TrussCalc.gridLeftOffsetMm(screen, defaultType, workspace);
         int n = Math.max(1, pointCount);
         double margin = edgeMarginMm(trussLengthMm);
         double usable = usableWidthMm(trussLengthMm);
