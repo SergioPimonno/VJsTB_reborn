@@ -3268,7 +3268,8 @@ public class SetupStagePanel extends JPanel {
                         ? UiKit.fmt(scr.getRiggingTrussLengthMm()) : "");
                 pRiggingTrussLength.setToolTipText(String.format("Целевая длина фермы, мм — пусто означает авто"
                         + " (сейчас %.0f мм, физическая ширина экрана).",
-                        com.vjstb.ledscheme.service.TrussCalc.suggestTrussLengthMm(scr, model.typeOf(scr))));
+                        com.vjstb.ledscheme.service.TrussCalc.suggestTrussLengthMm(scr, model.typeOf(scr),
+                        model.getWorkspace())));
                 pRiggingTrussSymmetric.setSelected(scr.isRiggingTrussSymmetricOffset());
                 pRiggingTrussManualOffset.setEnabled(!scr.isRiggingTrussSymmetricOffset());
                 pRiggingTrussManualOffset.setText(scr.getRiggingTrussManualLeftOffsetMm() != null

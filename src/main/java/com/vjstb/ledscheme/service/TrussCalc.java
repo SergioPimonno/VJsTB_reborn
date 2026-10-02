@@ -52,11 +52,55 @@ public final class TrussCalc {
     private TrussCalc() {
     }
 
-    /** Физическая ширина экрана, мм — {@code cols * defaultType.getWidthMm()};
-     *  {@code defaultType == null} (тип кабинета неизвестен) -> 0. */
-    public static double screenWidthMm(Screen screen, CabinetType defaultType) {
+    /** Протяжённость ВИДИМЫХ кабинетов экрана по X (в координатах его сетки, 0 — левый край
+     *  ячейки колонки 0): от левого края самого левого до правого края самого правого, с учётом
+     *  скрытых («вырезанных») ячеек, мм-смещений и переопределения типа по ячейке. Запрос
+     *  пользователя 2026-10-02: ригтех брал ширину экрана по настройкам (колонки × размер
+     *  кабинета по умолчанию — у Left 2 это 14 × 500 = 7 м), а кабинеты, реально стоящие в
+     *  экране, занимают 6,5 м — именно эта цифра нужна для длины фермы и точек подвеса.
+     *  Нет видимых кабинетов (или типа) — номинальная сетка {@code [0, cols × ширина]}.
+     *  {@code workspace} может быть {@code null} — тогда переопределение типа не резолвится
+     *  (кабинет считается шириной типа по умолчанию). */
+    public record Span(double minX, double maxX) {
+        public double width() {
+            return maxX - minX;
+        }
+    }
+
+    public static Span visibleSpan(Screen screen, CabinetType defaultType, Workspace workspace) {
         double cellW = defaultType != null ? defaultType.getWidthMm() : 0;
-        return screen.getCols() * cellW;
+        double nominal = screen.getCols() * cellW;
+        if (defaultType == null) {
+            return new Span(0, nominal);
+        }
+        double minX = Double.POSITIVE_INFINITY;
+        double maxX = Double.NEGATIVE_INFINITY;
+        for (com.vjstb.ledscheme.model.CabinetInstance c : screen.getCabinets()) {
+            if (c.isHidden()) {
+                continue;
+            }
+            CabinetType eff = ScreenLogic.effectiveType(c, defaultType, workspace);
+            double ew = eff != null ? eff.getWidthMm() : cellW;
+            double x0 = c.getColIndex() * cellW + c.getOffsetXMm();
+            minX = Math.min(minX, x0);
+            maxX = Math.max(maxX, x0 + ew);
+        }
+        if (minX == Double.POSITIVE_INFINITY) {
+            return new Span(0, nominal);
+        }
+        return new Span(minX, maxX);
+    }
+
+    /** Физическая ширина экрана, мм — протяжённость видимых кабинетов ({@link #visibleSpan});
+     *  {@code defaultType == null} (тип кабинета неизвестен) -> 0. Без {@code workspace}
+     *  переопределение типа по ячейке не учитывается — см. {@link #screenWidthMm(Screen,
+     *  CabinetType, Workspace)}. */
+    public static double screenWidthMm(Screen screen, CabinetType defaultType) {
+        return visibleSpan(screen, defaultType, null).width();
+    }
+
+    public static double screenWidthMm(Screen screen, CabinetType defaultType, Workspace workspace) {
+        return visibleSpan(screen, defaultType, workspace).width();
     }
 
     /** Целевая длина фермы по умолчанию — РЕАЛЬНАЯ физическая ширина экрана: ферма
@@ -65,14 +109,22 @@ public final class TrussCalc {
         return screenWidthMm(screen, defaultType);
     }
 
+    public static double suggestTrussLengthMm(Screen screen, CabinetType defaultType, Workspace workspace) {
+        return screenWidthMm(screen, defaultType, workspace);
+    }
+
     /** {@link Screen#getRiggingTrussLengthMm()} (если задан и положителен) побеждает,
      *  иначе {@link #suggestTrussLengthMm}. */
     public static double effectiveTrussLengthMm(Screen screen, CabinetType defaultType) {
+        return effectiveTrussLengthMm(screen, defaultType, null);
+    }
+
+    public static double effectiveTrussLengthMm(Screen screen, CabinetType defaultType, Workspace workspace) {
         Double override = screen.getRiggingTrussLengthMm();
         if (override != null && override > 0) {
             return override;
         }
-        return suggestTrussLengthMm(screen, defaultType);
+        return suggestTrussLengthMm(screen, defaultType, workspace);
     }
 
     /** Свес/недостача фермы относительно ширины экрана, мм, для ЯВНО заданной физической
@@ -80,12 +132,14 @@ public final class TrussCalc {
      *  (нависает), отрицательно, если короче. Приватный общий хелпер для {@link
      *  #leftOffsetMm(Screen, CabinetType)}/{@link #leftOffsetMm(Screen, CabinetType, Workspace)}
      *  и их пар — см. class-javadoc про {@link #builtTrussLengthMm}, зачем вообще два набора. */
-    private static double overhangFor(Screen screen, CabinetType defaultType, double actualLengthMm) {
-        return actualLengthMm - screenWidthMm(screen, defaultType);
+    private static double overhangFor(Screen screen, CabinetType defaultType, Workspace workspace,
+            double actualLengthMm) {
+        return actualLengthMm - screenWidthMm(screen, defaultType, workspace);
     }
 
-    private static double leftOffsetFor(Screen screen, CabinetType defaultType, double actualLengthMm) {
-        double overhang = overhangFor(screen, defaultType, actualLengthMm);
+    private static double leftOffsetFor(Screen screen, CabinetType defaultType, Workspace workspace,
+            double actualLengthMm) {
+        double overhang = overhangFor(screen, defaultType, workspace, actualLengthMm);
         if (screen.isRiggingTrussSymmetricOffset()) {
             return overhang / 2.0;
         }
@@ -93,8 +147,10 @@ public final class TrussCalc {
         return manual != null ? manual : overhang / 2.0;
     }
 
-    private static double rightOffsetFor(Screen screen, CabinetType defaultType, double actualLengthMm) {
-        return overhangFor(screen, defaultType, actualLengthMm) - leftOffsetFor(screen, defaultType, actualLengthMm);
+    private static double rightOffsetFor(Screen screen, CabinetType defaultType, Workspace workspace,
+            double actualLengthMm) {
+        return overhangFor(screen, defaultType, workspace, actualLengthMm)
+                - leftOffsetFor(screen, defaultType, workspace, actualLengthMm);
     }
 
     /** Отступ левого края фермы от левого края экрана, мм — по ЦЕЛЕВОЙ длине ({@link
@@ -107,7 +163,7 @@ public final class TrussCalc {
      *  считается — используйте {@link #leftOffsetMm(Screen, CabinetType, Workspace)} вместо
      *  этого метода (см. её javadoc, баг-репорт 2026-09-15). */
     public static double leftOffsetMm(Screen screen, CabinetType defaultType) {
-        return leftOffsetFor(screen, defaultType, effectiveTrussLengthMm(screen, defaultType));
+        return leftOffsetFor(screen, defaultType, null, effectiveTrussLengthMm(screen, defaultType));
     }
 
     /** Отступ правого края фермы от правого края экрана, мм — остаток свеса после
@@ -115,7 +171,7 @@ public final class TrussCalc {
      *  ручной ввод). См. {@link #rightOffsetMm(Screen, CabinetType, Workspace)} за версией
      *  по реальной длине комплекта. */
     public static double rightOffsetMm(Screen screen, CabinetType defaultType) {
-        return rightOffsetFor(screen, defaultType, effectiveTrussLengthMm(screen, defaultType));
+        return rightOffsetFor(screen, defaultType, null, effectiveTrussLengthMm(screen, defaultType));
     }
 
     /** Отступы по РЕАЛЬНОЙ физической длине фермы ({@link #builtTrussLengthMm}) — версии
@@ -125,11 +181,20 @@ public final class TrussCalc {
      *  RiggingCalc} (чтобы точки подвеса расставлялись по РЕАЛЬНОЙ длине, не абстрактной
      *  цели) — баг-репорт 2026-09-15: см. class-javadoc {@link #builtTrussLengthMm}. */
     public static double leftOffsetMm(Screen screen, CabinetType defaultType, Workspace workspace) {
-        return leftOffsetFor(screen, defaultType, builtTrussLengthMm(screen, defaultType, workspace));
+        return leftOffsetFor(screen, defaultType, workspace, builtTrussLengthMm(screen, defaultType, workspace));
     }
 
     public static double rightOffsetMm(Screen screen, CabinetType defaultType, Workspace workspace) {
-        return rightOffsetFor(screen, defaultType, builtTrussLengthMm(screen, defaultType, workspace));
+        return rightOffsetFor(screen, defaultType, workspace, builtTrussLengthMm(screen, defaultType, workspace));
+    }
+
+    /** Отступ левого края фермы от начала СЕТКИ экрана (колонка 0), мм — в тех же координатах,
+     *  что центры колонок в {@link RiggingCalc#columnWeights} и пиксельная шкала отрисовки
+     *  (она считает от номинальной сетки). {@link #leftOffsetMm} отсчитывается от левого
+     *  края видимых кабинетов (это то, что видит пользователь), а у экрана с вырезанными
+     *  левыми ячейками он не совпадает с началом сетки на {@link Span#minX()}. */
+    public static double gridLeftOffsetMm(Screen screen, CabinetType defaultType, Workspace workspace) {
+        return leftOffsetMm(screen, defaultType, workspace) - visibleSpan(screen, defaultType, workspace).minX();
     }
 
     /** true — ферма короче ширины экрана (физически не перекрывает его целиком) —
@@ -138,6 +203,10 @@ public final class TrussCalc {
      *  ДО выбора профиля/BOM (пользователь явно ввёл длину короче экрана). */
     public static boolean isShorterThanScreen(Screen screen, CabinetType defaultType) {
         return effectiveTrussLengthMm(screen, defaultType) < screenWidthMm(screen, defaultType);
+    }
+
+    public static boolean isShorterThanScreen(Screen screen, CabinetType defaultType, Workspace workspace) {
+        return effectiveTrussLengthMm(screen, defaultType, workspace) < screenWidthMm(screen, defaultType, workspace);
     }
 
     /** Минимальный по СУММАРНОЙ ДЛИНЕ (не по числу кусков — см. {@link
@@ -169,7 +238,7 @@ public final class TrussCalc {
      *  Теперь свес/отступы и расстановка точек подвеса считаются от ЭТОЙ (реальной) длины —
      *  см. {@link #leftOffsetMm(Screen, CabinetType, Workspace)}. */
     public static double builtTrussLengthMm(Screen screen, CabinetType defaultType, Workspace workspace) {
-        double targetMm = effectiveTrussLengthMm(screen, defaultType);
+        double targetMm = effectiveTrussLengthMm(screen, defaultType, workspace);
         String profileId = screen.getRiggingTrussProfileId();
         TrussProfile profile = profileId != null ? workspace.trussProfileById(profileId) : null;
         if (profile == null) {
@@ -208,38 +277,54 @@ public final class TrussCalc {
                           boolean shorterThanScreenWarning, List<CableSpecCalc.Piece> pieces,
                           int totalPieceCount, double totalKitLengthMm, int jointCount,
                           int spigotCount, int pinCount, int clipCount,
-                          boolean profileMissing, boolean catalogEmpty) {
+                          boolean profileMissing, boolean catalogEmpty,
+                          double spanMinXMm, double spanMaxXMm, double nominalWidthMm) {
+        /** Левый отступ фермы от НАЧАЛА СЕТКИ экрана — для отрисовки (она ведёт отсчёт от
+         *  номинальной сетки) и расстановки точек; {@link #leftOffsetMm} — от края видимых
+         *  кабинетов. Для экрана без вырезов слева совпадают. */
+        public double gridLeftOffsetMm() {
+            return leftOffsetMm - spanMinXMm;
+        }
+
+        /** Правый отступ фермы от ПРАВОГО КРАЯ СЕТКИ (см. {@link #gridLeftOffsetMm}). */
+        public double gridRightOffsetMm() {
+            return rightOffsetMm - (nominalWidthMm - spanMaxXMm);
+        }
     }
 
     public static Result compute(Screen screen, CabinetType defaultType, Workspace workspace) {
-        double targetMm = effectiveTrussLengthMm(screen, defaultType);
-        boolean shorter = isShorterThanScreen(screen, defaultType);
+        double targetMm = effectiveTrussLengthMm(screen, defaultType, workspace);
+        boolean shorter = isShorterThanScreen(screen, defaultType, workspace);
+        Span span = visibleSpan(screen, defaultType, workspace);
+        double nominalW = screen.getCols() * (defaultType != null ? defaultType.getWidthMm() : 0);
 
         String profileId = screen.getRiggingTrussProfileId();
         TrussProfile profile = profileId != null ? workspace.trussProfileById(profileId) : null;
         if (profile == null) {
-            double left = leftOffsetFor(screen, defaultType, targetMm);
-            double right = rightOffsetFor(screen, defaultType, targetMm);
-            return new Result(targetMm, left, right, shorter, null, 0, 0, 0, 0, 0, 0, true, false);
+            double left = leftOffsetFor(screen, defaultType, workspace, targetMm);
+            double right = rightOffsetFor(screen, defaultType, workspace, targetMm);
+            return new Result(targetMm, left, right, shorter, null, 0, 0, 0, 0, 0, 0, true, false,
+                    span.minX(), span.maxX(), nominalW);
         }
 
         List<CableSpecCalc.Piece> pieces = minimalKit(targetMm / 1000.0, profile);
         if (pieces == null) {
-            double left = leftOffsetFor(screen, defaultType, targetMm);
-            double right = rightOffsetFor(screen, defaultType, targetMm);
-            return new Result(targetMm, left, right, shorter, null, 0, 0, 0, 0, 0, 0, false, true);
+            double left = leftOffsetFor(screen, defaultType, workspace, targetMm);
+            double right = rightOffsetFor(screen, defaultType, workspace, targetMm);
+            return new Result(targetMm, left, right, shorter, null, 0, 0, 0, 0, 0, 0, false, true,
+                    span.minX(), span.maxX(), nominalW);
         }
 
         int totalPieces = pieces.stream().mapToInt(CableSpecCalc.Piece::count).sum();
         double totalKitLengthM = pieces.stream().mapToDouble(p -> p.lengthM() * p.count()).sum();
         double builtLengthMm = totalKitLengthM * 1000.0;
-        double left = leftOffsetFor(screen, defaultType, builtLengthMm);
-        double right = rightOffsetFor(screen, defaultType, builtLengthMm);
+        double left = leftOffsetFor(screen, defaultType, workspace, builtLengthMm);
+        double right = rightOffsetFor(screen, defaultType, workspace, builtLengthMm);
         int joints = Math.max(0, totalPieces - 1);
         int spigots = joints * SPIGOTS_PER_JOINT;
         int pins = joints * PINS_PER_JOINT;
         int clips = joints * CLIPS_PER_JOINT;
         return new Result(targetMm, left, right, shorter, pieces, totalPieces, builtLengthMm,
-                joints, spigots, pins, clips, false, false);
+                joints, spigots, pins, clips, false, false, span.minX(), span.maxX(), nominalW);
     }
 }

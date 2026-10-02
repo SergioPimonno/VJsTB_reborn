@@ -80,11 +80,14 @@ class RiggingCalcTest {
         assertEquals(30.0, result.totalCabinetWeightKg(), 1e-6); // только 3 видимых кабинета
         double sum = result.points().stream().mapToDouble(RiggingCalc.PointLoad::loadKg).sum();
         assertEquals(36.0, sum, 1e-6); // 30 * 1.2 наценки, весь вес где-то среди точек
-        // Крайняя правая точка (x=3000, глубоко в вырезанной/скрытой зоне cols 3..5,
-        // x от 1500 до 3000) не должна получить ни грамма веса — все видимые кабинеты
-        // (cols 0..2, x от 0 до 1500) физически ближе к левым точкам.
-        RiggingCalc.PointLoad rightmost = result.points().get(result.points().size() - 1);
-        assertEquals(0.0, rightmost.loadKg(), 1e-6);
+        // Запрос 2026-10-02: ферма и точки подвеса считаются по РЕАЛЬНОЙ ширине экрана (протяжённость
+        // видимых кабинетов: cols 0..2 -> 0..1500 мм), а не по номинальной сетке 6 x 500 = 3000. Раньше
+        // крайняя правая точка (x=3000) попадала глубоко в вырезанную зону и не несла веса -- теперь
+        // все точки стоят над видимыми кабинетами и каждая несёт нагрузку.
+        for (RiggingCalc.PointLoad p : result.points()) {
+            assertTrue(p.xMm() >= 0 && p.xMm() <= 1500, "точка над видимыми кабинетами: " + p.xMm());
+            assertTrue(p.loadKg() > 0, "каждая точка несёт вес");
+        }
     }
 
     @Test
