@@ -7,7 +7,7 @@
   Компиляция под Java 21 (`maven.compiler.release=21`).
 - **Прогон**: `mvn test` в корне `VJsTB_reborn`. Перед релизом — полный прогон,
   0 failures (скиллы `run-tests`, `release-client` шаг 5).
-- **Всего**: на момент v2.6 — 861 тест (по surefire), 0 failures; после изогнутых
+- **Всего**: на момент релиза v2.6 — 1003 теста (по surefire), 0 failures; после изогнутых
   экранов (ветка `claude/curve`, 2026-10-01) — 916, 0 failures; после Round 26
   (`claude/curve-fix`, поверх слияния curve + floor3d) — 958, 0 failures (кроме
   временно́го `OrthogonalRouterTest.routesLargeFixtureFastEnough` под нагрузкой — при
