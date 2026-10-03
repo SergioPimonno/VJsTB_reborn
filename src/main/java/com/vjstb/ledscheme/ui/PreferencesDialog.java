@@ -76,6 +76,8 @@ public class PreferencesDialog extends JDialog {
     private JSpinner snapStrengthSpinner;
     private JCheckBox foolProofWiringCheck;
     private JCheckBox schemaScreensAsWiringCheck;
+    private JComboBox<com.vjstb.ledscheme.settings.ScreenEntrySide> signalScreenEntryCombo;
+    private JComboBox<com.vjstb.ledscheme.settings.ScreenEntrySide> powerScreenEntryCombo;
     private JComboBox<WireHopStyle> wireHopStyleCombo;
     /** Гасит слушатель комбобокса на время программной установки значения в
      *  {@link #refresh()} — иначе {@code setSelectedItem} сам дёрнул бы сеттер
@@ -202,6 +204,18 @@ public class PreferencesDialog extends JDialog {
                         + " Выключено — узел экрана выглядит как обычный прямоугольный блок с названием, без деталей"
                         + " расключения. Действует одинаково для сигнала и питания.",
                 settings::setSchemaScreensAsWiringDiagram);
+
+        String entryTip = "С какой стороны блока экрана подходят линии в режиме «Авто под 90°» — даже если другой"
+                + " конец левее, правее или выше, линия обойдёт блок и зайдёт с выбранной стороны (к гнезду-кабинету"
+                + " миниатюры расключения — прямо напротив него). «Снизу» обычно выглядит аккуратнее всего;"
+                + " «Ближайшая грань» — прежнее поведение. Выходы экранов и узлы с настоящими гнёздами не"
+                + " затрагиваются. Своя отдельная копия для схемы питания.";
+        signalScreenEntryCombo = screenEntryCombo(
+                settings.activeProfile().getSchemaScreenEntrySide(com.vjstb.ledscheme.model.SchemaMode.SIGNAL), entryTip,
+                side -> settings.setSchemaScreenEntrySide(com.vjstb.ledscheme.model.SchemaMode.SIGNAL, side));
+        powerScreenEntryCombo = screenEntryCombo(
+                settings.activeProfile().getSchemaScreenEntrySide(com.vjstb.ledscheme.model.SchemaMode.POWER), entryTip,
+                side -> settings.setSchemaScreenEntrySide(com.vjstb.ledscheme.model.SchemaMode.POWER, side));
 
         wireHopRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         wireHopRow.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -508,6 +522,20 @@ public class PreferencesDialog extends JDialog {
         return combo;
     }
 
+    private JComboBox<com.vjstb.ledscheme.settings.ScreenEntrySide> screenEntryCombo(com.vjstb.ledscheme.settings.ScreenEntrySide selected, String tooltip,
+            Consumer<com.vjstb.ledscheme.settings.ScreenEntrySide> apply) {
+        JComboBox<com.vjstb.ledscheme.settings.ScreenEntrySide> combo = new JComboBox<>(com.vjstb.ledscheme.settings.ScreenEntrySide.values());
+        combo.setSelectedItem(selected);
+        combo.setToolTipText(tooltip);
+        combo.setAlignmentX(Component.LEFT_ALIGNMENT);
+        combo.addActionListener(e -> {
+            if (!refreshingSchemaLayoutCombos) {
+                apply.accept((com.vjstb.ledscheme.settings.ScreenEntrySide) combo.getSelectedItem());
+            }
+        });
+        return combo;
+    }
+
     /** Строка «подпись + дропдаун» для списка по этапам — сам дропдаун (см. {@link
      *  #orientationCombo}/{@link #groupDisplayCombo}) переиспользуется и в матрице
      *  ({@link #buildMatrixBody()}), там БЕЗ подписи (у ячейки уже есть своя, см.
@@ -566,18 +594,20 @@ public class PreferencesDialog extends JDialog {
         content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
 
         content.add(UiKit.section("Общие", stack(previewWidgetCheck, canvasSnapToCenterCheck, snapRow,
-                foolProofWiringCheck, schemaScreensAsWiringCheck, wireHopRow, schemaRouteStubRow,
-                schemaLabelPaddingRow, exportRow)));
+                foolProofWiringCheck, schemaScreensAsWiringCheck, wireHopRow,
+                schemaRouteStubRow, schemaLabelPaddingRow, exportRow)));
         content.add(Box.createVerticalStrut(8));
         content.add(UiKit.section("Сигнал", stack(signalSocketWiringCheck,
                 comboRow("Ориентация блоков по умолчанию:", signalOrientationCombo),
                 comboRow("Незанятые группы гнёзд:", signalGroupDisplayCombo),
+                comboRow("Вход связей в блоки экранов:", signalScreenEntryCombo),
                 signalChainEndpointSocketsCheck, signalSchemaAutoPopulateCheck,
                 signalSceneStatsCheck)));
         content.add(Box.createVerticalStrut(8));
         content.add(UiKit.section("Питание", stack(powerSocketWiringCheck,
                 comboRow("Ориентация блоков по умолчанию:", powerOrientationCombo),
                 comboRow("Незанятые группы гнёзд:", powerGroupDisplayCombo),
+                comboRow("Вход связей в блоки экранов:", powerScreenEntryCombo),
                 powerChainEndpointSocketsCheck, powerSchemaAutoPopulateCheck,
                 powerSceneStatsCheck, loadTrackingCheck, powerUnitKwCheck)));
         content.add(Box.createVerticalStrut(8));
@@ -638,6 +668,8 @@ public class PreferencesDialog extends JDialog {
                 DASH, signalOrientationCombo, powerOrientationCombo);
         triple(g, row, "Незанятые группы гнёзд", null,
                 DASH, signalGroupDisplayCombo, powerGroupDisplayCombo);
+        triple(g, row, "Вход связей в блоки экранов", "режим «Авто под 90°»",
+                DASH, signalScreenEntryCombo, powerScreenEntryCombo);
         triple(g, row, "Вводные кабинеты цепочек — тоже гнёзда подключения", null,
                 DASH, signalChainEndpointSocketsCheck, powerChainEndpointSocketsCheck);
         triple(g, row, "Автозаполнение схемы при переходе с расключения", null,
@@ -829,6 +861,8 @@ public class PreferencesDialog extends JDialog {
         powerSchemaAutoPopulateCheck.setSelected(settings.activeProfile().isPowerSchemaAutoPopulateEnabled());
         applySocketDependentEnablement();
         refreshingSchemaLayoutCombos = true;
+        signalScreenEntryCombo.setSelectedItem(settings.activeProfile().getSchemaScreenEntrySide(com.vjstb.ledscheme.model.SchemaMode.SIGNAL));
+        powerScreenEntryCombo.setSelectedItem(settings.activeProfile().getSchemaScreenEntrySide(com.vjstb.ledscheme.model.SchemaMode.POWER));
         signalOrientationCombo.setSelectedItem(settings.activeProfile().getSignalDefaultOrientation());
         powerOrientationCombo.setSelectedItem(settings.activeProfile().getPowerDefaultOrientation());
         signalGroupDisplayCombo.setSelectedItem(settings.activeProfile().getSignalGroupDisplay());

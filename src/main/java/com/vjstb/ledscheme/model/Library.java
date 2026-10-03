@@ -51,6 +51,11 @@ public class Library {
      *  на эти id нет персистентных FK нигде в проектных данных, кроме {@code
      *  NetworkDevicePlacement#deviceTypeId} (данные ПРОЕКТА, не библиотеки). */
     private List<NetworkDeviceType> networkDeviceTypes = new ArrayList<>();
+    /** Серии оборудования (H-серия Novastar, VFC Disguise — общий каталог карт на модели, запрос
+     *  2026-10-02). Личный список в клиенте пока не редактируется (серии заводятся в админ-консоли и
+     *  приходят с сервера в {@link #sharedEquipmentSeries}); поле нужно механизму синхронизации
+     *  ({@code AppModel#applyOne} работает с парой «общее + личное»). */
+    private List<EquipmentSeries> equipmentSeries = new ArrayList<>();
     /** Подкатегории оборудования под "Прочее оборудование" — общая справочная
      *  данные (Task #135/v2.0), редактируется только через отдельную админ-консоль
      *  (ledscheme-admin), синхронизируется с сервера (вид EQUIPMENT_CUSTOM_CATEGORY,
@@ -117,6 +122,7 @@ public class Library {
     private List<CaseType> sharedCaseTypes = new ArrayList<>();
     private List<VehicleType> sharedVehicleTypes = new ArrayList<>();
     private List<NetworkDeviceType> sharedNetworkDeviceTypes = new ArrayList<>();
+    private List<EquipmentSeries> sharedEquipmentSeries = new ArrayList<>();
 
     public List<CabinetType> getCabinetTypes() {
         return cabinetTypes;
@@ -204,6 +210,22 @@ public class Library {
 
     public void setVehicleTypes(List<VehicleType> vehicleTypes) {
         this.vehicleTypes = vehicleTypes;
+    }
+
+    public List<EquipmentSeries> getEquipmentSeries() {
+        return equipmentSeries;
+    }
+
+    public void setEquipmentSeries(List<EquipmentSeries> equipmentSeries) {
+        this.equipmentSeries = equipmentSeries != null ? equipmentSeries : new ArrayList<>();
+    }
+
+    public List<EquipmentSeries> getSharedEquipmentSeries() {
+        return sharedEquipmentSeries;
+    }
+
+    public void setSharedEquipmentSeries(List<EquipmentSeries> sharedEquipmentSeries) {
+        this.sharedEquipmentSeries = sharedEquipmentSeries != null ? sharedEquipmentSeries : new ArrayList<>();
     }
 
     public List<NetworkDeviceType> getNetworkDeviceTypes() {

@@ -19,6 +19,7 @@ import com.vjstb.ledscheme.model.ControllerInstance;
 import com.vjstb.ledscheme.model.ControllerType;
 import com.vjstb.ledscheme.model.EdgeRouteMode;
 import com.vjstb.ledscheme.model.EquipmentPreset;
+import com.vjstb.ledscheme.model.EquipmentSeries;
 import com.vjstb.ledscheme.model.InterfaceRole;
 import com.vjstb.ledscheme.model.InterfaceType;
 import com.vjstb.ledscheme.model.ContentSection;
@@ -663,19 +664,11 @@ public class AppModel {
      *  #addSchemaNodeFromPresetWithCardOrder}. */
     private void freezeControllerInstanceCards(ControllerInstance ci, EquipmentPreset preset, List<String> cardOrder) {
         List<SchemaCard> cards = new ArrayList<>();
-        if (cardOrder != null && !cardOrder.isEmpty()) {
-            for (String templateId : cardOrder) {
-                for (SchemaCard template : preset.getCards()) {
-                    if (template.getId().equals(templateId)) {
-                        cards.add(duplicateCardWithFreshIds(template));
-                        break;
-                    }
-                }
-            }
-        } else {
-            for (SchemaCard template : preset.getCards()) {
-                cards.add(duplicateCardWithFreshIds(template));
-            }
+        List<SchemaCard> picked = cardOrder != null && !cardOrder.isEmpty()
+                ? resolveTemplates(preset, cardOrder) : cardTemplatesOf(preset);
+        requireWithinCardLimits(preset, picked);
+        for (SchemaCard template : picked) {
+            cards.add(duplicateCardWithFreshIds(template));
         }
         ci.setCards(cards);
         ci.setPortCount(preset.getPortCount());
@@ -730,6 +723,405 @@ public class AppModel {
         }
         renumberControllers(scene);
         changed();
+    }
+
+    // ---- замена контроллера (запрос 2026-10-03) ----
+
+    /** Подходящие для замены пресеты контроллеров ({@link #suitable}) и сколько скрыто
+     *  как неподходящих ({@link #hidden}). */
+    public record ControllerReplacementOptions(List<EquipmentPreset> suitable, int hidden) {
+    }
+
+    /** Занятые контроллером {@code ci} ЛОКАЛЬНЫЕ порты (1-based, по возрастанию): и
+     *  основные порты цепочек сцены, и резервные ({@link SignalChain#getBackupPortNumber()}),
+     *  если они попадают в диапазон этого контроллера — резерв тоже физически занимает порт. */
+    private List<Integer> occupiedLocalPorts(Scene scene, int offset, int count) {
+        java.util.TreeSet<Integer> used = new java.util.TreeSet<>();
+        for (SignalChain c : scene.getSignalChains()) {
+            Integer p = c.getPortNumber();
+            if (p != null && p > offset && p <= offset + count) {
+                used.add(p - offset);
+            }
+            Integer bp = c.getBackupPortNumber();
+            if (bp != null && bp > offset && bp <= offset + count) {
+                used.add(bp - offset);
+            }
+        }
+        return new ArrayList<>(used);
+    }
+
+    /** Локальные порты кандидата, пригодные под цепочки (Ethernet), по возрастанию. */
+    private static List<Integer> usableLocalPorts(ControllerInstance candidate) {
+        List<Integer> avail = new ArrayList<>();
+        int total = candidate.effectivePortCount();
+        for (int i = 1; i <= total; i++) {
+            if (candidate.isEffectivePortEthernet(i)) {
+                avail.add(i);
+            }
+        }
+        return avail;
+    }
+
+    /** Причина, по которой {@code candidate} не может заменить {@code current}, либо
+     *  {@code null}. Единственное правило (решение пользователя 2026-10-03): Ethernet-портов
+     *  столько, чтобы вместились ВСЕ занятые порты (основные и резервные); номера при этом могут
+     *  уплотниться, см. {@link #planPortMapping}. Число ВХОДОВ не проверяется: сначала оно
+     *  было условием, но из-за него нельзя было заменить любой контроллер моделью модульной
+     *  серии (H-серия), у которой входы появляются только вместе с картами при сборке. */
+    private String replacementProblem(Scene scene, ControllerInstance current, ControllerInstance candidate) {
+        int offset = portOffsetOf(scene, current);
+        int occupied = occupiedLocalPorts(scene, offset, current.effectivePortCount()).size();
+        int available = usableLocalPorts(candidate).size();
+        if (available < occupied) {
+            return "Не хватает портов для расключения: занято " + occupied + ", у нового контроллера доступно "
+                    + available;
+        }
+        return null;
+    }
+
+    /** Куда уходят занятые порты: если все они помещаются на свои же номера (и там Ethernet) —
+     *  номера сохраняются; иначе занятые порты ПО ПОРЯДКУ ложатся на младшие доступные
+     *  порты нового контроллера (уплотнение, решение пользователя). */
+    private static java.util.Map<Integer, Integer> planPortMapping(List<Integer> occupied,
+                                                                    ControllerInstance candidate) {
+        List<Integer> avail = usableLocalPorts(candidate);
+        java.util.Map<Integer, Integer> map = new java.util.LinkedHashMap<>();
+        if (avail.containsAll(occupied)) {
+            for (int p : occupied) {
+                map.put(p, p);
+            }
+        } else {
+            for (int i = 0; i < occupied.size(); i++) {
+                map.put(occupied.get(i), avail.get(i));
+            }
+        }
+        return map;
+    }
+
+    private ControllerInstance scratchControllerFor(EquipmentPreset preset, List<String> cardOrder) {
+        ControllerInstance scratch = new ControllerInstance(preset.getId(), "");
+        freezeControllerInstanceCards(scratch, preset, cardOrder);
+        return scratch;
+    }
+
+    /** Пресеты контроллеров, которыми можно заменить {@code controllerInstanceId}: простые
+     *  проверяются по числу портов сразу, модульные (несколько шаблонов карт) предлагаются без
+     *  проверки — их комплектация собирается при самой замене и проверяется тогда. */
+    public ControllerReplacementOptions controllerReplacementOptions(Scene scene, String controllerInstanceId) {
+        ControllerInstance current = controllerById(scene, controllerInstanceId);
+        if (current == null) {
+            return new ControllerReplacementOptions(List.of(), 0);
+        }
+        List<EquipmentPreset> suitable = new ArrayList<>();
+        int hidden = 0;
+        for (EquipmentPreset p : getEquipmentPresets()) {
+            if (p.getCategory() != SchemaNodeType.CONTROLLER || p.getId().equals(current.getControllerTypeId())) {
+                continue;
+            }
+            // Модульные модели (несколько шаблонов карт, как H-серия) предлагаются всегда: число
+            // портов зависит от комплектации, которую инженер собирает уже после выбора, —
+            // окончательная проверка идёт в replaceController по собранной комплектации.
+            if (cardTemplatesOf(p).size() > 1) {
+                suitable.add(p);
+                continue;
+            }
+            try {
+                if (replacementProblem(scene, current, scratchControllerFor(p, null)) == null) {
+                    suitable.add(p);
+                } else {
+                    hidden++;
+                }
+            } catch (RuntimeException ex) {
+                hidden++;
+            }
+        }
+        return new ControllerReplacementOptions(suitable, hidden);
+    }
+
+    /** Один контроллер-конец связи блока общей схемы, который надо перенести на новую группу
+     *  портов после замены (см. {@link #replaceController}). */
+    private record EdgeFix(SchemaEdge edge, boolean controllerIsTo, SchemaNode node, SignalChain chain,
+                           boolean backupEnd, int[] oldGroup) {
+    }
+
+    private static int[] groupOfPortOnNode(SchemaNode node, String portId) {
+        if (portId == null) {
+            return null;
+        }
+        for (int ci = 0; ci < node.getCards().size(); ci++) {
+            List<CardPort> ports = node.getCards().get(ci).getPorts();
+            for (int pi = 0; pi < ports.size(); pi++) {
+                if (portId.equals(ports.get(pi).getId())) {
+                    return new int[]{ci, pi};
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Заменяет контроллер {@code controllerInstanceId} другим пресетом ПО МЕСТУ — это тот же
+     *  экземпляр (id, подпись «Контроллер N», позиция в списке, связки резерва), а не
+     *  добавление ещё одного: число контроллеров в списке не растёт. Расключение переносится
+     *  по номерам портов; если занятые порты не помещаются на свои номера, они уплотняются
+     *  (см. {@link #planPortMapping}). Номера портов контроллеров ПОСЛЕ заменённого сдвигаются
+     *  на разницу в числе портов, как при вставке/удалении ({@link #shiftSceneChainPorts}).
+     *  Блоки общей схемы, привязанные к этому контроллеру, получают его новые карты, а их
+     *  связи с кабинетами переприсоединяются к соответствующим группам портов.
+     *  @return соответствие «старый локальный порт → новый» занятых портов
+     *  @throws IllegalArgumentException замена невозможна (текст — для показа пользователю) */
+    public java.util.Map<Integer, Integer> replaceController(Scene scene, String controllerInstanceId,
+                                                              String presetId, List<String> cardOrder) {
+        return replaceController(scene, controllerInstanceId, presetId, cardOrder, false);
+    }
+
+    /** Проверка перед заменой по уже собранной комплектации: текст причины (сейчас — не хватает
+     *  портов под занятые) либо {@code null}, если замена пройдёт без потери расключения. */
+    public String controllerReplacementProblem(Scene scene, String controllerInstanceId, String presetId,
+                                               List<String> cardOrder) {
+        ControllerInstance ci = scene != null ? controllerById(scene, controllerInstanceId) : null;
+        EquipmentPreset preset = equipmentPresetById(presetId);
+        if (ci == null || preset == null) {
+            return "Контроллер или тип не найден";
+        }
+        return replacementProblem(scene, ci, scratchControllerFor(preset, cardOrder));
+    }
+
+    /** Сколько цепочек сцены обслуживает контроллер (основным или резервным портом) — для
+     *  предупреждения о сбросе. */
+    public int chainsOnController(Scene scene, String controllerInstanceId) {
+        ControllerInstance ci = scene != null ? controllerById(scene, controllerInstanceId) : null;
+        if (ci == null) {
+            return 0;
+        }
+        int offset = portOffsetOf(scene, ci);
+        int count = ci.effectivePortCount();
+        int n = 0;
+        for (SignalChain c : scene.getSignalChains()) {
+            Integer p = c.getPortNumber();
+            Integer bp = c.getBackupPortNumber();
+            if ((p != null && p > offset && p <= offset + count) || (bp != null && bp > offset && bp <= offset + count)) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /** Подсказка для модульной модели (H-серия): сколько занято портов и какое минимальное число
+     *  карт с наибольшим числом Ethernet-портов нужно собрать, чтобы расключение не сломалось.
+     *  {@code cardsNeeded == 0} — занятых портов нет (подсказка не нужна); {@code cardsNeeded < 0}
+     *  — набрать нужное число портов нельзя (нет выходных Ethernet-карт или упёрлись в лимит
+     *  выходных карт модели). */
+    public record CardsNeeded(int occupied, int cardsNeeded, int portsPerCard, String cardName,
+                              Integer maxOutputCards) {
+    }
+
+    public CardsNeeded minimumCardsToKeepWiring(Scene scene, String controllerInstanceId, EquipmentPreset preset) {
+        ControllerInstance ci = scene != null ? controllerById(scene, controllerInstanceId) : null;
+        if (ci == null) {
+            return new CardsNeeded(0, 0, 0, null, null);
+        }
+        int occupied = occupiedLocalPorts(scene, portOffsetOf(scene, ci), ci.effectivePortCount()).size();
+        if (occupied == 0) {
+            return new CardsNeeded(0, 0, 0, null, preset.getMaxOutputCards());
+        }
+        int best = 0;
+        String bestName = null;
+        for (SchemaCard t : cardTemplatesOf(preset)) {
+            ControllerInstance probe = new ControllerInstance(preset.getId(), "");
+            probe.setCards(List.of(t));
+            int ports = usableLocalPorts(probe).size();
+            if (ports > best) {
+                best = ports;
+                bestName = t.getName();
+            }
+        }
+        if (best == 0) {
+            return new CardsNeeded(occupied, -1, 0, null, preset.getMaxOutputCards());
+        }
+        int needed = (occupied + best - 1) / best;
+        Integer limit = preset.getMaxOutputCards();
+        if (limit != null && needed > limit) {
+            needed = -1;
+        }
+        return new CardsNeeded(occupied, needed, best, bestName, limit);
+    }
+
+    /** Как {@link #replaceController(Scene, String, String, List)}; {@code resetWiringIfShort} —
+     *  если у новой комплектации не хватает портов под занятые, не отказывать, а СБРОСИТЬ
+     *  цепочки этого контроллера (решение пользователя 2026-10-03: так получается при замене на
+     *  модульную модель с малым числом карт). Сбрасываются цепочки, чей основной порт на этом
+     *  контроллере (вместе с блоками связей на схеме); у цепочек других контроллеров, чей
+     *  резерв лежал на нём, резерв снимается. */
+    public java.util.Map<Integer, Integer> replaceController(Scene scene, String controllerInstanceId,
+                                                              String presetId, List<String> cardOrder,
+                                                              boolean resetWiringIfShort) {
+        ControllerInstance ci = scene != null ? controllerById(scene, controllerInstanceId) : null;
+        if (ci == null) {
+            throw new IllegalArgumentException("Контроллер не найден");
+        }
+        EquipmentPreset preset = equipmentPresetById(presetId);
+        if (preset == null || preset.getCategory() != SchemaNodeType.CONTROLLER) {
+            throw new IllegalArgumentException("Тип контроллера не найден");
+        }
+        ControllerInstance scratch = scratchControllerFor(preset, cardOrder);
+        String problem = replacementProblem(scene, ci, scratch);
+        boolean shortage = problem != null;
+        if (shortage && !resetWiringIfShort) {
+            throw new IllegalArgumentException(problem);
+        }
+        pushUndo("Замена контроллера");
+        int offset = portOffsetOf(scene, ci);
+        int oldCount = ci.effectivePortCount();
+        int newCount = scratch.effectivePortCount();
+        java.util.Map<Integer, Integer> mapping = shortage ? new java.util.LinkedHashMap<>()
+                : planPortMapping(occupiedLocalPorts(scene, offset, oldCount), scratch);
+        ControllerInstance oldSnapshot = ci.copy();
+        java.util.Set<SignalChain> removedChains = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        if (shortage) {
+            for (SignalChain c : scene.getSignalChains()) {
+                Integer p = c.getPortNumber();
+                if (p != null && p > offset && p <= offset + oldCount) {
+                    removedChains.add(c);
+                }
+            }
+        }
+
+        // Фаза 1 (до правки): какие связи блоков общей схемы шли к портам этого контроллера
+        List<EdgeFix> fixes = new ArrayList<>();
+        for (SchemaNode n : scene.getSchemaNodes()) {
+            if (n.getMode() != SchemaMode.SIGNAL || n.getType() != SchemaNodeType.CONTROLLER
+                    || !ci.getId().equals(n.getControllerInstanceRefId())) {
+                continue;
+            }
+            for (SchemaEdge e : scene.getSchemaEdges()) {
+                if (e.getMode() != SchemaMode.SIGNAL) {
+                    continue;
+                }
+                boolean toEnd = n.getId().equals(e.getToNodeId());
+                if (!toEnd && !n.getId().equals(e.getFromNodeId())) {
+                    continue;
+                }
+                int[] oldGroup = groupOfPortOnNode(n, toEnd ? e.getToPortId() : e.getFromPortId());
+                if (oldGroup == null) {
+                    continue;
+                }
+                String cab = toEnd ? e.getFromCabinetInstanceId() : e.getToCabinetInstanceId();
+                SignalChain chain = null;
+                boolean backupEnd = false;
+                for (SignalChain c : scene.getSignalChains()) {
+                    List<String> ids = c.getCabinetInstanceIds();
+                    if (cab == null || ids.isEmpty()) {
+                        continue;
+                    }
+                    for (int pass = 0; pass < 2 && chain == null; pass++) {
+                        boolean backup = pass == 1;
+                        Integer g = backup ? c.getBackupPortNumber() : c.getPortNumber();
+                        String endCab = backup ? ids.get(ids.size() - 1) : ids.get(0);
+                        if (g == null || !cab.equals(endCab)) {
+                            continue;
+                        }
+                        int[] grp = cardPortGroupForLocalPort(oldSnapshot, g - offset);
+                        if (grp != null && grp[0] == oldGroup[0] && grp[1] == oldGroup[1]) {
+                            chain = c;
+                            backupEnd = backup;
+                        }
+                    }
+                    if (chain != null) {
+                        break;
+                    }
+                }
+                fixes.add(new EdgeFix(e, toEnd, n, chain, backupEnd, oldGroup));
+            }
+        }
+
+        // Номера портов цепочек: считаем ДО правки, применяем после сдвига остальных
+        record ChainUpdate(SignalChain chain, Integer port, Integer backup) {
+        }
+        List<ChainUpdate> updates = new ArrayList<>();
+        List<SignalChain> backupsToClear = new ArrayList<>();
+        for (SignalChain c : scene.getSignalChains()) {
+            if (removedChains.contains(c)) {
+                continue;
+            }
+            Integer p = c.getPortNumber();
+            Integer bp = c.getBackupPortNumber();
+            boolean backupHere = bp != null && bp > offset && bp <= offset + oldCount;
+            if (shortage) {
+                if (backupHere) {
+                    backupsToClear.add(c);
+                }
+                continue;
+            }
+            Integer np = p != null && p > offset && p <= offset + oldCount ? offset + mapping.get(p - offset) : null;
+            Integer nb = backupHere ? offset + mapping.get(bp - offset) : null;
+            if (np != null || nb != null) {
+                updates.add(new ChainUpdate(c, np, nb));
+            }
+        }
+
+        // Фаза 2: сам контроллер
+        ci.setControllerTypeId(preset.getId());
+        ci.setCards(scratch.getCards());
+        ci.setPortCount(scratch.getPortCount());
+        ci.setPortBandwidthMbps(scratch.getPortBandwidthMbps());
+        ci.setInputPortCount(scratch.getInputPortCount());
+        scene.getSignalChains().removeIf(removedChains::contains);
+        for (SignalChain c : backupsToClear) {
+            c.setBackupPortNumber(null);
+        }
+        shiftSceneChainPorts(scene, offset + oldCount, newCount - oldCount);
+        for (ChainUpdate u : updates) {
+            if (u.port() != null) {
+                u.chain().setPortNumber(u.port());
+            }
+            if (u.backup() != null) {
+                u.chain().setBackupPortNumber(u.backup());
+            }
+        }
+        // Резерв по картам привязан к номерам пулов — связки на пулы, которых больше нет, снимаем
+        int pools = ci.ethernetPoolCount();
+        ci.getCardBackupLinks().keySet().removeIf(k -> k == null || k >= pools);
+        for (ControllerInstance other : controllersInScene(scene)) {
+            other.getCardBackupLinks().values().removeIf(link -> link != null
+                    && ci.getId().equals(link.getControllerId()) && link.getPoolIndex() >= pools);
+        }
+
+        // Блоки общей схемы: новые карты и переподключение связей
+        for (SchemaNode n : scene.getSchemaNodes()) {
+            if (n.getMode() == SchemaMode.SIGNAL && n.getType() == SchemaNodeType.CONTROLLER
+                    && ci.getId().equals(n.getControllerInstanceRefId())) {
+                String label = n.getLabel() != null && !n.getLabel().isEmpty() ? n.getLabel() : "Контроллер";
+                mirrorControllerCardsOntoNode(n, ci, label);
+                n.getPortPlacements().clear();
+                if (currentScene == scene) {
+                    autoFitNodeToPorts(n);
+                }
+            }
+        }
+        for (EdgeFix f : fixes) {
+            int[] group = f.oldGroup();
+            if (f.chain() != null) {
+                Integer g = f.backupEnd() ? f.chain().getBackupPortNumber() : f.chain().getPortNumber();
+                group = g != null ? cardPortGroupForLocalPort(ci, g - offset) : null;
+            }
+            if (f.chain() != null && removedChains.contains(f.chain())) {
+                group = null;
+            }
+            String newPortId = null;
+            if (group != null && group[0] < f.node().getCards().size()
+                    && group[1] < f.node().getCards().get(group[0]).getPorts().size()) {
+                newPortId = f.node().getCards().get(group[0]).getPorts().get(group[1]).getId();
+            }
+            if (newPortId == null) {
+                scene.getSchemaEdges().remove(f.edge());
+            } else if (f.controllerIsTo()) {
+                f.edge().setToPortId(newPortId);
+            } else {
+                f.edge().setFromPortId(newPortId);
+            }
+        }
+        changed();
+        return mapping;
     }
 
     /** Сдвигает сквозные (сценовые) номера портов уже сохранённых цепочек
@@ -2123,6 +2515,34 @@ public class AppModel {
         changed();
     }
 
+    /** «Расставить блоки»: авторасстановка ВСЕХ блоков открытого листа режима {@code mode} колонками
+     *  слева направо по типу оборудования (правила — {@link
+     *  com.vjstb.ledscheme.service.schemalayout.SchemaAutoArrange}), одна запись отмены. Связи с
+     *  ручными изломами ({@link EdgeRouteMode#MANUAL}) после переноса блоков повисли бы в воздухе —
+     *  они переводятся в «Авто под 90°» с очисткой изломов (как «Перетрассировать»); автоматические и
+     *  прямые связи не затрагиваются. Возвращает число перемещённых блоков. */
+    public int arrangeSchemaNodes(SchemaMode mode) {
+        java.util.Map<SchemaNode, double[]> positions =
+                com.vjstb.ledscheme.service.schemalayout.SchemaAutoArrange.arrange(
+                        schemaNodesForCurrentScene(mode), mode);
+        if (positions.isEmpty()) {
+            return 0;
+        }
+        pushUndo("Расстановка блоков схемы");
+        positions.forEach((node, xy) -> {
+            node.setX(xy[0]);
+            node.setY(xy[1]);
+        });
+        for (SchemaEdge edge : schemaEdgesForCurrentScene(mode)) {
+            if (edge.effectiveRouteMode() == EdgeRouteMode.MANUAL) {
+                edge.setRouteMode(EdgeRouteMode.AUTO);
+                edge.setWaypoints(List.of());
+            }
+        }
+        changed();
+        return positions.size();
+    }
+
     private static final double SCHEMA_NODE_MIN_WIDTH = 110;
     private static final double SCHEMA_NODE_MIN_HEIGHT = 44;
 
@@ -3148,6 +3568,84 @@ public class AppModel {
         return union;
     }
 
+    // ---- серии оборудования (запрос 2026-10-02: H-серия Novastar, VFC Disguise D3) ----
+
+    /** Общие серии (с сервера) ++ личные. */
+    public List<EquipmentSeries> getEquipmentSeries() {
+        List<EquipmentSeries> union = new ArrayList<>(workspace.getSharedEquipmentSeries());
+        union.addAll(workspace.getEquipmentSeries());
+        return union;
+    }
+
+    /** Серия модели ({@link EquipmentPreset#getSeriesId()}) или {@code null}: модель вне серии либо серии
+     *  (ещё) нет в локальной библиотеке — тогда модель работает только со своими картами. */
+    public EquipmentSeries seriesOf(EquipmentPreset preset) {
+        if (preset == null || preset.getSeriesId() == null) {
+            return null;
+        }
+        for (EquipmentSeries s : getEquipmentSeries()) {
+            if (s.getId().equals(preset.getSeriesId())) {
+                return s;
+            }
+        }
+        return null;
+    }
+
+    /** Карты-шаблоны, доступные модели для сборки узла: карты её серии, затем собственные карты модели
+     *  (карта с повторяющимся id берётся один раз). Везде, где раньше брали {@code preset.getCards()}
+     *  как «библиотеку карт для сборки», нужно это. */
+    public List<SchemaCard> cardTemplatesOf(EquipmentPreset preset) {
+        List<SchemaCard> result = new ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        EquipmentSeries series = seriesOf(preset);
+        if (series != null) {
+            for (SchemaCard c : series.getCards()) {
+                if (seen.add(c.getId())) {
+                    result.add(c);
+                }
+            }
+        }
+        for (SchemaCard c : preset.getCards()) {
+            if (seen.add(c.getId())) {
+                result.add(c);
+            }
+        }
+        return result;
+    }
+
+    /** Карта принадлежит серии модели (а не самой модели) — такие карты правятся только в админ-консоли. */
+    public boolean isSeriesCard(EquipmentPreset preset, String cardId) {
+        EquipmentSeries series = seriesOf(preset);
+        return series != null && series.getCards().stream().anyMatch(c -> c.getId().equals(cardId))
+                && preset.getCards().stream().noneMatch(c -> c.getId().equals(cardId));
+    }
+
+    /** Резолвит id шаблонов (с повторами, в порядке размещения) в карты-шаблоны модели; неизвестные id
+     *  пропускаются. */
+    private List<SchemaCard> resolveTemplates(EquipmentPreset preset, List<String> templateIds) {
+        List<SchemaCard> templates = cardTemplatesOf(preset);
+        List<SchemaCard> result = new ArrayList<>();
+        for (String id : templateIds) {
+            for (SchemaCard t : templates) {
+                if (t.getId().equals(id)) {
+                    result.add(t);
+                    break;
+                }
+            }
+        }
+        return result;
+    }
+
+    /** Жёсткий лимит модели на число входных/выходных карт: бросает {@link IllegalArgumentException}
+     *  с понятным текстом, если набор карт превышает лимиты (диалог сборки не даёт превысить, это
+     *  страховка для остальных путей). */
+    private void requireWithinCardLimits(EquipmentPreset preset, List<SchemaCard> cards) {
+        String problem = CardLoadout.problem(preset, cards);
+        if (problem != null) {
+            throw new IllegalArgumentException(problem);
+        }
+    }
+
     public boolean isSharedEquipmentPreset(String id) {
         return id != null && workspace.getSharedEquipmentPresets().stream().anyMatch(p -> p.getId().equals(id));
     }
@@ -3325,6 +3823,16 @@ public class AppModel {
 
     public void deleteEquipmentPreset(EquipmentPreset preset) {
         workspace.getEquipmentPresets().remove(preset);
+        changed();
+    }
+
+    /** Серия оборудования модели и лимиты её карт (запрос 2026-10-02): {@code seriesId == null} — вне
+     *  серии (лимиты тогда сбрасываются), {@code null}-лимит — без ограничения. */
+    public void setEquipmentPresetSeries(EquipmentPreset preset, String seriesId, Integer maxInputCards,
+                                          Integer maxOutputCards) {
+        preset.setSeriesId(seriesId);
+        preset.setMaxInputCards(seriesId == null ? null : maxInputCards);
+        preset.setMaxOutputCards(seriesId == null ? null : maxOutputCards);
         changed();
     }
 
@@ -4008,6 +4516,10 @@ public class AppModel {
                             workspace.getNetworkDeviceTypes(), dto, NetworkDeviceType.class,
                             NetworkDeviceType::getId, NetworkDeviceType::setId, NetworkDeviceType::getName,
                             NO_REFERENCE_MIGRATION);
+                    case "EQUIPMENT_SERIES" -> applyOne(workspace.getSharedEquipmentSeries(),
+                            workspace.getEquipmentSeries(), dto, EquipmentSeries.class,
+                            EquipmentSeries::getId, EquipmentSeries::setId, EquipmentSeries::getName,
+                            NO_REFERENCE_MIGRATION);
                     case "EQUIPMENT_CUSTOM_CATEGORY" -> applyCustomCategory(dto);
                     case "GUIDE_TEXT" -> applySingletonSections(dto, workspace.getLibrary()::setGuideSections);
                     case "ONBOARDING_TEXT" -> applySingletonSections(dto, workspace.getLibrary()::setOnboardingSections);
@@ -4062,6 +4574,7 @@ public class AppModel {
             case "CASE" -> workspace.getSharedCaseTypes().removeIf(c -> c.getId().equals(dto.id()));
             case "VEHICLE" -> workspace.getSharedVehicleTypes().removeIf(v -> v.getId().equals(dto.id()));
             case "NETWORK_DEVICE" -> workspace.getSharedNetworkDeviceTypes().removeIf(t -> t.getId().equals(dto.id()));
+            case "EQUIPMENT_SERIES" -> workspace.getSharedEquipmentSeries().removeIf(s -> s.getId().equals(dto.id()));
             case "EQUIPMENT_CUSTOM_CATEGORY" ->
                     workspace.getServerCustomEquipmentCategoriesById().remove(dto.id()) != null;
             default -> false; // остальные виды (тексты/сценарии/параметры) не поддерживают удаление синком
@@ -4626,6 +5139,27 @@ public class AppModel {
         return card;
     }
 
+    /** Копирует карты-шаблоны {@code sources} (обычно из ДРУГОГО оборудования) в {@code target}
+     *  (запрос 2026-10-02: «возможность копировать карты между оборудованием»): каждая копия получает
+     *  новый id карты и новые id портов, исходные пресеты не меняются; одна запись изменения на все
+     *  карты. Возвращает добавленные карты в порядке источника. */
+    public List<SchemaCard> copyCardsToPreset(EquipmentPreset target, List<SchemaCard> sources) {
+        List<SchemaCard> added = new ArrayList<>();
+        for (SchemaCard src : sources) {
+            SchemaCard c = src.copy();
+            c.setId(java.util.UUID.randomUUID().toString());
+            for (CardPort p : c.getPorts()) {
+                p.setId(java.util.UUID.randomUUID().toString());
+            }
+            target.getCards().add(c);
+            added.add(c);
+        }
+        if (!added.isEmpty()) {
+            changed();
+        }
+        return added;
+    }
+
     public void removeCardFromPreset(EquipmentPreset preset, String cardId) {
         preset.getCards().removeIf(c -> c.getId().equals(cardId));
         changed();
@@ -4720,14 +5254,11 @@ public class AppModel {
      *  id шаблонов (preset.getCards()[i].getId()), с повторами при дублях. */
     public SchemaNode addSchemaNodeFromPresetWithCardOrder(SchemaMode mode, EquipmentPreset preset,
                                                             double x, double y, List<String> templateIdsInOrder) {
+        List<SchemaCard> picked = resolveTemplates(preset, templateIdsInOrder);
+        requireWithinCardLimits(preset, picked);
         SchemaNode node = addSchemaNode(mode, preset.getCategory(), preset.getName(), x, y, null);
-        for (String templateId : templateIdsInOrder) {
-            for (SchemaCard template : preset.getCards()) {
-                if (template.getId().equals(templateId)) {
-                    node.getCards().add(duplicateCardWithFreshIds(template));
-                    break;
-                }
-            }
+        for (SchemaCard template : picked) {
+            node.getCards().add(duplicateCardWithFreshIds(template));
         }
         for (CardPort p : preset.getPowerConnectors()) {
             node.getPowerConnectors().add(duplicatePortWithFreshId(p));

@@ -1718,15 +1718,13 @@ public class SchemaCanvasPanel extends JPanel {
         if (a == null || b == null) {
             return null;
         }
-        boolean aIsCabinetEnd = edge.getFromCabinetInstanceId() != null;
-        boolean bIsCabinetEnd = edge.getToCabinetInstanceId() != null;
         // Ориентировочная точка КАЖДОГО конца — используется только как "куда
         // смотреть" для гнезда-БЕЗ-гнезда на ДРУГОМ конце (см. routeEndpointFor
         // ниже) — тот же порядок отката, что и aSocket/bSocket в endpointsFor.
         double[] aRef = referencePointFor(a, edge.getFromPortId(), edge.getFromCabinetInstanceId());
         double[] bRef = referencePointFor(b, edge.getToPortId(), edge.getToCabinetInstanceId());
-        RouteEndpoint ea = routeEndpointFor(a, edge.getFromPortId(), edge.getFromCabinetInstanceId(), edge, bRef);
-        RouteEndpoint eb = routeEndpointFor(b, edge.getToPortId(), edge.getToCabinetInstanceId(), edge, aRef);
+        RouteEndpoint ea = routeEndpointFor(a, edge.getFromPortId(), edge.getFromCabinetInstanceId(), edge, bRef, false);
+        RouteEndpoint eb = routeEndpointFor(b, edge.getToPortId(), edge.getToCabinetInstanceId(), edge, aRef, true);
         if (ea == null || eb == null) {
             return null;
         }
@@ -1738,7 +1736,7 @@ public class SchemaCanvasPanel extends JPanel {
             // узел по-прежнему приходится исключать целиком, иначе исходная точка
             // трассировки сама оказалась бы "внутри" препятствия и авто-трассировка
             // сразу отказала бы (откат на fallback/прямую).
-            if ((n == a && aIsCabinetEnd) || (n == b && bIsCabinetEnd)) {
+            if ((n == a && ea.insideNode()) || (n == b && eb.insideNode())) {
                 continue;
             }
             if (n == a || n == b) {
@@ -1766,7 +1764,19 @@ public class SchemaCanvasPanel extends JPanel {
         }
         var result = com.vjstb.ledscheme.service.schemalayout.OrthogonalRouter.route(
                 ea.x(), ea.y(), ea.side(), eb.x(), eb.y(), eb.side(), obstacles, stub);
-        return result.points();
+        List<double[]> points = result.points();
+        // принудительная грань входа в блок экрана (см. forcedEntrySide): первая/последняя точка маршрута
+        // лежит на грани блока строго напротив гнезда-кабинета — заменяем её самим гнездом (отрезок
+        // перпендикулярен грани, лежит под заливкой узла)
+        if (ea.inner() != null && !points.isEmpty()) {
+            points = new ArrayList<>(points);
+            points.set(0, ea.inner());
+        }
+        if (eb.inner() != null && !points.isEmpty()) {
+            points = new ArrayList<>(points);
+            points.set(points.size() - 1, eb.inner());
+        }
+        return points;
     }
 
     /** Прямоугольник СВОЕГО ЖЕ узла как препятствие (см. {@link #autoRoutePoints}) —
@@ -1816,20 +1826,70 @@ public class SchemaCanvasPanel extends JPanel {
      *  прямой линии (тот же путь внутри блока не виден за его заливкой), а с точки
      *  выхода из блока трассировка уже полноценно огибает препятствия под 90°, как
      *  и для обычных гнёзд. */
-    private record RouteEndpoint(double x, double y, NodeSide side) {
+    /** @param inner       не {@code null} — реальная точка гнезда-кабинета ВНУТРИ блока экрана при
+     *                     принудительной грани входа (см. {@link #routeEndpointFor}): маршрут начинается на
+     *                     этой грани, а в готовую ломаную точка добавляется первой/последней —
+     *                     отрезок от неё до грани лежит под заливкой блока
+     *  @param insideNode  гнездо-кабинет лежит глубоко внутри узла и принудительная грань не применялась —
+     *                     свой узел из препятствий исключается целиком (как и раньше) */
+    private record RouteEndpoint(double x, double y, NodeSide side, double[] inner, boolean insideNode) {
+        RouteEndpoint(double x, double y, NodeSide side) {
+            this(x, y, side, null, false);
+        }
+    }
+
+    /** Принудительная грань входа в блок экрана (запрос пользователя 2026-10-02: «чтобы линии
+     *  старались заходить в блоки экранов снизу — так визуально красивее», настройка «Вход связей в
+     *  блоки экранов», по умолчанию — снизу): только для КОНЦА-ПРИЁМНИКА связи; {@code null} — не
+     *  принудительно (ближайшая грань). Источник/выход экрана остаётся на своей стороне — иначе связь
+     *  экран→экран торчала бы обоими концами вниз. */
+    private NodeSide forcedEntrySide(SchemaNode node, boolean entering) {
+        if (!entering || node.getType() != SchemaNodeType.SCREEN) {
+            return null;
+        }
+        return settings.activeProfile().getSchemaScreenEntrySide(mode).nodeSide();
+    }
+
+    /** Точка на грани {@code side} блока «под» точкой {@code (x, y)}; {@code clamp} — не ближе
+     *  {@code inset} к углу (для связи без гнезда, чтобы линия не липла к рамке в самом углу). */
+    private static double[] borderPointOnSide(SchemaNode node, NodeSide side, double x, double y, boolean clamp) {
+        double left = node.getX(), right = node.getX() + node.getWidth();
+        double top = node.getY(), bottom = node.getY() + node.getHeight();
+        double inset = clamp ? Math.min(16, Math.min(node.getWidth(), node.getHeight()) / 4.0) : 0;
+        double cx = Math.max(left + inset, Math.min(right - inset, x));
+        double cy = Math.max(top + inset, Math.min(bottom - inset, y));
+        return switch (side) {
+            case BOTTOM -> new double[]{cx, bottom};
+            case TOP -> new double[]{cx, top};
+            case LEFT -> new double[]{left, cy};
+            case RIGHT -> new double[]{right, cy};
+        };
     }
 
     private RouteEndpoint routeEndpointFor(SchemaNode node, String portId, String cabinetInstanceId,
-                                            SchemaEdge forEdge, double[] aim) {
+                                            SchemaEdge forEdge, double[] aim, boolean entering) {
+        NodeSide forced = forcedEntrySide(node, entering);
         if (cabinetInstanceId != null) {
             Point p = cabinetSocketPosition(node, cabinetInstanceId);
             if (p == null) {
                 return null;
             }
-            return new RouteEndpoint(p.x, p.y, nearestSide(node, p.x, p.y));
+            if (forced != null) {
+                // маршрут стартует на выбранной грани блока прямо напротив гнезда; участок «гнездо → грань»
+                // лежит под заливкой узла и подставляется в ломаную как есть (см. autoRoutePoints)
+                double[] b = borderPointOnSide(node, forced, p.x, p.y, false);
+                return new RouteEndpoint(b[0], b[1], forced, new double[]{p.x, p.y}, false);
+            }
+            return new RouteEndpoint(p.x, p.y, nearestSide(node, p.x, p.y), null, true);
         }
         if (portId == null) {
             double[] center = {node.getX() + node.getWidth() / 2.0, node.getY() + node.getHeight() / 2.0};
+            if (forced != null) {
+                // точка на выбранной грани строго напротив другого конца, но не в самом углу —
+                // линия заходит перпендикулярно грани, а не по диагонали рамки
+                double[] b = borderPointOnSide(node, forced, aim[0], aim[1], true);
+                return new RouteEndpoint(b[0], b[1], forced);
+            }
             double[] p = clipToBorder(node, center, aim);
             return new RouteEndpoint(p[0], p[1], nearestSide(node, p[0], p[1]));
         }
@@ -3749,8 +3809,7 @@ public class SchemaCanvasPanel extends JPanel {
             if (hasPorts) {
                 boolean hasTopPins = nodeLayout(n).pins().stream()
                         .anyMatch(p -> p.side() == com.vjstb.ledscheme.model.NodeSide.TOP);
-                double topOffset = hasTopPins
-                        ? com.vjstb.ledscheme.service.schemalayout.SchemaLayoutMetrics.HORIZONTAL_SIDE_DEPTH : 0;
+                double topOffset = hasTopPins ? horizontalDepth(n) : 0;
                 String clippedTitle = clipToWidth(g2, title, nw - 16);
                 int titleW = g2.getFontMetrics().stringWidth(clippedTitle);
                 int titleX = (int) n.getX() + (nw - titleW) / 2;
@@ -4340,19 +4399,42 @@ public class SchemaCanvasPanel extends JPanel {
         var layout = nodeLayout(n);
         double ox = n.getX(), oy = n.getY();
         Integer nodeFontSize = model.schemaNodeFontSizeOverride(n);
+        double depth = horizontalDepth(n);
         for (var bay : layout.bays()) {
-            drawBayBackground(g2, bay, layout.pins(), ox, oy, (int) n.getWidth(), (int) n.getHeight());
+            drawBayBackground(g2, bay, layout.pins(), ox, oy, (int) n.getWidth(), (int) n.getHeight(), depth);
         }
         for (var bay : layout.bays()) {
-            drawBay(g2, bay, layout.pins(), ox, oy, (int) n.getWidth(), (int) n.getHeight(), nodeFontSize);
+            drawBay(g2, bay, layout.pins(), ox, oy, (int) n.getWidth(), (int) n.getHeight(), nodeFontSize, depth);
         }
-        drawGroupBrackets(g2, layout, ox, oy, (int) n.getHeight());
+        drawGroupBrackets(g2, layout, ox, oy, (int) n.getHeight(), nodeFontSize, depth);
         for (var pin : layout.pins()) {
             drawPin(g2, n, pin, ox, oy, nodeFontSize);
         }
         for (var overflow : layout.overflow()) {
-            drawOverflow(g2, overflow, ox, oy, (int) n.getWidth(), (int) n.getHeight());
+            drawOverflow(g2, overflow, ox, oy, (int) n.getWidth(), (int) n.getHeight(), depth);
         }
+    }
+
+    /** Глубина полосы TOP/BOTTOM (две строки: номера гнёзд + скобка с названием группы) —
+     *  ровно та же величина, что резервирует {@link
+     *  com.vjstb.ledscheme.service.schemalayout.NodePortLayout} (масштаб от размера шрифта
+     *  узла и «Отступа подписей»). Раньше отрисовка брала константу {@code
+     *  HORIZONTAL_SIDE_DEPTH} = 28, а раскладка при стандартных настройках резервировала 32:
+     *  скобка и название группы вставали на строку номеров гнёзд (баг-репорт со скриншотом
+     *  2026-10-03, нижние карточки «Genlock (SDI)» и «Genlock Tri-Level»). */
+    private double horizontalDepth(SchemaNode n) {
+        return com.vjstb.ledscheme.service.schemalayout.NodePortLayout.horizontalSideDepth(
+                model.effectiveNodeFontSize(n), labelPaddingPx());
+    }
+
+    /** Шрифт подписей узла для скобок/шапок/номеров TOP/BOTTOM: тот же, что у {@link #drawPin}
+     *  (у отрисовки скобок собственного размера шрифта раньше не было вовсе). */
+    private Font withNodeFont(Graphics2D g2, Integer nodeFontSize) {
+        Font original = g2.getFont();
+        if (nodeFontSize != null) {
+            g2.setFont(original.deriveFont((float) nodeFontSize));
+        }
+        return original;
     }
 
     /** Общее название развёрнутой группы гнёзд на TOP/BOTTOM — рисуется ОДИН раз
@@ -4364,8 +4446,9 @@ public class SchemaCanvasPanel extends JPanel {
      *  же {@code CardPort} всегда идут подряд (гарантия {@link
      *  com.vjstb.ledscheme.service.schemalayout.NodePortLayout}). */
     private void drawGroupBrackets(Graphics2D g2, com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Result layout,
-                                    double ox, double oy, int nh) {
+                                    double ox, double oy, int nh, Integer nodeFontSize, double depth) {
         List<com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Pin> pins = layout.pins();
+        Font original = withNodeFont(g2, nodeFontSize);
         int i = 0;
         while (i < pins.size()) {
             var p = pins.get(i);
@@ -4382,17 +4465,18 @@ public class SchemaCanvasPanel extends JPanel {
             double xStart = ox + pins.get(i).x();
             double xEnd = ox + pins.get(runEnd - 1).x();
             boolean top = p.side() == com.vjstb.ledscheme.model.NodeSide.TOP;
-            int bracketY = (int) (oy + (top
-                    ? com.vjstb.ledscheme.service.schemalayout.SchemaLayoutMetrics.HORIZONTAL_SIDE_DEPTH - 10
-                    : nh - com.vjstb.ledscheme.service.schemalayout.SchemaLayoutMetrics.HORIZONTAL_SIDE_DEPTH + 4));
+            // Вторая строка полосы (глубина = две строки): у TOP — под строкой номеров, у BOTTOM —
+            // над ней. Скобка у верхней кромки строки, подпись сразу под скобкой.
+            int bracketY = (int) Math.round(oy + (top ? depth / 2 + 1 : nh - depth + 1));
             g2.setColor(style.cardBlockHeaderText);
             g2.setStroke(new BasicStroke(1f));
             g2.drawLine((int) xStart, bracketY, (int) xEnd, bracketY);
             String label = clipToWidth(g2, p.port().getConnectorType(), (int) (xEnd - xStart) + 20);
             int tw = g2.getFontMetrics().stringWidth(label);
-            g2.drawString(label, (int) ((xStart + xEnd) / 2 - tw / 2.0), bracketY + 9 + labelPaddingPx());
+            g2.drawString(label, (int) ((xStart + xEnd) / 2 - tw / 2.0), bracketY + 2 + g2.getFontMetrics().getAscent());
             i = runEnd;
         }
+        g2.setFont(original);
     }
 
     /** Рамка-подложка отсека карты — визуально выделяет границы карты внутри блока
@@ -4411,7 +4495,7 @@ public class SchemaCanvasPanel extends JPanel {
      *  декоративной рамки. */
     private void drawBayBackground(Graphics2D g2, com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Bay bay,
                                     List<com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Pin> pins,
-                                    double ox, double oy, int nw, int nh) {
+                                    double ox, double oy, int nw, int nh, double sideDepth) {
         if (bay.label() == null) {
             return;
         }
@@ -4421,7 +4505,7 @@ public class SchemaCanvasPanel extends JPanel {
         g2.setColor(style.cardBlockBorder);
         g2.setStroke(new BasicStroke(1f));
         if (horizontal) {
-            int depth = (int) com.vjstb.ledscheme.service.schemalayout.SchemaLayoutMetrics.HORIZONTAL_SIDE_DEPTH;
+            int depth = (int) Math.round(sideDepth);
             int y = bay.side() == com.vjstb.ledscheme.model.NodeSide.TOP ? (int) oy : (int) (oy + nh - depth);
             int x = (int) (ox + bay.alongStart());
             int w = Math.max(1, (int) (bay.alongEnd() - bay.alongStart()));
@@ -4475,7 +4559,7 @@ public class SchemaCanvasPanel extends JPanel {
      *  используется унаследованный шрифт. Отступ — см. {@link #labelPaddingPx()}. */
     private void drawBay(Graphics2D g2, com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Bay bay,
                           List<com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Pin> pins,
-                          double ox, double oy, int nw, int nh, Integer nodeFontSize) {
+                          double ox, double oy, int nw, int nh, Integer nodeFontSize, double sideDepth) {
         if (bay.label() == null) {
             return;
         }
@@ -4505,10 +4589,8 @@ public class SchemaCanvasPanel extends JPanel {
                 int tw = g2.getFontMetrics().stringWidth(clipped);
                 int textX = (int) (ox + (bay.alongStart() + bay.alongEnd()) / 2 - tw / 2.0);
                 boolean top = bay.side() == com.vjstb.ledscheme.model.NodeSide.TOP;
-                int bracketY = (int) (oy + (top
-                        ? com.vjstb.ledscheme.service.schemalayout.SchemaLayoutMetrics.HORIZONTAL_SIDE_DEPTH - 10
-                        : nh - com.vjstb.ledscheme.service.schemalayout.SchemaLayoutMetrics.HORIZONTAL_SIDE_DEPTH + 4));
-                int textY = bracketY + 9 + pad;
+                int bracketY = (int) Math.round(oy + (top ? sideDepth / 2 + 1 : nh - sideDepth + 1));
+                int textY = bracketY + 2 + g2.getFontMetrics().getAscent();
                 g2.setStroke(new BasicStroke(1f));
                 g2.drawLine((int) (ox + bay.alongStart()), bracketY, (int) (ox + bay.alongEnd()), bracketY);
                 g2.drawString(clipped, textX, textY);
@@ -4585,14 +4667,17 @@ public class SchemaCanvasPanel extends JPanel {
                 g2.drawString(clipped, cx - PIN_DOT_D - pad - fm.stringWidth(clipped),
                         cy + fm.getAscent() / 2 - 1);
             }
+            // Номера — в ПЕРВОЙ строке полосы (у самой кромки, сразу за точкой-гнездом), скобка с
+            // названием группы — во второй; прежнее «PIN_DOT_D + 2 + pad» опускало цифры в
+            // строку скобки (см. horizontalDepth).
             case TOP -> {
                 String clipped = clipToWidth(g2, label, topBottomLabelMaxWidth(pin));
                 g2.drawString(clipped, cx - fm.stringWidth(clipped) / 2,
-                        cy + PIN_DOT_D + pad + fm.getAscent());
+                        cy + PIN_DOT_D / 2 + 1 + fm.getAscent());
             }
             case BOTTOM -> {
                 String clipped = clipToWidth(g2, label, topBottomLabelMaxWidth(pin));
-                g2.drawString(clipped, cx - fm.stringWidth(clipped) / 2, cy - PIN_DOT_D - 2 - pad);
+                g2.drawString(clipped, cx - fm.stringWidth(clipped) / 2, cy - PIN_DOT_D / 2 - 1 - pad);
             }
         }
         g2.setFont(original);
@@ -4655,7 +4740,7 @@ public class SchemaCanvasPanel extends JPanel {
     }
 
     private void drawOverflow(Graphics2D g2, com.vjstb.ledscheme.service.schemalayout.NodePortLayout.Overflow o,
-                               double ox, double oy, int nw, int nh) {
+                               double ox, double oy, int nw, int nh, double sideDepth) {
         g2.setColor(style.cardBlockHeaderText);
         switch (o.side()) {
             case LEFT -> g2.drawString(o.text(), (int) ox + 4, (int) (oy + nh) - 6);
@@ -4663,8 +4748,7 @@ public class SchemaCanvasPanel extends JPanel {
                 int w = g2.getFontMetrics().stringWidth(o.text());
                 g2.drawString(o.text(), (int) (ox + nw) - 4 - w, (int) (oy + nh) - 6);
             }
-            case TOP -> g2.drawString(o.text(), (int) ox + 4,
-                    (int) (oy + com.vjstb.ledscheme.service.schemalayout.SchemaLayoutMetrics.HORIZONTAL_SIDE_DEPTH) - 2);
+            case TOP -> g2.drawString(o.text(), (int) ox + 4, (int) (oy + sideDepth) - 2);
             case BOTTOM -> g2.drawString(o.text(), (int) ox + 4, (int) (oy + nh) - 2);
         }
     }
@@ -4889,7 +4973,9 @@ public class SchemaCanvasPanel extends JPanel {
     /** "N×Тип[, Lм]" для чипа шины — N это СУММА {@code wireCount} всех связей
      *  пучка (реальное число проводов: каждая связь и сама может нести несколько
      *  одинаковых, не только одну на пучок), метраж показан, только если у ВСЕХ
-     *  связей пучка один и тот же (иначе неясно, какой из них показать). */
+     *  связей пучка один и тот же (иначе неясно, какой из них показать). Неподписанная
+     *  связь пучка считается за один кабель общего типа пучка — спецификация считает так
+     *  же ({@code SceneSpecCalc#wiresOf}, баг-репорт 2026-10-03, проект «Лемана»). */
     private static String bundleLabelText(List<SchemaEdge> bundle, String sharedType) {
         int totalCount = 0;
         Double sharedLength = null;

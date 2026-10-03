@@ -2,12 +2,16 @@ package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.model.ControllerInstance;
 import com.vjstb.ledscheme.model.EquipmentPreset;
+import com.vjstb.ledscheme.model.EquipmentSeries;
+import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.SchemaNodeType;
 import com.vjstb.ledscheme.service.AppModel;
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
 import java.awt.Window;
+import java.util.ArrayList;
+import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
@@ -18,6 +22,8 @@ import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JSpinner;
+import javax.swing.SpinnerNumberModel;
 import javax.swing.JTextField;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
@@ -51,6 +57,21 @@ public class EquipmentPresetDialog extends JDialog {
     private final JLabel subcategoryLabel = new JLabel("Подкатегория");
     private final JComboBox<String> companyField = new JComboBox<>();
 
+    // ---- серия оборудования (запрос 2026-10-02): список серий этой категории + лимиты карт ----
+    private final JComboBox<EquipmentSeries> seriesField = new JComboBox<>();
+    private final JLabel seriesLabel = new JLabel("Серия");
+    private final JSpinner maxInputSpinner = new JSpinner(new SpinnerNumberModel(-1, -1, 99, 1));
+    private final JSpinner maxOutputSpinner = new JSpinner(new SpinnerNumberModel(-1, -1, 99, 1));
+    private final JLabel maxInputLabel = new JLabel("Макс. входных карт (-1 = без лимита)");
+    private final JLabel maxOutputLabel = new JLabel("Макс. выходных карт (-1 = без лимита)");
+    private final AppModel model;
+    private final boolean seriesApplicable;
+    /** Серия, записанная в пресете, и менял ли её пользователь: серия может отсутствовать в локальной
+     *  библиотеке (ещё не синхронизирована) — тогда сохранение не должно молча отвязывать пресет. */
+    private final String existingSeriesId;
+    private boolean seriesTouched;
+    private boolean refillingSeries;
+
     // ---- видно только для category == CONTROLLER (перенесено из ControllerTypeDialog) ----
     private final JPanel controllerFieldsPanel;
     private final JTextField vendorField = new JTextField();
@@ -63,7 +84,8 @@ public class EquipmentPresetDialog extends JDialog {
 
     public record Result(SchemaNodeType category, String name, String description, String customCategoryLabel,
                           String company, String vendor, int portCount, double portBandwidthMbps,
-                          int inputPortCount, boolean loopPort) {
+                          int inputPortCount, boolean loopPort, String seriesId, Integer maxInputCards,
+                          Integer maxOutputCards) {
     }
 
     private Result result;
@@ -78,8 +100,18 @@ public class EquipmentPresetDialog extends JDialog {
      *  первую по счёту категорию (SOURCE) вместо ожидаемой Y. Игнорируется при
      *  редактировании существующего пресета (тогда категория берётся из него). */
     public EquipmentPresetDialog(Window owner, AppModel model, EquipmentPreset existing, SchemaNodeType initialCategory) {
+        this(owner, model, existing, initialCategory, existing != null ? existing.getMode() : SchemaMode.SIGNAL);
+    }
+
+    /** {@code mode} — режим схемы библиотеки, в которой создаётся/правится пресет: серии (общий каталог
+     *  карт) бывают только у оборудования СИГНАЛА, для питания строки серии нет. */
+    public EquipmentPresetDialog(Window owner, AppModel model, EquipmentPreset existing, SchemaNodeType initialCategory,
+                                  SchemaMode mode) {
         super(owner, existing == null ? "Новый пресет оборудования" : "Редактирование пресета",
                 ModalityType.APPLICATION_MODAL);
+        this.model = model;
+        this.seriesApplicable = mode == SchemaMode.SIGNAL;
+        this.existingSeriesId = existing != null ? existing.getSeriesId() : null;
 
         companyField.setEditable(true);
         companyField.setModel(new javax.swing.DefaultComboBoxModel<>(model.getKnownCompanies().toArray(new String[0])));
@@ -115,7 +147,31 @@ public class EquipmentPresetDialog extends JDialog {
             subcategoryField.setVisible(isCustom);
             controllerFieldsPanel.setVisible(categoryField.getSelectedItem() == SchemaNodeType.CONTROLLER);
         };
-        categoryField.addActionListener(e -> syncCategoryVisibility.run());
+        categoryField.addActionListener(e -> {
+            syncCategoryVisibility.run();
+            refillSeries(null);
+        });
+        seriesField.setRenderer(new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public java.awt.Component getListCellRendererComponent(javax.swing.JList<?> list, Object value,
+                    int index, boolean isSelected, boolean cellHasFocus) {
+                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                setText(value instanceof EquipmentSeries s ? s.getName() : "— без серии —");
+                return this;
+            }
+        });
+        seriesField.setToolTipText("Серия даёт модели общий каталог карт (карты серии доступны при сборке узла"
+                + " и в «Картах…»); сами серии создаются в админ-консоли.");
+        seriesField.addActionListener(e -> {
+            if (!refillingSeries) {
+                seriesTouched = true;
+            }
+            syncSeriesVisibility();
+        });
+        String limitTip = "Сколько карт можно собрать в узле этой модели (-1 — без ограничения). Смешанная карта"
+                + " считается и во входных, и в выходных.";
+        maxInputSpinner.setToolTipText(limitTip);
+        maxOutputSpinner.setToolTipText(limitTip);
 
         JPanel form = new JPanel(new GridLayout(0, 2, 8, 6));
         form.setBorder(BorderFactory.createEmptyBorder(14, 14, 14, 14));
@@ -129,6 +185,12 @@ public class EquipmentPresetDialog extends JDialog {
         form.add(descriptionField);
         form.add(subcategoryLabel);
         form.add(subcategoryField);
+        form.add(seriesLabel);
+        form.add(seriesField);
+        form.add(maxInputLabel);
+        form.add(maxInputSpinner);
+        form.add(maxOutputLabel);
+        form.add(maxOutputSpinner);
 
         if (existing != null) {
             categoryField.setSelectedItem(existing.getCategory());
@@ -146,10 +208,13 @@ public class EquipmentPresetDialog extends JDialog {
                     ControllerInstance.REFERENCE_HZ, ControllerInstance.REFERENCE_BIT_DEPTH)));
             inputPortsField.setText(String.valueOf(existing.getInputPortCount()));
             loopPortCheck.setSelected(existing.isLoopPort());
+            maxInputSpinner.setValue(existing.getMaxInputCards() != null ? existing.getMaxInputCards() : -1);
+            maxOutputSpinner.setValue(existing.getMaxOutputCards() != null ? existing.getMaxOutputCards() : -1);
         } else if (initialCategory != null) {
             categoryField.setSelectedItem(initialCategory);
         }
         syncCategoryVisibility.run();
+        refillSeries(existingSeriesId);
 
         JButton ok = new JButton("Сохранить");
         ok.addActionListener(e -> onOk());
@@ -171,6 +236,55 @@ public class EquipmentPresetDialog extends JDialog {
         getRootPane().setDefaultButton(ok);
         pack();
         setLocationRelativeTo(owner);
+    }
+
+    /** Серии, доступные для выбранной категории оборудования (серия привязана к категории: серия
+     *  контроллеров — только контроллерам, серия медиасерверов — только серверам). */
+    private List<EquipmentSeries> seriesForCategory(SchemaNodeType category) {
+        List<EquipmentSeries> result = new ArrayList<>();
+        for (EquipmentSeries s : model.getEquipmentSeries()) {
+            if (s.getCategory() == category) {
+                result.add(s);
+            }
+        }
+        return result;
+    }
+
+    /** Пересобирает выпадающий список серий под выбранную категорию; {@code selectId} — какую выбрать. */
+    private void refillSeries(String selectId) {
+        refillingSeries = true;
+        try {
+            seriesField.removeAllItems();
+            seriesField.addItem(null);
+            EquipmentSeries toSelect = null;
+            for (EquipmentSeries s : seriesForCategory((SchemaNodeType) categoryField.getSelectedItem())) {
+                seriesField.addItem(s);
+                if (s.getId().equals(selectId)) {
+                    toSelect = s;
+                }
+            }
+            seriesField.setSelectedItem(toSelect);
+        } finally {
+            refillingSeries = false;
+        }
+        syncSeriesVisibility();
+    }
+
+    /** Строка серии видна, только если для категории есть серии (или пресет уже записан в серию), лимиты
+     *  — когда серия выбрана. Для питания серий нет. */
+    private void syncSeriesVisibility() {
+        boolean hasSeries = seriesApplicable
+                && (seriesField.getItemCount() > 1 || existingSeriesId != null);
+        seriesLabel.setVisible(hasSeries);
+        seriesField.setVisible(hasSeries);
+        boolean limits = hasSeries && seriesField.getSelectedItem() != null;
+        maxInputLabel.setVisible(limits);
+        maxInputSpinner.setVisible(limits);
+        maxOutputLabel.setVisible(limits);
+        maxOutputSpinner.setVisible(limits);
+        if (isShowing() || getContentPane().getComponentCount() > 0) {
+            pack();
+        }
     }
 
     /** Блок полей контроллера — буквально перенесён из бывшего ControllerTypeDialog
@@ -280,8 +394,17 @@ public class EquipmentPresetDialog extends JDialog {
                 return;
             }
         }
+        EquipmentSeries series = (EquipmentSeries) seriesField.getSelectedItem();
+        // серия, которой ещё нет в локальной библиотеке, и пользователь её не трогал — не отвязываем
+        String seriesId = !seriesApplicable ? null
+                : series != null ? series.getId()
+                : seriesTouched ? null : existingSeriesId;
+        int maxIn = (Integer) maxInputSpinner.getValue();
+        int maxOut = (Integer) maxOutputSpinner.getValue();
+        boolean limits = seriesId != null;
         result = new Result(category, name, descriptionField.getText().trim(), subcategory,
-                company.isEmpty() ? null : company, vendor, portCount, portBandwidthMbps, inputPortCount, loopPort);
+                company.isEmpty() ? null : company, vendor, portCount, portBandwidthMbps, inputPortCount, loopPort,
+                seriesId, limits && maxIn >= 0 ? maxIn : null, limits && maxOut >= 0 ? maxOut : null);
         dispose();
     }
 

@@ -572,6 +572,112 @@ public class SignalStagePanel extends JPanel {
         return result;
     }
 
+    /** Меню «Заменить…»: что можно поставить вместо выбранного контроллера (подбор и правила —
+     *  {@link com.vjstb.ledscheme.service.AppModel#controllerReplacementOptions}). */
+    private void showReplaceControllerMenu(java.awt.Component anchor) {
+        Screen scr = model.getCurrentScreen();
+        ControllerInstance current = scr != null ? selectedController(scr) : null;
+        if (current == null) {
+            JOptionPane.showMessageDialog(this, "Сначала добавьте контроллер и выберите его в списке.",
+                    "Заменить контроллер", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        var options = model.controllerReplacementOptions(model.getCurrentScene(), current.getId());
+        javax.swing.JPopupMenu menu = new javax.swing.JPopupMenu();
+        javax.swing.JMenuItem header = new javax.swing.JMenuItem("Заменить «" + current.getLabel() + "» на:");
+        header.setEnabled(false);
+        menu.add(header);
+        menu.addSeparator();
+        if (options.suitable().isEmpty()) {
+            javax.swing.JMenuItem none = new javax.swing.JMenuItem("Нет подходящих контроллеров");
+            none.setEnabled(false);
+            menu.add(none);
+        }
+        for (EquipmentPreset p : options.suitable()) {
+            javax.swing.JMenuItem item = new javax.swing.JMenuItem(p.getName() + " (" + p.previewPortCount() + " п.)");
+            item.addActionListener(e -> replaceControllerWith(current, p));
+            menu.add(item);
+        }
+        if (options.hidden() > 0) {
+            menu.addSeparator();
+            javax.swing.JMenuItem hidden = new javax.swing.JMenuItem("Скрыто: " + options.hidden()
+                    + " — мало входов или портов под текущее расключение");
+            hidden.setEnabled(false);
+            menu.add(hidden);
+        }
+        menu.show(anchor, 0, anchor.getHeight());
+    }
+
+    private static String cardsWord(int n) {
+        int mod100 = n % 100;
+        int mod10 = n % 10;
+        if (mod100 >= 11 && mod100 <= 14) {
+            return "карт";
+        }
+        return mod10 == 1 ? "карту" : (mod10 >= 2 && mod10 <= 4 ? "карты" : "карт");
+    }
+
+    private void replaceControllerWith(ControllerInstance current, EquipmentPreset preset) {
+        List<String> cardOrder = null;
+        Scene scene = model.getCurrentScene();
+        if (model.cardTemplatesOf(preset).size() > 1) {
+            // Модульная модель (H-серия): порты появятся только после сборки карт — заранее говорим,
+            // сколько карт нужно, чтобы расключение не сломалось
+            var need = model.minimumCardsToKeepWiring(scene, current.getId(), preset);
+            if (need.occupied() > 0) {
+                String msg;
+                if (need.cardsNeeded() < 0) {
+                    msg = "Занято портов: " + need.occupied() + ". Набрать столько Ethernet-портов у «" + preset.getName()
+                            + "» нельзя" + (need.maxOutputCards() != null
+                            ? " (выходных карт не больше " + need.maxOutputCards() + ")" : "")
+                            + " — если собрать максимум, цепочки этого контроллера будут сброшены.";
+                } else {
+                    msg = "Занято портов: " + need.occupied() + ". Чтобы расключение не сломалось, соберите минимум "
+                            + need.cardsNeeded() + " " + cardsWord(need.cardsNeeded()) + " «" + need.cardName()
+                            + "» (по " + need.portsPerCard() + " портов). При меньшем числе цепочки этого"
+                            + " контроллера будут сброшены.";
+                }
+                JOptionPane.showMessageDialog(this, msg, "Заменить контроллер", JOptionPane.WARNING_MESSAGE);
+            }
+            cardOrder = new com.vjstb.ledscheme.ui.AssembleCardsDialog(
+                    javax.swing.SwingUtilities.getWindowAncestor(this), preset, model.cardTemplatesOf(preset),
+                    preset.getDefaultCardTemplateIds(), "Комплектация — " + preset.getName(),
+                    "Заменить контроллер").showDialog();
+            if (cardOrder == null) {
+                return;
+            }
+        }
+        try {
+            boolean reset = false;
+            String problem = model.controllerReplacementProblem(scene, current.getId(), preset.getId(), cardOrder);
+            if (problem != null) {
+                int chains = model.chainsOnController(scene, current.getId());
+                int answer = JOptionPane.showConfirmDialog(this, problem + ".\nЦепочки этого контроллера ("
+                        + chains + ") будут сброшены. Продолжить?", "Заменить контроллер",
+                        JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+                if (answer != JOptionPane.YES_OPTION) {
+                    return;
+                }
+                reset = true;
+            }
+            var mapping = model.replaceController(scene, current.getId(), preset.getId(), cardOrder, reset);
+            boolean renumbered = mapping.entrySet().stream().anyMatch(en -> !en.getKey().equals(en.getValue()));
+            if (renumbered) {
+                StringBuilder sb = new StringBuilder("Занятые порты не помещались на свои номера и уплотнены:\n");
+                mapping.forEach((from, to) -> {
+                    if (!from.equals(to)) {
+                        sb.append("  порт ").append(from).append(" → ").append(to).append('\n');
+                    }
+                });
+                sb.append("Замену можно отменить кнопкой «Отменить».");
+                JOptionPane.showMessageDialog(this, sb.toString(), "Контроллер заменён",
+                        JOptionPane.INFORMATION_MESSAGE);
+            }
+        } catch (RuntimeException ex) {
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "Заменить контроллер", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
     /** Контроллер, чьи порты сейчас показаны — выбранный явно (ЛКМ по строке), или
      *  первый в сцене по умолчанию, если выбор ещё не сделан/устарел (контроллер
      *  удалён). null — контроллеров в сцене нет вовсе. */
@@ -724,9 +830,9 @@ public class SignalStagePanel extends JPanel {
             // копируется целиком без лишнего диалога (см. class-javadoc
             // ControllerInstance/AppModel#addControllerToScreen).
             List<String> cardOrder = null;
-            if (sel.getCards().size() > 1) {
+            if (model.cardTemplatesOf(sel).size() > 1) {
                 cardOrder = new com.vjstb.ledscheme.ui.AssembleCardsDialog(
-                        javax.swing.SwingUtilities.getWindowAncestor(this), sel,
+                        javax.swing.SwingUtilities.getWindowAncestor(this), sel, model.cardTemplatesOf(sel),
                         sel.getDefaultCardTemplateIds(), "Комплектация — " + sel.getName(),
                         "Добавить контроллер").showDialog();
                 if (cardOrder == null) {
@@ -755,6 +861,7 @@ public class SignalStagePanel extends JPanel {
                 try {
                     model.updateEquipmentPreset(copy, SchemaMode.SIGNAL, r.category(), r.name(), r.description(),
                             r.customCategoryLabel(), r.company());
+                    model.setEquipmentPresetSeries(copy, r.seriesId(), r.maxInputCards(), r.maxOutputCards());
                     if (r.category() == SchemaNodeType.CONTROLLER) {
                         model.setControllerPresetFields(copy, r.vendor(), r.portCount(), r.portBandwidthMbps(),
                                 r.inputPortCount(), r.loopPort());
@@ -790,7 +897,13 @@ public class SignalStagePanel extends JPanel {
         addRow.add(controllerTypeCombo, BorderLayout.CENTER);
         JPanel addButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         addButtons.setAlignmentX(LEFT_ALIGNMENT);
+        JButton replaceCtrl = new JButton("Заменить…");
+        replaceCtrl.setToolTipText("Заменить выбранный в списке контроллер другой моделью: новая модель встаёт НА ЕГО"
+                + " МЕСТО (в списке остаётся столько же контроллеров), расключение переносится по номерам портов."
+                + " В меню — только модели, где хватает входов и портов под существующие цепочки.");
+        replaceCtrl.addActionListener(e -> showReplaceControllerMenu(replaceCtrl));
         addButtons.add(addCtrl);
+        addButtons.add(replaceCtrl);
         addButtons.add(editCtrl);
         addButtons.add(cardsCtrl);
         controllersBody.add(UiKit.vgap());
