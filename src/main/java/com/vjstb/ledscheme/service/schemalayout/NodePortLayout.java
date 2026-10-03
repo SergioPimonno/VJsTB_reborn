@@ -168,14 +168,14 @@ public final class NodePortLayout {
      *  (запрос пользователя: без font-масштаба подписи увеличенного шрифта
      *  налезают на соседнюю строку; без {@code labelPaddingPx} вокруг каждой
      *  строки нет "полей", только между гнёздами разных карт). */
-    private static double rowStep(int fontSize, int labelPaddingPx) {
+    public static double rowStep(int fontSize, int labelPaddingPx) {
         return SchemaLayoutMetrics.ROW_STEP * fontSize / (double) SchemaLayoutMetrics.LABEL_FONT_SIZE + labelPaddingPx;
     }
 
     /** Глубина зоны TOP/BOTTOM (строка номеров гнёзд + строка подписи группы) —
      *  та же логика масштаба, что {@link #rowStep}: два ряда высотой
      *  {@link #rowStep}. */
-    private static double horizontalSideDepth(int fontSize, int labelPaddingPx) {
+    public static double horizontalSideDepth(int fontSize, int labelPaddingPx) {
         return rowStep(fontSize, labelPaddingPx) * 2;
     }
 

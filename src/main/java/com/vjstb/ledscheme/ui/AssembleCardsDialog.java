@@ -2,6 +2,7 @@ package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.model.EquipmentPreset;
 import com.vjstb.ledscheme.model.SchemaCard;
+import com.vjstb.ledscheme.service.CardLoadout;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
@@ -38,6 +39,9 @@ import javax.swing.TransferHandler;
 public class AssembleCardsDialog extends JDialog {
 
     private final EquipmentPreset preset;
+    /** Карты-шаблоны, доступные для сборки: карты серии модели + собственные (см. AppModel#cardTemplatesOf). */
+    private final List<SchemaCard> templates;
+    private final JLabel limitsLabel = new JLabel(" ");
     private final DefaultListModel<SchemaCard> assembledModel = new DefaultListModel<>();
     private final JList<SchemaCard> assembledList = new JList<>(assembledModel);
     private final JList<SchemaCard> libraryList;
@@ -54,11 +58,20 @@ public class AssembleCardsDialog extends JDialog {
      *  в библиотеке — см. LibrariesStagePanel). */
     public AssembleCardsDialog(Window owner, EquipmentPreset preset, List<String> initialTemplateIds,
                                 String title, String okLabel) {
+        this(owner, preset, preset.getCards(), initialTemplateIds, title, okLabel);
+    }
+
+    /** {@code templates} — карты, из которых собирается узел (для моделей из серии — карты серии плюс
+     *  собственные, см. {@code AppModel#cardTemplatesOf}); лимиты входных/выходных карт берутся из
+     *  {@code preset} и НЕ дают добавить карту сверх лимита (запрос 2026-10-02). */
+    public AssembleCardsDialog(Window owner, EquipmentPreset preset, List<SchemaCard> templates,
+                                List<String> initialTemplateIds, String title, String okLabel) {
         super(owner, title, ModalityType.APPLICATION_MODAL);
         this.preset = preset;
+        this.templates = templates;
 
         DefaultListModel<SchemaCard> libraryModel = new DefaultListModel<>();
-        for (SchemaCard template : preset.getCards()) {
+        for (SchemaCard template : templates) {
             libraryModel.addElement(template);
         }
         libraryList = new JList<>(libraryModel);
@@ -86,7 +99,7 @@ public class AssembleCardsDialog extends JDialog {
             public void mouseClicked(MouseEvent e) {
                 if (e.getClickCount() == 2) {
                     SchemaCard sel = libraryList.getSelectedValue();
-                    if (sel != null) {
+                    if (sel != null && canAddCard(sel)) {
                         assembledModel.addElement(sel);
                     }
                 }
@@ -100,6 +113,9 @@ public class AssembleCardsDialog extends JDialog {
         JScrollPane assembledScroll = new JScrollPane(assembledList);
         assembledScroll.setPreferredSize(new Dimension(240, 220));
         left.add(assembledScroll, BorderLayout.CENTER);
+        JPanel leftSouth = new JPanel(new BorderLayout());
+        limitsLabel.setForeground(Palette.MUTED);
+        leftSouth.add(limitsLabel, BorderLayout.NORTH);
         JPanel leftButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
         JButton up = new JButton("▲");
         JButton down = new JButton("▼");
@@ -117,7 +133,25 @@ public class AssembleCardsDialog extends JDialog {
         leftButtons.add(up);
         leftButtons.add(down);
         leftButtons.add(removeBtn);
-        left.add(leftButtons, BorderLayout.SOUTH);
+        leftSouth.add(leftButtons, BorderLayout.CENTER);
+        left.add(leftSouth, BorderLayout.SOUTH);
+        assembledModel.addListDataListener(new javax.swing.event.ListDataListener() {
+            @Override
+            public void intervalAdded(javax.swing.event.ListDataEvent e) {
+                updateLimitsLabel();
+            }
+
+            @Override
+            public void intervalRemoved(javax.swing.event.ListDataEvent e) {
+                updateLimitsLabel();
+            }
+
+            @Override
+            public void contentsChanged(javax.swing.event.ListDataEvent e) {
+                updateLimitsLabel();
+            }
+        });
+        updateLimitsLabel();
 
         JPanel right = new JPanel(new BorderLayout(4, 4));
         JLabel rightTitle = new JLabel("Библиотека карт этого оборудования");
@@ -139,6 +173,12 @@ public class AssembleCardsDialog extends JDialog {
 
         JButton ok = new JButton(okLabel);
         ok.addActionListener(e -> {
+            String problem = CardLoadout.problem(preset, assembledCards());
+            if (problem != null) {
+                javax.swing.JOptionPane.showMessageDialog(this, problem, "Лимит карт",
+                        javax.swing.JOptionPane.WARNING_MESSAGE);
+                return;
+            }
             result = new ArrayList<>();
             for (int i = 0; i < assembledModel.size(); i++) {
                 result.add(assembledModel.get(i).getId());
@@ -171,8 +211,36 @@ public class AssembleCardsDialog extends JDialog {
         assembledList.setSelectedIndex(target);
     }
 
+    private List<SchemaCard> assembledCards() {
+        List<SchemaCard> cards = new ArrayList<>();
+        for (int i = 0; i < assembledModel.size(); i++) {
+            cards.add(assembledModel.get(i));
+        }
+        return cards;
+    }
+
+    /** Лимиты модели на входные/выходные карты: сверх лимита добавить нельзя (подсказка в счётчике). */
+    private boolean canAddCard(SchemaCard card) {
+        if (CardLoadout.canAdd(preset, assembledCards(), card)) {
+            return true;
+        }
+        java.awt.Toolkit.getDefaultToolkit().beep();
+        limitsLabel.setText("Лимит достигнут: " + CardLoadout.summary(preset, assembledCards()));
+        limitsLabel.setForeground(new java.awt.Color(0xC0392B));
+        return false;
+    }
+
+    private void updateLimitsLabel() {
+        if (preset.getMaxInputCards() == null && preset.getMaxOutputCards() == null) {
+            limitsLabel.setText(" ");
+            return;
+        }
+        limitsLabel.setText(CardLoadout.summary(preset, assembledCards()));
+        limitsLabel.setForeground(Palette.MUTED);
+    }
+
     private SchemaCard findTemplateById(String id) {
-        for (SchemaCard t : preset.getCards()) {
+        for (SchemaCard t : templates) {
             if (t.getId().equals(id)) {
                 return t;
             }
@@ -226,6 +294,10 @@ public class AssembleCardsDialog extends JDialog {
                     }
                 }
                 boolean internalMove = support.getDropAction() == MOVE && dragSourceIndex >= 0;
+                // перестановка внутри состава число карт не меняет — лимит проверяем только для новой карты
+                if (!internalMove && !canAddCard(template)) {
+                    return false;
+                }
                 if (internalMove && dragSourceIndex < dropIndex) {
                     dropIndex--;
                 }

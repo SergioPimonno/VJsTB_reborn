@@ -88,6 +88,7 @@ public class LibrariesStagePanel extends JPanel {
     private final DefaultListModel<SchemaCard> signalCardModel = new DefaultListModel<>();
     private final JList<SchemaCard> signalCardList = new JList<>(signalCardModel);
     private final JScrollPane signalCardScroll = new JScrollPane(signalCardList);
+    private final javax.swing.JLabel signalSeriesInfo = new javax.swing.JLabel(" ");
 
     private final DefaultListModel<CableType> cableModel = new DefaultListModel<>();
     private final JList<CableType> cableList = new JList<>(cableModel);
@@ -476,7 +477,7 @@ public class LibrariesStagePanel extends JPanel {
                 p -> (p.getDescription() == null || p.getDescription().isEmpty() ? "" : p.getDescription() + " · ")
                         + (mode == SchemaMode.POWER
                                 ? "разъёмов: " + p.getPowerConnectors().size()
-                                : "карт: " + p.getCards().size())
+                                : "карт: " + model.cardTemplatesOf(p).size() + seriesSuffix(p))
                         + (p.getCompany() == null || p.getCompany().isEmpty() ? "" : " · Компания: " + p.getCompany()),
                 p -> model.isSharedEquipmentPreset(p.getId()));
         presetList.setCellRenderer(renderer);
@@ -486,11 +487,12 @@ public class LibrariesStagePanel extends JPanel {
         JButton add = new JButton("Добавить");
         add.addActionListener(e -> {
             EquipmentPresetDialog.Result r = new EquipmentPresetDialog(topWindow(), model, null,
-                    selectedOrFirstCategory(categoryList)).showDialog();
+                    selectedOrFirstCategory(categoryList), mode).showDialog();
             if (r != null) {
                 tryRun(() -> {
                     EquipmentPreset created = model.addEquipmentPreset(mode, r.category(), r.name(), r.description(),
                             null, r.customCategoryLabel(), r.company());
+                    model.setEquipmentPresetSeries(created, r.seriesId(), r.maxInputCards(), r.maxOutputCards());
                     if (r.category() == SchemaNodeType.CONTROLLER) {
                         model.setControllerPresetFields(created, r.vendor(), r.portCount(), r.portBandwidthMbps(),
                                 r.inputPortCount(), r.loopPort());
@@ -507,6 +509,7 @@ public class LibrariesStagePanel extends JPanel {
                 tryRun(() -> {
                     model.updateEquipmentPreset(sel, mode, r.category(), r.name(), r.description(),
                             r.customCategoryLabel(), r.company());
+                    model.setEquipmentPresetSeries(sel, r.seriesId(), r.maxInputCards(), r.maxOutputCards());
                     if (r.category() == SchemaNodeType.CONTROLLER) {
                         model.setControllerPresetFields(sel, r.vendor(), r.portCount(), r.portBandwidthMbps(),
                                 r.inputPortCount(), r.loopPort());
@@ -574,6 +577,7 @@ public class LibrariesStagePanel extends JPanel {
                 tryRun(() -> {
                     model.updateEquipmentPreset(copy, mode, r.category(), r.name(), r.description(),
                             r.customCategoryLabel(), r.company());
+                    model.setEquipmentPresetSeries(copy, r.seriesId(), r.maxInputCards(), r.maxOutputCards());
                     if (r.category() == SchemaNodeType.CONTROLLER) {
                         model.setControllerPresetFields(copy, r.vendor(), r.portCount(), r.portBandwidthMbps(),
                                 r.inputPortCount(), r.loopPort());
@@ -1044,7 +1048,7 @@ public class LibrariesStagePanel extends JPanel {
         signalPresetList.setCellRenderer(new NamedRenderer<EquipmentPreset>(
                 EquipmentPreset::getName,
                 p -> (p.getDescription() == null || p.getDescription().isEmpty() ? "" : p.getDescription() + " · ")
-                        + "карт: " + p.getCards().size()
+                        + "карт: " + model.cardTemplatesOf(p).size() + seriesSuffix(p)
                         + (p.getCompany() == null || p.getCompany().isEmpty() ? "" : " · Компания: " + p.getCompany()),
                 p -> model.isSharedEquipmentPreset(p.getId())));
         signalPresetScroll.setMinimumSize(new Dimension(180, 120));
@@ -1065,6 +1069,7 @@ public class LibrariesStagePanel extends JPanel {
                 tryRun(() -> {
                     EquipmentPreset created = model.addEquipmentPreset(SchemaMode.SIGNAL, r.category(), r.name(),
                             r.description(), null, r.customCategoryLabel(), r.company());
+                    model.setEquipmentPresetSeries(created, r.seriesId(), r.maxInputCards(), r.maxOutputCards());
                     if (r.category() == SchemaNodeType.CONTROLLER) {
                         model.setControllerPresetFields(created, r.vendor(), r.portCount(), r.portBandwidthMbps(),
                                 r.inputPortCount(), r.loopPort());
@@ -1081,6 +1086,7 @@ public class LibrariesStagePanel extends JPanel {
                 tryRun(() -> {
                     model.updateEquipmentPreset(sel, SchemaMode.SIGNAL, r.category(), r.name(), r.description(),
                             r.customCategoryLabel(), r.company());
+                    model.setEquipmentPresetSeries(sel, r.seriesId(), r.maxInputCards(), r.maxOutputCards());
                     if (r.category() == SchemaNodeType.CONTROLLER) {
                         model.setControllerPresetFields(sel, r.vendor(), r.portCount(), r.portBandwidthMbps(),
                                 r.inputPortCount(), r.loopPort());
@@ -1117,6 +1123,7 @@ public class LibrariesStagePanel extends JPanel {
                 tryRun(() -> {
                     model.updateEquipmentPreset(copy, SchemaMode.SIGNAL, r.category(), r.name(),
                             r.description(), r.customCategoryLabel(), r.company());
+                    model.setEquipmentPresetSeries(copy, r.seriesId(), r.maxInputCards(), r.maxOutputCards());
                     if (r.category() == SchemaNodeType.CONTROLLER) {
                         model.setControllerPresetFields(copy, r.vendor(), r.portCount(), r.portBandwidthMbps(),
                                 r.inputPortCount(), r.loopPort());
@@ -1149,6 +1156,8 @@ public class LibrariesStagePanel extends JPanel {
         JPanel right = UiKit.vbox();
         right.add(UiKit.muted("Карты-шаблоны выбранного оборудования"));
         right.add(signalCardScroll);
+        signalSeriesInfo.setForeground(com.vjstb.ledscheme.ui.Palette.MUTED);
+        right.add(signalSeriesInfo);
         JPanel rightCrud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
         JButton cardAdd = new JButton("Добавить карту");
         cardAdd.addActionListener(e -> {
@@ -1164,10 +1173,26 @@ public class LibrariesStagePanel extends JPanel {
                     CardsConfigDialog.forPreset(model, sel), model);
             dlg.setVisible(true);
         });
+        JButton cardCopy = new JButton("Копировать из…");
+        cardCopy.addActionListener(e -> {
+            EquipmentPreset picked = signalPresetList.getSelectedValue();
+            if (picked == null) {
+                JOptionPane.showMessageDialog(this, "Сначала выберите тип оборудования слева (в него будут"
+                        + " скопированы карты)", "Копирование карт", JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            copyCardsFromOtherEquipment(picked);
+        });
         Runnable deleteSelectedSignalCard = () -> {
             EquipmentPreset picked = signalPresetList.getSelectedValue();
             SchemaCard card = signalCardList.getSelectedValue();
             if (picked == null || card == null) return;
+            if (model.isSeriesCard(picked, card.getId())) {
+                JOptionPane.showMessageDialog(this, "Карта «" + card.getName() + "» принадлежит серии и правится"
+                        + " только в админ-консоли (вид «EQUIPMENT_SERIES»).", "Карты",
+                        JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
             if (!confirm("Удалить карту-шаблон «" + card.getName() + "»?")) return;
             EquipmentPreset sel = editablePresetOrFork(picked, signalPresetList);
             if (sel == null) return;
@@ -1186,7 +1211,7 @@ public class LibrariesStagePanel extends JPanel {
                         "Комплектация по умолчанию", JOptionPane.INFORMATION_MESSAGE);
                 return;
             }
-            if (sel.getCards().isEmpty()) {
+            if (model.cardTemplatesOf(sel).isEmpty()) {
                 JOptionPane.showMessageDialog(this, "У этого оборудования ещё нет карт-шаблонов — сначала"
                         + " добавьте хотя бы одну кнопкой «Добавить карту»", "Комплектация по умолчанию",
                         JOptionPane.INFORMATION_MESSAGE);
@@ -1194,13 +1219,15 @@ public class LibrariesStagePanel extends JPanel {
             }
             EquipmentPreset target = editablePresetOrFork(sel, signalPresetList);
             if (target == null) return;
-            List<String> order = new AssembleCardsDialog(topWindow(), target, target.getDefaultCardTemplateIds(),
+            List<String> order = new AssembleCardsDialog(topWindow(), target, model.cardTemplatesOf(target),
+                    target.getDefaultCardTemplateIds(),
                     "Комплектация по умолчанию — " + target.getName(), "Сохранить по умолчанию").showDialog();
             if (order != null) {
                 tryRun(() -> model.setDefaultCardLoadout(target, order));
             }
         });
         rightCrud.add(cardAdd);
+        rightCrud.add(cardCopy);
         rightCrud.add(cardDel);
         rightCrud.add(defaultLoadoutBtn);
         right.add(rightCrud);
@@ -1218,6 +1245,7 @@ public class LibrariesStagePanel extends JPanel {
             propose.setEnabled(sel != null && !shared);
             copyEdit.setEnabled(shared);
             cardAdd.setEnabled(sel != null);
+            cardCopy.setEnabled(sel != null);
             cardDel.setEnabled(sel != null);
             defaultLoadoutBtn.setEnabled(sel != null);
             String tip = shared ? signalPresetSharedTip : null;
@@ -1226,6 +1254,8 @@ public class LibrariesStagePanel extends JPanel {
             del.setToolTipText(tip);
             propose.setToolTipText(tip);
             cardAdd.setToolTipText(forkTip);
+            cardCopy.setToolTipText(forkTip != null ? forkTip
+                    : "Скопировать карты-шаблоны из другого оборудования в выбранное");
             cardDel.setToolTipText(forkTip);
             defaultLoadoutBtn.setToolTipText(forkTip != null ? forkTip
                     : "Задать комплектацию, с которой будет стартовать сборка узла из этого"
@@ -1249,10 +1279,111 @@ public class LibrariesStagePanel extends JPanel {
         return (JPanel) UiKit.dynamicSection("Оборудование сигнала (пресеты для схемы)", listSectionBody(split));
     }
 
+    /** «Копировать из…»: диалог «оборудование-источник + какие карты», копии добавляются в {@code picked}
+     *  (общее оборудование — через личную копию, как и при остальной правке карт). */
+    private void copyCardsFromOtherEquipment(EquipmentPreset picked) {
+        List<EquipmentPreset> sources = new java.util.ArrayList<>();
+        for (EquipmentPreset p : model.getEquipmentPresets()) {
+            if (p.getMode() == SchemaMode.SIGNAL && p != picked && !model.cardTemplatesOf(p).isEmpty()) {
+                sources.add(p);
+            }
+        }
+        if (sources.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Нет другого оборудования с картами, откуда можно копировать",
+                    "Копирование карт", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        JComboBox<EquipmentPreset> sourceBox = new JComboBox<>(sources.toArray(new EquipmentPreset[0]));
+        sourceBox.setRenderer(new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public java.awt.Component getListCellRendererComponent(JList<?> list, Object value, int index,
+                                                                    boolean sel, boolean focus) {
+                EquipmentPreset p = (EquipmentPreset) value;
+                String name = p == null ? "" : (p.getName() == null ? "" : p.getName())
+                        + (p.getCompany() == null || p.getCompany().isBlank() ? "" : " (" + p.getCompany() + ")");
+                return super.getListCellRendererComponent(list, name, index, sel, focus);
+            }
+        });
+        DefaultListModel<SchemaCard> cardModel = new DefaultListModel<>();
+        JList<SchemaCard> cardPick = new JList<>(cardModel);
+        cardPick.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+        cardPick.setCellRenderer(new NamedRenderer<SchemaCard>(SchemaCard::getName, SchemaCard::portsSummary));
+        Runnable fill = () -> {
+            cardModel.clear();
+            EquipmentPreset src = (EquipmentPreset) sourceBox.getSelectedItem();
+            if (src != null) {
+                model.cardTemplatesOf(src).forEach(cardModel::addElement);
+                cardPick.setSelectionInterval(0, cardModel.size() - 1);
+            }
+        };
+        sourceBox.addActionListener(e -> fill.run());
+        fill.run();
+
+        JPanel content = new JPanel(new java.awt.BorderLayout(4, 4));
+        JPanel top = new JPanel(new java.awt.BorderLayout(4, 4));
+        top.add(new javax.swing.JLabel("Откуда:"), java.awt.BorderLayout.WEST);
+        top.add(sourceBox, java.awt.BorderLayout.CENTER);
+        content.add(top, java.awt.BorderLayout.NORTH);
+        JScrollPane pickScroll = new JScrollPane(cardPick);
+        pickScroll.setPreferredSize(new Dimension(420, 200));
+        content.add(pickScroll, java.awt.BorderLayout.CENTER);
+        content.add(new javax.swing.JLabel("В «" + picked.getName() + "» (Ctrl/Shift — несколько карт):"),
+                java.awt.BorderLayout.SOUTH);
+        if (JOptionPane.showConfirmDialog(this, content, "Копировать карты из другого оборудования",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) {
+            return;
+        }
+        List<SchemaCard> chosen = cardPick.getSelectedValuesList();
+        if (chosen.isEmpty()) {
+            return;
+        }
+        EquipmentPreset target = editablePresetOrFork(picked, signalPresetList);
+        if (target == null) {
+            return;
+        }
+        tryRun(() -> model.copyCardsToPreset(target, chosen));
+    }
+
+    /** « · серия X» в строке списка пресетов (серия задана и есть в локальной библиотеке). */
+    private String seriesSuffix(EquipmentPreset p) {
+        com.vjstb.ledscheme.model.EquipmentSeries s = model.seriesOf(p);
+        return s == null ? "" : " · серия " + s.getName();
+    }
+
+    /** Строка под списком карт: серия модели и её лимиты входных/выходных карт (запрос 2026-10-02). */
+    private String seriesInfoText(EquipmentPreset sel) {
+        if (sel == null) {
+            return " ";
+        }
+        com.vjstb.ledscheme.model.EquipmentSeries series = model.seriesOf(sel);
+        if (series == null && sel.getSeriesId() == null && sel.getMaxInputCards() == null
+                && sel.getMaxOutputCards() == null) {
+            return " ";
+        }
+        StringBuilder sb = new StringBuilder();
+        if (series == null && sel.getSeriesId() != null) {
+            sb.append("Серия модели не найдена в локальной библиотеке — обновите библиотеку с сервера");
+        }
+        if (series != null) {
+            sb.append("Серия «").append(series.getName()).append("» (карты серии правятся в админ-консоли)");
+        }
+        if (sel.getMaxInputCards() != null || sel.getMaxOutputCards() != null) {
+            if (sb.length() > 0) {
+                sb.append(" · ");
+            }
+            sb.append("лимит: входных ")
+                    .append(sel.getMaxInputCards() == null ? "∞" : sel.getMaxInputCards())
+                    .append(", выходных ")
+                    .append(sel.getMaxOutputCards() == null ? "∞" : sel.getMaxOutputCards());
+        }
+        return sb.toString();
+    }
+
     private void refreshSignalCards() {
         EquipmentPreset sel = signalPresetList.getSelectedValue();
-        List<SchemaCard> cards = sel == null ? List.of() : sel.getCards();
+        List<SchemaCard> cards = sel == null ? List.of() : model.cardTemplatesOf(sel);
         syncList(signalCardModel, cards);
+        signalSeriesInfo.setText(seriesInfoText(sel));
         // Внутри JSplitPane — ширина уже ограничена его долей (см. применение
         // contentWidth к секции в applyContentWidth), список сам растягивается
         // на выделенную ему часть (capWidth=false), а не на отдельно заданную ширину.

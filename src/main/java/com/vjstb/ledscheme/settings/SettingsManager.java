@@ -295,6 +295,13 @@ public class SettingsManager {
         persist();
     }
 
+    /** Сторона входа связей в блоки экранов — см. {@link UserProfile#getSchemaScreenEntrySide}
+     *  (отдельно для сигнала и питания). */
+    public void setSchemaScreenEntrySide(com.vjstb.ledscheme.model.SchemaMode mode, ScreenEntrySide side) {
+        activeProfile().setSchemaScreenEntrySide(mode, side);
+        persist();
+    }
+
     /** Отступ текста от края блока/гнезда на общей схеме (px) — см. {@link
      *  UserProfile#getSchemaLabelPaddingPx()}. */
     public void setSchemaLabelPaddingPx(int px) {

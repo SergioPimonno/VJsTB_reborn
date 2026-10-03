@@ -277,6 +277,14 @@ public class UserProfile {
      *  связи в MODERN — см. {@code SchemaCanvasPanel#autoRoutePoints}. */
     private int schemaRouteStubPx = 24;
 
+    /** С какой стороны связи (режим «Авто под 90°») заходят в блоки экранов (запрос пользователя
+     *  2026-10-02: «чтобы линии старались заходить в блоки экранов снизу — так визуально красивее»,
+     *  по образцу «Ориентация блоков по умолчанию»); {@code null} (профиль без поля) = {@link
+     *  ScreenEntrySide#BOTTOM}. Узлы оборудования с настоящими гнёздами не затрагиваются — их сторону
+     *  задаёт раскладка гнёзд. Отдельная копия для схемы питания — {@link #schemaScreenEntrySidePower}. */
+    private ScreenEntrySide schemaScreenEntrySideSignal;
+    private ScreenEntrySide schemaScreenEntrySidePower;
+
     /** Отступ (px) текста от края блока/гнезда на общей схеме — заголовок карты и
      *  подписи её портов, и в MODERN (заголовок отсека {@code drawBay}, подпись
      *  гнезда {@code drawPin}), и в CLASSIC режиме отрисовки ({@code
@@ -857,6 +865,41 @@ public class UserProfile {
         this.schemaRouteStubPx = Math.max(0, px);
     }
 
+    /** Bean-аксессоры ради JSON: Jackson сохраняет в профиль только свойства с геттером/сеттером БЕЗ
+     *  параметров — маршрутизаторы по {@code SchemaMode} ниже для него не свойства, и без этих четырёх
+     *  методов выбор терялся при перезапуске (баг-репорт 2026-10-03). Тот же приём, что у
+     *  {@link #getSignalDefaultOrientation()}/{@link #getPowerDefaultOrientation()}. */
+    public ScreenEntrySide getSchemaScreenEntrySideSignal() {
+        return schemaScreenEntrySideSignal != null ? schemaScreenEntrySideSignal : ScreenEntrySide.BOTTOM;
+    }
+
+    public void setSchemaScreenEntrySideSignal(ScreenEntrySide side) {
+        this.schemaScreenEntrySideSignal = side != null ? side : ScreenEntrySide.BOTTOM;
+    }
+
+    public ScreenEntrySide getSchemaScreenEntrySidePower() {
+        return schemaScreenEntrySidePower != null ? schemaScreenEntrySidePower : ScreenEntrySide.BOTTOM;
+    }
+
+    public void setSchemaScreenEntrySidePower(ScreenEntrySide side) {
+        this.schemaScreenEntrySidePower = side != null ? side : ScreenEntrySide.BOTTOM;
+    }
+
+    public ScreenEntrySide getSchemaScreenEntrySide(com.vjstb.ledscheme.model.SchemaMode mode) {
+        ScreenEntrySide side = mode == com.vjstb.ledscheme.model.SchemaMode.POWER
+                ? schemaScreenEntrySidePower : schemaScreenEntrySideSignal;
+        return side != null ? side : ScreenEntrySide.BOTTOM;
+    }
+
+    public void setSchemaScreenEntrySide(com.vjstb.ledscheme.model.SchemaMode mode, ScreenEntrySide side) {
+        ScreenEntrySide value = side != null ? side : ScreenEntrySide.BOTTOM;
+        if (mode == com.vjstb.ledscheme.model.SchemaMode.POWER) {
+            this.schemaScreenEntrySidePower = value;
+        } else {
+            this.schemaScreenEntrySideSignal = value;
+        }
+    }
+
     public int getSchemaLabelPaddingPx() {
         return schemaLabelPaddingPx;
     }
@@ -1073,6 +1116,8 @@ public class UserProfile {
         p.schemaStylePreset = schemaStylePreset;
         p.schemaRenderMode = schemaRenderMode;
         p.schemaRouteStubPx = schemaRouteStubPx;
+        p.schemaScreenEntrySideSignal = schemaScreenEntrySideSignal;
+        p.schemaScreenEntrySidePower = schemaScreenEntrySidePower;
         p.schemaLabelPaddingPx = schemaLabelPaddingPx;
         p.signalSideScrollUnitPx = signalSideScrollUnitPx;
         p.loadTrackingEnabled = loadTrackingEnabled;

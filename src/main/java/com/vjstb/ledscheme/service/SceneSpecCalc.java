@@ -193,6 +193,82 @@ public final class SceneSpecCalc {
         return result;
     }
 
+    // ---- кабели схемы: подписанные связи и связи пучка без подписи ----
+
+    /** Один учитываемый кабель(и): тип провода, число линий, метраж одной линии (null — не задан). */
+    private record Wire(String type, int count, Double lengthM) {
+    }
+
+    private record WireList(List<Wire> wires, int uncounted) {
+    }
+
+    /** Кабели схемы для спецификации. Подписанная связь ({@link SchemaEdge#hasStructuredWire()}) —
+     *  свои {@code wireCount}×тип. Связь БЕЗ подписи, которая входит в пучок (2+ связи в одном
+     *  гнезде — то, что на схеме показывает чип шины «N×Тип»), считается за ОДИН кабель общего типа
+     *  пучка — ровно как чип: иначе схема показывала «4×DP», а спецификация учитывала только
+     *  подписанные три (баг-репорт 2026-10-03, проект «Лемана»: неподписанная линия к монитору
+     *  из того же гнезда, что и три «1×DP», терялась — в Excel 6 DP вместо 8). Метраж у такой связи
+     *  неизвестен. Неподписанная связь вне пучка, либо если в пучках на её концах разные типы
+     *  провода, по-прежнему не учитывается (попадает в счётчик «связей без подписи»). */
+    private static WireList wiresOf(SheetData sheet) {
+        List<SchemaEdge> edges = sheet.edges();
+        List<Wire> wires = new ArrayList<>();
+        int uncounted = 0;
+        for (SchemaEdge edge : edges) {
+            if (edge.hasStructuredWire()) {
+                wires.add(new Wire(edge.getWireType(), edge.getWireCount(), edge.getLengthM()));
+                continue;
+            }
+            String inherited = inheritedBundleType(edge, edges);
+            if (inherited != null) {
+                wires.add(new Wire(inherited, 1, null));
+            } else {
+                uncounted++;
+            }
+        }
+        return new WireList(wires, uncounted);
+    }
+
+    /** Общий тип провода пучков на концах {@code edge}; {@code null} — пучка нет, подписанных связей
+     *  в нём нет или типы расходятся. Пучок — все связи листа, подходящие к тому же гнезду. */
+    private static String inheritedBundleType(SchemaEdge edge, List<SchemaEdge> edges) {
+        String result = null;
+        for (boolean fromEnd : new boolean[]{true, false}) {
+            String nodeId = fromEnd ? edge.getFromNodeId() : edge.getToNodeId();
+            String portId = fromEnd ? edge.getFromPortId() : edge.getToPortId();
+            if (nodeId == null || portId == null) {
+                continue;
+            }
+            int size = 0;
+            String type = null;
+            boolean conflict = false;
+            for (SchemaEdge other : edges) {
+                boolean touches = (nodeId.equals(other.getFromNodeId()) && portId.equals(other.getFromPortId()))
+                        || (nodeId.equals(other.getToNodeId()) && portId.equals(other.getToPortId()));
+                if (!touches) {
+                    continue;
+                }
+                size++;
+                if (other.hasStructuredWire()) {
+                    String t = other.getWireType().trim();
+                    if (type == null) {
+                        type = t;
+                    } else if (!type.equals(t)) {
+                        conflict = true;
+                    }
+                }
+            }
+            if (size < 2 || type == null) {
+                continue;
+            }
+            if (conflict || (result != null && !result.equals(type))) {
+                return null;
+            }
+            result = type;
+        }
+        return result;
+    }
+
     // ---- коммутация ----
 
     /** Листы «Коммутация — сводная»/«сплайсовка» по схемам. Комплектация кусками
@@ -215,20 +291,17 @@ public final class SceneSpecCalc {
         }
         for (int col = 0; col < n; col++) {
             SheetData sheet = sheets.get(col);
-            for (SchemaEdge edge : sheet.edges()) {
-                if (!edge.hasStructuredWire()) {
-                    uncounted++;
-                    continue;
-                }
-                List<List<double[]>> perColumn = byMode.get(sheet.mode()).computeIfAbsent(edge.getWireType(), k -> {
+            WireList wl = wiresOf(sheet);
+            uncounted += wl.uncounted();
+            for (Wire w : wl.wires()) {
+                List<List<double[]>> perColumn = byMode.get(sheet.mode()).computeIfAbsent(w.type(), k -> {
                     List<List<double[]>> l = new ArrayList<>();
                     for (int i = 0; i < n; i++) {
                         l.add(new ArrayList<>());
                     }
                     return l;
                 });
-                perColumn.get(col).add(new double[]{edge.getLengthM() != null ? edge.getLengthM() : 0,
-                        edge.getWireCount()});
+                perColumn.get(col).add(new double[]{w.lengthM() != null ? w.lengthM() : 0, w.count()});
             }
         }
 
@@ -339,14 +412,11 @@ public final class SceneSpecCalc {
                 if (sheet.mode() != mode) {
                     continue;
                 }
-                for (SchemaEdge edge : sheet.edges()) {
-                    if (!edge.hasStructuredWire()) {
-                        continue;
-                    }
-                    WireTotalRow row = rows.computeIfAbsent(modeLabel(mode) + ": " + edge.getWireType(),
-                            k -> new WireTotalRow(modeLabel(mode), edge.getWireType(), new int[n], new double[n], null));
-                    row.lineCounts()[col] += edge.getWireCount();
-                    row.lengthsM()[col] += (edge.getLengthM() != null ? edge.getLengthM() : 0) * edge.getWireCount();
+                for (Wire w : wiresOf(sheet).wires()) {
+                    WireTotalRow row = rows.computeIfAbsent(modeLabel(mode) + ": " + w.type(),
+                            k -> new WireTotalRow(modeLabel(mode), w.type(), new int[n], new double[n], null));
+                    row.lineCounts()[col] += w.count();
+                    row.lengthsM()[col] += (w.lengthM() != null ? w.lengthM() : 0) * w.count();
                 }
             }
         }

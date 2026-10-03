@@ -48,6 +48,17 @@ install` в нём самом** (для релизной CI — ещё и `git c
   CABLE_LENGTH_PROFILE, HOIST, STRUCTURE_FRAME, CASE, VEHICLE,
   EQUIPMENT_CUSTOM_CATEGORY` — создаются/удаляются свободно, id генерируется при
   создании.
+  - `EQUIPMENT_SERIES` (v2.6, 2026-10-02) — серия оборудования (H-серия
+    Novastar, VFC Disguise D3): общий каталог карт `EquipmentSeries.cards` с
+    видом карты `CardKind` (входная/выходная/смешанная, `null` — по портам).
+    Модель оборудования (`EquipmentPreset`) ссылается на серию через
+    `seriesId` и задаёт свои лимиты `maxInputCards`/`maxOutputCards`
+    (`null` — без лимита). Каталог серий правится только в админ-консоли, клиент читает; привязать модель к серии и задать лимиты можно и в клиенте (`EquipmentPresetDialog`, список — серии категории модели):
+    `Library.sharedEquipmentSeries`, `AppModel.cardTemplatesOf(preset)` =
+    карты серии + собственные карты модели, лимиты — `service.CardLoadout`
+    (диалог сборки узла не даёт превысить, `AppModel` бросает
+    `IllegalArgumentException`). FK в проектных данных нет (на серию ссылаются
+    только пресеты), удаление синком безусловное.
   - `HOIST` (модели лебёдок/талей с паспортной WLL) и `STRUCTURE_FRAME`
     (элементы наземного конструктива — рама/короткая рама/стакан/контейнер
     балласта, один вид с дискриминатором `kind` внутри payload) — единственные

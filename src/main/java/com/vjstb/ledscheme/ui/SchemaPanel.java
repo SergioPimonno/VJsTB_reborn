@@ -170,7 +170,25 @@ public class SchemaPanel extends JPanel {
                 canvas.fitNodesToContent(model.schemaNodesForCurrentScene(mode));
             }
         });
+        JButton arrangeBtn = new JButton("Расставить блоки");
+        arrangeBtn.setToolTipText(mode == SchemaMode.POWER
+                ? "Автоматически расставить блоки слева направо: источники без входных разъёмов → источники с"
+                + " входными → распределение → экраны и всё остальное. Размеры блоков не меняются; отменяется Ctrl+Z."
+                : "Автоматически расставить блоки слева направо: серверы → другое оборудование → контроллеры →"
+                + " конвертеры → экраны. Размеры блоков не меняются; отменяется Ctrl+Z.");
+        arrangeBtn.addActionListener(e -> {
+            if (model.schemaNodesForCurrentScene(mode).isEmpty()) {
+                return;
+            }
+            if (JOptionPane.showConfirmDialog(this,
+                    "Расставить все блоки схемы колонками по типу оборудования? Текущее положение блоков будет"
+                            + " заменено, а связи с ручными изломами станут «Авто под 90°».",
+                    "Расставить блоки", JOptionPane.OK_CANCEL_OPTION) == JOptionPane.OK_OPTION) {
+                model.arrangeSchemaNodes(mode);
+            }
+        });
         JPanel bar = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 4, 2));
+        bar.add(arrangeBtn);
         bar.add(fitBtn);
         bar.add(fontBtn);
         bar.add(clear);
@@ -432,13 +450,15 @@ public class SchemaPanel extends JPanel {
 
         Object presetSel = presetCombo.getSelectedItem();
         if (presetSel instanceof EquipmentPreset preset) {
-            if (!preset.getCards().isEmpty()) {
+            if (!model.cardTemplatesOf(preset).isEmpty()) {
                 // У пресета есть карты-шаблоны — даём собрать реальную конфигурацию
                 // узла (сколько экземпляров каждой карты), а не копировать пресет
                 // один-в-один как есть (одинаковых карт в устройстве может быть
                 // несколько, см. Task #59).
                 java.util.List<String> cardOrder = new AssembleCardsDialog(
-                        SwingUtilities.getWindowAncestor(this), preset).showDialog();
+                        SwingUtilities.getWindowAncestor(this), preset, model.cardTemplatesOf(preset),
+                        preset.getDefaultCardTemplateIds(), "Состав карт — " + preset.getName(), "Добавить узел")
+                        .showDialog();
                 if (cardOrder == null) {
                     return;
                 }

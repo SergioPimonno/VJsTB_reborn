@@ -16,6 +16,9 @@ description: >-
 живую проверку пользователь делает сам и скриншот не просили. `testbuild/`-jar
 не должен отставать от внесённых изменений — иначе пользователь тестирует старую
 сборку. Полный цикл: `mvn -DskipTests package` → копия в единый путь (см. ниже).
+Делай это через `tools/test-build/snapshot-and-build.sh "описание"` (скилл
+`after-edit`): он сначала сохраняет предыдущий jar и незакоммиченные правки в
+`testbuild/previous/`, чтобы правку можно было откатить.
 Перезапуск процесса нужен только если проверяешь сам через computer-use.
 
 ## Сборка
@@ -50,10 +53,11 @@ cp target/led-scheme.jar "C:\Development\VJsTB_reborn\testbuild\led-scheme-test.
 
 1. **Предупреди пользователя**, прежде чем управлять его рабочим столом через
    computer-use.
-2. Убей только процессы ЭТОГО приложения: ищи `javaw.exe`, в командной строке
-   которых есть `led-scheme-test.jar`. **НЕ блочный `taskkill` по имени
-   процесса** — на машине пользователя есть посторонние `javaw.exe` (напр.
-   Minecraft), их трогать нельзя.
+2. Закрывай только процессы ЭТОГО приложения: `java(w).exe`, в командной
+   строке которых есть `led-scheme`, `vjstb`, `ave_tb` или `AVE_ToolBox`.
+   **НЕ блочный `taskkill` по имени процесса** — на машине пользователя есть
+   посторонние `javaw.exe` (напр. Minecraft), IDE и Maven, их трогать нельзя
+   (Золотое правило 5). Готовый фильтр — `snapshot-and-build.sh … --restart`.
 3. Запусти ровно один свежий процесс:
    ```bash
    nohup "javaw.exe" -jar "C:\Development\VJsTB_reborn\testbuild\led-scheme-test.jar" &
