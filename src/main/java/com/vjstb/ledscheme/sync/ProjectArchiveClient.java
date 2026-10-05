@@ -62,8 +62,11 @@ public class ProjectArchiveClient {
         }
     }
 
+    /** {@code scope=team}: в приложении даже админ видит только проекты своей
+     *  команды (обзор всех команд -- в админ-консоли). Старый сервер параметр
+     *  игнорирует и отдаёт прежний список. */
     public List<ProjectSummaryDto> list(String token) throws IOException, InterruptedException {
-        HttpResponse<String> response = send(token, "GET", "/api/projects", null);
+        HttpResponse<String> response = send(token, "GET", "/api/projects?scope=team", null);
         checkOk(response, false);
         return MAPPER.readValue(response.body(),
                 MAPPER.getTypeFactory().constructCollectionType(List.class, ProjectSummaryDto.class));
