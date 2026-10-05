@@ -408,6 +408,14 @@ public class UserProfile {
      *  диалоге, по умолчанию (профиль без полей) — печатать оба блока. */
     private Boolean screensExportLegend;
     private Boolean screensExportStats;
+    /** Фермы подвеса в экспорте таблицы экранов и легенда ферм (запрос 2026-10-05): по умолчанию
+     *  (профиль без полей) — рисовать и фермы, и их легенду. */
+    private Boolean screensExportTrusses;
+    private Boolean screensExportTrussLegend;
+    /** Какие части входят в «Сформировать пакет документации» (имена {@code ui.stage.OutputPart},
+     *  запрос 2026-10-05, галочки в таблице «Состав вывода»). {@code null} — выбор не делали, действует
+     *  состав по умолчанию (то, что входило в пакет до галочек); пустой список — не отмечено ничего. */
+    private List<String> outputParts;
 
     public UserProfile() {
     }
@@ -1047,6 +1055,31 @@ public class UserProfile {
         this.screensExportStats = value;
     }
 
+    /** См. {@link #outputParts}: {@code null} — выбор не делали. */
+    public List<String> getOutputParts() {
+        return outputParts;
+    }
+
+    public void setOutputParts(List<String> outputParts) {
+        this.outputParts = outputParts;
+    }
+
+    public boolean isScreensExportTrusses() {
+        return screensExportTrusses == null || screensExportTrusses;
+    }
+
+    public void setScreensExportTrusses(boolean value) {
+        this.screensExportTrusses = value;
+    }
+
+    public boolean isScreensExportTrussLegend() {
+        return screensExportTrussLegend == null || screensExportTrussLegend;
+    }
+
+    public void setScreensExportTrussLegend(boolean value) {
+        this.screensExportTrussLegend = value;
+    }
+
     /** true — тёмный бакет цветов Palette (см. Palette#applyTheme); ПРОИЗВОДНОЕ от
      *  {@link #lafStyle}, не отдельное состояние (Darcula считается тёмным,
      *  IntelliJ — светлым, см. {@code ui.LafStyle#isDark}). */
@@ -1136,6 +1169,9 @@ public class UserProfile {
         p.floorPlanViewMode = floorPlanViewMode;
         p.screensExportLegend = screensExportLegend;
         p.screensExportStats = screensExportStats;
+        p.outputParts = outputParts != null ? new ArrayList<>(outputParts) : null;
+        p.screensExportTrusses = screensExportTrusses;
+        p.screensExportTrussLegend = screensExportTrussLegend;
         p.keyBindings = new LinkedHashMap<>();
         for (Map.Entry<String, KeyCombo> en : keyBindings.entrySet()) {
             p.keyBindings.put(en.getKey(), en.getValue().copy());

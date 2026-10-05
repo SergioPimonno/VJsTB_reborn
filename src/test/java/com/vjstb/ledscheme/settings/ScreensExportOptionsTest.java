@@ -22,11 +22,16 @@ class ScreensExportOptionsTest {
         assertTrue(s.activeProfile().isScreensExportLegend());
         assertTrue(s.activeProfile().isScreensExportStats());
 
-        s.setScreensExportOptions(false, true);
+        assertTrue(s.activeProfile().isScreensExportTrusses(), "фермы и их легенда — по умолчанию тоже печатаются");
+        assertTrue(s.activeProfile().isScreensExportTrussLegend());
+
+        s.setScreensExportOptions(false, true, true, false);
 
         SettingsManager reloaded = settings(dir);
         assertFalse(reloaded.activeProfile().isScreensExportLegend());
         assertTrue(reloaded.activeProfile().isScreensExportStats());
+        assertTrue(reloaded.activeProfile().isScreensExportTrusses());
+        assertFalse(reloaded.activeProfile().isScreensExportTrussLegend());
         assertFalse(reloaded.activeProfile().copy().isScreensExportLegend(), "copy() переносит выбор");
     }
 }

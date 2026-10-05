@@ -61,6 +61,9 @@ public class OutputStagePanel extends JPanel {
     private final com.vjstb.ledscheme.settings.SettingsManager settings;
     private final JTextField folderField = new JTextField();
     private final JLabel exportOptionsSummary = new JLabel();
+    /** Галочки «В общий вывод» таблицы «Состав вывода» — по одной на часть {@link OutputPart}. */
+    private final java.util.Map<OutputPart, javax.swing.JCheckBox> partChecks =
+            new java.util.EnumMap<>(OutputPart.class);
     private File chosenFolder;
 
     public OutputStagePanel(AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings) {
@@ -118,32 +121,96 @@ public class OutputStagePanel extends JPanel {
         body.add(UiKit.section("Параметры экспорта схем", optionsRow));
 
         body.add(UiKit.vgap(10));
-        JButton generate = new JButton("Сформировать пакет документации проекта");
-        generate.addActionListener(e -> generate());
-        body.add(generate);
+        body.add(UiKit.section("Состав вывода", buildPartsTable()));
 
-        body.add(UiKit.vgap(16));
-        JPanel piecesPanel = UiKit.vbox();
-        JButton exportPower = new JButton("Экспортировать схемы этапа «Питание»");
-        exportPower.addActionListener(e -> exportSchemesForMode(true));
-        piecesPanel.add(exportPower);
-        piecesPanel.add(UiKit.vgap(6));
-        JButton exportSignal = new JButton("Экспортировать схемы этапа «Сигнал»");
-        exportSignal.addActionListener(e -> exportSchemesForMode(false));
-        piecesPanel.add(exportSignal);
-        piecesPanel.add(UiKit.vgap(6));
-        JButton exportSummary = new JButton("Сформировать сводку по проекту");
-        exportSummary.addActionListener(e -> exportReportOnly());
-        piecesPanel.add(exportSummary);
-        piecesPanel.add(UiKit.vgap(6));
-        JButton exportSpec = new JButton("Сформировать спецификацию оборудования");
-        exportSpec.addActionListener(e -> exportSpecOnly());
-        piecesPanel.add(exportSpec);
-        body.add(UiKit.section("Экспорт по отдельности", piecesPanel));
+        body.add(UiKit.vgap(10));
+        JButton generate = new JButton("Сформировать пакет документации проекта (отмеченное галочками)");
+        generate.setToolTipText("Выгружает только части, отмеченные в таблице «Состав вывода» галочкой «В общий"
+                + " вывод». Выбор запоминается.");
+        generate.addActionListener(e -> runExport(selectedParts(), false));
+        body.add(generate);
 
         body.add(javax.swing.Box.createVerticalGlue());
 
         return body;
+    }
+
+    /** Таблица «Состав вывода» (запрос 2026-10-05): слева название части вывода, затем галочка «В общий
+     *  вывод» (входит ли часть в пакет документации; выбор запоминается в профиле) и кнопка отдельного
+     *  экспорта этой части. И пакет, и отдельные кнопки идут через один {@link #runExport}. */
+    private JPanel buildPartsTable() {
+        JPanel table = new JPanel(new java.awt.GridBagLayout());
+        java.awt.GridBagConstraints c = new java.awt.GridBagConstraints();
+        c.insets = new java.awt.Insets(3, 6, 3, 6);
+        c.gridy = 0;
+        c.gridx = 0;
+        c.weightx = 1;
+        c.anchor = java.awt.GridBagConstraints.WEST;
+        c.fill = java.awt.GridBagConstraints.HORIZONTAL;
+        table.add(headerCell("Этап"), c);
+        c.gridx = 1;
+        c.weightx = 0;
+        c.anchor = java.awt.GridBagConstraints.CENTER;
+        c.fill = java.awt.GridBagConstraints.NONE;
+        table.add(headerCell("В общий вывод"), c);
+        c.gridx = 2;
+        table.add(headerCell("Отдельно"), c);
+
+        c.gridy = 1;
+        c.gridx = 0;
+        c.gridwidth = 3;
+        c.fill = java.awt.GridBagConstraints.HORIZONTAL;
+        table.add(new javax.swing.JSeparator(), c);
+        c.gridwidth = 1;
+
+        java.util.Set<OutputPart> selected = OutputPart.fromNames(settings.activeProfile().getOutputParts());
+        int row = 2;
+        for (OutputPart part : OutputPart.values()) {
+            c.gridy = row++;
+            c.gridx = 0;
+            c.weightx = 1;
+            c.anchor = java.awt.GridBagConstraints.WEST;
+            c.fill = java.awt.GridBagConstraints.HORIZONTAL;
+            table.add(new JLabel(part.label()), c);
+
+            javax.swing.JCheckBox check = new javax.swing.JCheckBox();
+            check.setSelected(selected.contains(part));
+            check.setToolTipText("Включать «" + part.label() + "» в пакет документации");
+            check.addActionListener(e -> saveSelectedParts());
+            partChecks.put(part, check);
+            c.gridx = 1;
+            c.weightx = 0;
+            c.anchor = java.awt.GridBagConstraints.CENTER;
+            c.fill = java.awt.GridBagConstraints.NONE;
+            table.add(check, c);
+
+            JButton export = new JButton("Экспортировать");
+            export.addActionListener(e -> runExport(java.util.EnumSet.of(part), true));
+            c.gridx = 2;
+            c.fill = java.awt.GridBagConstraints.HORIZONTAL;
+            table.add(export, c);
+        }
+        return table;
+    }
+
+    private static JLabel headerCell(String text) {
+        JLabel label = new JLabel(text);
+        label.setFont(label.getFont().deriveFont(java.awt.Font.BOLD));
+        return label;
+    }
+
+    private java.util.Set<OutputPart> selectedParts() {
+        java.util.Set<OutputPart> parts = java.util.EnumSet.noneOf(OutputPart.class);
+        for (var e : partChecks.entrySet()) {
+            if (e.getValue().isSelected()) {
+                parts.add(e.getKey());
+            }
+        }
+        return parts;
+    }
+
+    private void saveSelectedParts() {
+        settings.setOutputParts(OutputPart.toNames(selectedParts()));
     }
 
     /** Цепочки проекта (любой сцены) с превышением ёмкости, ещё не подтверждённые
@@ -346,10 +413,10 @@ public class OutputStagePanel extends JPanel {
      *  Размеры масок экранов — через {@code MaskGeometry} (с множителем «сетки»). {@code true} —
      *  продолжать. Классы — полными именами, чтобы не трогать общий блок импортов (файл
      *  параллельно правят треки C2/C3). */
-    private boolean confirmMaskSizes(Project project) {
+    private boolean confirmMaskSizes(Project project, boolean includeScreens) {
         com.vjstb.ledscheme.ui.MaskExportSet sizes = new com.vjstb.ledscheme.ui.MaskExportSet();
         for (Scene scene : project.getScenes()) {
-            for (Screen scr : scene.getScreens()) {
+            for (Screen scr : includeScreens ? scene.getScreens() : List.<Screen>of()) {
                 com.vjstb.ledscheme.service.MaskGeometry geo =
                         com.vjstb.ledscheme.service.MaskGeometry.of(scr, model.typeOf(scr), model.getWorkspace());
                 sizes.addSizeOnly(com.vjstb.ledscheme.ui.MaskExportSet.screenLabel(scene, scr, true),
@@ -362,128 +429,209 @@ public class OutputStagePanel extends JPanel {
         }
         String crop = com.vjstb.ledscheme.service.CanvasFit.report(project.getScenes(), null, model, true);
         return com.vjstb.ledscheme.ui.MaskExportSet.confirm(this, crop, sizes,
-                "Всё равно сформировать пакет документации?");
+                "Всё равно продолжить экспорт?");
     }
 
-    private void generate() {
+    private static Screen findScreen(Scene scene, String id) {
+        if (id == null) {
+            return null;
+        }
+        for (Screen s : scene.getScreens()) {
+            if (s.getId().equals(id)) {
+                return s;
+            }
+        }
+        return null;
+    }
+
+    /** Выгрузка выбранных частей вывода ({@link OutputPart}) по всему проекту. Пакет документации —
+     *  все отмеченные галочкой части ({@code single == false}), кнопка строки таблицы — одна часть
+     *  ({@code single == true}, для таблицы экранов спрашивает, что печатать). Структура папок общая:
+     *  <Сцена>/Сила, /Сигнал, /Маски, /Транспорт, /Пресеты; сводка лежит в корне папки вывода,
+     *  спецификации — в папках сцен.
+     *
+     *  <p>Рендер схемы сцены целиком ({@code SceneCanvasPanel}) и общих схем читает «текущую» сцену модели,
+     *  поэтому для питания/сигнала сцена на время экспорта переключается и потом возвращается (побочный
+     *  эффект {@code AppModel.selectScene} — очистка стека undo, как при ручном переключении). Для остальных
+     *  частей выбор сцены не трогается: {@code PixelGridRenderer.renderCanvasMask} и прочие берут сцену
+     *  параметром (баг-репорт 2026-09-30 «общий экспорт масок не отрисовывает канвасы другой сцены»). */
+    private void runExport(java.util.Set<OutputPart> parts, boolean single) {
+        if (parts.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Отметьте галочками, что включать в общий вывод",
+                    "Нечего экспортировать", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
         Project project = requireExportableProject();
         if (project == null) {
             return;
         }
         File folder = resolveFolder();
-        // Качество JPEG-схем (питание/сигнал/блок-схема/обзор сцены), НЕ масок —
-        // см. ExportSettingsDialog/UserProfile#getDocExportDpi. 1.0 = 72dpi = прежнее поведение.
+        // Качество схем (питание/сигнал/блок-схема/обзор сцены/экраны), НЕ масок — см.
+        // ExportSettingsDialog/UserProfile#getDocExportDpi. 1.0 = 72dpi = прежнее поведение.
         int docExportDpi = settings.activeProfile().getDocExportDpi();
         double dpiScale = docExportDpi / 72.0;
         boolean kw = settings.activeProfile().isPowerUnitKw();
 
-        String report = buildProjectReport(project, kw);
-        if (!confirmMaskSizes(project)) {
+        boolean doPower = parts.contains(OutputPart.POWER);
+        boolean doSignal = parts.contains(OutputPart.SIGNAL);
+        boolean doMasks = parts.contains(OutputPart.MASKS);
+        boolean doTransport = parts.contains(OutputPart.TRANSPORT);
+        boolean doScreens = parts.contains(OutputPart.SCREENS);
+        boolean doResolume = parts.contains(OutputPart.RESOLUME);
+        boolean doAfterEffects = parts.contains(OutputPart.AFTER_EFFECTS);
+        boolean doReport = parts.contains(OutputPart.REPORT);
+        boolean doSpec = parts.contains(OutputPart.SPEC);
+
+        ScreensExportOptions screensOptions = null;
+        if (doScreens) {
+            screensOptions = single ? ScreensExportOptions.ask(this, settings)
+                    : ScreensExportOptions.fromProfile(settings);
+            if (screensOptions == null) {
+                return;
+            }
+        }
+        String report = doReport ? buildProjectReport(project, kw) : null;
+        // Одно общее подтверждение по маскам (канвас обрежет, сторона ≥ 16384, больше 30000 px) — для
+        // масок, пресетов After Effects (они кладут рядом PNG-маски) и канвасов Resolume
+        if ((doMasks || doResolume || doAfterEffects) && !confirmMaskSizes(project, doMasks || doAfterEffects)) {
             return;
         }
 
-        // Рендер схемы сцены целиком (SceneCanvasPanel) читает "текущую" сцену модели, а
-        // не параметр — на время экспорта временно переключаем выбор сцены, поэтому
-        // сохраняем исходный, чтобы вернуть его после (см. finally ниже). Побочный
-        // эффект: AppModel.selectScene очищает стек undo — то же самое произошло бы,
-        // если бы пользователь вручную переключил сцену, так что это не новый риск.
-        // (PixelGridRenderer.renderCanvasMask эту сцену больше не читает — исправлен
-        // баг-репорт 2026-09-30 "общий экспорт масок не отрисовывает канвасы другой
-        // сцены": у неё теперь свой явный параметр Scene, но переключение здесь
-        // оставлено — оно всё ещё нужно SceneCanvasPanel выше.)
+        boolean switchesScene = doPower || doSignal;
         Scene origScene = model.getCurrentScene();
         Screen origScreen = model.getCurrentScreen();
-        // Экспорт общих схем переключает текущую схему режима (см. ниже), поэтому
-        // запоминаем выбранные до него, чтобы вернуть (запрос 2026-09-30, несколько схем на сцену).
+        // Экспорт общих схем переключает текущую схему режима (см. ниже), поэтому запоминаем выбранные
+        // до него, чтобы вернуть (запрос 2026-09-30, несколько схем на сцену).
         com.vjstb.ledscheme.model.SchemaSheet origPowerSheet = model.currentSchemaSheet(SchemaMode.POWER);
         com.vjstb.ledscheme.model.SchemaSheet origSignalSheet = model.currentSchemaSheet(SchemaMode.SIGNAL);
 
         int jpegCount = 0;
         int maskCount = 0;
+        int screensTableCount = 0;
+        int resolumeCount = 0;
+        int afterEffectsCount = 0;
+        File reportFile = null;
+        List<File> specFiles = new java.util.ArrayList<>();
         ExportProgressDialog progress = null;
         try {
-            int total = 1 + project.getScenes().size(); // отчёт + спецификация на каждую сцену (D6)
+            int total = (doReport ? 1 : 0) + (doSpec ? project.getScenes().size() : 0);
             for (Scene scene : project.getScenes()) {
                 int n = scene.getScreens().size();
-                total += n * 3 + (n > 1 ? 2 : 0) + scene.getCanvases().size()
-                        + model.schemaSheets(scene, SchemaMode.POWER).size()
-                        + model.schemaSheets(scene, SchemaMode.SIGNAL).size();
-                if (scene.getVehicleLoadPlan() != null) {
+                if (doPower) {
+                    total += n + (screenIdsWithChains(scene, true).size() > 1 ? 1 : 0)
+                            + model.schemaSheets(scene, SchemaMode.POWER).size();
+                }
+                if (doSignal) {
+                    total += n + (screenIdsWithChains(scene, false).size() > 1 ? 1 : 0)
+                            + model.schemaSheets(scene, SchemaMode.SIGNAL).size();
+                }
+                if (doMasks) {
+                    total += n + scene.getCanvases().size();
+                }
+                if (doTransport && scene.getVehicleLoadPlan() != null) {
                     total += scene.getVehicleLoadPlan().getSections().size();
                 }
+                if (doScreens && n > 0) {
+                    total++;
+                }
+                if (doResolume && !scene.getCanvases().isEmpty()) {
+                    total++;
+                }
+                if (doAfterEffects && !scene.getCanvases().isEmpty()) {
+                    total++;
+                }
             }
-            progress = new ExportProgressDialog(this, "Формирование пакета документации", total);
+            progress = new ExportProgressDialog(this, single
+                    ? "Экспорт: " + parts.iterator().next().label() : "Формирование пакета документации", total);
             for (Scene scene : project.getScenes()) {
-                model.selectScene(scene);
+                if (switchesScene) {
+                    model.selectScene(scene);
+                }
 
-                // Схемы и маски раньше сохранялись плоско в папку ПРОЕКТА — из-за
-                // этого схемы всех сцен смешивались в одном месте, и не было видно,
-                // какая схема к какой сцене относится, кроме как по имени файла.
-                // Теперь у каждой сцены своя папка с подпапками по назначению.
+                // Схемы и маски раньше сохранялись плоско в папку ПРОЕКТА — из-за этого схемы всех сцен
+                // смешивались в одном месте. Теперь у каждой сцены своя папка с подпапками по назначению.
                 File sceneFolder = new File(folder, OutputPaths.sanitize(scene.getName()));
                 File powerFolder = new File(sceneFolder, "Сила");
                 File signalFolder = new File(sceneFolder, "Сигнал");
                 File masksFolder = new File(sceneFolder, "Маски");
-                powerFolder.mkdirs();
-                signalFolder.mkdirs();
-                masksFolder.mkdirs();
+                if (doPower) {
+                    powerFolder.mkdirs();
+                }
+                if (doSignal) {
+                    signalFolder.mkdirs();
+                }
+                if (doMasks) {
+                    masksFolder.mkdirs();
+                }
 
                 for (Screen scr : scene.getScreens()) {
                     CabinetType type = model.typeOf(scr);
 
-                    // Цепочки хранятся на уровне сцены (Task #78), а не экрана — берём
-                    // только те, что физически затрагивают кабинеты ЭТОГО экрана (цепочка
-                    // может начинаться на другом экране сцены и продолжаться сюда). Нужны
-                    // только для рендера схем ниже — сам список цепочек в отчёт не входит
-                    // (см. Task v1.4: отчёт — только нагрузки/веса/точки подвеса).
-                    List<PowerChain> scrPowerChains = model.powerChainsTouchingScreen(scr);
-                    List<SignalChain> scrSignalChains = model.signalChainsTouchingScreen(scr);
+                    // Цепочки хранятся на уровне сцены (Task #78), а не экрана — берём только те, что
+                    // физически затрагивают кабинеты ЭТОГО экрана (цепочка может начинаться на другом
+                    // экране сцены и продолжаться сюда). Нужны только для рендера схем ниже — сам список
+                    // цепочек в отчёт не входит (см. Task v1.4: отчёт — только нагрузки/веса/точки подвеса).
+                    if (doPower || doSignal) {
+                        List<PowerChain> scrPowerChains = model.powerChainsTouchingScreen(scr);
+                        List<SignalChain> scrSignalChains = model.signalChainsTouchingScreen(scr);
+                        List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers =
+                                model.controllersInScene(scr);
+                        if (doPower) {
+                            progress.step(scene.getName() + " · " + scr.getName() + " · схема питания");
+                            BufferedImage powerImg = SchemeRenderer.renderImage(scr, type, true, 120,
+                                    model.getWorkspace(), scrPowerChains, scrSignalChains, sceneControllers, kw,
+                                    dpiScale);
+                            writeScheme(powerImg, powerFolder, OutputPaths.sanitize(scr.getName() + " Сила"),
+                                    docExportDpi);
+                            jpegCount++;
+                        }
+                        if (doSignal) {
+                            progress.step(scene.getName() + " · " + scr.getName() + " · схема сигнала");
+                            BufferedImage signalImg = SchemeRenderer.renderImage(scr, type, false, 120,
+                                    model.getWorkspace(), scrPowerChains, scrSignalChains, sceneControllers, kw,
+                                    dpiScale);
+                            writeScheme(signalImg, signalFolder, OutputPaths.sanitize(scr.getName() + " Сигнал"),
+                                    docExportDpi);
+                            jpegCount++;
+                        }
+                    }
 
-                    List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers =
-                            model.controllersInScene(scr);
-                    progress.step(scene.getName() + " · " + scr.getName() + " · схема питания");
-                    BufferedImage powerImg = SchemeRenderer.renderImage(scr, type, true, 120, model.getWorkspace(),
-                            scrPowerChains, scrSignalChains, sceneControllers, kw, dpiScale);
-                    writeScheme(powerImg, powerFolder, OutputPaths.sanitize(scr.getName() + " Сила"), docExportDpi);
-                    jpegCount++;
-
-                    progress.step(scene.getName() + " · " + scr.getName() + " · схема сигнала");
-                    BufferedImage signalImg = SchemeRenderer.renderImage(scr, type, false, 120, model.getWorkspace(),
-                            scrPowerChains, scrSignalChains, sceneControllers, kw, dpiScale);
-                    writeScheme(signalImg, signalFolder, OutputPaths.sanitize(scr.getName() + " Сигнал"),
-                            docExportDpi);
-                    jpegCount++;
-
-                    String maskStep = scene.getName() + " · " + scr.getName() + " · маска";
-                    progress.step(maskStep);
-                    // 2026-09-30 (решение D7): потоковая запись полосами в фоне (окно не замирает,
-                    // есть «Отмена»); маска больше 30000 px не пишется -- пользователь видел её в
-                    // подтверждении перед пакетом (confirmMaskSizes).
-                    com.vjstb.ledscheme.ui.MaskImage maskImg = com.vjstb.ledscheme.ui.MaskImage.screen(scr, type,
-                            model.getWorkspace(),
-                            PixelGridRenderer.GridRenderOptions.defaultForScreen(scr));
-                    if (!com.vjstb.ledscheme.service.MaskLimits.exceedsMax(maskImg.width(), maskImg.height())) {
-                        File maskFile = new File(masksFolder, OutputPaths.sanitize(scr.getName()) + "_Маска_"
-                                + maskImg.width() + "x" + maskImg.height() + ".png");
-                        progress.runInBackground(maskStep, p -> {
-                            maskImg.writePng(maskFile,
-                                    com.vjstb.ledscheme.ui.MaskImage.defaultStripRows(maskImg.width()), p);
-                            return null;
-                        });
-                        maskCount++;
+                    if (doMasks) {
+                        String maskStep = scene.getName() + " · " + scr.getName() + " · маска";
+                        progress.step(maskStep);
+                        // 2026-09-30 (решение D7): потоковая запись полосами в фоне (окно не замирает, есть
+                        // «Отмена»); маска больше 30000 px не пишется — пользователь видел её в
+                        // подтверждении перед экспортом (confirmMaskSizes).
+                        com.vjstb.ledscheme.ui.MaskImage maskImg = com.vjstb.ledscheme.ui.MaskImage.screen(scr,
+                                type, model.getWorkspace(),
+                                PixelGridRenderer.GridRenderOptions.defaultForScreen(scr));
+                        if (!com.vjstb.ledscheme.service.MaskLimits.exceedsMax(maskImg.width(), maskImg.height())) {
+                            File maskFile = new File(masksFolder, OutputPaths.sanitize(scr.getName()) + "_Маска_"
+                                    + maskImg.width() + "x" + maskImg.height() + ".png");
+                            progress.runInBackground(maskStep, p -> {
+                                maskImg.writePng(maskFile,
+                                        com.vjstb.ledscheme.ui.MaskImage.defaultStripRows(maskImg.width()), p);
+                                return null;
+                            });
+                            maskCount++;
+                        }
                     }
                 }
 
-                // Схема сцены ЦЕЛИКОМ (все экраны сразу, как «Показать все экраны
-                // сцены») — если цепочка проходит через пару экранов, по отдельным
-                // схемам экранов этого не видно вовсе, только по этой общей схеме.
-                // При ОДНОМ экране в сцене эта схема буквально дублирует его же
-                // отдельную схему (межэкранных цепочек физически быть не может) —
-                // не генерируем лишний файл.
-                if (scene.getScreens().size() > 1) {
-                    for (boolean power : new boolean[]{true, false}) {
+                // Схема сцены ЦЕЛИКОМ (все экраны сразу, как «Показать все экраны сцены») — если цепочка
+                // проходит через пару экранов, по отдельным схемам экранов этого не видно вовсе, только по
+                // этой общей схеме. Экраны БЕЗ цепочек этого режима на схеме не рисуются (запрос
+                // 2026-10-05) — файл строится только по экранам с цепочками, и если их меньше двух, он
+                // лишний (повторял бы схему единственного экрана).
+                for (boolean power : new boolean[]{true, false}) {
+                    if (power ? !doPower : !doSignal) {
+                        continue;
+                    }
+                    java.util.Set<String> withChains = screenIdsWithChains(scene, power);
+                    if (withChains.size() > 1) {
                         progress.step(scene.getName() + " · все экраны сцены · " + (power ? "питание" : "сигнал"));
                         SceneCanvasPanel overview = new SceneCanvasPanel(model, settings);
+                        overview.setScreenFilter(withChains);
                         overview.setDetailMode(true, power, false);
                         Dimension size = overview.getPreferredSize();
                         BufferedImage img = overview.renderImage(size.width, size.height, dpiScale);
@@ -492,24 +640,19 @@ public class OutputStagePanel extends JPanel {
                     }
                 }
 
-                // Общая нарисованная блок-схема площадки («Общая схема питания/сигнала»
-                // из редактора) раньше вообще не попадала в пакет документации, хотя
-                // на ней размечена вся коммутация оборудования (щиты/дистрибьюторы/
-                // конвертеры/медиасерверы/контроллеры), а не только сами экраны. Две
-                // версии: обычная (как в редакторе) и "тестовая", где вместо блока
-                // экрана рисуется уменьшённая схема его расключения (см.
-                // SchemaCanvasPanel.renderImage(..., renderScreenWiring=true)) — так
-                // видно, к какому физическому оборудованию подключён каждый экран, не
-                // открывая отдельно схему расключения каждого экрана.
-                // Экраны в общей схеме рисуются блоком или схемой расключения — по
-                // тому же переключателю Персонализации, что и в живом редакторе схемы
-                // (см. Task #83/#84/v1.4), а не всегда обоими вариантами сразу.
+                // Общая нарисованная блок-схема площадки («Общая схема питания/сигнала» из редактора):
+                // на ней размечена вся коммутация оборудования (щиты/дистрибьюторы/конвертеры/
+                // медиасерверы/контроллеры), а не только сами экраны. Экраны в общей схеме рисуются блоком
+                // или схемой расключения — по тому же переключателю Персонализации, что и в живом
+                // редакторе схемы (см. Task #83/#84/v1.4). На сцене может быть несколько общих схем одного
+                // режима (запрос 2026-09-30, пункт 8) — каждая отдельным файлом с её именем (см.
+                // CurrentSchemeExporter#packageSchemaBaseNames). Холст рисует ТЕКУЩУЮ схему режима, поэтому
+                // перед каждым рендером она выбирается.
                 boolean screensAsWiring = settings.activeProfile().isSchemaScreensAsWiringDiagram();
-                // На сцене может быть несколько общих схем одного режима (запрос
-                // 2026-09-30, пункт 8) — каждая отдельным файлом с её именем (см.
-                // CurrentSchemeExporter#packageSchemaBaseNames). Холст рисует ТЕКУЩУЮ
-                // схему режима, поэтому перед каждым рендером она выбирается.
                 for (SchemaMode schemaMode : SchemaMode.values()) {
+                    if (schemaMode == SchemaMode.POWER ? !doPower : !doSignal) {
+                        continue;
+                    }
                     File modeFolder = schemaMode == SchemaMode.POWER ? powerFolder : signalFolder;
                     List<com.vjstb.ledscheme.model.SchemaSheet> sheets = model.schemaSheets(scene, schemaMode);
                     List<String> fileNames = CurrentSchemeExporter.packageSchemaBaseNames(scene.getName(),
@@ -529,31 +672,31 @@ public class OutputStagePanel extends JPanel {
                     }
                 }
 
-                for (ContentCanvas c : scene.getCanvases()) {
-                    String canvasStep = scene.getName() + " · маска канваса «" + c.getName() + "»";
-                    progress.step(canvasStep);
-                    com.vjstb.ledscheme.ui.MaskImage img =
-                            com.vjstb.ledscheme.ui.MaskImage.canvas(c, scene, model, settings);
-                    if (!com.vjstb.ledscheme.service.MaskLimits.exceedsMax(img.width(), img.height())) {
-                        File canvasFile = new File(masksFolder, "Канвас_" + OutputPaths.sanitize(c.getName()) + "_"
-                                + img.width() + "x" + img.height() + ".png");
-                        progress.runInBackground(canvasStep, p -> {
-                            img.writePng(canvasFile,
-                                    com.vjstb.ledscheme.ui.MaskImage.defaultStripRows(img.width()), p);
-                            return null;
-                        });
-                        maskCount++;
+                if (doMasks) {
+                    for (ContentCanvas c : scene.getCanvases()) {
+                        String canvasStep = scene.getName() + " · маска канваса «" + c.getName() + "»";
+                        progress.step(canvasStep);
+                        com.vjstb.ledscheme.ui.MaskImage img =
+                                com.vjstb.ledscheme.ui.MaskImage.canvas(c, scene, model, settings);
+                        if (!com.vjstb.ledscheme.service.MaskLimits.exceedsMax(img.width(), img.height())) {
+                            File canvasFile = new File(masksFolder, "Канвас_" + OutputPaths.sanitize(c.getName())
+                                    + "_" + img.width() + "x" + img.height() + ".png");
+                            progress.runInBackground(canvasStep, p -> {
+                                img.writePng(canvasFile,
+                                        com.vjstb.ledscheme.ui.MaskImage.defaultStripRows(img.width()), p);
+                                return null;
+                            });
+                            maskCount++;
+                        }
                     }
                 }
 
-                // Схема загрузки машины(-) кофрами (см. ui.VehicleLoadVisualizerDialog,
-                // персистится в Scene.vehicleLoadPlan) — по прямому запросу пользователя:
-                // "рендер схемы размещения аналогично рендеру схем расключения", тот же
-                // dpiScale/docExportDpi, что и остальные JPEG-схемы этого экспорта. Только
-                // если визуализатор для этой сцены вообще открывали и там что-то размещено —
-                // не создаём папку/файлы для сцен без раскладки.
+                // Схема загрузки машины(-) кофрами (см. ui.VehicleLoadVisualizerDialog, персистится в
+                // Scene.vehicleLoadPlan) — по прямому запросу пользователя: «рендер схемы размещения
+                // аналогично рендеру схем расключения». Только если визуализатор для этой сцены вообще
+                // открывали и там что-то размещено — не создаём папку/файлы для сцен без раскладки.
                 VehicleLoadPlan loadPlan = scene.getVehicleLoadPlan();
-                if (loadPlan != null && !loadPlan.getSections().isEmpty()) {
+                if (doTransport && loadPlan != null && !loadPlan.getSections().isEmpty()) {
                     File transportFolder = new File(sceneFolder, "Транспорт");
                     int machineIndex = 0;
                     for (VehicleLoadSection section : loadPlan.getSections()) {
@@ -583,203 +726,142 @@ public class OutputStagePanel extends JPanel {
                         jpegCount++;
                     }
                 }
+
+                // Таблица экранов сцены (то же, что кнопка «Экспорт экранов» этапа «Настройка»)
+                if (doScreens && !scene.getScreens().isEmpty()) {
+                    progress.step(scene.getName() + " · таблица экранов");
+                    BufferedImage tableImg = SchemeRenderer.renderScreensOverviewImage(scene.getName(), model,
+                            scene.getScreens(), dpiScale, screensOptions.legend(), screensOptions.stats(),
+                            screensOptions.trusses(), screensOptions.trussLegend());
+                    sceneFolder.mkdirs();
+                    writeScheme(tableImg, sceneFolder, OutputPaths.sanitize(scene.getName() + " Экраны"),
+                            docExportDpi);
+                    screensTableCount++;
+                }
+
+                // Пресеты под Resolume и After Effects — по файлу на каждый канвас сцены (то же, что кнопки
+                // «Экспорт под …» этапа «Маски»), в подпапку «Пресеты» сцены
+                File presetsFolder = new File(sceneFolder, "Пресеты");
+                if (doResolume && !scene.getCanvases().isEmpty()) {
+                    progress.step(scene.getName() + " · пресеты Resolume");
+                    presetsFolder.mkdirs();
+                    for (ContentCanvas c : scene.getCanvases()) {
+                        String xml = com.vjstb.ledscheme.ui.ResolumePresetExporter.buildXml(c, scene, model);
+                        String fname = "Resolume_" + OutputPaths.sanitize(scene.getName()) + "_"
+                                + OutputPaths.sanitize(c.getName()) + ".xml";
+                        Files.writeString(new File(presetsFolder, fname).toPath(), xml, StandardCharsets.UTF_8);
+                        resolumeCount++;
+                    }
+                }
+                if (doAfterEffects && !scene.getCanvases().isEmpty()) {
+                    progress.step(scene.getName() + " · пресеты After Effects");
+                    String sceneName = OutputPaths.sanitize(scene.getName());
+                    com.vjstb.ledscheme.ui.MaskExportSet aeSet = new com.vjstb.ledscheme.ui.MaskExportSet();
+                    for (ContentCanvas c : scene.getCanvases()) {
+                        for (com.vjstb.ledscheme.model.CanvasPlacement pl : c.getPlacements()) {
+                            Screen scr = findScreen(scene, pl.getScreenId());
+                            if (scr == null) {
+                                continue; // экран с тех пор удалён из сцены
+                            }
+                            com.vjstb.ledscheme.ui.MaskImage img = com.vjstb.ledscheme.ui.MaskImage.screen(scr,
+                                    model.typeOf(scr), model.getWorkspace(),
+                                    PixelGridRenderer.GridRenderOptions.defaultForScreen(scr));
+                            aeSet.add(com.vjstb.ledscheme.ui.AfterEffectsJsxWriter.maskFilename(sceneName, scr,
+                                    img.width(), img.height()),
+                                    com.vjstb.ledscheme.ui.MaskExportSet.screenLabel(scene, scr, false), img);
+                        }
+                        aeSet.add(com.vjstb.ledscheme.ui.AfterEffectsJsxWriter.gapMaskFilename(sceneName, c),
+                                com.vjstb.ledscheme.ui.MaskExportSet.canvasLabel(scene, c, false) + " (пустоты)",
+                                com.vjstb.ledscheme.ui.MaskImage.canvasGap(c, scene, model));
+                        aeSet.add(com.vjstb.ledscheme.ui.AfterEffectsJsxWriter.overlayFilename(sceneName, c),
+                                com.vjstb.ledscheme.ui.MaskExportSet.canvasLabel(scene, c, false) + " (разметка)",
+                                com.vjstb.ledscheme.ui.MaskImage.canvasOverlay(c, scene, model));
+                    }
+                    presetsFolder.mkdirs();
+                    // PNG пишутся потоково в фоне со своим окном прогресса и «Отменой» (решение D7)
+                    aeSet.writeAll(this, "Экспорт под After Effects — " + scene.getName(), presetsFolder);
+                    for (ContentCanvas c : scene.getCanvases()) {
+                        String jsx = com.vjstb.ledscheme.ui.AfterEffectsJsxWriter.buildJsx(c, scene, model,
+                                sceneName);
+                        String jsxName = "AE_" + sceneName + "_" + OutputPaths.sanitize(c.getName()) + ".jsx";
+                        // BOM обязателен: без него ExtendScript читает файл в системной кодировке, и кириллица
+                        // в именах PNG («Маска», «Пустоты») превращается в мусор -> «файл не найден».
+                        Files.writeString(new File(presetsFolder, jsxName).toPath(), "\uFEFF" + jsx,
+                                StandardCharsets.UTF_8);
+                        afterEffectsCount++;
+                    }
+                }
             }
 
-            progress.step("Отчёт по проекту");
-            File reportFile = new File(folder, OutputPaths.sanitize(project.getName()) + "_отчёт.txt");
-            Files.writeString(reportFile.toPath(), report, StandardCharsets.UTF_8);
+            if (doReport) {
+                progress.step("Сводка по проекту");
+                // в пакете файл называется «отчёт», отдельной кнопкой — «сводка» (как и раньше)
+                reportFile = new File(folder, OutputPaths.sanitize(project.getName())
+                        + (single ? "_сводка.txt" : "_отчёт.txt"));
+                Files.writeString(reportFile.toPath(), report, StandardCharsets.UTF_8);
+            }
 
-            // Спецификация — отдельный файл на КАЖДУЮ сцену, в её папке (запрос 2026-09-30,
-            // решение D6); общепроектного <Проект>_спецификация.xlsx больше нет.
-            List<File> specFiles = new java.util.ArrayList<>();
-            for (Scene scene : project.getScenes()) {
-                progress.step(scene.getName() + " · спецификация оборудования");
-                specFiles.add(writeSceneSpec(project, scene, folder));
+            // Спецификация — отдельный файл на КАЖДУЮ сцену, в её папке (запрос 2026-09-30, решение D6);
+            // общепроектного <Проект>_спецификация.xlsx больше нет.
+            if (doSpec) {
+                for (Scene scene : project.getScenes()) {
+                    progress.step(scene.getName() + " · спецификация оборудования");
+                    specFiles.add(writeSceneSpec(project, scene, folder));
+                }
             }
 
             progress.close();
-            int answer = JOptionPane.showConfirmDialog(this,
-                    "Готово.\nСхем сохранено: " + jpegCount + "\nМасок сохранено: " + maskCount
-                            + "\nОтчёт: " + reportFile.getName() + "\n" + specFilesSummary(specFiles, folder)
-                            + "\n\nОткрыть папку?",
-                    "Пакет документации сформирован", JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE);
+            StringBuilder done = new StringBuilder("Готово.");
+            if (doPower || doSignal || doTransport) {
+                done.append("\nСхем сохранено: ").append(jpegCount);
+            }
+            if (doMasks) {
+                done.append("\nМасок сохранено: ").append(maskCount);
+            }
+            if (doScreens) {
+                done.append("\nТаблиц экранов: ").append(screensTableCount);
+            }
+            if (doResolume) {
+                done.append("\nФайлов Resolume: ").append(resolumeCount);
+            }
+            if (doAfterEffects) {
+                done.append("\nСкриптов After Effects: ").append(afterEffectsCount);
+            }
+            if (reportFile != null) {
+                done.append("\n").append(single ? "Сводка: " : "Отчёт: ").append(reportFile.getName());
+            }
+            if (doSpec) {
+                done.append("\n").append(specFilesSummary(specFiles, folder));
+            }
+            done.append("\n\nОткрыть папку?");
+            int answer = JOptionPane.showConfirmDialog(this, done.toString(),
+                    single ? "Экспорт: " + parts.iterator().next().label() : "Пакет документации сформирован",
+                    JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE);
             if (answer == JOptionPane.YES_OPTION) {
                 openFolder(folder);
             }
-        } catch (Exception ex) {
+        } catch (java.util.concurrent.CancellationException cancelled) {
             if (progress != null) {
                 progress.close();
             }
-            JOptionPane.showMessageDialog(this, "Ошибка формирования пакета: " + ex.getMessage(), "Ошибка",
-                    JOptionPane.ERROR_MESSAGE);
-        } finally {
-            if (progress != null) {
-                progress.close();
-            }
-            model.selectScene(origScene);
-            model.selectScreen(origScreen);
-            model.selectSchemaSheet(origPowerSheet);
-            model.selectSchemaSheet(origSignalSheet);
-        }
-    }
-
-    /** Схемы расключения (JPEG) только одного этапа — «Питание» или «Сигнал» — без масок,
-     *  отчёта, спецификации и схем транспорта: те же файлы и та же структура папок
-     *  (Сцена/Сила или Сцена/Сигнал), что и в полном пакете (см. generate()), просто без
-     *  остального. Для проекта, где нужно отправить смежникам схему только одной из двух
-     *  сетей, не пересобирая весь пакет документации. */
-    private void exportSchemesForMode(boolean power) {
-        Project project = requireExportableProject();
-        if (project == null) {
-            return;
-        }
-        File folder = resolveFolder();
-        int docExportDpi = settings.activeProfile().getDocExportDpi();
-        double dpiScale = docExportDpi / 72.0;
-        boolean kw = settings.activeProfile().isPowerUnitKw();
-        String modeFolderName = power ? "Сила" : "Сигнал";
-        String modeSuffix = power ? " Сила" : " Сигнал";
-
-        Scene origScene = model.getCurrentScene();
-        Screen origScreen = model.getCurrentScreen();
-        SchemaMode exportMode = power ? SchemaMode.POWER : SchemaMode.SIGNAL;
-        com.vjstb.ledscheme.model.SchemaSheet origSheet = model.currentSchemaSheet(exportMode);
-        int jpegCount = 0;
-        ExportProgressDialog progress = null;
-        try {
-            int total = 0;
-            for (Scene scene : project.getScenes()) {
-                int n = scene.getScreens().size();
-                total += n + (n > 1 ? 1 : 0) + model.schemaSheets(scene, exportMode).size();
-            }
-            progress = new ExportProgressDialog(this, "Экспорт схем этапа «" + modeFolderName + "»", total);
-            for (Scene scene : project.getScenes()) {
-                model.selectScene(scene);
-
-                File sceneFolder = new File(folder, OutputPaths.sanitize(scene.getName()));
-                File modeFolder = new File(sceneFolder, modeFolderName);
-                modeFolder.mkdirs();
-
-                for (Screen scr : scene.getScreens()) {
-                    CabinetType type = model.typeOf(scr);
-                    List<PowerChain> scrPowerChains = model.powerChainsTouchingScreen(scr);
-                    List<SignalChain> scrSignalChains = model.signalChainsTouchingScreen(scr);
-                    List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers =
-                            model.controllersInScene(scr);
-                    progress.step(scene.getName() + " · " + scr.getName());
-                    BufferedImage img = SchemeRenderer.renderImage(scr, type, power, 120, model.getWorkspace(),
-                            scrPowerChains, scrSignalChains, sceneControllers, kw, dpiScale);
-                    writeScheme(img, modeFolder, OutputPaths.sanitize(scr.getName() + modeSuffix), docExportDpi);
-                    jpegCount++;
-                }
-
-                if (scene.getScreens().size() > 1) {
-                    progress.step(scene.getName() + " · все экраны сцены");
-                    SceneCanvasPanel overview = new SceneCanvasPanel(model, settings);
-                    overview.setDetailMode(true, power, false);
-                    Dimension size = overview.getPreferredSize();
-                    BufferedImage img = overview.renderImage(size.width, size.height, dpiScale);
-                    writeScheme(img, modeFolder, "_Все экраны сцены", docExportDpi);
-                    jpegCount++;
-                }
-
-                boolean screensAsWiring = settings.activeProfile().isSchemaScreensAsWiringDiagram();
-                SchemaMode schemaMode = exportMode;
-                // Каждая общая схема режима — отдельным файлом (запрос 2026-09-30,
-                // пункт 8; см. CurrentSchemeExporter#packageSchemaBaseNames).
-                List<com.vjstb.ledscheme.model.SchemaSheet> sheets = model.schemaSheets(scene, schemaMode);
-                List<String> fileNames = CurrentSchemeExporter.packageSchemaBaseNames(scene.getName(),
-                        schemaMode, sheets);
-                for (int i = 0; i < sheets.size(); i++) {
-                    com.vjstb.ledscheme.model.SchemaSheet sheet = sheets.get(i);
-                    progress.step(scene.getName() + " · общая схема"
-                            + (sheets.size() > 1 ? " «" + sheet.getName() + "»" : ""));
-                    model.selectSchemaSheet(sheet);
-                    SchemaCanvasPanel schemaCanvas = new SchemaCanvasPanel(model, schemaMode, settings);
-                    Dimension size = schemaCanvas.getPreferredSize();
-                    BufferedImage img = schemaCanvas.renderImage(size.width, size.height, screensAsWiring,
-                            dpiScale);
-                    writeScheme(img, modeFolder, fileNames.get(i), docExportDpi);
-                    jpegCount++;
-                }
-            }
-
-            progress.close();
-            int answer = JOptionPane.showConfirmDialog(this,
-                    "Готово.\nСхем сохранено: " + jpegCount + "\n\nОткрыть папку?",
-                    "Схемы этапа «" + modeFolderName + "» сохранены", JOptionPane.YES_NO_OPTION,
+            JOptionPane.showMessageDialog(this, "Экспорт отменён — недописанный файл удалён.", "Отменено",
                     JOptionPane.INFORMATION_MESSAGE);
-            if (answer == JOptionPane.YES_OPTION) {
-                openFolder(folder);
-            }
         } catch (Exception ex) {
             if (progress != null) {
                 progress.close();
             }
-            JOptionPane.showMessageDialog(this, "Ошибка экспорта схем: " + ex.getMessage(), "Ошибка",
+            JOptionPane.showMessageDialog(this, "Ошибка экспорта: " + ex.getMessage(), "Ошибка",
                     JOptionPane.ERROR_MESSAGE);
         } finally {
             if (progress != null) {
                 progress.close();
             }
-            model.selectScene(origScene);
-            model.selectScreen(origScreen);
-            model.selectSchemaSheet(origSheet);
-        }
-    }
-
-    /** Только текстовая сводка по проекту (см. {@link #buildProjectReport}), без схем/масок/
-     *  спецификации — по прямому запросу пользователя как отдельная кнопка (название
-     *  «сводка», не «отчёт», чтобы не путать с «отчётом по проекту» — так называется
-     *  содержимое этого же текста внутри полного пакета документации, см. generate()). */
-    private void exportReportOnly() {
-        Project project = requireExportableProject();
-        if (project == null) {
-            return;
-        }
-        File folder = resolveFolder();
-        boolean kw = settings.activeProfile().isPowerUnitKw();
-        try {
-            String report = buildProjectReport(project, kw);
-            File reportFile = new File(folder, OutputPaths.sanitize(project.getName()) + "_сводка.txt");
-            Files.writeString(reportFile.toPath(), report, StandardCharsets.UTF_8);
-
-            int answer = JOptionPane.showConfirmDialog(this,
-                    "Готово.\nСводка: " + reportFile.getName() + "\n\nОткрыть папку?",
-                    "Сводка по проекту сформирована", JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE);
-            if (answer == JOptionPane.YES_OPTION) {
-                openFolder(folder);
+            if (switchesScene) {
+                model.selectScene(origScene);
+                model.selectScreen(origScreen);
+                model.selectSchemaSheet(origPowerSheet);
+                model.selectSchemaSheet(origSignalSheet);
             }
-        } catch (Exception ex) {
-            JOptionPane.showMessageDialog(this, "Ошибка формирования сводки: " + ex.getMessage(), "Ошибка",
-                    JOptionPane.ERROR_MESSAGE);
-        }
-    }
-
-    /** Только табличная спецификация оборудования (см. {@link #buildEquipmentSpecWorkbook}),
-     *  без схем/масок/сводки — отдельная кнопка по прямому запросу пользователя. Файл на
-     *  каждую сцену проекта, в папке сцены (запрос 2026-09-30, решение D6). */
-    private void exportSpecOnly() {
-        Project project = requireExportableProject();
-        if (project == null) {
-            return;
-        }
-        File folder = resolveFolder();
-        try {
-            List<File> specFiles = new java.util.ArrayList<>();
-            for (Scene scene : project.getScenes()) {
-                specFiles.add(writeSceneSpec(project, scene, folder));
-            }
-
-            int answer = JOptionPane.showConfirmDialog(this,
-                    "Готово.\n" + specFilesSummary(specFiles, folder) + "\n\nОткрыть папку?",
-                    "Спецификация сформирована", JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE);
-            if (answer == JOptionPane.YES_OPTION) {
-                openFolder(folder);
-            }
-        } catch (Exception ex) {
-            JOptionPane.showMessageDialog(this, "Ошибка формирования спецификации: " + ex.getMessage(), "Ошибка",
-                    JOptionPane.ERROR_MESSAGE);
         }
     }
 
@@ -882,17 +964,55 @@ public class OutputStagePanel extends JPanel {
         }
         com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(equipmentSheet, 3 + columns.size());
 
-        addWiringSheets(wb, sheets, columns);
+        java.util.function.BiFunction<com.vjstb.ledscheme.service.SceneSpecCalc.SheetData,
+                com.vjstb.ledscheme.model.SchemaEdge, Integer> edgeColor = unlabeledEdgeColorResolver();
+        com.vjstb.ledscheme.service.SceneSpecCalc.Wiring wiring = com.vjstb.ledscheme.service.SceneSpecCalc.wiring(
+                sheets, model::cableLengthProfileByName, wireType -> {
+                    com.vjstb.ledscheme.model.CableType adapter = model.cableTypeByLabel(wireType);
+                    return adapter == null ? null : adapter.getFixedLengthM();
+                }, edgeColor);
+        addWiringSheets(wb, wiring, columns);
         addStructureSheet(wb, scene);
         addFloorSheet(wb, scene);
         addTrussSheet(wb, scene);
-        addOverallEquipmentSheet(wb, scene, cabinets, equipment, sheets, columns);
+        addOverallEquipmentSheet(wb, scene, cabinets, equipment, wiring, sheets, edgeColor, columns);
         // Лист "Общий список" физически создаётся последним (нужны уже посчитанные
         // выше карты/агрегаты остальных листов), но по прямому запросу пользователя
         // должен идти визуально СРАЗУ ПОСЛЕ "Инфо" — переставляем позицию листа в
         // книге отдельно от порядка его заполнения (POI: индекс 0 = "Инфо").
         wb.setSheetOrder("Общий список", 1);
         return wb;
+    }
+
+    /** Цвет линии связи БЕЗ подписи для спецификации (RGB) — тот же, которым она нарисована на
+     *  схеме: свой цвет связи, иначе цвет роли гнезда-источника (сигнал) / номинала разъёма
+     *  (питание) активного пресета оформления ({@code SchemaCanvasPanel#edgeDefaultColor}).
+     *  {@code null} — линия цвета пресета по умолчанию (зависит от темы, в спецификацию не
+     *  выносится). */
+    private java.util.function.BiFunction<com.vjstb.ledscheme.service.SceneSpecCalc.SheetData,
+            com.vjstb.ledscheme.model.SchemaEdge, Integer> unlabeledEdgeColorResolver() {
+        com.vjstb.ledscheme.ui.SchemaStyle style = com.vjstb.ledscheme.ui.SchemaStyle
+                .forPreset(settings.activeProfile().getSchemaStylePreset());
+        return (sheet, edge) -> {
+            if (edge.getColor() != null) {
+                return edge.getColor() & 0xFFFFFF;
+            }
+            com.vjstb.ledscheme.model.SchemaNode from = null;
+            for (com.vjstb.ledscheme.model.SchemaNode n : sheet.nodes()) {
+                if (n.getId().equals(edge.getFromNodeId())) {
+                    from = n;
+                    break;
+                }
+            }
+            java.awt.Color c;
+            if (sheet.mode() == com.vjstb.ledscheme.model.SchemaMode.POWER) {
+                c = style.powerNominalLineColor(model.edgeSourceConnectorType(from, edge.getFromPortId()));
+            } else {
+                var role = model.edgeSourceRole(from, edge.getFromPortId());
+                c = role != null ? style.roleLineColor(role) : null;
+            }
+            return c != null ? c.getRGB() & 0xFFFFFF : null;
+        };
     }
 
     /** Заголовки листа: фиксированные колонки + по колонке на схему сцены (названия схем
@@ -1039,15 +1159,18 @@ public class OutputStagePanel extends JPanel {
      *  <li>Напольный каркас — экраны с {@code mountType == FLOOR}, {@code FloorCalc.compute}:
      *  рамы и стаканы по названию из библиотеки, болты/ножки/зубы суммами (детализация — лист
      *  «Напольный каркас»; стыки не выводятся);</li>
-     *  <li>Коммутация — по типу провода число линий по схемам (детальная разбивка на
-     *  куски определённой длины — на листе «Коммутация — сводная»/«Коммутация —
-     *  сплайсовка»).</li>
+     *  <li>Коммутация — по типу провода и длине куска количество кусков по схемам (с учётом
+     *  сплайсовки, как на листе «Коммутация — сводная»; состав сплайсованных линий — на
+     *  листе «Коммутация — сплайсовка»).</li>
      *  </ul>
      */
     private void addOverallEquipmentSheet(Workbook wb, Scene scene,
             java.util.Map<CabinetType, Integer> cabinets,
             List<com.vjstb.ledscheme.service.SceneSpecCalc.EquipmentRow> equipment,
+            com.vjstb.ledscheme.service.SceneSpecCalc.Wiring wiring,
             List<com.vjstb.ledscheme.service.SceneSpecCalc.SheetData> sheets,
+            java.util.function.BiFunction<com.vjstb.ledscheme.service.SceneSpecCalc.SheetData,
+                    com.vjstb.ledscheme.model.SchemaEdge, Integer> edgeColor,
             List<com.vjstb.ledscheme.service.SceneSpecCalc.Column> columns) {
         Sheet sheet = com.vjstb.ledscheme.service.SpecXlsxWriter.addSheet(wb, "Общий список",
                 schemaColumnHeaders(columns, "Категория", "Наименование", "Кол-во", "Ед."));
@@ -1215,10 +1338,12 @@ public class OutputStagePanel extends JPanel {
             com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, "Напольный каркас", "Зубы", floorTeeth, "шт");
         }
 
-        for (var row : com.vjstb.ledscheme.service.SceneSpecCalc.wireTotals(sheets)) {
+        // Кабель с каталогом длин — итоговое количество кусков по длинам (с учётом сплайсовки),
+        // как на листе «Коммутация — сводная»; без каталога — число линий (запрос 2026-10-04).
+        for (var row : com.vjstb.ledscheme.service.SceneSpecCalc.wireSpecRows(wiring, sheets,
+                model::cableLengthProfileByName, edgeColor)) {
             com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, specRow(
-                    new Object[]{"Коммутация", row.modeLabel() + ": " + row.wireType(), null, row.unit()},
-                    row.lineCounts()));
+                    new Object[]{"Коммутация", row.label(), null, row.unit()}, row.counts()));
         }
 
         com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(sheet, 4 + schemaCols);
@@ -1236,13 +1361,8 @@ public class OutputStagePanel extends JPanel {
      *  зарегистрированный переходник (см. model.CableType) с фиксированной длиной,
      *  показывается она; иначе — свободный текст, просто количество и метраж. */
     private void addWiringSheets(Workbook wb,
-            List<com.vjstb.ledscheme.service.SceneSpecCalc.SheetData> sheets,
+            com.vjstb.ledscheme.service.SceneSpecCalc.Wiring wiring,
             List<com.vjstb.ledscheme.service.SceneSpecCalc.Column> columns) {
-        com.vjstb.ledscheme.service.SceneSpecCalc.Wiring wiring = com.vjstb.ledscheme.service.SceneSpecCalc.wiring(
-                sheets, model::cableLengthProfileByName, wireType -> {
-                    com.vjstb.ledscheme.model.CableType adapter = model.cableTypeByLabel(wireType);
-                    return adapter == null ? null : adapter.getFixedLengthM();
-                });
         int n = columns.size();
 
         String[] purchaseHeaders = new String[3 + n + 1];
@@ -1282,6 +1402,22 @@ public class OutputStagePanel extends JPanel {
 
         com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(purchase, 4 + n);
         com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(splices, 4 + n);
+    }
+
+    /** id экранов сцены, через которые проходит хотя бы одна непустая цепочка выбранного режима
+     *  (питание/сигнал) — только они рисуются в файле «_Все экраны сцены» (запрос 2026-10-05). Цепочка,
+     *  идущая на соседний экран, делает «затронутыми» оба. */
+    private java.util.Set<String> screenIdsWithChains(Scene scene, boolean power) {
+        java.util.Set<String> ids = new java.util.HashSet<>();
+        for (Screen scr : scene.getScreens()) {
+            boolean touched = power
+                    ? model.powerChainsTouchingScreen(scr).stream().anyMatch(c -> !c.getCabinetInstanceIds().isEmpty())
+                    : model.signalChainsTouchingScreen(scr).stream().anyMatch(c -> !c.getCabinetInstanceIds().isEmpty());
+            if (touched) {
+                ids.add(scr.getId());
+            }
+        }
+        return ids;
     }
 
     private void openFolder(File dir) {

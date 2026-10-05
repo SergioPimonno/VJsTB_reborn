@@ -536,7 +536,7 @@ public class SchemaPanel extends JPanel {
                     "Легенда пуста", JOptionPane.WARNING_MESSAGE);
             return;
         }
-        CurrentSchemeExporter.exportPng(this, model, settings, scene.getName() + " — легенда портов",
+        CurrentSchemeExporter.export(this, model, settings, scene.getName() + " — легенда портов",
                 dpiScale -> SchemeRenderer.renderPortLegendImage(scene.getName(), rows, dpiScale));
     }
 

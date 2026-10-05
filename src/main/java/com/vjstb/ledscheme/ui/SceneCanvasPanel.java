@@ -920,6 +920,31 @@ public class SceneCanvasPanel extends JPanel {
         setDetailMode(enabled, power, false);
     }
 
+    /** id экранов, которые вообще рисуются и входят в габариты сцены; {@code null} — все экраны. Нужен
+     *  экспорту «_Все экраны сцены» (запрос 2026-10-05): экраны без цепочек выбранного режима на этой
+     *  схеме не рисуются и места не занимают. Живой просмотр фильтр не ставит. */
+    private java.util.Set<String> screenFilter;
+
+    public void setScreenFilter(java.util.Set<String> screenIds) {
+        this.screenFilter = screenIds;
+        revalidate();
+        repaint();
+    }
+
+    /** Экраны сцены, которые участвуют в отрисовке/габаритах с учётом {@link #setScreenFilter}. */
+    private List<Screen> shownScreens(Scene scene) {
+        if (screenFilter == null) {
+            return scene.getScreens();
+        }
+        List<Screen> shown = new ArrayList<>();
+        for (Screen s : scene.getScreens()) {
+            if (screenFilter.contains(s.getId())) {
+                shown.add(s);
+            }
+        }
+        return shown;
+    }
+
     public void setDetailMode(boolean enabled, boolean power, boolean fitToViewport) {
         this.detailMode = enabled;
         this.detailPower = power;
@@ -985,7 +1010,7 @@ public class SceneCanvasPanel extends JPanel {
         }
         double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE, maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
         boolean any = false;
-        for (Screen s : scene.getScreens()) {
+        for (Screen s : shownScreens(scene)) {
             CabinetType t = model.typeOf(s);
             if (t == null) {
                 continue;
@@ -1201,7 +1226,7 @@ public class SceneCanvasPanel extends JPanel {
         // экранов); внутренние отрезки цепочки внутри каждого экрана рисует сам
         // paintScheme, т.к. ему передаётся ПОЛНЫЙ список цепочек сцены.
         java.util.Map<String, int[]> screenBoxes = new java.util.HashMap<>();
-        for (Screen s : scene.getScreens()) {
+        for (Screen s : shownScreens(scene)) {
             CabinetType t = model.typeOf(s);
             if (t == null) {
                 continue;
@@ -1467,7 +1492,7 @@ public class SceneCanvasPanel extends JPanel {
      *  Порядок — по порядку обхода экранов/кабинетов сцены (не алфавитный). */
     private java.util.LinkedHashMap<String, Boolean> legendTypeIds(Scene scene) {
         java.util.LinkedHashMap<String, Boolean> usedTypeIds = new java.util.LinkedHashMap<>();
-        for (Screen s : scene.getScreens()) {
+        for (Screen s : shownScreens(scene)) {
             boolean screenHasOverride = false;
             boolean screenHasDefault = false;
             for (CabinetInstance c : s.getCabinets()) {

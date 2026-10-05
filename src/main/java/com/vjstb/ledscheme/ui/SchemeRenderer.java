@@ -8,8 +8,10 @@ import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SignalChain;
 import com.vjstb.ledscheme.model.Workspace;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.service.CableSpecCalc;
 import com.vjstb.ledscheme.service.ScreenLogic;
 import com.vjstb.ledscheme.service.ScreenStats;
+import com.vjstb.ledscheme.service.TrussCalc;
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Dimension;
@@ -1326,6 +1328,16 @@ public final class SchemeRenderer {
      *  более типах на сцене она всегда есть (запрос 2026-10-02). */
     public static BufferedImage renderScreensOverviewImage(String sceneName, AppModel model,
             List<Screen> screens, double dpiScale, boolean showLegend, boolean showStats) {
+        return renderScreensOverviewImage(sceneName, model, screens, dpiScale, showLegend, showStats, false, false);
+    }
+
+    /** {@code showTrusses} — фермы подвеса над экранами на подвесе, каждая цветом своего типа
+     *  (профиля фермы); {@code showTrussLegend} — блок «Фермы» в правой панели: цвет, тип, число и
+     *  суммарная длина (запрос 2026-10-05). Сегменты рисуются реальной длиной, как на холсте сцены
+     *  ({@code SceneCanvasPanel#drawRiggingTruss}), со свесом {@link TrussCalc.Result#gridLeftOffsetMm()}. */
+    public static BufferedImage renderScreensOverviewImage(String sceneName, AppModel model,
+            List<Screen> screens, double dpiScale, boolean showLegend, boolean showStats,
+            boolean showTrusses, boolean showTrussLegend) {
         record Row(String number, String name, String size, String resolution, String weight, String load,
                    String mount, String notes, double widthMm, double heightMm) {
         }
@@ -1378,6 +1390,50 @@ public final class SchemeRenderer {
         // заливка ничего не различает (и закрасила бы всю площадку одним цветом)
         boolean tintByType = typesById.size() >= 2;
 
+        // Фермы подвеса экранов сцены: только с профилем и непустым каталогом длин (иначе нечего
+        // рисовать — тот же критерий, что у холста сцены); тип фермы = профиль библиотеки
+        record TrussDraw(int screenIndex, TrussCalc.Result calc, com.vjstb.ledscheme.model.TrussProfile profile) {
+        }
+        List<TrussDraw> trusses = new ArrayList<>();
+        if (showTrusses || showTrussLegend) {
+            for (int i = 0; i < screens.size(); i++) {
+                Screen s = screens.get(i);
+                CabinetType defaultType = model.typeOf(s);
+                if (s.getMountType() != com.vjstb.ledscheme.model.ScreenMountType.RIGGED
+                        || s.getRiggingTrussProfileId() == null || defaultType == null) {
+                    continue;
+                }
+                TrussCalc.Result calc = TrussCalc.compute(s, defaultType, model.getWorkspace());
+                com.vjstb.ledscheme.model.TrussProfile profile =
+                        model.getWorkspace().trussProfileById(s.getRiggingTrussProfileId());
+                if (calc.profileMissing() || calc.catalogEmpty() || calc.pieces() == null || profile == null) {
+                    continue;
+                }
+                trusses.add(new TrussDraw(i, calc, profile));
+            }
+        }
+        // тип фермы -> [число ферм, суммарная собранная длина, м]
+        java.util.LinkedHashMap<String, double[]> trussTotals = new java.util.LinkedHashMap<>();
+        java.util.Map<String, com.vjstb.ledscheme.model.TrussProfile> trussProfiles = new java.util.HashMap<>();
+        for (TrussDraw td : trusses) {
+            double[] tot = trussTotals.computeIfAbsent(td.profile().getId(), k -> new double[2]);
+            tot[0]++;
+            tot[1] += td.calc().totalKitLengthMm() / 1000.0;
+            trussProfiles.putIfAbsent(td.profile().getId(), td.profile());
+        }
+        // Цвета типов ферм — из набора максимально различимых тонов, по порядку имён типов (а не
+        // хэш id, у которого два типа легко получали близкие цвета): запрос 2026-10-05
+        List<String> trussIdsByName = new ArrayList<>(trussTotals.keySet());
+        trussIdsByName.sort(java.util.Comparator.comparing(
+                (String id) -> String.valueOf(trussProfiles.get(id).getName()).toLowerCase(),
+                java.util.Comparator.naturalOrder()).thenComparing(java.util.Comparator.naturalOrder()));
+        java.util.Map<String, Color> trussColors = new java.util.HashMap<>();
+        for (int i = 0; i < trussIdsByName.size(); i++) {
+            trussColors.put(trussIdsByName.get(i), trussTypeColor(i));
+        }
+        boolean trussLegendOn = showTrussLegend && !trusses.isEmpty();
+        boolean drawTrusses = showTrusses && !trusses.isEmpty();
+
         Font titleFont = new Font(Font.SANS_SERIF, Font.BOLD, 20);
         Font headerFont = new Font(Font.SANS_SERIF, Font.BOLD, 15);
         Font rowFont = new Font(Font.SANS_SERIF, Font.PLAIN, 15);
@@ -1427,15 +1483,23 @@ public final class SchemeRenderer {
         int panelPad = 14;
         int swatchSize = 14;
         int swatchGap = 8;
-        boolean hasPanel = !screens.isEmpty() && (showLegend || showStats);
+        boolean hasPanel = !screens.isEmpty() && (showLegend || showStats || trussLegendOn);
         List<String> typeLines = new ArrayList<>();
         List<String> statLines = new ArrayList<>();
+        List<String> trussLines = new ArrayList<>();
         int panelW = 0;
         if (hasPanel) {
             if (showLegend) {
                 for (CabinetType t : typesById.values()) {
                     String name = t.getName() == null || t.getName().isBlank() ? "(без названия)" : t.getName();
                     typeLines.add(name + " — " + countByTypeId.getOrDefault(t.getId(), 0) + " шт.");
+                }
+            }
+            if (trussLegendOn) {
+                for (var te : trussTotals.entrySet()) {
+                    String name = trussProfiles.get(te.getKey()).getName();
+                    trussLines.add((name == null || name.isBlank() ? "(без названия)" : name) + " — "
+                            + (int) te.getValue()[0] + " шт., " + trim(te.getValue()[1]) + " м");
                 }
             }
             if (showStats) {
@@ -1451,6 +1515,12 @@ public final class SchemeRenderer {
             if (showLegend) {
                 content = Math.max(content, headerFm.stringWidth("Типы кабинетов"));
             }
+            if (trussLegendOn) {
+                content = Math.max(content, headerFm.stringWidth("Фермы"));
+            }
+            for (String l : trussLines) {
+                content = Math.max(content, swatchSize + swatchGap + rowFm.stringWidth(l));
+            }
             for (String l : typeLines) {
                 content = Math.max(content, swatchSize + swatchGap + rowFm.stringWidth(l));
             }
@@ -1463,15 +1533,20 @@ public final class SchemeRenderer {
         int panelH = 0;
         if (hasPanel) {
             panelH = panelPad * 2;
+            int sections = 0;
             if (showLegend) {
                 panelH += headerH + 6 + typeLines.size() * rowH;
+                sections++;
             }
-            if (showLegend && showStats) {
-                panelH += 12;
+            if (trussLegendOn) {
+                panelH += headerH + 6 + trussLines.size() * rowH;
+                sections++;
             }
             if (showStats) {
                 panelH += headerH + 6 + statLines.size() * rowH;
+                sections++;
             }
+            panelH += 12 * Math.max(0, sections - 1);
         }
         pg.dispose();
 
@@ -1510,6 +1585,14 @@ public final class SchemeRenderer {
             maxX = Math.max(maxX, s.getPosXMm() + e[2]);
             maxY = Math.max(maxY, s.getPosYMm() + e[3]);
         }
+        if (drawTrusses) {
+            for (TrussDraw td : trusses) {
+                Screen s = screens.get(td.screenIndex());
+                double startMm = s.getPosXMm() - td.calc().gridLeftOffsetMm();
+                minX = Math.min(minX, startMm);
+                maxX = Math.max(maxX, startMm + td.calc().totalKitLengthMm());
+            }
+        }
         boolean hasScreens = !rows.isEmpty();
         double boundW = hasScreens ? Math.max(1, maxX - minX) : 1;
         double boundH = hasScreens ? Math.max(1, maxY - minY) : 1;
@@ -1522,7 +1605,9 @@ public final class SchemeRenderer {
         int leftW = Math.max(titleW, Math.max(tableW, planPxW));
         int w = leftW + (hasPanel ? panelGap + panelW : 0) + pad * 2;
         int titleY = pad + titleH - 6;
-        int screensY = titleY + 24;
+        // над самым верхним экраном нужна полоса под ферму (она рисуется над верхним краем экрана)
+        int trussBand = drawTrusses ? TRUSS_BAND_H + TRUSS_BAND_GAP + 4 : 0;
+        int screensY = titleY + 24 + trussBand;
         int tableTop = rows.isEmpty() ? screensY : screensY + planPxH + 40;
         int headerY = tableTop + headerH;
         int firstRowY = headerY + 16;
@@ -1604,6 +1689,37 @@ public final class SchemeRenderer {
             g2.drawString(number, sx + 8, sy + 3 + numFm.getAscent() + 1);
         }
 
+        if (drawTrusses) {
+            for (TrussDraw td : trusses) {
+                Screen scr = screens.get(td.screenIndex());
+                double[] e = ext[td.screenIndex()];
+                int sy = screensY + (int) Math.round((scr.getPosYMm() + e[1] - minY) * scale);
+                double gridXMm = scr.getPosXMm() - minX;
+                List<Double> segMm = new ArrayList<>();
+                for (CableSpecCalc.Piece p : td.calc().pieces()) {
+                    for (int k = 0; k < p.count(); k++) {
+                        segMm.add(p.lengthM() * 1000.0);
+                    }
+                }
+                segMm.sort(java.util.Comparator.reverseOrder());
+                Color fill = trussColors.get(td.profile().getId());
+                int topY = sy - TRUSS_BAND_GAP - TRUSS_BAND_H;
+                double cursorMm = 0;
+                for (double len : segMm) {
+                    int px1 = pad + (int) Math.round((gridXMm + cursorMm - td.calc().gridLeftOffsetMm()) * scale);
+                    int px2 = pad + (int) Math.round((gridXMm + cursorMm + len - td.calc().gridLeftOffsetMm()) * scale);
+                    if (px2 > px1) {
+                        g2.setColor(fill);
+                        g2.fillRect(px1, topY, px2 - px1, TRUSS_BAND_H);
+                        g2.setColor(new Color(0x20, 0x20, 0x20));
+                        g2.setStroke(new java.awt.BasicStroke(1f));
+                        g2.drawRect(px1, topY, px2 - px1, TRUSS_BAND_H);
+                    }
+                    cursorMm += len;
+                }
+            }
+        }
+
         g2.setFont(headerFont);
         g2.setColor(Palette.TEXT);
         for (int i = 0; i < headers.length; i++) {
@@ -1659,6 +1775,29 @@ public final class SchemeRenderer {
                     ty += rowH;
                     ti++;
                 }
+                if (trussLegendOn || showStats) {
+                    ty += 12;
+                }
+            }
+            if (trussLegendOn) {
+                g2.setFont(headerFont);
+                g2.setColor(Palette.TEXT);
+                g2.drawString("Фермы", px + panelPad, ty);
+                ty += 6 + rowH - 4;
+                g2.setFont(rowFont);
+                int fi = 0;
+                for (String profileId : trussTotals.keySet()) {
+                    int rowTop = ty - rowFm.getAscent();
+                    g2.setColor(trussColors.get(profileId));
+                    g2.fillRect(px + panelPad, rowTop + 1, swatchSize, swatchSize);
+                    g2.setColor(new Color(0x20, 0x20, 0x20));
+                    g2.drawRect(px + panelPad, rowTop + 1, swatchSize - 1, swatchSize - 1);
+                    g2.setColor(Palette.TEXT);
+                    g2.drawString(clipToWidth(g2, trussLines.get(fi), typeTextMaxW),
+                            px + panelPad + swatchSize + swatchGap, ty);
+                    ty += rowH;
+                    fi++;
+                }
                 if (showStats) {
                     ty += 12;
                 }
@@ -1682,6 +1821,23 @@ public final class SchemeRenderer {
 
     /** Непрозрачность заливки кабинета цветом его типа в экспорте таблицы экранов. */
     private static final int TINT_ALPHA = 150;
+    /** Набор тонов типов ферм: красный, синий, оранжевый, зелёный, фиолетовый, голубой, жёлтый,
+     *  розовый, коричневый, салатовый, бирюзовый, серо-голубой — максимально разведены по тону и яркости,
+     *  хорошо читаются и на тёмном фоне, и рядом с серой сеткой кабинетов. */
+    private static final int[] TRUSS_TYPE_COLORS = {
+            0xE6194B, 0x3C76E8, 0xF58231, 0x3CB44B, 0x911EB4, 0x42D4F4,
+            0xFFE119, 0xF032E6, 0x9A6324, 0xBFEF45, 0x469990, 0xA9B8D0};
+
+    /** Цвет {@code index}-го (по порядку имён) типа фермы в экспорте экранов; после исчерпания набора
+     *  цвета повторяются затемнёнными (больше 12 типов ферм на одной сцене — редкость). */
+    public static Color trussTypeColor(int index) {
+        Color base = new Color(TRUSS_TYPE_COLORS[index % TRUSS_TYPE_COLORS.length]);
+        return index < TRUSS_TYPE_COLORS.length ? base : base.darker();
+    }
+
+    /** Высота полосы фермы над экраном и зазор до верхнего края экрана в экспорте таблицы экранов. */
+    private static final int TRUSS_BAND_H = 9;
+    private static final int TRUSS_BAND_GAP = 3;
 
     /** Электрическая нагрузка экрана для таблицы (см. {@link #renderScreensOverviewImage}) —
      *  в кВт с одним знаком после запятой при 1 кВт и больше (обычный диапазон для

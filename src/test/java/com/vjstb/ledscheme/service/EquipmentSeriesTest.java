@@ -63,8 +63,8 @@ class EquipmentSeriesTest {
     void cardKindIsDerivedFromPortsUnlessSetExplicitly() {
         assertEquals(CardKind.INPUT, card("a", PortDirection.IN).effectiveKind());
         assertEquals(CardKind.OUTPUT, card("b", PortDirection.OUT).effectiveKind());
-        assertEquals(CardKind.MIXED, card("c", PortDirection.IN_OUT).effectiveKind());
-        assertEquals(CardKind.MIXED, new SchemaCard("пустая", List.of()).effectiveKind());
+        assertEquals(CardKind.NO_SLOT, card("c", PortDirection.IN_OUT).effectiveKind());
+        assertEquals(CardKind.NO_SLOT, new SchemaCard("пустая", List.of()).effectiveKind());
         SchemaCard forced = card("d", PortDirection.IN);
         forced.setKind(CardKind.OUTPUT);
         assertEquals(CardKind.OUTPUT, forced.effectiveKind());
@@ -72,19 +72,34 @@ class EquipmentSeriesTest {
     }
 
     @Test
-    void limitsCountInputOutputAndMixedSeparately() {
+    void noSlotKindRoundTripsAndLegacyMixedLoadsAsAutoDetect() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper()
+                .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        SchemaCard noSlot = card("basic", PortDirection.IN);
+        noSlot.setKind(CardKind.NO_SLOT);
+        SchemaCard back = mapper.readValue(mapper.writeValueAsString(noSlot), SchemaCard.class);
+        assertEquals(CardKind.NO_SLOT, back.getKind());
+        // «смешанная» карта существовала до 2026-10-05 — сохранённые данные не должны ронять загрузку
+        SchemaCard legacy = mapper.readValue("{\"name\":\"old\",\"ports\":[],\"kind\":\"MIXED\"}", SchemaCard.class);
+        assertNull(legacy.getKind());
+    }
+
+    @Test
+    void limitsCountInputAndOutputSeparatelyAndNoSlotCardsAreFree() {
         EquipmentPreset p = new EquipmentPreset();
         p.setName("H2");
         p.setMaxInputCards(1);
         p.setMaxOutputCards(2);
         SchemaCard in = card("in", PortDirection.IN);
         SchemaCard out = card("out", PortDirection.OUT);
-        SchemaCard mixed = card("mix", PortDirection.IN_OUT);
+        SchemaCard noSlot = card("basic", PortDirection.IN);
+        noSlot.setKind(CardKind.NO_SLOT);
 
         assertTrue(CardLoadout.canAdd(p, List.of(), in));
         assertFalse(CardLoadout.canAdd(p, List.of(in), in), "второй входной сверх лимита 1");
         assertTrue(CardLoadout.canAdd(p, List.of(in), out));
-        assertFalse(CardLoadout.canAdd(p, List.of(in), mixed), "смешанная занимает и входной слот");
+        assertTrue(CardLoadout.canAdd(p, List.of(in, out, out), noSlot), "«не требует слота» не занимает ни один слот");
+        assertEquals("Входные 1/1 · Выходные 2/2", CardLoadout.summary(p, List.of(in, noSlot, out, noSlot, out)));
         assertTrue(CardLoadout.canAdd(p, List.of(out, out), in));
         assertFalse(CardLoadout.canAdd(p, List.of(out, out), out));
         assertNull(CardLoadout.problem(p, List.of(in, out, out)));

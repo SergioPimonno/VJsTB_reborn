@@ -398,10 +398,19 @@ public class SettingsManager {
         persist();
     }
 
-    /** Запоминает выбор диалога экспорта таблицы экранов (легенда кабинетов / статистика сцены). */
-    public void setScreensExportOptions(boolean legend, boolean stats) {
+    /** Запоминает выбор диалога экспорта таблицы экранов (легенда кабинетов / статистика сцены /
+     *  фермы / легенда ферм). */
+    public void setScreensExportOptions(boolean legend, boolean stats, boolean trusses, boolean trussLegend) {
         activeProfile().setScreensExportLegend(legend);
         activeProfile().setScreensExportStats(stats);
+        activeProfile().setScreensExportTrusses(trusses);
+        activeProfile().setScreensExportTrussLegend(trussLegend);
+        persist();
+    }
+
+    /** Запоминает, какие части входят в общий вывод (имена {@code ui.stage.OutputPart}). */
+    public void setOutputParts(java.util.List<String> names) {
+        activeProfile().setOutputParts(new java.util.ArrayList<>(names));
         persist();
     }
 

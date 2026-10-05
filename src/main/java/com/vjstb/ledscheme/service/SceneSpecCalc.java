@@ -15,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /**
@@ -76,9 +77,70 @@ public final class SceneSpecCalc {
     public record WireTotalRow(String modeLabel, String wireType, int[] lineCounts, double[] lengthsM, String unit) {
     }
 
+    /** Строка «Коммутация» листа «Общий список»: наименование уже включает длину куска
+     *  («Питание: CEE 32A — 10 м»), {@code counts} — число кусков по колонкам. */
+    public record WireSpecRow(String modeLabel, String label, int[] counts, String unit) {
+    }
+
     /** Результат разбора связей: оба листа коммутации и число связей без
      *  структурированной подписи (не учтены в подсчёте). */
     public record Wiring(List<WirePurchaseRow> purchase, List<WireSpliceRow> splices, int uncountedEdges) {
+    }
+
+    /** Пояснение к позиции линий типа с каталогом длин, у которых длина не задана. */
+    static final String NO_LENGTH_NOTE = "длина не указана";
+
+    /** Начало «типа провода» неподписанной связи, см. {@link #unknownTypeLabel}. */
+    private static final String UNKNOWN_TYPE = "неизвестный тип";
+
+    /** Тип провода для связи без подписи: «неизвестный тип, цвет красный (#E00000)»;
+     *  {@code rgb == null} — линия нарисована цветом пресета по умолчанию (его RGB зависит от
+     *  темы, поэтому в спецификацию не выносится). */
+    static String unknownTypeLabel(Integer rgb) {
+        return UNKNOWN_TYPE + ", " + (rgb == null ? "цвет по умолчанию"
+                : "цвет " + colorName(rgb) + " (#" + String.format("%06X", rgb & 0xFFFFFF) + ")");
+    }
+
+    private static boolean isUnknownType(String wireType) {
+        return wireType != null && wireType.startsWith(UNKNOWN_TYPE);
+    }
+
+    /** Грубое русское название цвета по тону/насыщенности — чтобы в Excel было читаемо
+     *  без расшифровки hex. */
+    static String colorName(int rgb) {
+        int r = (rgb >> 16) & 0xFF;
+        int g = (rgb >> 8) & 0xFF;
+        int b = rgb & 0xFF;
+        float[] hsb = java.awt.Color.RGBtoHSB(r, g, b, null);
+        if (hsb[2] < 0.2f) {
+            return "чёрный";
+        }
+        if (hsb[1] < 0.15f) {
+            return hsb[2] > 0.85f ? "белый" : "серый";
+        }
+        float h = hsb[0] * 360f;
+        if (h < 15 || h >= 345) {
+            return "красный";
+        }
+        if (h < 40) {
+            return hsb[2] < 0.7f ? "коричневый" : "оранжевый";
+        }
+        if (h < 70) {
+            return "жёлтый";
+        }
+        if (h < 170) {
+            return "зелёный";
+        }
+        if (h < 200) {
+            return "голубой";
+        }
+        if (h < 260) {
+            return "синий";
+        }
+        if (h < 290) {
+            return "фиолетовый";
+        }
+        return "розовый";
     }
 
     /** Подпись режима в первой колонке листов спецификации. */
@@ -209,8 +271,11 @@ public final class SceneSpecCalc {
      *  подписанные три (баг-репорт 2026-10-03, проект «Лемана»: неподписанная линия к монитору
      *  из того же гнезда, что и три «1×DP», терялась — в Excel 6 DP вместо 8). Метраж у такой связи
      *  неизвестен. Неподписанная связь вне пучка, либо если в пучках на её концах разные типы
-     *  провода, по-прежнему не учитывается (попадает в счётчик «связей без подписи»). */
-    private static WireList wiresOf(SheetData sheet) {
+     *  провода, по-прежнему не учитывается (попадает в счётчик «связей без подписи»), если не
+     *  задан {@code colorOf}: тогда такая связь идёт отдельной позицией «неизвестный тип, цвет …»
+     *  — кабель известного цвета, но без подписи, классифицируется по цвету линии (запрос
+     *  2026-10-04). */
+    private static WireList wiresOf(SheetData sheet, BiFunction<SheetData, SchemaEdge, Integer> colorOf) {
         List<SchemaEdge> edges = sheet.edges();
         List<Wire> wires = new ArrayList<>();
         int uncounted = 0;
@@ -222,6 +287,8 @@ public final class SceneSpecCalc {
             String inherited = inheritedBundleType(edge, edges);
             if (inherited != null) {
                 wires.add(new Wire(inherited, 1, null));
+            } else if (colorOf != null) {
+                wires.add(new Wire(unknownTypeLabel(colorOf.apply(sheet, edge)), 1, null));
             } else {
                 uncounted++;
             }
@@ -281,6 +348,15 @@ public final class SceneSpecCalc {
      *         переходника по типу провода ({@code null} — не переходник) */
     public static Wiring wiring(List<SheetData> sheets, Function<String, CableLengthProfile> profileOf,
             Function<String, Double> adapterFixedLengthOf) {
+        return wiring(sheets, profileOf, adapterFixedLengthOf, null);
+    }
+
+    /** {@link #wiring(List, Function, Function)} с учётом связей БЕЗ подписи: {@code colorOf}
+     *  даёт цвет линии (RGB; {@code null} — цвет по умолчанию пресета) — такая связь считается
+     *  кабелем «неизвестный тип, цвет …» ({@link #unknownTypeLabel}). {@code colorOf == null} —
+     *  неподписанные связи не учитываются (счётчик {@link Wiring#uncountedEdges()}). */
+    public static Wiring wiring(List<SheetData> sheets, Function<String, CableLengthProfile> profileOf,
+            Function<String, Double> adapterFixedLengthOf, BiFunction<SheetData, SchemaEdge, Integer> colorOf) {
         List<Column> columns = columns(sheets);
         int n = sheets.size();
         int uncounted = 0;
@@ -291,7 +367,7 @@ public final class SceneSpecCalc {
         }
         for (int col = 0; col < n; col++) {
             SheetData sheet = sheets.get(col);
-            WireList wl = wiresOf(sheet);
+            WireList wl = wiresOf(sheet, colorOf);
             uncounted += wl.uncounted();
             for (Wire w : wl.wires()) {
                 List<List<double[]>> perColumn = byMode.get(sheet.mode()).computeIfAbsent(w.type(), k -> {
@@ -341,7 +417,21 @@ public final class SceneSpecCalc {
                         }
                         continue;
                     }
-                    CableSpecCalc.Breakdown breakdown = CableSpecCalc.breakdown(lines, profile);
+                    // Линии без длины комплектовать нечем (нулевая длина дала бы кусок
+                    // минимального номинала) — отдельная позиция «длина не указана».
+                    List<double[]> sized = new ArrayList<>();
+                    int unsizedCount = 0;
+                    for (double[] l : lines) {
+                        if (l[0] > 0) {
+                            sized.add(l);
+                        } else {
+                            unsizedCount += (int) Math.round(l[1]);
+                        }
+                    }
+                    if (unsizedCount > 0) {
+                        addPurchase(rows, "nolen", modeLabel, wireType, null, n, col, unsizedCount, NO_LENGTH_NOTE);
+                    }
+                    CableSpecCalc.Breakdown breakdown = CableSpecCalc.breakdown(sized, profile);
                     for (var byLen : breakdown.countByRoundedLengthM().entrySet()) {
                         addPurchase(rows, "len:" + byLen.getKey(), modeLabel, wireType, byLen.getKey(), n, col,
                                 byLen.getValue(), null);
@@ -367,7 +457,7 @@ public final class SceneSpecCalc {
                 WirePurchaseRow free = rows.get("free");
                 if (free != null) {
                     rows.put("free", new WirePurchaseRow(free.modeLabel(), free.wireType(), null, free.counts(),
-                            freeNote(columns, freeLengths)));
+                            isUnknownType(wireType) ? "тип не указан на связи" : freeNote(columns, freeLengths)));
                 }
                 purchase.addAll(rows.values());
                 splices.addAll(spliceRows.values());
@@ -393,16 +483,84 @@ public final class SceneSpecCalc {
                 sum += lengths[i];
             }
         }
+        if (sum == 0) {
+            return "не зарегистрирован в библиотеке, длина не задана";
+        }
         if (parts.size() <= 1) {
             return "не зарегистрирован в библиотеке — суммарно " + fmt(sum) + " м";
         }
         return "не зарегистрирован в библиотеке — суммарно: " + String.join("; ", parts);
     }
 
+    /** Строки «Коммутация» листа «Общий список» (запрос 2026-10-04: «общая спецификация на то и
+     *  общая» — нужен кабель по длинам, а не «3 шт линий (~60 м суммарно)»).
+     *  <ul>
+     *  <li>Тип с каталогом длин ({@code profileOf != null}, к нему применима сплайсовка) —
+     *  строка на КАЖДУЮ длину куска к закупке («Питание: CEE 32A — 10 м», кусков N шт); куски,
+     *  ушедшие в сплайсовку, уже учтены в этих числах. Длины по возрастанию, затем отдельной
+     *  позицией линии без указанной длины («… (длина не указана)») — их комплектовать нечем.</li>
+     *  <li>Тип без каталога (переходник, незарегистрированный) — одна строка с числом
+     *  ЛИНИЙ: «шт линий (~X м суммарно)» или «(длина не указана)».</li>
+     *  </ul>
+     *  Порядок типов сохраняется (питание, затем сигнал). */
+    public static List<WireSpecRow> wireSpecRows(Wiring wiring, List<SheetData> sheets,
+            Function<String, CableLengthProfile> profileOf, BiFunction<SheetData, SchemaEdge, Integer> colorOf) {
+        Map<String, List<WirePurchaseRow>> byType = new LinkedHashMap<>();
+        for (WirePurchaseRow r : wiring.purchase()) {
+            byType.computeIfAbsent(r.modeLabel() + ": " + r.wireType(), k -> new ArrayList<>()).add(r);
+        }
+        Map<String, WireTotalRow> totals = new LinkedHashMap<>();
+        for (WireTotalRow t : wireTotals(sheets, colorOf)) {
+            totals.put(t.modeLabel() + ": " + t.wireType(), t);
+        }
+        List<WireSpecRow> result = new ArrayList<>();
+        for (var entry : byType.entrySet()) {
+            WirePurchaseRow first = entry.getValue().get(0);
+            if (profileOf.apply(first.wireType()) == null) {
+                WireTotalRow t = totals.get(entry.getKey());
+                if (t != null) {
+                    boolean anyLength = false;
+                    for (double len : t.lengthsM()) {
+                        anyLength |= len > 0;
+                    }
+                    result.add(new WireSpecRow(t.modeLabel(), entry.getKey(), t.lineCounts(),
+                            isUnknownType(t.wireType()) ? "шт"
+                                    : anyLength ? t.unit() : "шт линий (" + NO_LENGTH_NOTE + ")"));
+                }
+                continue;
+            }
+            List<WirePurchaseRow> rows = new ArrayList<>(entry.getValue());
+            rows.sort(java.util.Comparator.comparing(WirePurchaseRow::lengthM,
+                    java.util.Comparator.nullsLast(Double::compare)));
+            for (WirePurchaseRow r : rows) {
+                if (r.lengthM() != null) {
+                    result.add(new WireSpecRow(r.modeLabel(), entry.getKey() + " — " + fmt(r.lengthM()) + " м",
+                            r.counts(), "шт"));
+                } else if (NO_LENGTH_NOTE.equals(r.note())) {
+                    result.add(new WireSpecRow(r.modeLabel(), entry.getKey() + " (" + NO_LENGTH_NOTE + ")",
+                            r.counts(), "шт линий"));
+                } else {
+                    result.add(new WireSpecRow(r.modeLabel(), entry.getKey(), r.counts(),
+                            "шт линий (" + r.note() + ")"));
+                }
+            }
+        }
+        return result;
+    }
+
     /** Строки «Коммутация» листа «Общий список»: по типу провода число линий и метраж
      *  по схемам (раньше одна сумма на проект). {@code unit} — «шт линий (~X м
-     *  суммарно)»; если провод есть в нескольких схемах — метраж по схемам. */
+     *  суммарно)»; если провод есть в нескольких схемах — метраж по схемам. В
+     *  выгрузку больше не идёт (см. {@link #wireSpecRows}), оставлено для подсчёта
+     *  линий по схемам. */
     public static List<WireTotalRow> wireTotals(List<SheetData> sheets) {
+        return wireTotals(sheets, null);
+    }
+
+    /** {@link #wireTotals(List)} с неподписанными связями по цвету, см. {@link #wiring(List,
+     *  Function, Function, BiFunction)}. */
+    public static List<WireTotalRow> wireTotals(List<SheetData> sheets,
+            BiFunction<SheetData, SchemaEdge, Integer> colorOf) {
         List<Column> columns = columns(sheets);
         int n = sheets.size();
         Map<String, WireTotalRow> rows = new LinkedHashMap<>();
@@ -412,7 +570,7 @@ public final class SceneSpecCalc {
                 if (sheet.mode() != mode) {
                     continue;
                 }
-                for (Wire w : wiresOf(sheet).wires()) {
+                for (Wire w : wiresOf(sheet, colorOf).wires()) {
                     WireTotalRow row = rows.computeIfAbsent(modeLabel(mode) + ": " + w.type(),
                             k -> new WireTotalRow(modeLabel(mode), w.type(), new int[n], new double[n], null));
                     row.lineCounts()[col] += w.count();

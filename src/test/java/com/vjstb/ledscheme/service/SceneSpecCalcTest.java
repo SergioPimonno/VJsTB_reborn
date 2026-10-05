@@ -234,6 +234,57 @@ class SceneSpecCalcTest {
         assertEquals("Питание: P", power.modeLabel() + ": " + power.wireType());
     }
 
+    @Test
+    void wireSpecRowsListPiecesByLengthThenUnsizedThenLinesForTypesWithoutCatalog() {
+        // Каталог Cat6 10 и 20 м: 2 линии по 8 м -> 2x10; линия 25 м -> сплайсовка 20+10;
+        // ещё 2 линии Cat6 без длины. «Свободный» каталога не имеет -> число линий.
+        List<SheetData> sheets = List.of(sheet("a", SchemaMode.SIGNAL, "А", List.of(), List.of(
+                wire(SchemaMode.SIGNAL, 2, "Cat6", 8.0), wire(SchemaMode.SIGNAL, 1, "Cat6", 25.0),
+                wire(SchemaMode.SIGNAL, 2, "Cat6", null),
+                wire(SchemaMode.SIGNAL, 3, "Свободный", null), wire(SchemaMode.SIGNAL, 1, "Свободный", 4.0))));
+        java.util.function.Function<String, CableLengthProfile> profileOf =
+                t -> "Cat6".equals(t) ? profile(10, 20) : null;
+
+        var rows = SceneSpecCalc.wireSpecRows(SceneSpecCalc.wiring(sheets, profileOf, t -> null), sheets, profileOf, null);
+
+        assertEquals(4, rows.size(), rows.toString());
+        assertEquals("Сигнал: Cat6 — 10 м", rows.get(0).label());
+        assertArrayEquals(new int[]{3}, rows.get(0).counts(), "2 целых куска + 1 из сплайсовки");
+        assertEquals("шт", rows.get(0).unit());
+        assertEquals("Сигнал: Cat6 — 20 м", rows.get(1).label());
+        assertArrayEquals(new int[]{1}, rows.get(1).counts());
+        assertEquals("Сигнал: Cat6 (длина не указана)", rows.get(2).label());
+        assertArrayEquals(new int[]{2}, rows.get(2).counts());
+        assertEquals("Сигнал: Свободный", rows.get(3).label());
+        assertArrayEquals(new int[]{4}, rows.get(3).counts(), "без каталога — число линий");
+        assertEquals("шт линий (~4 м суммарно)", rows.get(3).unit());
+    }
+
+    @Test
+    void unlabeledEdgesAreListedAsUnknownTypeByColor() {
+        SchemaEdge red1 = new SchemaEdge(SchemaMode.POWER, "a", "b", null);
+        red1.setColor(0xE00000);
+        SchemaEdge red2 = new SchemaEdge(SchemaMode.POWER, "a", "c", null);
+        red2.setColor(0xE00000);
+        SchemaEdge plain = new SchemaEdge(SchemaMode.POWER, "a", "d", null);
+        List<SheetData> sheets = List.of(sheet("p", SchemaMode.POWER, "П", List.of(),
+                List.of(red1, red2, plain, wire(SchemaMode.POWER, 1, "CEE 32A", 5.0))));
+        java.util.function.BiFunction<SheetData, SchemaEdge, Integer> colorOf = (s, e) -> e.getColor();
+
+        var wiring = SceneSpecCalc.wiring(sheets, t -> null, t -> null, colorOf);
+        var rows = SceneSpecCalc.wireSpecRows(wiring, sheets, t -> null, colorOf);
+
+        assertEquals(0, wiring.uncountedEdges());
+        assertEquals(3, rows.size(), rows.toString());
+        assertEquals("Питание: неизвестный тип, цвет красный (#E00000)",
+                rows.stream().filter(r -> r.counts()[0] == 2).findFirst().orElseThrow().label());
+        assertEquals("Питание: неизвестный тип, цвет по умолчанию",
+                rows.stream().filter(r -> r.label().contains("по умолчанию")).findFirst().orElseThrow().label());
+        assertEquals("шт", rows.stream().filter(r -> r.label().contains("красный")).findFirst().orElseThrow().unit());
+        // без colorOf поведение прежнее: неподписанные не учитываются
+        assertEquals(3, SceneSpecCalc.wiring(sheets, t -> null, t -> null).uncountedEdges());
+    }
+
     // ---- сцена целиком (с AppModel): D6 ----
 
     private static AppModel model(Path dir) {

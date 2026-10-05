@@ -7740,7 +7740,6 @@ public class AppModel {
         if (scene == null) {
             return roles;
         }
-        List<InterfaceType> library = getInterfaceTypes();
         java.util.Map<String, SchemaNode> byId = new java.util.LinkedHashMap<>();
         for (SchemaNode n : schemaNodesOfSheet(scene, sheetId)) {
             byId.put(n.getId(), n);
@@ -7750,18 +7749,34 @@ public class AppModel {
                 continue;
             }
             SchemaNode fromNode = byId.get(e.getFromNodeId());
-            CardPort fromPort = fromNode != null ? findPortOnNode(fromNode, e.getFromPortId()) : null;
-            if (fromPort == null) {
+            InterfaceRole role = edgeSourceRole(fromNode, e.getFromPortId());
+            if (role == null) {
                 continue;
             }
-            InterfaceRole role = com.vjstb.ledscheme.service.schemalayout.PortRoleResolver.resolve(
-                    SchemaMode.SIGNAL, fromNode.getType(), fromPort, portPlacementFor(fromNode, e.getFromPortId()),
-                    library);
             if (!roles.contains(role)) {
                 roles.add(role);
             }
         }
         return roles;
+    }
+
+    /** Роль гнезда-источника сигнальной связи (то, что красит линию, см. {@link
+     *  #lineLegendRoles}); {@code null} — узла/гнезда нет (связь без конкретного гнезда). */
+    public InterfaceRole edgeSourceRole(SchemaNode fromNode, String fromPortId) {
+        CardPort fromPort = fromNode != null ? findPortOnNode(fromNode, fromPortId) : null;
+        if (fromPort == null) {
+            return null;
+        }
+        return com.vjstb.ledscheme.service.schemalayout.PortRoleResolver.resolve(
+                SchemaMode.SIGNAL, fromNode.getType(), fromPort, portPlacementFor(fromNode, fromPortId),
+                getInterfaceTypes());
+    }
+
+    /** Тип разъёма гнезда-источника силовой связи (по нему красится линия питания);
+     *  {@code null} — гнезда нет. */
+    public String edgeSourceConnectorType(SchemaNode fromNode, String fromPortId) {
+        CardPort fromPort = fromNode != null ? findPortOnNode(fromNode, fromPortId) : null;
+        return fromPort != null ? fromPort.getConnectorType() : null;
     }
 
     /** Номиналы (типы разъёмов) силовых связей, РЕАЛЬНО присутствующие на схеме

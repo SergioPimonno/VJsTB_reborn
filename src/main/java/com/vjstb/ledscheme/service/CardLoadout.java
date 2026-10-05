@@ -10,7 +10,7 @@ import java.util.List;
  * оборудования — H-серия Novastar, VFC Disguise D3): модели одной серии делят каталог карт и
  * различаются лимитами {@link EquipmentPreset#getMaxInputCards()}/{@link EquipmentPreset#getMaxOutputCards()}.
  * Входная карта ({@link SchemaCard#effectiveKind()}) занимает слот «входных», выходная — «выходных»,
- * смешанная — оба. Лимит {@code null} — без ограничения. Чистая логика без Swing/модели.
+ * «не требует слота» ({@link CardKind#NO_SLOT}) — ни тот, ни другой. Лимит {@code null} — без ограничения. Чистая логика без Swing/модели.
  */
 public final class CardLoadout {
 
@@ -26,10 +26,9 @@ public final class CardLoadout {
         int out = 0;
         for (SchemaCard c : cards) {
             CardKind kind = c.effectiveKind();
-            if (kind == CardKind.INPUT || kind == CardKind.MIXED) {
+            if (kind == CardKind.INPUT) {
                 in++;
-            }
-            if (kind == CardKind.OUTPUT || kind == CardKind.MIXED) {
+            } else if (kind == CardKind.OUTPUT) {
                 out++;
             }
         }

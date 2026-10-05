@@ -168,8 +168,8 @@ public class EquipmentPresetDialog extends JDialog {
             }
             syncSeriesVisibility();
         });
-        String limitTip = "Сколько карт можно собрать в узле этой модели (-1 — без ограничения). Смешанная карта"
-                + " считается и во входных, и в выходных.";
+        String limitTip = "Сколько карт можно собрать в узле этой модели (-1 — без ограничения). Карта «не требует"
+                + " слота» не считается ни во входных, ни в выходных.";
         maxInputSpinner.setToolTipText(limitTip);
         maxOutputSpinner.setToolTipText(limitTip);
 

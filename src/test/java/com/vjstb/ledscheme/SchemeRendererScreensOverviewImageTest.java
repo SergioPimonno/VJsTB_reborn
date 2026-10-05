@@ -127,6 +127,46 @@ class SchemeRendererScreensOverviewImageTest {
         assertFalse(hasPixelNear(oneType, blendedA, 3), "при одном типе кабинеты не закрашиваются");
     }
 
+    /** Запрос 2026-10-05: в экспорте экранов можно нарисовать фермы подвеса над экранами (цвет — по
+     *  типу/профилю фермы) и отдельной легендой ферм справа в углу. */
+    @Test
+    void trussesAreDrawnAboveRiggedScreensInTheirTypeColorWithOptionalLegend(@TempDir Path dir) {
+        AppModel model = model(dir);
+        CabinetType t = model.addCabinetType(type("P3 500x500", 500, 500, 128, 128, 12));
+        com.vjstb.ledscheme.model.TrussProfile profile = new com.vjstb.ledscheme.model.TrussProfile();
+        profile.setName("RCTC Truss 40");
+        profile.setAvailableLengthsM(List.of(2.0, 1.0));
+        model.getWorkspace().getTrussProfiles().add(profile);
+        Screen rigged = model.addScreen("Подвес", t.getId(), 2, 4, 0, 0);
+        rigged.setMountType(ScreenMountType.RIGGED);
+        rigged.setRiggingTrussProfileId(profile.getId());
+
+        BufferedImage without = SchemeRenderer.renderScreensOverviewImage("Зал", model, List.of(rigged), 1.0,
+                false, false, false, false);
+        BufferedImage trussOnly = SchemeRenderer.renderScreensOverviewImage("Зал", model, List.of(rigged), 1.0,
+                false, false, true, false);
+        BufferedImage withLegend = SchemeRenderer.renderScreensOverviewImage("Зал", model, List.of(rigged), 1.0,
+                false, false, true, true);
+
+        java.awt.Color trussColor = SchemeRenderer.trussTypeColor(0);
+        assertFalse(hasPixelNear(without, trussColor, 3), "без галочки «Фермы» ферма не рисуется");
+        assertTrue(hasPixelNear(trussOnly, trussColor, 3), "ферма закрашена цветом своего типа");
+        assertTrue(trussOnly.getHeight() > without.getHeight(), "над экраном зарезервирована полоса под ферму");
+        assertTrue(withLegend.getWidth() > trussOnly.getWidth(), "легенда ферм добавляет панель справа");
+    }
+
+    /** Запрос 2026-10-05: цвета типов ферм контрастнее и разнообразнее — набор разведённых тонов по
+     *  порядку имён типов, без повторов в пределах набора. */
+    @Test
+    void trussTypeColorsAreDistinctWithinThePalette() {
+        java.util.Set<Integer> seen = new java.util.HashSet<>();
+        for (int i = 0; i < 12; i++) {
+            assertTrue(seen.add(SchemeRenderer.trussTypeColor(i).getRGB()), "цвет типа №" + i + " повторяется");
+        }
+        assertFalse(SchemeRenderer.trussTypeColor(12).equals(SchemeRenderer.trussTypeColor(0)),
+                "после набора цвета повторяются затемнёнными");
+    }
+
     /** Область примечаний вдвое уже (420 → 210), освободившееся место отдано панели справа:
      *  длинное примечание обрезается по новой ширине, а картинка не шире прежней на всю
      *  ширину панели. */
