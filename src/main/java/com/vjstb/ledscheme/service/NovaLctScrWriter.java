@@ -75,9 +75,12 @@ public final class NovaLctScrWriter {
      *  ИЗНАЧАЛЬНО считался фиксированной константой {@code 00 80 00 80 00 01}
      *  (собрано по образцам с кабинетом 128×128) — ОШИБОЧНО: контролируемый образец
      *  с кабинетом 250×250 показал якорь {@code 00 FA 00 FA 00 01} (0xFA=250) —
-     *  байты 1 и 3 это ШИРИНА и ВЫСОТА кабинета в пикселях (при <256 — старший байт
-     *  0, т.е. фактически однобайтовое значение с нулевым префиксом, не classic
-     *  LE16), а не константа 128. Байт 5 (флаг) — считался 0x01 при 0 записей и 0xFF
+     *  байты 1 и 3 это ШИРИНА и ВЫСОТА кабинета в пикселях, а не константа 128.
+     *  <b>Кодировка — LE16 (байты 1..2 и 3..4)</b>: при <256 px старший байт 0, поэтому на
+     *  образцах (128/192/250) это выглядело как «однобайтовое значение с нулевым префиксом»;
+     *  кабинет 320 px при однобайтовой записи превращался в 64 (баг-репорт 2026-10-20).
+     *  ВЫВЕДЕНО из структуры записи (все числа LE16); подтверждено загрузкой в
+     *  NovaLCT экспорта с кабинетами 320×320 / 320×240 (2026-10-20). Байт 5 (флаг) — считался 0x01 при 0 записей и 0xFF
      *  при их наличии (по одному старому образцу 4×2/7 записей) — ОПРОВЕРГНУТО
      *  более надёжным новым образцом (4×3, 11 записей со сложной цепочкой,
      *  сверено побайтово): там байт = 0x01 ВО ВСЕХ 11 записях И в хвосте. В
@@ -103,10 +106,14 @@ public final class NovaLctScrWriter {
      * (в идеале с ДРУГОЙ раскладкой колонок/портов) для чистой, воспроизводимой
      * сверки без риска спутать со сборочным кэшем. */
     private static byte[] buildAnchor(int cabinetWidthPx, int cabinetHeightPx) {
+        // Ширина/высота — LE16 (байты 1..2 и 3..4), а НЕ «однобайтовое значение с нулевым префиксом»:
+        // баг-репорт — кабинет 320×320 после загрузки в NovaLCT стал 64×64 (320 & 0xff = 64),
+        // 320×240 → 64×240. Нулевые байты 2 и 4 у всех прежних образцов (кабинеты < 256 px) — это
+        // и есть старшие байты LE16, как у всех остальных числовых полей записи (seq/x/y).
         return new byte[]{
-                0x00, (byte) (cabinetWidthPx & 0xff),
-                0x00, (byte) (cabinetHeightPx & 0xff),
-                0x00, 0x01,
+                0x00, (byte) (cabinetWidthPx & 0xff), (byte) ((cabinetWidthPx >> 8) & 0xff),
+                (byte) (cabinetHeightPx & 0xff), (byte) ((cabinetHeightPx >> 8) & 0xff),
+                0x01,
         };
     }
 
@@ -274,7 +281,7 @@ public final class NovaLctScrWriter {
     /** Пиксельный размер каждой ВИДИМОЙ ячейки экрана по её эффективному типу
      *  (переопределение типа кабинета, см. {@link ScreenLogic#effectiveType}) — для
      *  Standard-записи размер по портам (см. {@link #writeCabinetRecords}). */
-    private static Map<CellKey, int[]> cellSizesOf(Screen screen, Workspace workspace) {
+    static Map<CellKey, int[]> cellSizesOf(Screen screen, Workspace workspace) {
         CabinetType defaultType = workspace != null ? workspace.cabinetTypeById(screen.getCabinetTypeId()) : null;
         Map<CellKey, int[]> sizes = new HashMap<>();
         for (CabinetInstance cab : screen.getCabinets()) {
@@ -302,6 +309,20 @@ public final class NovaLctScrWriter {
      *  ({@link #writeForResolvedScreen}), где известно, на какой порт какой кабинет
      *  расключён — Standard хранит размер на порт, поэтому кабинеты разных портов
      *  могут иметь разное разрешение, не уходя в Complex. */
+    /** Причины, по которым экран нельзя записать как обычный (Standard), — для диалога «как
+     *  прописывать экран». Пустой список — экран годится для Standard. {@code recs == null} —
+     *  режим без карты портов (одно разрешение на весь экран), иначе размер сверяется по портам
+     *  (см. {@link ScreenLogic#complexReasons}). */
+    public static List<String> complexReasons(Screen screen, List<NovaLctControllerResolver.CabinetRec> recs,
+                                               Workspace workspace) {
+        CabinetType defaultType = workspace != null ? workspace.cabinetTypeById(screen.getCabinetTypeId()) : null;
+        if (defaultType == null) {
+            return List.of("у экрана не задан тип кабинета");
+        }
+        return ScreenLogic.complexReasons(screen, defaultType, workspace,
+                recs != null ? portKeysOf(screen, recs) : null);
+    }
+
     public static boolean isComplexExport(Screen screen, List<NovaLctControllerResolver.CabinetRec> recs,
                                            Workspace workspace) {
         CabinetType defaultType = workspace != null ? workspace.cabinetTypeById(screen.getCabinetTypeId()) : null;
@@ -333,9 +354,18 @@ public final class NovaLctScrWriter {
      * {@code involvedScreens.size() == 1}); записи с другого экрана игнорируются. */
     public static byte[] writeForResolvedScreen(Screen screen, List<NovaLctControllerResolver.CabinetRec> recs,
                                                  Workspace workspace) {
+        return writeForResolvedScreen(screen, recs, workspace, null);
+    }
+
+    /** {@code forceComplex}: {@code null} — вид записи по критериям, {@code TRUE}/{@code FALSE} —
+     *  пользователь выбрал в диалоге «как прописывать экран» (Complex / обычный); без типа
+     *  кабинета Complex записать нельзя, поэтому выбор игнорируется. */
+    public static byte[] writeForResolvedScreen(Screen screen, List<NovaLctControllerResolver.CabinetRec> recs,
+                                                 Workspace workspace, Boolean forceComplex) {
         CabinetType defaultType = workspace != null ? workspace.cabinetTypeById(screen.getCabinetTypeId()) : null;
-        if (defaultType != null && !ScreenLogic.isUniformRectangularGrid(screen, defaultType, workspace,
-                portKeysOf(screen, recs))) {
+        if (defaultType != null && (forceComplex != null ? forceComplex
+                : !ScreenLogic.isUniformRectangularGrid(screen, defaultType, workspace,
+                portKeysOf(screen, recs)))) {
             return writeComplexCore(complexCardsFromRecs(screen, recs, workspace, defaultType));
         }
         return writeStandardFromRecs(screen, recs, workspace);
@@ -858,7 +888,24 @@ public final class NovaLctScrWriter {
      *  в отличие от {@link NovaLctCombineHelper.CombineResult}, где несколько экранов
      *  СЛИВАЮТСЯ в одну сетку, здесь каждый остаётся отдельным экраном со своим
      *  cols/rows/card/port, просто упакованным в тот же файл. */
-    public record ScreenBlock(int cols, int rows, int cabW, int cabH, int screenXPx, Map<CellKey, Rec> cells) {
+    public record ScreenBlock(int cols, int rows, int cabW, int cabH, int screenXPx, Map<CellKey, Rec> cells,
+                               Map<CellKey, int[]> cellSizes) {
+        /** Блок с ОДНИМ размером кабинета на весь экран ({@code cellSizes == null}). */
+        public ScreenBlock(int cols, int rows, int cabW, int cabH, int screenXPx, Map<CellKey, Rec> cells) {
+            this(cols, rows, cabW, cabH, screenXPx, cells, null);
+        }
+
+    }
+
+    /** {@code cellSizes} блока, если размеры кабинетов в нём РАЗНЫЕ; {@code null}, если все
+     *  равны {@code cabW×cabH} — тогда блок пишется ровно как раньше (побайтовые golden-тесты). */
+    static Map<CellKey, int[]> nonUniformSizesOrNull(Map<CellKey, int[]> sizes, int cabW, int cabH) {
+        for (int[] s : sizes.values()) {
+            if (s[0] != cabW || s[1] != cabH) {
+                return sizes;
+            }
+        }
+        return null;
     }
 
     /** <b>Статус: ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО</b> — мультиэкранный Standard Screen
@@ -1045,22 +1092,23 @@ public final class NovaLctScrWriter {
                 originSeqs[0], s0.screenXPx());
         writeBytes(out, header);
 
-        writeCabinetRecords(out, buildAnchor(s0.cabW(), s0.cabH()), s0.cols(), s0.rows(), s0.cabW(), s0.cabH(),
-                s0.screenXPx(), s0.cells());
+        // Якорь после блока = размер его ПОСЛЕДНЕЙ записи (Standard хранит размер кабинета НА ПОРТ,
+        // см. writeCabinetRecords); без cellSizes это просто cabW×cabH блока, как и раньше.
+        int[] lastSize = writeCabinetRecords(out, s0.cols(), s0.rows(), s0.cabW(), s0.cabH(),
+                s0.screenXPx(), s0.cells(), s0.cellSizes());
 
         for (int i = 1; i < screenCount; i++) {
             ScreenBlock s = screens.get(i);
-            byte[] anchor = buildAnchor(s.cabW(), s.cabH());
-            writeBytes(out, anchor);
+            writeBytes(out, buildAnchor(lastSize[0], lastSize[1]));
             byte[] tail = new byte[21];
             writeScreenDescriptor(tail, 0, s.cols(), s.rows(), firstCards[i], firstPorts[i], originSeqs[i],
                     s.screenXPx());
             writeBytes(out, tail);
-            writeCabinetRecords(out, anchor, s.cols(), s.rows(), s.cabW(), s.cabH(), s.screenXPx(), s.cells());
+            lastSize = writeCabinetRecords(out, s.cols(), s.rows(), s.cabW(), s.cabH(), s.screenXPx(),
+                    s.cells(), s.cellSizes());
         }
 
-        ScreenBlock last = screens.get(screenCount - 1);
-        byte[] finalAnchor = buildAnchor(last.cabW(), last.cabH());
+        byte[] finalAnchor = buildAnchor(lastSize[0], lastSize[1]);
         // jsonBytes уже собран выше (нужен был заранее для footerStart/0x0a).
         writeBytes(out, finalAnchor);
         writeU16(out, jsonBytes.length);
@@ -1179,7 +1227,10 @@ public final class NovaLctScrWriter {
         CabinetType defaultType = workspace != null ? workspace.cabinetTypeById(screen.getCabinetTypeId()) : null;
         int cabW = defaultType != null ? defaultType.getResolutionWidth() : 128;
         int cabH = defaultType != null ? defaultType.getResolutionHeight() : 128;
-        return new ScreenBlock(screen.getCols(), screen.getRows(), cabW, cabH, 0, byCell);
+        // Размеры по ячейкам — только если кабинеты РАЗНЫХ размеров (на разных портах, см.
+        // ScreenLogic.isUniformRectangularGrid с картой портов); иначе блок пишется как раньше.
+        return new ScreenBlock(screen.getCols(), screen.getRows(), cabW, cabH, 0, byCell,
+                nonUniformSizesOrNull(cellSizesOf(screen, workspace), cabW, cabH));
     }
 
     /** {@link ComplexScreenBlock} одного Complex-экрана из резолвнутых
@@ -1248,11 +1299,22 @@ public final class NovaLctScrWriter {
      *  требование NovaLCT (иначе {@code LoadFromFile} отклоняет файл целиком, см.
      *  {@code NOVALCT_EXPORT.md} §9). */
     public static byte[] writeMixedMultiScreen(List<MixedScreen> screensIn) {
+        return writeMixedMultiScreen(screensIn, false);
+    }
+
+    /** {@code keepOrder=true} — индексы Screen1..N берутся РОВНО в порядке {@code screensIn}
+     *  (пользователь сам назначил проектные экраны на номера NovaLCT-экранов в
+     *  {@code NovaLctScreenOrderDialog}, допустимость порядка проверяет
+     *  {@link NovaLctScreenOrder#violation}); {@code false} — сортировка по
+     *  (Sending Card, Port), как раньше. */
+    public static byte[] writeMixedMultiScreen(List<MixedScreen> screensIn, boolean keepOrder) {
         if (screensIn == null || screensIn.isEmpty()) {
             throw new IllegalArgumentException("Нужен хотя бы один экран");
         }
         List<MixedScreen> screens = new ArrayList<>(screensIn);
-        screens.sort(Comparator.comparingInt(MixedScreen::firstCard).thenComparingInt(MixedScreen::firstPort));
+        if (!keepOrder) {
+            screens.sort(Comparator.comparingInt(MixedScreen::firstCard).thenComparingInt(MixedScreen::firstPort));
+        }
 
         int n = screens.size();
         int shift = 4 * (n - 1);
@@ -1285,11 +1347,13 @@ public final class NovaLctScrWriter {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         writeBytes(out, header);
 
+        // Якорь после Standard-блока = размер его последней записи (размер кабинета хранится НА
+        // ПОРТ); без cellSizes — cabW×cabH блока, как и раньше.
+        int[] lastStdSize = null;
         for (int i = 0; i < n; i++) {
             MixedScreen ms = screens.get(i);
             if (i >= 1 && screens.get(i - 1).isStandard()) {
-                ScreenBlock prev = screens.get(i - 1).standard();
-                writeBytes(out, buildAnchor(prev.cabW(), prev.cabH()));
+                writeBytes(out, buildAnchor(lastStdSize[0], lastStdSize[1]));
             }
             if (ms.isStandard()) {
                 ScreenBlock sb = ms.standard();
@@ -1299,8 +1363,8 @@ public final class NovaLctScrWriter {
                 byte[] desc = new byte[21];
                 writeScreenDescriptor(desc, 0, sb.cols(), sb.rows(), fcp[0], fcp[1], originSeq, sb.screenXPx());
                 writeBytes(out, desc);
-                writeCabinetRecords(out, buildAnchor(sb.cabW(), sb.cabH()),
-                        sb.cols(), sb.rows(), sb.cabW(), sb.cabH(), sb.screenXPx(), sb.cells());
+                lastStdSize = writeCabinetRecords(out, sb.cols(), sb.rows(), sb.cabW(), sb.cabH(),
+                        sb.screenXPx(), sb.cells(), sb.cellSizes());
             } else {
                 ComplexScreenBlock cb = ms.complex();
                 out.write(2); // Type -- Complex/IrRegular
@@ -1323,7 +1387,7 @@ public final class NovaLctScrWriter {
 
         MixedScreen last = screens.get(n - 1);
         if (last.isStandard()) {
-            writeBytes(out, buildAnchor(last.standard().cabW(), last.standard().cabH()));
+            writeBytes(out, buildAnchor(lastStdSize[0], lastStdSize[1]));
         }
 
         StringBuilder jsonBuilder = new StringBuilder("[");

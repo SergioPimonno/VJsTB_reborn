@@ -167,33 +167,188 @@ public final class ScreenLogic {
      *  пишут один размер на блок): прежняя строгая проверка «одно разрешение на экран». */
     public static boolean isUniformRectangularGrid(Screen s, CabinetType defaultType, Workspace workspace,
                                                     java.util.Map<String, String> portKeyByCabinetId) {
+        return complexReasons(s, defaultType, workspace, portKeyByCabinetId).isEmpty();
+    }
+
+    /** ПРИЧИНЫ, по которым экран нельзя записать как обычный (Standard) — человекочитаемый
+     *  список для диалога экспорта («как прописывать экран»); пустой список — экран годится для
+     *  Standard. Единственный источник правды: {@link #isUniformRectangularGrid} — это просто
+     *  «причин нет». Критерии Standard:
+     *  <ol>
+     *    <li>кабинеты разных типов неотличимы при записи (оба прямоугольные либо с галочкой
+     *    «прописывать как стандартный кабинет», хотя бы у одного она стоит); в режиме без карты
+     *    портов ({@code portKeyByCabinetId == null}) — ещё и одно разрешение на весь экран;</li>
+     *    <li>с картой портов: на ОДНОМ порту размер (px) кабинетов одинаковый — Standard хранит
+     *    размер НА ПОРТ;</li>
+     *    <li>кабинеты стоят ВСТЫК: каждый вплотную к правому краю левого соседа и к нижнему краю
+     *    верхнего (по реальным мм-размерам типов и смещениям) — зазор или наезд даёт Complex,
+     *    потому что Standard сам складывает размеры подряд ({@link #gridProblem});</li>
+     *    <li>в сетке существуют все ячейки rows×cols (вырезанные — скрытые — допустимы).</li>
+     *  </ol>
+     *  Скрытые ячейки сами по себе Standard не мешают (см. javadoc выше), но вместе со смещениями
+     *  плотность сетки проверить нельзя — это тоже причина. */
+    public static java.util.List<String> complexReasons(Screen s, CabinetType defaultType, Workspace workspace,
+                                                         java.util.Map<String, String> portKeyByCabinetId) {
+        java.util.List<String> reasons = new ArrayList<>();
         boolean perPort = portKeyByCabinetId != null;
         java.util.Map<String, int[]> sizeByPort = new java.util.HashMap<>();
+        java.util.Map<String, java.util.Set<String>> sizeNamesByPort = new java.util.LinkedHashMap<>();
+        java.util.Set<String> badPorts = new java.util.LinkedHashSet<>();
+        java.util.Set<String> typeProblems = new java.util.LinkedHashSet<>();
         for (CabinetInstance cab : s.getCabinets()) {
             if (cab.isHidden()) {
                 continue;
             }
-            if (cab.getOffsetXMm() != 0 || cab.getOffsetYMm() != 0) {
-                return false;
-            }
             CabinetType eff = effectiveType(cab, defaultType, workspace);
             if (eff != null && defaultType != null && !eff.getId().equals(defaultType.getId())
                     && !exportsAsSameStandardCabinet(eff, defaultType, perPort)) {
-                return false;
+                typeProblems.add(describeTypeProblem(eff, defaultType, perPort));
             }
             String port = perPort ? portKeyByCabinetId.get(cab.getId()) : null;
             if (port != null) {
                 CabinetType t = eff != null ? eff : defaultType;
                 if (t != null) {
                     int[] size = {t.getResolutionWidth(), t.getResolutionHeight()};
+                    sizeNamesByPort.computeIfAbsent(port, k -> new java.util.LinkedHashSet<>())
+                            .add("«" + t.getName() + "» " + size[0] + "×" + size[1]);
                     int[] known = sizeByPort.putIfAbsent(port, size);
                     if (known != null && (known[0] != size[0] || known[1] != size[1])) {
-                        return false;
+                        badPorts.add(port);
                     }
                 }
             }
         }
-        return s.getCabinets().size() == s.getRows() * s.getCols();
+        reasons.addAll(typeProblems);
+        for (String port : badPorts) {
+            String[] cp = port.split(":");
+            String label = cp.length == 2
+                    ? "Sending Card " + (Integer.parseInt(cp[0]) + 1) + ", порт " + (Integer.parseInt(cp[1]) + 1)
+                    : port;
+            reasons.add("на одном порту (" + label + ") кабинеты разных размеров: "
+                    + String.join(", ", sizeNamesByPort.get(port)) + " — Standard хранит один размер на порт");
+        }
+        if (s.getCabinets().size() != s.getRows() * s.getCols()) {
+            reasons.add("в сетке экрана существуют не все ячейки (" + s.getCabinets().size() + " из "
+                    + (s.getRows() * s.getCols()) + ")");
+        }
+        String grid = gridProblem(s, defaultType, workspace);
+        if (grid != null) {
+            reasons.add(grid);
+        }
+        return reasons;
+    }
+
+    private static String describeTypeProblem(CabinetType eff, CabinetType def, boolean perPort) {
+        if (!eff.isExportAsStandardCabinet() && !def.isExportAsStandardCabinet()) {
+            return "тип «" + eff.getName() + "» отличается от типа экрана «" + def.getName()
+                    + "», а ни у одного из них не включено «прописывать как стандартный кабинет»";
+        }
+        if (!isWritableAsStandard(eff)) {
+            return "тип «" + eff.getName()
+                    + "» непрямоугольный, а «прописывать как стандартный кабинет» у него выключено";
+        }
+        if (!isWritableAsStandard(def)) {
+            return "тип экрана «" + def.getName()
+                    + "» непрямоугольный, а «прописывать как стандартный кабинет» у него выключено";
+        }
+        return "разное разрешение: «" + eff.getName() + "» " + eff.getResolutionWidth() + "×"
+                + eff.getResolutionHeight() + " и «" + def.getName() + "» " + def.getResolutionWidth() + "×"
+                + def.getResolutionHeight() + (perPort ? "" : " — в этом режиме один размер на весь экран");
+    }
+
+    /** Кабинеты стоят ВСТЫК? Standard раскладывает ячейки сам (x = сумма ширин левее в ряду,
+     *  y = сумма высот выше в столбце), поэтому реальная геометрия обязана совпадать с такой
+     *  укладкой. Смещения (Task #7/v1.6) НЕ мешают, если они лишь «подгоняют» кабинеты разного
+     *  размера в плотную сетку (баг-репорт: у R1 верхний ряд кабинетов 320×160 в сетке 320×240
+     *  сдвинут на 125 мм, чтобы стоять вплотную к следующему ряду — смещение само по себе
+     *  отправляло экран в Complex).
+     *
+     *  <p>Проверка в мм по реальным размерам типов, только по ВИДИМЫМ ячейкам: каждая ячейка
+     *  примыкает слева к правому краю левой соседки и сверху к нижнему краю верхней (допуск
+     *  0.5 мм), все ячейки первого столбца стоят на одном X, первого ряда — на одном Y.
+     *  Зазор/наезд/«ступенька» — не сетка. Скрытые ячейки в сочетании со смещениями — не
+     *  проверяются (положение ячеек, из которых Standard складывает размеры, неизвестно).
+     *  {@code null} — проблем нет (либо экран нельзя проверить: нет типа, неполная сетка — это
+     *  отдельные причины). */
+    static String gridProblem(Screen s, CabinetType defaultType, Workspace workspace) {
+        if (defaultType == null || s.getCabinets().size() != s.getRows() * s.getCols()) {
+            return null;
+        }
+        int rows = s.getRows();
+        int cols = s.getCols();
+        double[][] x0 = new double[rows][cols];
+        double[][] y0 = new double[rows][cols];
+        double[][] w = new double[rows][cols];
+        double[][] h = new double[rows][cols];
+        boolean[][] vis = new boolean[rows][cols];
+        boolean hasOffsets = false;
+        boolean hasHidden = false;
+        for (CabinetInstance cab : s.getCabinets()) {
+            int r = cab.getRowIndex();
+            int c = cab.getColIndex();
+            if (r < 0 || r >= rows || c < 0 || c >= cols) {
+                return null;
+            }
+            if (cab.isHidden()) {
+                hasHidden = true;
+                continue;
+            }
+            if (cab.getOffsetXMm() != 0 || cab.getOffsetYMm() != 0) {
+                hasOffsets = true;
+            }
+            CabinetType eff = effectiveType(cab, defaultType, workspace);
+            if (eff == null) {
+                eff = defaultType;
+            }
+            vis[r][c] = true;
+            w[r][c] = eff.getWidthMm();
+            h[r][c] = eff.getHeightMm();
+            x0[r][c] = c * defaultType.getWidthMm() + cab.getOffsetXMm();
+            y0[r][c] = r * defaultType.getHeightMm() + cab.getOffsetYMm();
+        }
+        if (hasOffsets && hasHidden) {
+            return "есть вырезанные (скрытые) ячейки и смещения кабинетов — плотность сетки проверить нельзя";
+        }
+        final double eps = 0.5;
+        double firstColX = Double.NaN;
+        double firstRowY = Double.NaN;
+        for (int r = 0; r < rows; r++) {
+            for (int c = 0; c < cols; c++) {
+                if (!vis[r][c]) {
+                    continue;
+                }
+                String at = "ряд " + (r + 1) + ", столбец " + (c + 1);
+                if (c == 0) {
+                    if (Double.isNaN(firstColX)) {
+                        firstColX = x0[r][0];
+                    } else if (Math.abs(x0[r][0] - firstColX) > eps) {
+                        return "левый край кабинетов первого столбца не на одной линии (" + at + ")";
+                    }
+                }
+                if (r == 0) {
+                    if (Double.isNaN(firstRowY)) {
+                        firstRowY = y0[0][c];
+                    } else if (Math.abs(y0[0][c] - firstRowY) > eps) {
+                        return "верхний край кабинетов первого ряда не на одной линии (" + at + ")";
+                    }
+                }
+                if (c > 0 && vis[r][c - 1]) {
+                    double gap = x0[r][c] - (x0[r][c - 1] + w[r][c - 1]);
+                    if (Math.abs(gap) > eps) {
+                        return "кабинеты не стоят встык по горизонтали (" + at + "): "
+                                + (gap > 0 ? "зазор " : "наезд ") + Math.round(Math.abs(gap)) + " мм";
+                    }
+                }
+                if (r > 0 && vis[r - 1][c]) {
+                    double gap = y0[r][c] - (y0[r - 1][c] + h[r - 1][c]);
+                    if (Math.abs(gap) > eps) {
+                        return "кабинеты не стоят встык по вертикали (" + at + "): "
+                                + (gap > 0 ? "зазор " : "наезд ") + Math.round(Math.abs(gap)) + " мм";
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     /** Два РАЗНЫХ типа кабинета в NovaLCT-экспорте неотличимы — оба пишутся как

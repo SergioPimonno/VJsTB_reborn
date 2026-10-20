@@ -3,6 +3,7 @@ package com.vjstb.ledscheme.service;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -684,6 +685,197 @@ class NovaLctScrWriterTest {
                 "без знания портов (мультиэкранные пути) — строгая проверка, Complex");
         assertArrayEquals(decode(PER_PORT_SIZES_SCR_BASE64),
                 NovaLctScrWriter.writeForResolvedScreen(screen, recs, model.getWorkspace()));
+    }
+
+    /** Баг-репорт: в многоэкранном экспорте («Отдельными экранами») экран с кабинетами разных
+     *  размеров уходил в Complex, хотя на каждом порту размер один. Тот же экран и тот же реальный
+     *  образец, что выше, но через путь раздельных экранов: блок несёт размеры по ячейкам, а
+     *  мультиэкранные писатели (для N=1 — вырождение в одноэкранный файл) дают те же байты. */
+    @Test
+    void separateScreensPath_keepsPerPortCabinetSizes_matchingRealSample(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType rect = model.addCabinetType(type128());
+        CabinetType halfSrc = triangle128(true);
+        halfSrc.setName("Half-height triangle");
+        halfSrc.setResolutionHeight(64);
+        CabinetType half = model.addCabinetType(halfSrc);
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("S1", rect.getId(), 2, 4, 0, 0);
+        EquipmentPreset ctype = singleCardController(model);
+        ControllerInstance ctrl = model.addControllerToScreen(screen, ctype.getId(), null);
+        model.selectScreen(screen);
+        for (int row = 0; row < 2; row++) {
+            for (int col = 2; col < 4; col++) {
+                model.setCabinetTypeOverride(screen.cabinetAt(row, col).getId(), half.getId());
+            }
+        }
+        model.addSignalChain(1, false, List.of(
+                screen.cabinetAt(1, 0).getId(), screen.cabinetAt(0, 0).getId(),
+                screen.cabinetAt(0, 1).getId(), screen.cabinetAt(1, 1).getId()));
+        model.addSignalChain(2, false, List.of(
+                screen.cabinetAt(1, 2).getId(), screen.cabinetAt(0, 2).getId(),
+                screen.cabinetAt(0, 3).getId(), screen.cabinetAt(1, 3).getId()));
+        List<NovaLctControllerResolver.CabinetRec> recs = NovaLctControllerResolver.resolve(scene, ctrl, model);
+
+        List<NovaLctCombineHelper.LabeledBlock> blocks = NovaLctCombineHelper.splitSeparateGroupedLabeled(
+                List.of(new NovaLctCombineHelper.ScreenSlot(screen, 0, 0)), Map.of(), recs, model);
+        assertEquals(1, blocks.size());
+        assertNotNull(blocks.get(0).block().cellSizes(), "размеры кабинетов разные -> блок несёт размеры по ячейкам");
+
+        assertArrayEquals(decode(PER_PORT_SIZES_SCR_BASE64),
+                NovaLctScrWriter.writeStandardMultiScreen(List.of(blocks.get(0).block())));
+        assertArrayEquals(decode(PER_PORT_SIZES_SCR_BASE64),
+                NovaLctScrWriter.writeMixedMultiScreen(
+                        List.of(NovaLctScrWriter.MixedScreen.of(blocks.get(0).block()))));
+        assertNotNull(NovaLctScrWriter.resolvedStandardScreen(screen, recs, model.getWorkspace()).cellSizes());
+    }
+
+    /** Баг-репорт (R1): верхний ряд из низких кабинетов сдвинут вниз смещением, чтобы стоять
+     *  вплотную к следующему ряду, — это ровно та сетка, что даёт Standard с размером на порт, и
+     *  смещение не должно само по себе отправлять экран в Complex. Зазор/наезд — по-прежнему Complex. */
+    @Test
+    void offsetThatJustPacksShorterRowAgainstNextRow_staysStandardPerPort(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType tall = model.addCabinetType(type128()); // 500x500 мм, 128x128 px
+        CabinetType lowSrc = type128();
+        lowSrc.setName("Low 128x64");
+        lowSrc.setHeightMm(250);
+        lowSrc.setResolutionHeight(64);
+        CabinetType low = model.addCabinetType(lowSrc);
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("S1", tall.getId(), 2, 2, 0, 0); // 2 ряда × 2 столбца
+        EquipmentPreset ctype = singleCardController(model);
+        ControllerInstance ctrl = model.addControllerToScreen(screen, ctype.getId(), null);
+        model.selectScreen(screen);
+        for (int col = 0; col < 2; col++) {
+            model.setCabinetTypeOverride(screen.cabinetAt(0, col).getId(), low.getId());
+        }
+        model.addSignalChain(1, false, List.of(screen.cabinetAt(0, 0).getId(), screen.cabinetAt(0, 1).getId()));
+        model.addSignalChain(2, false, List.of(screen.cabinetAt(1, 0).getId(), screen.cabinetAt(1, 1).getId()));
+        List<NovaLctControllerResolver.CabinetRec> recs = NovaLctControllerResolver.resolve(scene, ctrl, model);
+
+        // низкий ряд 250 мм в ячейке 500 мм: сдвиг вниз на 250 мм — вплотную к нижнему ряду
+        for (int col = 0; col < 2; col++) {
+            model.updateCabinetOffset(screen.cabinetAt(0, col), 0.0, 250.0);
+        }
+        assertFalse(NovaLctScrWriter.isComplexExport(screen, recs, model.getWorkspace()),
+                "смещение лишь подгоняет ряды вплотную — Standard с размером на порт");
+        assertTrue(NovaLctScrWriter.complexReasons(screen, recs, model.getWorkspace()).isEmpty());
+
+        // с зазором 100 мм между рядами — уже не сетка
+        for (int col = 0; col < 2; col++) {
+            model.updateCabinetOffset(screen.cabinetAt(0, col), 0.0, 150.0);
+        }
+        assertTrue(NovaLctScrWriter.isComplexExport(screen, recs, model.getWorkspace()),
+                "зазор между рядами — не плотная сетка, Complex");
+        List<String> reasons = NovaLctScrWriter.complexReasons(screen, recs, model.getWorkspace());
+        assertEquals(1, reasons.size(), reasons.toString());
+        assertTrue(reasons.get(0).contains("встык") && reasons.get(0).contains("зазор 100 мм"), reasons.get(0));
+    }
+
+    /** Причины Complex, которые показывает диалог «как прописывать экраны»: разные размеры на ОДНОМ
+     *  порту, разрешение при строгой проверке (Combine), непрямоугольный тип без галочки, наезд. */
+    @Test
+    void complexReasonsNameEveryCauseForTheDialog(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType tall = model.addCabinetType(type128());
+        CabinetType lowSrc = type128();
+        lowSrc.setName("Low 128x64");
+        lowSrc.setHeightMm(250);
+        lowSrc.setResolutionHeight(64);
+        CabinetType low = model.addCabinetType(lowSrc);
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("S1", tall.getId(), 1, 2, 0, 0); // 1 ряд × 2 столбца
+        EquipmentPreset ctype = singleCardController(model);
+        ControllerInstance ctrl = model.addControllerToScreen(screen, ctype.getId(), null);
+        model.selectScreen(screen);
+        model.setCabinetTypeOverride(screen.cabinetAt(0, 1).getId(), low.getId());
+        model.addSignalChain(1, false, List.of(screen.cabinetAt(0, 0).getId(), screen.cabinetAt(0, 1).getId()));
+        List<NovaLctControllerResolver.CabinetRec> recs = NovaLctControllerResolver.resolve(scene, ctrl, model);
+
+        List<String> perPort = NovaLctScrWriter.complexReasons(screen, recs, model.getWorkspace());
+        assertEquals(1, perPort.size(), perPort.toString());
+        assertTrue(perPort.get(0).contains("на одном порту") && perPort.get(0).contains("Sending Card 1")
+                && perPort.get(0).contains("Low 128x64"), perPort.get(0));
+
+        List<String> strict = NovaLctScrWriter.complexReasons(screen, null, model.getWorkspace());
+        assertTrue(strict.stream().anyMatch(x -> x.contains("разное разрешение")
+                && x.contains("один размер на весь экран")), strict.toString());
+
+        // тот же экран, но тип без галочки: другая причина
+        CabinetType noFlag = low.copy();
+        noFlag.setExportAsStandardCabinet(false);
+        model.updateCabinetType(noFlag);
+        CabinetType noFlagTall = tall.copy();
+        noFlagTall.setExportAsStandardCabinet(false);
+        model.updateCabinetType(noFlagTall);
+        List<String> unflagged = NovaLctScrWriter.complexReasons(screen, null, model.getWorkspace());
+        assertTrue(unflagged.stream().anyMatch(x -> x.contains("прописывать как стандартный кабинет")),
+                unflagged.toString());
+    }
+
+    /** Без типа кабинета обычным экран записать нельзя — это тоже причина (диалог блокирует выбор). */
+    @Test
+    void screenWithoutCabinetTypeIsReportedAsComplex(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        Screen screen = new Screen();
+        screen.setCabinetTypeId("no-such-type");
+        assertEquals(List.of("у экрана не задан тип кабинета"),
+                NovaLctScrWriter.complexReasons(screen, null, model.getWorkspace()));
+    }
+
+    /** Баг-репорт: кабинет 320×320 после загрузки в NovaLCT стал 64×64 — размер в якоре писался
+     *  одним байтом (320 & 0xff = 64). Теперь ширина/высота — LE16: 320 → {@code 40 01}, 240 → {@code F0 00}. */
+    @Test
+    void cabinetSizesAbove255AreWrittenAsLe16InAnchor() {
+        Map<NovaLctScrWriter.CellKey, NovaLctScrWriter.Rec> cells = new HashMap<>();
+        cells.put(new NovaLctScrWriter.CellKey(0, 0), new NovaLctScrWriter.Rec(0, 0, 0, 0, 1));
+        cells.put(new NovaLctScrWriter.CellKey(1, 0), new NovaLctScrWriter.Rec(0, 1, 0, 0, 2));
+        byte[] data = NovaLctScrWriter.writeStandardCore(2, 1, 320, 240, 0, cells);
+        assertTrue(contains(data, new byte[]{0x00, 0x40, 0x01, (byte) 0xf0, 0x00, 0x01}),
+                "якорь 320×240 = 00 40 01 F0 00 01");
+        assertFalse(contains(data, new byte[]{0x00, 0x40, 0x00, (byte) 0xf0, 0x00, 0x01}),
+                "усечённый до байта 64×240 больше не пишется");
+    }
+
+    private static boolean contains(byte[] hay, byte[] needle) {
+        outer:
+        for (int i = 0; i + needle.length <= hay.length; i++) {
+            for (int j = 0; j < needle.length; j++) {
+                if (hay[i + j] != needle[j]) {
+                    continue outer;
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /** Блок экрана с ОДНИМ размером кабинета не несёт размеров по ячейкам — пишется как раньше. */
+    @Test
+    void uniformScreenBlockHasNoPerCellSizes(@TempDir Path dir) {
+        AppModel model = freshModel(dir);
+        CabinetType rect = model.addCabinetType(type128());
+        model.selectProject(model.addProject("P"));
+        Scene scene = model.addScene("S");
+        model.selectScene(scene);
+        Screen screen = model.addScreen("S1", rect.getId(), 1, 2, 0, 0);
+        EquipmentPreset ctype = singleCardController(model);
+        ControllerInstance ctrl = model.addControllerToScreen(screen, ctype.getId(), null);
+        model.selectScreen(screen);
+        model.addSignalChain(1, false, List.of(screen.cabinetAt(0, 0).getId(), screen.cabinetAt(0, 1).getId()));
+        List<NovaLctControllerResolver.CabinetRec> recs = NovaLctControllerResolver.resolve(scene, ctrl, model);
+
+        assertNull(NovaLctCombineHelper.splitSeparateGroupedLabeled(
+                List.of(new NovaLctCombineHelper.ScreenSlot(screen, 0, 0)), Map.of(), recs, model)
+                .get(0).block().cellSizes());
+        assertNull(NovaLctScrWriter.resolvedStandardScreen(screen, recs, model.getWorkspace()).cellSizes());
     }
 
     /** Оба размера на ОДНОМ порту — Standard хранит размер на порт, поэтому Complex, а

@@ -284,6 +284,25 @@ public final class NovaLctCombineHelper {
     public static List<NovaLctScrWriter.ScreenBlock> splitSeparateGrouped(List<ScreenSlot> slots,
             Map<String, Integer> groupIdByScreenId,
             List<NovaLctControllerResolver.CabinetRec> recs, AppModel model) {
+        List<NovaLctScrWriter.ScreenBlock> blocks = new ArrayList<>();
+        for (LabeledBlock lb : splitSeparateGroupedLabeled(slots, groupIdByScreenId, recs, model)) {
+            blocks.add(lb.block());
+        }
+        blocks.sort(SCREEN_ORDER);
+        return blocks;
+    }
+
+    /** NovaLCT-экран с подписью для UI — имена проектных экранов группы через « + ». */
+    public record LabeledBlock(String label, NovaLctScrWriter.ScreenBlock block) {
+    }
+
+    /** То же, что {@link #splitSeparateGrouped}, но БЕЗ сортировки и с подписями —
+     *  для шага «порядок экранов NovaLCT» ({@code NovaLctScreenOrderDialog}), где
+     *  пользователь сам назначает проектные экраны на Screen1..N. Порядок результата —
+     *  порядок первого появления группы/экрана в {@code slots}. */
+    public static List<LabeledBlock> splitSeparateGroupedLabeled(List<ScreenSlot> slots,
+            Map<String, Integer> groupIdByScreenId,
+            List<NovaLctControllerResolver.CabinetRec> recs, AppModel model) {
         Map<Screen, List<NovaLctControllerResolver.CabinetRec>> recsByScreen = new LinkedHashMap<>();
         for (NovaLctControllerResolver.CabinetRec r : recs) {
             recsByScreen.computeIfAbsent(r.sourceScreen(), s -> new ArrayList<>()).add(r);
@@ -296,16 +315,22 @@ public final class NovaLctCombineHelper {
             byGroup.computeIfAbsent(key, k -> new ArrayList<>()).add(slot);
         }
 
-        List<NovaLctScrWriter.ScreenBlock> blocks = new ArrayList<>();
+        List<LabeledBlock> blocks = new ArrayList<>();
         for (List<ScreenSlot> groupSlots : byGroup.values()) {
             if (groupSlots.size() == 1 && !recsByScreen.containsKey(groupSlots.get(0).screen())) {
                 continue; // как в splitSeparate -- нерасключённый ОДИНОЧНЫЙ экран пропускается;
                           // экран внутри настоящей группы (2+) остаётся ради footprint/blank,
                           // см. buildGroupBlock
             }
-            blocks.add(buildGroupBlock(groupSlots, recsByScreen, model));
+            StringBuilder label = new StringBuilder();
+            for (ScreenSlot slot : groupSlots) {
+                if (label.length() > 0) {
+                    label.append(" + ");
+                }
+                label.append(slot.screen().getName());
+            }
+            blocks.add(new LabeledBlock(label.toString(), buildGroupBlock(groupSlots, recsByScreen, model)));
         }
-        blocks.sort(SCREEN_ORDER);
         return blocks;
     }
 
@@ -407,6 +432,21 @@ public final class NovaLctCombineHelper {
             }
         }
 
-        return new NovaLctScrWriter.ScreenBlock(groupCols, groupRows, cabW, cabH, screenXPx, cells);
+        // Размер кабинета в Standard хранится НА ПОРТ: если кабинеты экрана (экранов группы) разного
+        // размера, но на каждом порту одинакового (это проверено ДО экспорта, см.
+        // ScreenLogic.isUniformRectangularGrid с картой портов), пишем размеры по ячейкам; иначе
+        // (все равны cabW×cabH) cellSizes = null и блок пишется ровно как раньше.
+        Map<NovaLctScrWriter.CellKey, int[]> sizes = new HashMap<>();
+        for (ScreenSlot slot : groupSlots) {
+            int localColOffset = slot.colOffset() - minCol;
+            int localRowOffset = slot.rowOffset() - minRow;
+            for (Map.Entry<NovaLctScrWriter.CellKey, int[]> e
+                    : NovaLctScrWriter.cellSizesOf(slot.screen(), model.getWorkspace()).entrySet()) {
+                sizes.put(new NovaLctScrWriter.CellKey(localColOffset + e.getKey().col(),
+                        localRowOffset + e.getKey().row()), e.getValue());
+            }
+        }
+        return new NovaLctScrWriter.ScreenBlock(groupCols, groupRows, cabW, cabH, screenXPx, cells,
+                NovaLctScrWriter.nonUniformSizesOrNull(sizes, cabW, cabH));
     }
 }

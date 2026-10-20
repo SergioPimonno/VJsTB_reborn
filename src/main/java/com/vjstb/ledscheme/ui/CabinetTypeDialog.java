@@ -76,8 +76,8 @@ public class CabinetTypeDialog extends JDialog {
      *  больших библиотек; отмечено по умолчанию для новых типов. */
     private final JCheckBox visibleInPaletteCheck = new JCheckBox("Показывать в палитре (меню выбора типа кабинета)");
 
-    /** См. {@code CabinetType#isExportAsStandardCabinet()} — доступно только пока
-     *  среди допустимых форм есть непрямоугольная. */
+    /** См. {@code CabinetType#isExportAsStandardCabinet()} — доступна всегда (раньше была
+     *  серой для прямоугольных типов, хотя влияет и на них: смесь типов одного разрешения). */
     private final JCheckBox exportAsStandardCheck = new JCheckBox("Прописывать как стандартный кабинет "
             + "(прямоугольный, по габаритам) при экспорте в NovaLCT");
 
@@ -228,7 +228,6 @@ public class CabinetTypeDialog extends JDialog {
                 .anyMatch(e -> e.getValue().isSelected() && e.getKey() != CabinetShape.RECTANGLE);
         rotationLabel.setEnabled(anyNonRectangle);
         rotationField.setEnabled(anyNonRectangle);
-        exportAsStandardCheck.setEnabled(anyNonRectangle);
         previewLabel.setVisible(anyNonRectangle);
         previewPanel.setVisible(anyNonRectangle);
         if (previewRow != null) {
@@ -316,7 +315,7 @@ public class CabinetTypeDialog extends JDialog {
             ct.setPowerConnectorsNeeded((int) parseNonNeg(powerConnectorsField.getText(), "Линий питания"));
             ct.setSignalConnectorsNeeded((int) parseNonNeg(signalConnectorsField.getText(), "Линий сигнала"));
             ct.setVisibleInPalette(visibleInPaletteCheck.isSelected());
-            ct.setExportAsStandardCabinet(exportAsStandardCheck.isEnabled() && exportAsStandardCheck.isSelected());
+            ct.setExportAsStandardCabinet(exportAsStandardCheck.isSelected());
             result = ct;
             dispose();
         } catch (IllegalArgumentException ex) {
