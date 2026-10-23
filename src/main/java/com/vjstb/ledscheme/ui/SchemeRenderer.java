@@ -397,7 +397,7 @@ public final class SchemeRenderer {
             if (m != null && showLabels) {
                 List<String> lines = new ArrayList<>();
                 lines.add(power ? "L" + m.phase()
-                        : portLabel(sceneControllers, workspace, m.port() != null ? m.port() : 0));
+                        : portLabel(sceneControllers, workspace, m.port() != null ? m.port() : 0, false));
                 lines.add("#" + m.seq());
                 if (effective != null) {
                     lines.add(power ? UiKit.fmtPower(effective.getPowerConsumptionW(), powerUnitKw)
@@ -455,7 +455,7 @@ public final class SchemeRenderer {
                 drawChainWithDots(g2, scr, chain.getCabinetInstanceIds(), cellW, cellH, offX, offY, type, workspace,
                         chain.isBackup());
                 if (chain.getPortNumber() != null) {
-                    String lbl = portLabel(sceneControllers, workspace, chain.getPortNumber());
+                    String lbl = portLabel(sceneControllers, workspace, chain.getPortNumber(), false);
                     // Раньше резервная цепочка получала префикс "рез:" — на мелких
                     // ячейках плашки бейджа он не помещался и обрезался до нечитаемого
                     // "pe...". Различаем резерв ЦВЕТОМ текста (см. drawStartLabelBadge),
@@ -464,7 +464,7 @@ public final class SchemeRenderer {
                             new LabelLine(lbl, chain.isBackup()));
                 }
                 if (chain.getBackupPortNumber() != null && !chain.getCabinetInstanceIds().isEmpty()) {
-                    String endLbl = portLabel(sceneControllers, workspace, chain.getBackupPortNumber());
+                    String endLbl = portLabel(sceneControllers, workspace, chain.getBackupPortNumber(), false);
                     List<String> ids = chain.getCabinetInstanceIds();
                     endLabelsByCabinet.computeIfAbsent(ids.get(ids.size() - 1), k -> new ArrayList<>())
                             .add(new LabelLine(endLbl, true));
@@ -742,10 +742,23 @@ public final class SchemeRenderer {
      * не находился вовсе, и метка тихо откатывалась на сырой номер порта. */
     static String portLabel(List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers,
                              Workspace workspace, int port) {
+        return portLabel(sceneControllers, workspace, port, true);
+    }
+
+    /** {@link #portLabel(List, Workspace, int)}; {@code includeController == false} — ТОЛЬКО номер порта
+     *  («P3»): без «C{n}·» при нескольких контроллерах в сцене и без «К{карта}·» у контроллера с
+     *  несколькими картами Ethernet (номер — в пределах своей карты, как в сайдбаре). Так подписан
+     *  «богатый» вид расключения экрана в общей схеме ({@link #paintWiringDiagram}): там подпись
+     *  обрезается по ширине ячейки, и при префиксе «C1·P3» в мелкой ячейке оставалось «C1·…» — номера
+     *  порта не видно (обратная связь техников 2026-10-06, проект «Лемана»; затем то же для карт —
+     *  «РК1·1» вместо «P1»). Конкретный контроллер и карту на общей схеме указывает инженер блоком
+     *  контроллера, повторять их в каждой плашке незачем. */
+    static String portLabel(List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers,
+                             Workspace workspace, int port, boolean includeController) {
         ControllerAndOffset co = controllerForPort(sceneControllers, workspace, port);
         com.vjstb.ledscheme.model.ControllerInstance ci = co.controller();
-        String portPart = resolvedPortPart(ci, port - co.offset(), port);
-        if (sceneControllers.size() <= 1) {
+        String portPart = resolvedPortPart(ci, port - co.offset(), port, includeController);
+        if (sceneControllers.size() <= 1 || !includeController) {
             return "P" + portPart;
         }
         int idx = ci != null ? sceneControllers.indexOf(ci) + 1 : 0;
@@ -761,7 +774,7 @@ public final class SchemeRenderer {
      *  не должен встречаться для реально сохранённой цепочки (та строится только
      *  на Ethernet-годных портах), но лучше показать хоть что-то, чем ничего. */
     private static String resolvedPortPart(com.vjstb.ledscheme.model.ControllerInstance t, int controllerLocalPort,
-                                            int rawFallbackPort) {
+                                            int rawFallbackPort, boolean includeCard) {
         if (t == null) {
             return String.valueOf(rawFallbackPort);
         }
@@ -769,7 +782,8 @@ public final class SchemeRenderer {
         if (pool == null) {
             return String.valueOf(rawFallbackPort);
         }
-        return t.ethernetPoolCount() > 1 ? "К" + (pool[0] + 1) + "·" + pool[1] : String.valueOf(pool[1]);
+        return includeCard && t.ethernetPoolCount() > 1 ? "К" + (pool[0] + 1) + "·" + pool[1]
+                : String.valueOf(pool[1]);
     }
 
     /** Метка НАЧАЛА сигнальной цепочки (первый кабинет) — основной порт.

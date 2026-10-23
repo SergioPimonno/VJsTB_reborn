@@ -321,6 +321,11 @@ public class SettingsManager {
         persist();
     }
 
+    public void setExportLoadRingsEnabled(boolean enabled) {
+        activeProfile().setExportLoadRingsEnabled(enabled);
+        persist();
+    }
+
     public void setPowerUnitKw(boolean enabled) {
         activeProfile().setPowerUnitKw(enabled);
         persist();

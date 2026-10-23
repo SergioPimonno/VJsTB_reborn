@@ -313,6 +313,13 @@ public class UserProfile {
      *  и дальше считает нагрузку сам. */
     private boolean loadTrackingEnabled = true;
 
+    /** Рисовать ли круговые индикаторы загрузки силовых блоков в ЭКСПОРТЕ общей схемы
+     *  (PDF/PNG). На экране кольцо видно всегда; в печатной схеме оно раньше пропускалось
+     *  (оставался только треугольник перегрузки), и инженеры, которым загрузка нужна в
+     *  выгрузке («Жара Сила», 2026-10-22), просили вернуть — поэтому переключатель, а не
+     *  жёсткое правило. Включено по умолчанию. */
+    private boolean exportLoadRingsEnabled = true;
+
     /** Единицы отображения мощности/нагрузки везде в UI (карточки узлов, статистика
      *  этапов Питание/Сигнал, экспортные документы) — false (по умолчанию) = ватты,
      *  true = киловатты. Влияет ТОЛЬКО на отображение — внутренний расчёт и хранение
@@ -934,6 +941,14 @@ public class UserProfile {
         this.loadTrackingEnabled = loadTrackingEnabled;
     }
 
+    public boolean isExportLoadRingsEnabled() {
+        return exportLoadRingsEnabled;
+    }
+
+    public void setExportLoadRingsEnabled(boolean exportLoadRingsEnabled) {
+        this.exportLoadRingsEnabled = exportLoadRingsEnabled;
+    }
+
     public boolean isPowerUnitKw() {
         return powerUnitKw;
     }
@@ -1154,6 +1169,7 @@ public class UserProfile {
         p.schemaLabelPaddingPx = schemaLabelPaddingPx;
         p.signalSideScrollUnitPx = signalSideScrollUnitPx;
         p.loadTrackingEnabled = loadTrackingEnabled;
+        p.exportLoadRingsEnabled = exportLoadRingsEnabled;
         p.powerUnitKw = powerUnitKw;
         p.maskLogoImagePath = maskLogoImagePath;
         p.maskPreviewResolution = maskPreviewResolution;

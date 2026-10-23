@@ -97,6 +97,7 @@ public class PreferencesDialog extends JDialog {
     private JCheckBox powerSceneStatsCheck;
     private JCheckBox loadTrackingCheck;
     private JCheckBox powerUnitKwCheck;
+    private JCheckBox exportLoadRingsCheck;
     private JLabel maskLogoPathLabel;
     private JTextField syncServerUrlField;
 
@@ -409,6 +410,13 @@ public class PreferencesDialog extends JDialog {
                         + " самостоятельно (см. Руководство).",
                 settings::setLoadTrackingEnabled);
 
+        exportLoadRingsCheck = check("Рисовать кольца загрузки блоков в экспорте силовой схемы",
+                settings.activeProfile().isExportLoadRingsEnabled(),
+                "Круговой индикатор загрузки в углу силового блока всегда виден на экране; эта настройка решает,"
+                        + " попадёт ли он в выгруженную схему (PDF/PNG). Треугольник перегрузки в экспорте остаётся"
+                        + " при любом значении. Работает только при включённом контроле нагрузки.",
+                settings::setExportLoadRingsEnabled);
+
         powerUnitKwCheck = check("Показывать мощность/нагрузку в киловаттах (кВт), а не ваттах (Вт)",
                 settings.activeProfile().isPowerUnitKw(),
                 "Меняет единицы отображения мощности везде в приложении (карточки узлов, статистика этапов,"
@@ -466,7 +474,8 @@ public class PreferencesDialog extends JDialog {
                 signalChainEndpointSocketsCheck,
                 signalSchemaAutoPopulateCheck, signalSceneStatsCheck, powerSocketWiringCheck,
                 powerChainEndpointSocketsCheck,
-                powerSchemaAutoPopulateCheck, powerSceneStatsCheck, loadTrackingCheck, powerUnitKwCheck,
+                powerSchemaAutoPopulateCheck, powerSceneStatsCheck, loadTrackingCheck, exportLoadRingsCheck,
+                powerUnitKwCheck,
         };
     }
 
@@ -609,7 +618,7 @@ public class PreferencesDialog extends JDialog {
                 comboRow("Незанятые группы гнёзд:", powerGroupDisplayCombo),
                 comboRow("Вход связей в блоки экранов:", powerScreenEntryCombo),
                 powerChainEndpointSocketsCheck, powerSchemaAutoPopulateCheck,
-                powerSceneStatsCheck, loadTrackingCheck, powerUnitKwCheck)));
+                powerSceneStatsCheck, loadTrackingCheck, exportLoadRingsCheck, powerUnitKwCheck)));
         content.add(Box.createVerticalStrut(8));
         content.add(UiKit.section("Генерация масок", stack(logoRow)));
         content.add(Box.createVerticalStrut(8));
@@ -680,6 +689,8 @@ public class PreferencesDialog extends JDialog {
         category(g, row, "Нагрузка и единицы — только питание");
         triple(g, row, "Контроль электрической нагрузки (перегрузка цепочек/щитов)", null,
                 DASH, DASH, loadTrackingCheck);
+        triple(g, row, "Кольца загрузки блоков в экспорте силовой схемы", null,
+                DASH, DASH, exportLoadRingsCheck);
         triple(g, row, "Показывать мощность/нагрузку в кВт, а не Вт", null,
                 DASH, DASH, powerUnitKwCheck);
 
@@ -871,6 +882,7 @@ public class PreferencesDialog extends JDialog {
         signalSceneStatsCheck.setSelected(settings.activeProfile().isSignalSceneStatsEnabled());
         powerSceneStatsCheck.setSelected(settings.activeProfile().isPowerSceneStatsEnabled());
         loadTrackingCheck.setSelected(settings.activeProfile().isLoadTrackingEnabled());
+        exportLoadRingsCheck.setSelected(settings.activeProfile().isExportLoadRingsEnabled());
         powerUnitKwCheck.setSelected(settings.activeProfile().isPowerUnitKw());
         String logoPath = settings.activeProfile().getMaskLogoImagePath();
         maskLogoPathLabel.setText(logoPath != null ? new File(logoPath).getName() : "не задан");
