@@ -51,6 +51,16 @@ public class Library {
      *  на эти id нет персистентных FK нигде в проектных данных, кроме {@code
      *  NetworkDevicePlacement#deviceTypeId} (данные ПРОЕКТА, не библиотеки). */
     private List<NetworkDeviceType> networkDeviceTypes = new ArrayList<>();
+    /** Прочее оборудование пультовой (пульты, мониторы-проверки, ИБП…) — см. RoomEquipmentType и
+     *  docs/control-room-planner/PLAN.md. На id ссылаются раскладки пультовой ({@link RoomLibRef}); потерянная
+     *  ссылка не ломает раскладку, позиция показывается как «неизвестная». */
+    private List<RoomEquipmentType> roomEquipmentTypes = new ArrayList<>();
+    /** Мебель, напольные станки и мониторы Планнера пультовой — см. RoomFurnitureType. */
+    private List<RoomFurnitureType> roomFurnitureTypes = new ArrayList<>();
+    /** Личные габариты позиций библиотеки, у которых общих данных нет (запрос 2026-10-23: пользователь указывает
+     *  габариты сам, не дожидаясь сервера). Ключ — {@link RoomLibRef#key()}; используется Планнером пультовой,
+     *  только пока в самой позиции габаритов не хватает — как только администратор заполнит общие, они главнее. */
+    private Map<String, PhysicalSpec> physicalOverrides = new LinkedHashMap<>();
     /** Серии оборудования (H-серия Novastar, VFC Disguise — общий каталог карт на модели, запрос
      *  2026-10-02). Личный список в клиенте пока не редактируется (серии заводятся в админ-консоли и
      *  приходят с сервера в {@link #sharedEquipmentSeries}); поле нужно механизму синхронизации
@@ -122,6 +132,8 @@ public class Library {
     private List<CaseType> sharedCaseTypes = new ArrayList<>();
     private List<VehicleType> sharedVehicleTypes = new ArrayList<>();
     private List<NetworkDeviceType> sharedNetworkDeviceTypes = new ArrayList<>();
+    private List<RoomEquipmentType> sharedRoomEquipmentTypes = new ArrayList<>();
+    private List<RoomFurnitureType> sharedRoomFurnitureTypes = new ArrayList<>();
     private List<EquipmentSeries> sharedEquipmentSeries = new ArrayList<>();
 
     public List<CabinetType> getCabinetTypes() {
@@ -482,6 +494,82 @@ public class Library {
         for (CaseType c : caseTypes) {
             if (c.getId().equals(id)) {
                 return c;
+            }
+        }
+        return null;
+    }
+
+    public Map<String, PhysicalSpec> getPhysicalOverrides() {
+        return physicalOverrides;
+    }
+
+    public void setPhysicalOverrides(Map<String, PhysicalSpec> physicalOverrides) {
+        this.physicalOverrides = physicalOverrides == null ? new LinkedHashMap<>() : physicalOverrides;
+    }
+
+    public List<RoomEquipmentType> getRoomEquipmentTypes() {
+        return roomEquipmentTypes;
+    }
+
+    public void setRoomEquipmentTypes(List<RoomEquipmentType> roomEquipmentTypes) {
+        this.roomEquipmentTypes = roomEquipmentTypes;
+    }
+
+    public List<RoomFurnitureType> getRoomFurnitureTypes() {
+        return roomFurnitureTypes;
+    }
+
+    public void setRoomFurnitureTypes(List<RoomFurnitureType> roomFurnitureTypes) {
+        this.roomFurnitureTypes = roomFurnitureTypes;
+    }
+
+    public List<RoomEquipmentType> getSharedRoomEquipmentTypes() {
+        return sharedRoomEquipmentTypes;
+    }
+
+    public void setSharedRoomEquipmentTypes(List<RoomEquipmentType> sharedRoomEquipmentTypes) {
+        this.sharedRoomEquipmentTypes = sharedRoomEquipmentTypes;
+    }
+
+    public List<RoomFurnitureType> getSharedRoomFurnitureTypes() {
+        return sharedRoomFurnitureTypes;
+    }
+
+    public void setSharedRoomFurnitureTypes(List<RoomFurnitureType> sharedRoomFurnitureTypes) {
+        this.sharedRoomFurnitureTypes = sharedRoomFurnitureTypes;
+    }
+
+    /** Общее, затем личное — см. class-javadoc про общую/личную библиотеку. */
+    public RoomEquipmentType roomEquipmentTypeById(String id) {
+        if (id == null) {
+            return null;
+        }
+        for (RoomEquipmentType t : sharedRoomEquipmentTypes) {
+            if (t.getId().equals(id)) {
+                return t;
+            }
+        }
+        for (RoomEquipmentType t : roomEquipmentTypes) {
+            if (t.getId().equals(id)) {
+                return t;
+            }
+        }
+        return null;
+    }
+
+    /** Общее, затем личное — см. class-javadoc про общую/личную библиотеку. */
+    public RoomFurnitureType roomFurnitureTypeById(String id) {
+        if (id == null) {
+            return null;
+        }
+        for (RoomFurnitureType t : sharedRoomFurnitureTypes) {
+            if (t.getId().equals(id)) {
+                return t;
+            }
+        }
+        for (RoomFurnitureType t : roomFurnitureTypes) {
+            if (t.getId().equals(id)) {
+                return t;
             }
         }
         return null;

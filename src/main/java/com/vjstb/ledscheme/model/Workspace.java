@@ -30,6 +30,8 @@ import java.util.Map;
         "sharedInterfaceTypes", "sharedCableLengthProfiles", "sharedHoistTypes", "sharedTrussProfiles",
         "sharedStructureFrameTypes",
         "sharedCaseTypes", "sharedVehicleTypes", "sharedNetworkDeviceTypes",
+        "roomEquipmentTypes", "roomFurnitureTypes", "sharedRoomEquipmentTypes", "sharedRoomFurnitureTypes",
+        "physicalOverrides",
         "customEquipmentCategories", "equipmentCategoryLabelOverrides"})
 public class Workspace {
 
@@ -299,6 +301,50 @@ public class Workspace {
 
     public CaseType caseTypeById(String id) {
         return library.caseTypeById(id);
+    }
+
+    public java.util.Map<String, PhysicalSpec> getPhysicalOverrides() {
+        return library.getPhysicalOverrides();
+    }
+
+    public List<RoomEquipmentType> getRoomEquipmentTypes() {
+        return library.getRoomEquipmentTypes();
+    }
+
+    public void setRoomEquipmentTypes(List<RoomEquipmentType> list) {
+        library.setRoomEquipmentTypes(list);
+    }
+
+    public List<RoomFurnitureType> getRoomFurnitureTypes() {
+        return library.getRoomFurnitureTypes();
+    }
+
+    public void setRoomFurnitureTypes(List<RoomFurnitureType> list) {
+        library.setRoomFurnitureTypes(list);
+    }
+
+    public List<RoomEquipmentType> getSharedRoomEquipmentTypes() {
+        return library.getSharedRoomEquipmentTypes();
+    }
+
+    public void setSharedRoomEquipmentTypes(List<RoomEquipmentType> list) {
+        library.setSharedRoomEquipmentTypes(list);
+    }
+
+    public List<RoomFurnitureType> getSharedRoomFurnitureTypes() {
+        return library.getSharedRoomFurnitureTypes();
+    }
+
+    public void setSharedRoomFurnitureTypes(List<RoomFurnitureType> list) {
+        library.setSharedRoomFurnitureTypes(list);
+    }
+
+    public RoomEquipmentType roomEquipmentTypeById(String id) {
+        return library.roomEquipmentTypeById(id);
+    }
+
+    public RoomFurnitureType roomFurnitureTypeById(String id) {
+        return library.roomFurnitureTypeById(id);
     }
 
     public VehicleType vehicleTypeById(String id) {

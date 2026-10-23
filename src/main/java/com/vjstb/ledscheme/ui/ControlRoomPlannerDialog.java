@@ -1,8 +1,12 @@
 package com.vjstb.ledscheme.ui;
 
 import com.vjstb.ledscheme.model.ControlRoomLayout;
+import com.vjstb.ledscheme.model.RoomEquipmentType;
+import com.vjstb.ledscheme.model.RoomFurnitureType;
+import com.vjstb.ledscheme.model.RoomLibRef;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.room.RoomItemSpec;
+import com.vjstb.ledscheme.service.room.RoomLibraryEdit;
 import com.vjstb.ledscheme.service.room.RoomLibraryAdapter;
 import com.vjstb.ledscheme.service.room.RoomPlanCalc;
 import com.vjstb.ledscheme.service.room.RoomUnits;
@@ -26,7 +30,9 @@ import javax.swing.JComboBox;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
+import javax.swing.JMenuItem;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTable;
@@ -56,6 +62,7 @@ public class ControlRoomPlannerDialog extends JDialog {
     private static final Color MISSING_BG = new Color(0xFF, 0xE8, 0xB0);
 
     private final AppModel model;
+    private final SettingsManager settings;
     private final AppModel.Listener modelListener;
     private final JLabel sceneLabel = new JLabel(" ");
     private final JComboBox<ControlRoomLayout> layoutBox = new JComboBox<>();
@@ -67,6 +74,13 @@ public class ControlRoomPlannerDialog extends JDialog {
     private final LibraryTableModel libModel = new LibraryTableModel();
     private final JCheckBox onlyMissing = new JCheckBox("Только без габаритов");
     private final JLabel libCount = new JLabel(" ");
+    private final JTable libTable = new JTable(libModel);
+    private final JButton dimsBtn = new JButton("Указать габариты…");
+    private final JButton newItemBtn = new JButton("Новая позиция ▾");
+    private final JButton editItemBtn = new JButton("Изменить…");
+    private final JButton deleteItemBtn = new JButton("Удалить…");
+    private final JButton proposeBtn = new JButton("Предложить на сервер…");
+    private RoomLibraryAdapter libAdapter;
     private boolean updating;
 
     /** Открыть окно (или вынести уже открытое на передний план). */
@@ -76,13 +90,19 @@ public class ControlRoomPlannerDialog extends JDialog {
             instance.refresh();
             return;
         }
-        instance = new ControlRoomPlannerDialog(owner, model);
+        instance = new ControlRoomPlannerDialog(owner, model, settings);
         instance.setVisible(true);
     }
 
     public ControlRoomPlannerDialog(Window owner, AppModel model) {
+        this(owner, model, null);
+    }
+
+    /** {@code settings == null} (тесты) отключает только «Предложить на сервер…». */
+    public ControlRoomPlannerDialog(Window owner, AppModel model, SettingsManager settings) {
         super(owner, "Планнер пультовой", ModalityType.MODELESS);
         this.model = model;
+        this.settings = settings;
 
         JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
         bar.add(new JLabel("Раскладка:"));
@@ -143,7 +163,7 @@ public class ControlRoomPlannerDialog extends JDialog {
     }
 
     private JPanel buildLibraryTab() {
-        JTable table = new JTable(libModel);
+        JTable table = libTable;
         table.setAutoCreateRowSorter(true);
         table.setRowHeight(24);
         int[] widths = {260, 120, 90, 230, 70, 90, 280};
@@ -168,9 +188,42 @@ public class ControlRoomPlannerDialog extends JDialog {
         JPanel top = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
         top.add(onlyMissing);
         top.add(libCount);
-        top.add(UiKit.muted("Янтарным выделены позиции без габаритов. Заполнить их можно в админке (импорт из CSV)."));
+        top.add(UiKit.muted("Янтарным выделены позиции без габаритов — укажите их сами или предложите на сервер."));
+        JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
+        actions.add(dimsBtn);
+        actions.add(newItemBtn);
+        actions.add(editItemBtn);
+        actions.add(deleteItemBtn);
+        actions.add(proposeBtn);
+        dimsBtn.addActionListener(e -> specifyDimensions());
+        editItemBtn.addActionListener(e -> editPersonalItem());
+        deleteItemBtn.addActionListener(e -> deletePersonalItem());
+        proposeBtn.addActionListener(e -> proposeSelected());
+        dimsBtn.setToolTipText("Указать (или поправить) габариты выбранной позиции. Они сохранятся у вас и будут действовать, "
+                + "пока в общей библиотеке нет данных.");
+        proposeBtn.setToolTipText("Отправить габариты администратору: они появятся в общей библиотеке у всех.");
+        JPopupMenu newMenu = new JPopupMenu();
+        JMenuItem newEquip = new JMenuItem("Оборудование пультовой…");
+        JMenuItem newFurn = new JMenuItem("Мебель, станок, монитор…");
+        newEquip.addActionListener(e -> RoomItemDialog.createEquipment(this, model));
+        newFurn.addActionListener(e -> RoomItemDialog.createFurniture(this, model));
+        newMenu.add(newEquip);
+        newMenu.add(newFurn);
+        newItemBtn.addActionListener(e -> newMenu.show(newItemBtn, 0, newItemBtn.getHeight()));
+        table.getSelectionModel().addListSelectionListener(e -> updateLibraryButtons());
+        table.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent e) {
+                if (e.getClickCount() == 2 && selectedLibraryRef() != null) {
+                    specifyDimensions();
+                }
+            }
+        });
+        JPanel north = new JPanel(new BorderLayout());
+        north.add(top, BorderLayout.NORTH);
+        north.add(actions, BorderLayout.SOUTH);
         JPanel p = new JPanel(new BorderLayout());
-        p.add(top, BorderLayout.NORTH);
+        p.add(north, BorderLayout.NORTH);
         p.add(new JScrollPane(table), BorderLayout.CENTER);
         return p;
     }
@@ -300,8 +353,97 @@ public class ControlRoomPlannerDialog extends JDialog {
         summary.setCaretPosition(0);
     }
 
+    // ---- вкладка «Библиотека»: габариты и свои позиции ----
+
+    private RoomLibRef selectedLibraryRef() {
+        int row = libTable.getSelectedRow();
+        if (row < 0) {
+            return null;
+        }
+        return libModel.at(libTable.convertRowIndexToModel(row)).ref();
+    }
+
+    private RoomLibraryEdit.Found selectedFound() {
+        RoomLibRef ref = selectedLibraryRef();
+        return ref != null ? RoomLibraryEdit.find(model, ref) : null;
+    }
+
+    private static boolean isPersonalRoomItem(RoomLibraryEdit.Found f) {
+        return f != null && !f.shared() && (f.ref().getKind() == RoomLibRef.Kind.ROOM_EQUIPMENT
+                || f.ref().getKind() == RoomLibRef.Kind.ROOM_FURNITURE);
+    }
+
+    private void updateLibraryButtons() {
+        RoomLibraryEdit.Found f = selectedFound();
+        dimsBtn.setEnabled(f != null);
+        editItemBtn.setEnabled(isPersonalRoomItem(f));
+        deleteItemBtn.setEnabled(isPersonalRoomItem(f));
+        boolean personalData = f != null && libAdapter != null
+                && (isPersonalRoomItem(f) || libAdapter.usesPersonalPhysical(f.ref()));
+        proposeBtn.setEnabled(settings != null && personalData && libAdapter.resolve(f.ref()).complete());
+    }
+
+    private void specifyDimensions() {
+        RoomLibRef ref = selectedLibraryRef();
+        if (ref != null) {
+            RoomDimensionsDialog.show(this, model, settings, ref);
+        }
+    }
+
+    private void editPersonalItem() {
+        RoomLibraryEdit.Found f = selectedFound();
+        if (!isPersonalRoomItem(f)) {
+            return;
+        }
+        if (f.item() instanceof RoomEquipmentType e) {
+            RoomItemDialog.editEquipment(this, model, e);
+        } else if (f.item() instanceof RoomFurnitureType t) {
+            RoomItemDialog.editFurniture(this, model, t);
+        }
+    }
+
+    private void deletePersonalItem() {
+        RoomLibraryEdit.Found f = selectedFound();
+        if (!isPersonalRoomItem(f)) {
+            return;
+        }
+        int used = model.countRoomLayoutReferences(f.ref());
+        String text = "Удалить «" + f.name() + "» из личной библиотеки?"
+                + (used > 0 ? "\nПозиция стоит в раскладках (" + used + " шт.) — там она станет «неизвестной»." : "");
+        if (JOptionPane.showConfirmDialog(this, text, "Удалить позицию", JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.WARNING_MESSAGE) != JOptionPane.OK_OPTION) {
+            return;
+        }
+        if (f.ref().getKind() == RoomLibRef.Kind.ROOM_EQUIPMENT) {
+            model.deleteRoomEquipmentType(f.id());
+        } else {
+            model.deleteRoomFurnitureType(f.id());
+        }
+    }
+
+    /** Предлагает на сервер позицию с теми габаритами, что действуют сейчас (личными или собственной записи). */
+    private void proposeSelected() {
+        RoomLibraryEdit.Found f = selectedFound();
+        if (f == null || settings == null) {
+            return;
+        }
+        com.vjstb.ledscheme.model.PhysicalSpec spec = model.getPhysicalOverrides().get(f.ref().key());
+        if (spec == null) {
+            spec = RoomLibraryEdit.physicalOf(f.item());
+        }
+        if (!RoomLibraryEdit.isComplete(f.item(), spec)) {
+            JOptionPane.showMessageDialog(this, "Сначала заполните габариты полностью.", "Предложить на сервер",
+                    JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        ProposeDialog.show(this, settings, f.serverKind(), f.name(), RoomLibraryEdit.draftWith(f.item(), spec),
+                f.shared() ? f.id() : null);
+    }
+
     private void renderLibrary() {
-        List<RoomItemSpec> all = RoomLibraryAdapter.of(model).all();
+        libAdapter = RoomLibraryAdapter.of(model);
+        RoomLibRef keep = selectedLibraryRef();
+        List<RoomItemSpec> all = libAdapter.all();
         int missing = 0;
         List<RoomItemSpec> shown = new ArrayList<>();
         for (RoomItemSpec s : all) {
@@ -312,8 +454,24 @@ public class ControlRoomPlannerDialog extends JDialog {
                 shown.add(s);
             }
         }
-        libModel.set(shown);
+        java.util.Set<RoomLibRef> personal = new java.util.HashSet<>();
+        for (RoomItemSpec s : shown) {
+            if (libAdapter.usesPersonalPhysical(s.ref())) {
+                personal.add(s.ref());
+            }
+        }
+        libModel.set(shown, personal);
         libCount.setText("Позиций: " + all.size() + ", без габаритов: " + missing);
+        if (keep != null) {
+            for (int i = 0; i < shown.size(); i++) {
+                if (keep.equals(shown.get(i).ref())) {
+                    int view = libTable.convertRowIndexToView(i);
+                    libTable.getSelectionModel().setSelectionInterval(view, view);
+                    break;
+                }
+            }
+        }
+        updateLibraryButtons();
     }
 
     private static String dims(RoomItemSpec s) {
@@ -340,9 +498,11 @@ public class ControlRoomPlannerDialog extends JDialog {
     private static final class LibraryTableModel extends AbstractTableModel {
         private final String[] cols = {"Позиция", "Категория", "Тип", "Размеры", "Вес, кг", "Мощность, Вт", "Габариты"};
         private List<RoomItemSpec> rows = List.of();
+        private java.util.Set<RoomLibRef> personal = java.util.Set.of();
 
-        void set(List<RoomItemSpec> rows) {
+        void set(List<RoomItemSpec> rows, java.util.Set<RoomLibRef> personal) {
             this.rows = rows;
+            this.personal = personal;
             fireTableDataChanged();
         }
 
@@ -375,7 +535,8 @@ public class ControlRoomPlannerDialog extends JDialog {
                 case 3 -> dims(s);
                 case 4 -> RoomUnits.num(s.weightKg(), 2);
                 case 5 -> RoomUnits.num(s.powerW(), 0);
-                default -> s.complete() ? "указаны" : "нет: " + String.join(", ", s.missing());
+                default -> s.complete() ? (personal.contains(s.ref()) ? "указаны (ваши)" : "указаны")
+                        : "нет: " + String.join(", ", s.missing());
             };
         }
     }

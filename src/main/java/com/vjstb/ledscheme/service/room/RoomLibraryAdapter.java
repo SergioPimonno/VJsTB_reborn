@@ -4,6 +4,8 @@ import com.vjstb.ledscheme.model.CaseType;
 import com.vjstb.ledscheme.model.EquipmentPreset;
 import com.vjstb.ledscheme.model.NetworkDeviceType;
 import com.vjstb.ledscheme.model.PhysicalSpec;
+import com.vjstb.ledscheme.model.RoomEquipmentType;
+import com.vjstb.ledscheme.model.RoomFurnitureType;
 import com.vjstb.ledscheme.model.RoomLibRef;
 import com.vjstb.ledscheme.service.AppModel;
 import java.util.ArrayList;
@@ -12,11 +14,12 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Каталог Планнера пультовой над существующими библиотеками приложения (PLAN.md, раздел 5):
- * пресеты оборудования общей схемы ({@link EquipmentPreset}), сетевые устройства
- * ({@link NetworkDeviceType}) и кофры ({@link CaseType}) — общие и личные списки вместе.
- * Размеры и вес берутся из физического блока позиции ({@link PhysicalSpec}); физика библиотеки
- * в миллиметрах, планнер считает в сантиметрах — пересчёт ровно здесь.
+ * Каталог Планнера пультовой над библиотеками приложения (PLAN.md, раздел 5): пресеты оборудования
+ * общей схемы ({@link EquipmentPreset}), сетевые устройства ({@link NetworkDeviceType}), кофры
+ * ({@link CaseType}), оборудование пультовой ({@link RoomEquipmentType}) и мебель/станки/мониторы
+ * ({@link RoomFurnitureType}) — общие и личные списки вместе. Размеры и вес берутся из
+ * физического блока позиции ({@link PhysicalSpec}); физика библиотеки в миллиметрах, планнер
+ * считает в сантиметрах — пересчёт ровно здесь.
  *
  * <p>Позиция без физического блока (или без нужных полей) не пропадает: она попадает в каталог
  * с условными размерами и пометкой в {@link RoomItemSpec#missing()} — так Планнер выделяет её
@@ -25,32 +28,58 @@ import java.util.Map;
  * плане = {@code widthMm}, глубина = {@code lengthMm}, высота = {@code heightMm} (размеры кофра
  * для перевозки; внутренняя глубина — {@code physical.depthMm}).
  *
- * <p>Виды библиотеки для мебели, станков, мониторов и прочего оборудования пультовой добавляются
- * отдельным треком; ссылки на них пока резолвятся как «неизвестная позиция».
+ * <p><b>Личные габариты.</b> Пользователь может указать габариты позиции сам
+ * ({@code Library.physicalOverrides}, ключ {@link RoomLibRef#key()}). Они подставляются вместо
+ * физического блока только пока общих данных не хватает ({@code missingFields} непусто или блока
+ * нет): как только администратор заполнит позицию на сервере, общие данные главнее — иначе устаревшая
+ * личная цифра тихо перебила бы справочник. Для мебели/станков/мониторов блок личных габаритов
+ * заполняет ширину, глубину, высоту, вес и мощность (диагональ монитора берётся только из библиотеки).
  */
 public class RoomLibraryAdapter implements RoomCatalog {
 
     private final Map<RoomLibRef, RoomItemSpec> items = new LinkedHashMap<>();
+    private final Map<String, PhysicalSpec> overrides;
+    /** Позиции, для которых сейчас действуют личные габариты. */
+    private final java.util.Set<RoomLibRef> usedOverrides = new java.util.HashSet<>();
 
     public RoomLibraryAdapter(List<EquipmentPreset> presets, List<NetworkDeviceType> devices, List<CaseType> cases) {
+        this(presets, devices, cases, List.of(), List.of(), Map.of());
+    }
+
+    public RoomLibraryAdapter(List<EquipmentPreset> presets, List<NetworkDeviceType> devices, List<CaseType> cases,
+                              List<RoomEquipmentType> roomEquipment, List<RoomFurnitureType> furniture,
+                              Map<String, PhysicalSpec> personalPhysical) {
+        this.overrides = personalPhysical != null ? personalPhysical : Map.of();
         for (CaseType c : cases) {
             RoomLibRef ref = new RoomLibRef(RoomLibRef.Kind.CASE, c.getId());
-            items.put(ref, caseSpec(ref, c));
+            items.put(ref, caseSpec(ref, c, effective(ref, c.getPhysical(), RoomLibraryAdapter::caseMissing)));
         }
         for (EquipmentPreset p : presets) {
             RoomLibRef ref = new RoomLibRef(RoomLibRef.Kind.EQUIPMENT, p.getId());
             items.put(ref, deviceSpec(ref, p.getName(), p.getCategory() != null ? p.getCategory().getLabel() : "",
-                    p.getPhysical()));
+                    effective(ref, p.getPhysical(), PhysicalSpec::missingFields)));
         }
         for (NetworkDeviceType d : devices) {
             RoomLibRef ref = new RoomLibRef(RoomLibRef.Kind.NETWORK_DEVICE, d.getId());
-            items.put(ref, deviceSpec(ref, d.getName(), "Сеть", d.getPhysical()));
+            items.put(ref, deviceSpec(ref, d.getName(), "Сеть",
+                    effective(ref, d.getPhysical(), PhysicalSpec::missingFields)));
+        }
+        for (RoomEquipmentType t : roomEquipment) {
+            RoomLibRef ref = new RoomLibRef(RoomLibRef.Kind.ROOM_EQUIPMENT, t.getId());
+            String category = t.getCategory() != null && !t.getCategory().isBlank() ? t.getCategory() : "Пультовая";
+            items.put(ref, deviceSpec(ref, t.getName(), category,
+                    effective(ref, t.getPhysical(), PhysicalSpec::missingFields)));
+        }
+        for (RoomFurnitureType t : furniture) {
+            RoomLibRef ref = new RoomLibRef(RoomLibRef.Kind.ROOM_FURNITURE, t.getId());
+            items.put(ref, furnitureSpec(ref, t));
         }
     }
 
     /** Каталог из общих и личных списков библиотеки текущей модели. */
     public static RoomLibraryAdapter of(AppModel model) {
-        return new RoomLibraryAdapter(model.getEquipmentPresets(), model.getNetworkDeviceTypes(), model.getCaseTypes());
+        return new RoomLibraryAdapter(model.getEquipmentPresets(), model.getNetworkDeviceTypes(), model.getCaseTypes(),
+                model.getRoomEquipmentTypes(), model.getRoomFurnitureTypes(), model.getPhysicalOverrides());
     }
 
     @Override
@@ -62,6 +91,35 @@ public class RoomLibraryAdapter implements RoomCatalog {
     @Override
     public List<RoomItemSpec> all() {
         return new ArrayList<>(items.values());
+    }
+
+    /** Есть ли у позиции личные габариты, и действуют ли они сейчас (общих данных не хватает). */
+    public boolean usesPersonalPhysical(RoomLibRef ref) {
+        return ref != null && usedOverrides.contains(ref);
+    }
+
+    /** Физический блок позиции с учётом личных габаритов. */
+    private PhysicalSpec effective(RoomLibRef ref, PhysicalSpec shared,
+                                   java.util.function.Function<PhysicalSpec, List<String>> missingOf) {
+        PhysicalSpec own = overrides.get(ref.key());
+        boolean sharedComplete = shared != null && missingOf.apply(shared).isEmpty();
+        if (own != null && !sharedComplete) {
+            usedOverrides.add(ref);
+            return own;
+        }
+        return shared;
+    }
+
+    /** Кофр считается описанным, когда известны юниты и внутренняя глубина. */
+    private static List<String> caseMissing(PhysicalSpec p) {
+        List<String> m = new ArrayList<>();
+        if (p.getRackUnits() == null) {
+            m.add("юниты (U) — не рэк-кофр");
+        }
+        if (p.getDepthMm() == null) {
+            m.add("внутренняя глубина");
+        }
+        return m;
     }
 
     private static RoomItemSpec deviceSpec(RoomLibRef ref, String name, String category, PhysicalSpec ph) {
@@ -86,8 +144,7 @@ public class RoomLibraryAdapter implements RoomCatalog {
                 kg, p, null, missing);
     }
 
-    private static RoomItemSpec caseSpec(RoomLibRef ref, CaseType c) {
-        PhysicalSpec ph = c.getPhysical();
+    private static RoomItemSpec caseSpec(RoomLibRef ref, CaseType c, PhysicalSpec ph) {
         List<String> missing = new ArrayList<>();
         int u = 0;
         double inner = 0;
@@ -104,5 +161,67 @@ public class RoomLibraryAdapter implements RoomCatalog {
         return new RoomItemSpec(ref, RoomItemSpec.Type.CASE, RoomItemSpec.Role.OTHER, c.getName(), "Кофры",
                 RoomUnits.mmToCm(c.getWidthMm()), RoomUnits.mmToCm(c.getHeightMm()), RoomUnits.mmToCm(c.getLengthMm()), u,
                 12, inner, c.getWeightKg(), 0, null, missing);
+    }
+
+    /** Условные размеры для позиции без данных, см: ширина, глубина, высота. */
+    private static double[] placeholder(RoomFurnitureType.Kind kind) {
+        return switch (kind) {
+            case DECK -> new double[] {100, 100, 20};
+            case MONITOR -> new double[] {55, 20, 35};
+            default -> new double[] {100, 60, 75};
+        };
+    }
+
+    private RoomItemSpec furnitureSpec(RoomLibRef ref, RoomFurnitureType t) {
+        RoomFurnitureType.Kind kind = t.getKind() != null ? t.getKind() : RoomFurnitureType.Kind.FURNITURE;
+        Double w = t.getWidthMm();
+        Double d = t.getDepthMm();
+        Double h = t.getHeightMm();
+        Double kg = t.getWeightKg();
+        Double pw = t.getPowerW();
+        PhysicalSpec own = overrides.get(ref.key());
+        boolean incomplete = t.missingFields().stream().anyMatch(m -> !m.equals("диагональ"));
+        if (own != null && incomplete) {
+            usedOverrides.add(ref);
+            w = own.getWidthMm() != null ? own.getWidthMm() : w;
+            d = own.getDepthMm() != null ? own.getDepthMm() : d;
+            h = own.getHeightMm() != null ? own.getHeightMm() : h;
+            kg = own.getWeightKg() != null ? own.getWeightKg() : kg;
+            pw = own.getPowerW() != null ? own.getPowerW() : pw;
+        }
+        List<String> missing = new ArrayList<>();
+        if (w == null) {
+            missing.add("ширина");
+        }
+        if (d == null) {
+            missing.add("глубина");
+        }
+        if (h == null) {
+            missing.add("высота");
+        }
+        if (kind == RoomFurnitureType.Kind.MONITOR && t.getDiagonalIn() == null) {
+            missing.add("диагональ");
+        }
+        double[] ph = placeholder(kind);
+        double wc = w != null ? RoomUnits.mmToCm(w) : ph[0];
+        double dc = d != null ? RoomUnits.mmToCm(d) : ph[1];
+        double hc = h != null ? RoomUnits.mmToCm(h) : ph[2];
+        RoomItemSpec.Type type = switch (kind) {
+            case DECK -> RoomItemSpec.Type.DECK;
+            case MONITOR -> RoomItemSpec.Type.MONITOR;
+            default -> RoomItemSpec.Type.FURNITURE;
+        };
+        RoomItemSpec.Role role = switch (t.getRole() != null ? t.getRole() : RoomFurnitureType.Role.OTHER) {
+            case TABLE -> RoomItemSpec.Role.TABLE;
+            case CHAIR -> RoomItemSpec.Role.CHAIR;
+            default -> RoomItemSpec.Role.OTHER;
+        };
+        String category = switch (kind) {
+            case DECK -> "Станки";
+            case MONITOR -> "Мониторы";
+            default -> "Мебель";
+        };
+        return new RoomItemSpec(ref, type, role, t.getName(), category, wc, hc, dc, 0, 12, 0,
+                kg != null ? kg : 0, pw != null ? pw : 0, t.getDiagonalIn(), missing);
     }
 }

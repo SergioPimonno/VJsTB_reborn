@@ -7,6 +7,8 @@ import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.CableLengthProfile;
 import com.vjstb.ledscheme.model.CaseType;
+import com.vjstb.ledscheme.model.RoomEquipmentType;
+import com.vjstb.ledscheme.model.RoomFurnitureType;
 import com.vjstb.ledscheme.model.HoistType;
 import com.vjstb.ledscheme.model.StructureFrameType;
 import com.vjstb.ledscheme.model.TrussProfile;
@@ -55,6 +57,7 @@ import com.vjstb.ledscheme.model.SignalChain;
 import com.vjstb.ledscheme.model.Workspace;
 import com.vjstb.ledscheme.store.LibraryStore;
 import com.vjstb.ledscheme.store.WorkspaceStore;
+import com.vjstb.ledscheme.service.room.RoomRefMigration;
 import com.vjstb.ledscheme.sync.LibrarySyncClient;
 import java.io.File;
 import java.util.ArrayDeque;
@@ -4387,6 +4390,128 @@ public class AppModel {
         changed();
     }
 
+    // ---- библиотека Планнера пультовой: оборудование и мебель/станки/мониторы ----
+
+    /** Сколько раз позиция библиотеки стоит в раскладках пультовой всех проектов и сцен — для предупреждения
+     *  перед удалением личной позиции. */
+    public int countRoomLayoutReferences(com.vjstb.ledscheme.model.RoomLibRef ref) {
+        int n = 0;
+        for (Project project : workspace.getProjects()) {
+            for (Scene scene : project.getScenes()) {
+                for (com.vjstb.ledscheme.model.ControlRoomLayout layout : scene.getControlRoomLayouts()) {
+                    n += RoomRefMigration.count(layout, ref.getKind(), ref.getId());
+                }
+            }
+        }
+        return n;
+    }
+
+    /** Личные габариты позиций библиотеки (ключ — {@code RoomLibRef.key()}), только для чтения. */
+    public java.util.Map<String, com.vjstb.ledscheme.model.PhysicalSpec> getPhysicalOverrides() {
+        return java.util.Collections.unmodifiableMap(workspace.getPhysicalOverrides());
+    }
+
+    /** Запоминает личные габариты позиции библиотеки; {@code null} убирает их. Работает и для общих позиций
+     *  (их саму запись менять нельзя), и для личных. */
+    public void setPhysicalOverride(com.vjstb.ledscheme.model.RoomLibRef ref,
+                                    com.vjstb.ledscheme.model.PhysicalSpec spec) {
+        if (ref == null || ref.getId() == null) {
+            throw new IllegalArgumentException("Не указана позиция библиотеки");
+        }
+        if (spec == null) {
+            workspace.getPhysicalOverrides().remove(ref.key());
+        } else {
+            workspace.getPhysicalOverrides().put(ref.key(), spec.copy());
+        }
+        changed();
+    }
+
+    /** Общая библиотека ++ личная — см. javadoc {@link #getCabinetTypes()}. */
+    public List<RoomEquipmentType> getRoomEquipmentTypes() {
+        List<RoomEquipmentType> union = new ArrayList<>(workspace.getSharedRoomEquipmentTypes());
+        union.addAll(workspace.getRoomEquipmentTypes());
+        return union;
+    }
+
+    public boolean isSharedRoomEquipmentType(String id) {
+        return id != null && workspace.getSharedRoomEquipmentTypes().stream().anyMatch(t -> t.getId().equals(id));
+    }
+
+    private void requireUniqueRoomEquipmentName(String name, String ignoreId) {
+        for (RoomEquipmentType t : getRoomEquipmentTypes()) {
+            if (t.getName().equalsIgnoreCase(name) && !t.getId().equals(ignoreId)) {
+                throw new IllegalStateException("Оборудование пультовой «" + name + "» уже есть в библиотеке");
+            }
+        }
+    }
+
+    public RoomEquipmentType addRoomEquipmentType(RoomEquipmentType type) {
+        requireUniqueRoomEquipmentName(type.getName(), null);
+        workspace.getRoomEquipmentTypes().add(type);
+        changed();
+        return type;
+    }
+
+    public void updateRoomEquipmentType(RoomEquipmentType edited) {
+        requireUniqueRoomEquipmentName(edited.getName(), edited.getId());
+        RoomEquipmentType existing = workspace.getRoomEquipmentTypes().stream()
+                .filter(t -> t.getId().equals(edited.getId())).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Оборудование не найдено в личной библиотеке (общие позиции правит администратор)"));
+        existing.applyEditedValues(edited);
+        changed();
+    }
+
+    public void deleteRoomEquipmentType(String id) {
+        workspace.getRoomEquipmentTypes().removeIf(t -> t.getId().equals(id));
+        workspace.getPhysicalOverrides().remove(new com.vjstb.ledscheme.model.RoomLibRef(
+                com.vjstb.ledscheme.model.RoomLibRef.Kind.ROOM_EQUIPMENT, id).key());
+        changed();
+    }
+
+    /** Общая библиотека ++ личная — см. javadoc {@link #getCabinetTypes()}. */
+    public List<RoomFurnitureType> getRoomFurnitureTypes() {
+        List<RoomFurnitureType> union = new ArrayList<>(workspace.getSharedRoomFurnitureTypes());
+        union.addAll(workspace.getRoomFurnitureTypes());
+        return union;
+    }
+
+    public boolean isSharedRoomFurnitureType(String id) {
+        return id != null && workspace.getSharedRoomFurnitureTypes().stream().anyMatch(t -> t.getId().equals(id));
+    }
+
+    private void requireUniqueRoomFurnitureName(String name, String ignoreId) {
+        for (RoomFurnitureType t : getRoomFurnitureTypes()) {
+            if (t.getName().equalsIgnoreCase(name) && !t.getId().equals(ignoreId)) {
+                throw new IllegalStateException("Мебель/станок/монитор «" + name + "» уже есть в библиотеке");
+            }
+        }
+    }
+
+    public RoomFurnitureType addRoomFurnitureType(RoomFurnitureType type) {
+        requireUniqueRoomFurnitureName(type.getName(), null);
+        workspace.getRoomFurnitureTypes().add(type);
+        changed();
+        return type;
+    }
+
+    public void updateRoomFurnitureType(RoomFurnitureType edited) {
+        requireUniqueRoomFurnitureName(edited.getName(), edited.getId());
+        RoomFurnitureType existing = workspace.getRoomFurnitureTypes().stream()
+                .filter(t -> t.getId().equals(edited.getId())).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Позиция не найдена в личной библиотеке (общие позиции правит администратор)"));
+        existing.applyEditedValues(edited);
+        changed();
+    }
+
+    public void deleteRoomFurnitureType(String id) {
+        workspace.getRoomFurnitureTypes().removeIf(t -> t.getId().equals(id));
+        workspace.getPhysicalOverrides().remove(new com.vjstb.ledscheme.model.RoomLibRef(
+                com.vjstb.ledscheme.model.RoomLibRef.Kind.ROOM_FURNITURE, id).key());
+        changed();
+    }
+
     /** Общая библиотека ("GTO") ++ личная — см. javadoc {@link #getCabinetTypes()}
      *  про то же разделение. */
     public List<VehicleType> getVehicleTypes() {
@@ -4533,7 +4658,10 @@ public class AppModel {
                     // указывающими на удалённый id.
                     case "EQUIPMENT" -> applyOne(workspace.getSharedEquipmentPresets(), workspace.getEquipmentPresets(),
                             dto, EquipmentPreset.class, EquipmentPreset::getId, EquipmentPreset::setId, EquipmentPreset::getName,
-                            this::migrateControllerInstanceReferences);
+                            (oldId, newId) -> {
+                                migrateControllerInstanceReferences(oldId, newId);
+                                migrateRoomReferences(com.vjstb.ledscheme.model.RoomLibRef.Kind.EQUIPMENT, oldId, newId);
+                            });
                     case "CABLE" -> applyOne(workspace.getSharedCableTypes(), workspace.getCableTypes(), dto,
                             CableType.class, CableType::getId, CableType::setId, CableType::getLabel,
                             NO_REFERENCE_MIGRATION);
@@ -4556,14 +4684,26 @@ public class AppModel {
                             this::migrateStructureFrameTypeReferences);
                     case "CASE" -> applyOne(workspace.getSharedCaseTypes(), workspace.getCaseTypes(), dto,
                             CaseType.class, CaseType::getId, CaseType::setId, CaseType::getName,
-                            NO_REFERENCE_MIGRATION);
+                            (oldId, newId) -> migrateRoomReferences(
+                                    com.vjstb.ledscheme.model.RoomLibRef.Kind.CASE, oldId, newId));
+                    case "ROOM_EQUIPMENT" -> applyOne(workspace.getSharedRoomEquipmentTypes(),
+                            workspace.getRoomEquipmentTypes(), dto, RoomEquipmentType.class,
+                            RoomEquipmentType::getId, RoomEquipmentType::setId, RoomEquipmentType::getName,
+                            (oldId, newId) -> migrateRoomReferences(
+                                    com.vjstb.ledscheme.model.RoomLibRef.Kind.ROOM_EQUIPMENT, oldId, newId));
+                    case "ROOM_FURNITURE" -> applyOne(workspace.getSharedRoomFurnitureTypes(),
+                            workspace.getRoomFurnitureTypes(), dto, RoomFurnitureType.class,
+                            RoomFurnitureType::getId, RoomFurnitureType::setId, RoomFurnitureType::getName,
+                            (oldId, newId) -> migrateRoomReferences(
+                                    com.vjstb.ledscheme.model.RoomLibRef.Kind.ROOM_FURNITURE, oldId, newId));
                     case "VEHICLE" -> applyOne(workspace.getSharedVehicleTypes(), workspace.getVehicleTypes(), dto,
                             VehicleType.class, VehicleType::getId, VehicleType::setId, VehicleType::getName,
                             NO_REFERENCE_MIGRATION);
                     case "NETWORK_DEVICE" -> applyOne(workspace.getSharedNetworkDeviceTypes(),
                             workspace.getNetworkDeviceTypes(), dto, NetworkDeviceType.class,
                             NetworkDeviceType::getId, NetworkDeviceType::setId, NetworkDeviceType::getName,
-                            NO_REFERENCE_MIGRATION);
+                            (oldId, newId) -> migrateRoomReferences(
+                                    com.vjstb.ledscheme.model.RoomLibRef.Kind.NETWORK_DEVICE, oldId, newId));
                     case "EQUIPMENT_SERIES" -> applyOne(workspace.getSharedEquipmentSeries(),
                             workspace.getEquipmentSeries(), dto, EquipmentSeries.class,
                             EquipmentSeries::getId, EquipmentSeries::setId, EquipmentSeries::getName,
@@ -4620,6 +4760,8 @@ public class AppModel {
             case "STRUCTURE_FRAME" -> removeSharedIfUnreferenced(workspace.getSharedStructureFrameTypes(), dto.id(),
                     StructureFrameType::getId, this::isStructureFrameTypeReferenced);
             case "CASE" -> workspace.getSharedCaseTypes().removeIf(c -> c.getId().equals(dto.id()));
+            case "ROOM_EQUIPMENT" -> workspace.getSharedRoomEquipmentTypes().removeIf(t -> t.getId().equals(dto.id()));
+            case "ROOM_FURNITURE" -> workspace.getSharedRoomFurnitureTypes().removeIf(t -> t.getId().equals(dto.id()));
             case "VEHICLE" -> workspace.getSharedVehicleTypes().removeIf(v -> v.getId().equals(dto.id()));
             case "NETWORK_DEVICE" -> workspace.getSharedNetworkDeviceTypes().removeIf(t -> t.getId().equals(dto.id()));
             case "EQUIPMENT_SERIES" -> workspace.getSharedEquipmentSeries().removeIf(s -> s.getId().equals(dto.id()));
@@ -4816,6 +4958,25 @@ public class AppModel {
      *  ТОЛЬКО веткой "EQUIPMENT" (после слияния библиотеки контроллеров в
      *  EquipmentPreset, 2026-09-23) — раньше была парной к отдельной ветке
      *  "CONTROLLER". */
+    /** Переносит ссылки раскладок пультовой и личные габариты с {@code oldId} на {@code newId} — см. javadoc
+     *  {@link #applyOne} и {@link RoomRefMigration}. */
+    private void migrateRoomReferences(com.vjstb.ledscheme.model.RoomLibRef.Kind kind, String oldId, String newId) {
+        for (Project project : workspace.getProjects()) {
+            for (Scene scene : project.getScenes()) {
+                for (com.vjstb.ledscheme.model.ControlRoomLayout layout : scene.getControlRoomLayouts()) {
+                    RoomRefMigration.migrate(layout, kind, oldId, newId);
+                }
+            }
+        }
+        java.util.Map<String, com.vjstb.ledscheme.model.PhysicalSpec> overrides = workspace.getPhysicalOverrides();
+        String oldKey = new com.vjstb.ledscheme.model.RoomLibRef(kind, oldId).key();
+        String newKey = new com.vjstb.ledscheme.model.RoomLibRef(kind, newId).key();
+        com.vjstb.ledscheme.model.PhysicalSpec moved = overrides.remove(oldKey);
+        if (moved != null) {
+            overrides.putIfAbsent(newKey, moved);
+        }
+    }
+
     private void migrateControllerInstanceReferences(String oldId, String newId) {
         for (Project project : workspace.getProjects()) {
             for (Scene scene : project.getScenes()) {
