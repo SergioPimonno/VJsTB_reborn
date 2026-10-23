@@ -192,6 +192,22 @@ public class Structure3DControlsPanel extends JPanel {
                 statusLabel.setText(s == null ? "Экран не выбран." : "Ползунки — только для наземного конструктива.");
                 return;
             }
+            if (s.isStructureManualLayout()) {
+                // Ручная расстановка (2026-10-22): форма/радиус/зазор/число башен не задают положение
+                // башен -- их ставит инженер; ползунки не должны молча пересобирать раскладку.
+                shapeCombo.setEnabled(false);
+                radiusSlider.setEnabled(false);
+                gapSlider.setEnabled(false);
+                towersSlider.setEnabled(false);
+                radiusLabel.setText("Радиус");
+                gapLabel.setText("Зазор между башнями");
+                towersLabel.setText("Число башен: " + s.getStructureTowerPlacements().size() + " (вручную)");
+                List<String> manualWarnings = controller.warnings();
+                statusLabel.setText(manualWarnings.isEmpty() ? "Башни расставлены вручную (панель «Раскладка»)."
+                        : "<html><div style='width:" + STATUS_WIDTH_PX + "px'>⚠ "
+                        + String.join("<br>⚠ ", manualWarnings) + "</div></html>");
+                return;
+            }
             ScreenCurveType type = s.getStructureCurveType();
             boolean separate = StructureCurveMath.separateTowers(s);
             shapeCombo.setSelectedItem(type);

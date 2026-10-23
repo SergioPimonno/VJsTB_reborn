@@ -177,12 +177,20 @@ public final class StructureCurveMath {
         }
     }
 
+    /** Глубина кабинета из библиотеки (мм); не задана — {@link #DEFAULT_CABINET_DEPTH_MM}. Одна
+     *  функция и для геометрии плана ({@link #curveOf}), и для 3D-рендера экрана: раньше прямой
+     *  экран рисовался плоской плитой в 15 мм, хотя глубина кабинета в библиотеке задана
+     *  (запрос 2026-10-22: «габариты, в том числе глубину, я указываю не просто так»). */
+    public static double cabinetDepthOf(CabinetType type) {
+        return type != null && type.getDepthMm() != null && type.getDepthMm() > 0
+                ? type.getDepthMm() : DEFAULT_CABINET_DEPTH_MM;
+    }
+
     /** Геометрия экрана из {@link Screen}: колонки, ширина/глубина кабинета из {@code type}
      *  (глубины нет — {@link #DEFAULT_CABINET_DEPTH_MM}), тип и радиус изгиба. */
     public static Curve curveOf(Screen screen, CabinetType type) {
         double w = type != null && type.getWidthMm() > 0 ? type.getWidthMm() : 500;
-        double d = type != null && type.getDepthMm() != null && type.getDepthMm() > 0
-                ? type.getDepthMm() : DEFAULT_CABINET_DEPTH_MM;
+        double d = cabinetDepthOf(type);
         return new Curve(screen.getStructureCurveType(), screen.getStructureCurveRadiusMm(), w, d, screen.getCols());
     }
 
@@ -265,8 +273,13 @@ public final class StructureCurveMath {
         return (type != null && type.isCurved()) || gapMm > EPS;
     }
 
+    /** Раздельные башни экрана: по форме/зазору ({@link #separateTowers(ScreenCurveType, double)})
+     *  ИЛИ ручная расстановка ({@link Screen#isStructureManualLayout()}, 2026-10-22) — в ручном
+     *  режиме башни всегда раздельные, пара столбов {@code 2k}/{@code 2k+1}, даже у прямого экрана
+     *  с зазором 0. */
     public static boolean separateTowers(Screen screen) {
-        return screen != null && separateTowers(screen.getStructureCurveType(), screen.getStructureTowerGapMm());
+        return screen != null && (screen.isStructureManualLayout()
+                || separateTowers(screen.getStructureCurveType(), screen.getStructureTowerGapMm()));
     }
 
     /** Зазор, с которым реально считается раздельный режим: не меньше {@link
@@ -489,7 +502,8 @@ public final class StructureCurveMath {
         return false;
     }
 
-    private static List<double[][]> worldRects(Placement p, TowerSpec t) {
+    /** Контур башни в плане — прямоугольники {@link #footprintLocal} в мировых координатах. */
+    public static List<double[][]> worldRects(Placement p, TowerSpec t) {
         List<double[][]> out = new ArrayList<>();
         for (Rect r : footprintLocal(t)) {
             double[][] corners = r.corners();
@@ -521,7 +535,8 @@ public final class StructureCurveMath {
         return result;
     }
 
-    private static boolean anyIntersect(List<double[][]> a, List<double[][]> b) {
+    /** Пересекается ли какой-нибудь прямоугольник {@code a} с каким-нибудь из {@code b}. */
+    public static boolean anyIntersect(List<double[][]> a, List<double[][]> b) {
         for (double[][] ra : a) {
             for (double[][] rb : b) {
                 if (intersects(ra, rb)) {
@@ -602,7 +617,10 @@ public final class StructureCurveMath {
         boolean separate = separateTowers(screen);
         double gap = effectiveGapMm(screen.getStructureCurveType(), screen.getStructureTowerGapMm());
         int n;
-        if (screen.getStructureTowerCount() > 0) {
+        if (screen.isStructureManualLayout()) {
+            // Ручная расстановка: башен ровно столько, сколько записей положения.
+            n = screen.getStructureTowerPlacements().size();
+        } else if (screen.getStructureTowerCount() > 0) {
             n = Math.max(1, (screen.getStructureTowerCount() + 1) / 2);
         } else if (screen.getStructureSeparateTowerCount() > 0) {
             n = screen.getStructureSeparateTowerCount();
@@ -617,6 +635,14 @@ public final class StructureCurveMath {
      *  введённого выноса ({@link StructureCalc#totalBaseSections}), номинальной сетки и
      *  реально стоящих (не скрытых) секций/усилительных рам. */
     public static TowerSpec towerSpecOf(Screen screen, Workspace workspace) {
+        return towerSpecOf(screen, workspace, -1);
+    }
+
+    /** То же для ОДНОЙ башни {@code tower} (столбы {@code 2·tower}/{@code 2·tower+1}): глубина — по
+     *  её собственным ячейкам, а не по самой глубокой башне экрана. В ручной расстановке башни
+     *  могут быть разной глубины, и контур каждой (пересечения, «встык») должен быть её собственным.
+     *  {@code tower < 0} — все башни сразу (максимум), как у {@link #towerSpecOf(Screen, Workspace)}. */
+    public static TowerSpec towerSpecOf(Screen screen, Workspace workspace, int tower) {
         StructureFrameType frameType = workspace != null
                 ? workspace.structureFrameTypeById(screen.getStructureFrameTypeId()) : null;
         double frameW = frameType != null && frameType.getWidthMm() != null && frameType.getWidthMm() > 0
@@ -627,18 +653,57 @@ public final class StructureCurveMath {
                 screen.getStructureBackRowSegments()),
                 StructureCalc.CORE_BASE_SECTION_COUNT + screen.getStructureExtendedBaseSections());
         for (StructureBaseFrameCell c : screen.getStructureBaseFrameCells()) {
-            if (!c.isHidden()) {
+            if (!c.isHidden() && ownedBy(c.getTowerIndex(), tower)) {
                 sections = Math.max(sections, c.getSectionIndex() + 1);
             }
         }
         for (StructureFrameCell c : screen.getStructureFrameCells()) {
-            if (!c.isHidden() && c.getRow() == 2) {
+            if (c.isHidden() || !ownedBy(c.getTowerIndex(), tower)) {
+                continue;
+            }
+            if (c.getRow() == 2) {
                 sections = Math.max(sections, c.getSegmentIndex() + 1);
-            } else if (!c.isHidden() && c.getRow() == 1) {
+            } else if (c.getRow() == 1) {
                 sections = Math.max(sections, 2);
             }
         }
-        return new TowerSpec(StructureCalc.DEFAULT_TOWER_SPACING_MM, frameD, frameW, sections * frameW);
+        if (tower >= 0) {
+            // Габарит КОНКРЕТНОЙ башни — по рамам, которые в ней реально стоят (запрос 2026-10-22: «убрал раму
+            // выноса, а башня по-прежнему метр на метр и мешает соседней — размеры башен зависят от рам»): глубина
+            // = самая дальняя стоящая секция основания / усилительная рама / задний ряд (две секции) / передний
+            // ряд (одна). Номинальный вынос экрана — только пока у башни ещё нет ни одной ячейки.
+            int actual = 0;
+            boolean anyCell = false;
+            for (StructureBaseFrameCell c : screen.getStructureBaseFrameCells()) {
+                if (ownedBy(c.getTowerIndex(), tower)) {
+                    anyCell = true;
+                    if (!c.isHidden()) {
+                        actual = Math.max(actual, c.getSectionIndex() + 1);
+                    }
+                }
+            }
+            for (StructureFrameCell c : screen.getStructureFrameCells()) {
+                if (!ownedBy(c.getTowerIndex(), tower)) {
+                    continue;
+                }
+                anyCell = true;
+                if (c.isHidden()) {
+                    continue;
+                }
+                actual = Math.max(actual, c.getRow() == 2 ? c.getSegmentIndex() + 1 : c.getRow() == 1 ? 2 : 1);
+            }
+            if (anyCell) {
+                sections = Math.max(1, actual);
+            }
+        }
+        double spacing = tower >= 0 ? StructureLayoutMath.towerPostSpacingMm(screen, workspace, tower)
+                : StructureCalc.DEFAULT_TOWER_SPACING_MM;
+        return new TowerSpec(spacing, frameD, frameW, sections * frameW);
+    }
+
+    /** Столб {@code post} принадлежит башне {@code tower} (или башня не задана — {@code tower < 0}). */
+    private static boolean ownedBy(int post, int tower) {
+        return tower < 0 || Math.floorDiv(post, 2) == tower;
     }
 
     /** Итог проверки раздельных башен. {@code minGapMm}/{@code maxDepthMm} считаются только

@@ -14,6 +14,12 @@ public class Screen {
 
     /** Радиус изгиба по умолчанию (10 м) — подставляется, пока пользователь не ввёл свой. */
     public static final double DEFAULT_CURVE_RADIUS_MM = 10_000;
+    /** Интервал авто-расстановки перемычек по умолчанию и нижняя граница, мм. */
+    public static final double DEFAULT_PEREMYCHKA_INTERVAL_MM = 1500;
+    /** Стяжек на стык башен по умолчанию и верхняя граница параметра. */
+    public static final int DEFAULT_TIES_PER_CONTACT = 2;
+    public static final int MAX_TIES_PER_CONTACT = 20;
+    public static final double MIN_PEREMYCHKA_INTERVAL_MM = 300;
 
     private String id = UUID.randomUUID().toString();
     private String name = "";
@@ -203,6 +209,57 @@ public class Screen {
      *  проектах трактуется именно так — в раздельном режиме {@code structureTowerCount}
      *  выводится как 2 × это число (см. {@code AppModel#updateScreenStructure}). */
     private int structureSeparateTowerCount;
+    /** РУЧНАЯ расстановка башен (запрос 2026-10-22: «две башни встык под 90°, и сразу под любым
+     *  углом»): вместо расчёта по форме экрана положение каждой башни берётся из {@link
+     *  #structureTowerPlacements}. Всегда раздельные башни (пара столбов {@code 2k}/{@code 2k+1}),
+     *  даже у прямого экрана с зазором 0 — см. {@code StructureCurveMath#separateTowers}. Включается
+     *  через {@code AppModel#setStructureManualLayout}: текущая авто-раскладка копируется в список
+     *  как стартовая. {@code false} по умолчанию — старые проекты считаются как раньше. */
+    private boolean structureManualLayout;
+    /** Стаканы между вертикальными рамами НЕ ставятся на всём экране (запрос 2026-10-22: «бывает что
+     *  собираем без них»): верхняя рама стоит прямо на нижней, шаг рам равен высоте рамы (иначе —
+     *  рама + стакан, 950 + 50 = 1 м). {@code false} по умолчанию — со стаканами, как собирают
+     *  обычно. Отдельные стыки убираются через {@link #structureRemovedCups}. */
+    private boolean structureWithoutCups;
+    /** Связь «экран примыкает к другому под углом» (запрос 2026-10-22): поза этого экрана ВЫЧИСЛЯЕТСЯ от экрана
+     *  {@link #structureAttachRefId} (сторона, угол между лицевыми поверхностями, загиб) и едет вместе с ним; ручная
+     *  правка позы связь разрывает. {@code null} — экран стоит сам по себе. */
+    private String structureAttachRefId;
+    private boolean structureAttachRight = true;
+    private double structureAttachAngleDeg = 90;
+    private boolean structureAttachToward = true;
+    /** Считать крепление (стяжки) между встык стоящими башнями — отдельная пометка, по умолчанию НЕТ (решение
+     *  пользователя 2026-10-22): число стяжек в спецификации = стыки башен × стяжек на стык. */
+    private boolean structureCountTies;
+    /** Стяжек на один стык встык стоящих башен — РЕДАКТИРУЕМЫЙ параметр (запрос 2026-10-22; по умолчанию 2). */
+    private int structureTiesPerContact = DEFAULT_TIES_PER_CONTACT;
+    /** Интервал АВТО-расстановки перемычек, мм (запрос 2026-10-22): «Предварительный расчёт» ставит
+     *  перемычки через этот шаг по высоте (1500, 3000, …), каждую — на ближайшую перекладину вертикальной
+     *  рамы; руками перемычку можно поставить на любую перекладину (низ/середина/верх каждой рамы). По
+     *  умолчанию 1500. */
+    private double structurePeremychkaIntervalMm = DEFAULT_PEREMYCHKA_INTERVAL_MM;
+    /** Номера перемычек {@link StructurePeremychkaCell#getLevelIndex()} — НОМЕРА ПЕРЕКЛАДИН
+     *  ({@code рама·3 + 0 низ / 1 середина / 2 верх}), а не «уровень через 1,5 рамы» как в проектах до
+     *  2026-10-22. {@code false} (поле в старом JSON нет) — записи в старом смысле, при первом обращении
+     *  переводятся {@code ScreenLogic#migratePeremychkaToRungs}. */
+    private boolean structurePeremychkaByRung;
+    /** Узкие башни: рама горизонтальных элементов башни, отличная от стандартной (короткая 850), см.
+     *  {@link StructureTowerWidth}. Пусто — все башни стандартной ширины. */
+    private List<StructureTowerWidth> structureTowerWidths = new ArrayList<>();
+    /** Стыки, на которых стакан убран вручную (ПКМ по стакану в 3D), см. {@link StructureCupRemoval}. */
+    private List<StructureCupRemoval> structureRemovedCups = new ArrayList<>();
+    /** Положения башен в ручном режиме (по одной записи на башню, {@code towerIndex} 0..n−1),
+     *  в системе координат ЭКРАНА — см. {@link StructureTowerPlacement}. В авто-режиме не читается. */
+    private List<StructureTowerPlacement> structureTowerPlacements = new ArrayList<>();
+    /** Поза ЭКРАНА в плане конструктива ГРУППЫ экранов (вид сверху, система группы: x вправо, z к
+     *  зрителю): {@code (structurePoseXMm, structurePoseZMm)} — где стоит начало координат экрана
+     *  (левая точка лицевой поверхности), {@code structurePoseYawDeg} — поворот экрана вокруг
+     *  вертикали (знак как у {@code glRotate(yaw, 0, 1, 0)}). Нужна только конструктиву: сигнал,
+     *  питание, маски и сетка «Сцены» от неё не зависят ({@link #posXMm} — это положение на
+     *  канвасе сцены, не здесь). У одиночного экрана всегда 0 — экран в центре своей системы. */
+    private double structurePoseXMm;
+    private double structurePoseZMm;
+    private double structurePoseYawDeg;
     /** Реально существующие вертикальные сегменты/перемычки/секции базовых рам конструктива
      *  (Phase 2 — интерактивный 3D-редактор, Phase 2.1 — объёмная башня, см.
      *  STRUCTURE_CALC_NOTES.md) — источник истины о том, что физически стоит,
@@ -648,6 +705,156 @@ public class Screen {
         this.structureSeparateTowerCount = Math.max(0, structureSeparateTowerCount);
     }
 
+    public boolean isStructureManualLayout() {
+        return structureManualLayout;
+    }
+
+    public void setStructureManualLayout(boolean structureManualLayout) {
+        this.structureManualLayout = structureManualLayout;
+    }
+
+    public double getStructurePeremychkaIntervalMm() {
+        return structurePeremychkaIntervalMm >= MIN_PEREMYCHKA_INTERVAL_MM
+                ? structurePeremychkaIntervalMm : DEFAULT_PEREMYCHKA_INTERVAL_MM;
+    }
+
+    public void setStructurePeremychkaIntervalMm(double mm) {
+        this.structurePeremychkaIntervalMm = mm >= MIN_PEREMYCHKA_INTERVAL_MM ? mm : DEFAULT_PEREMYCHKA_INTERVAL_MM;
+    }
+
+    public boolean isStructurePeremychkaByRung() {
+        return structurePeremychkaByRung;
+    }
+
+    public void setStructurePeremychkaByRung(boolean structurePeremychkaByRung) {
+        this.structurePeremychkaByRung = structurePeremychkaByRung;
+    }
+
+    public String getStructureAttachRefId() {
+        return structureAttachRefId;
+    }
+
+    public void setStructureAttachRefId(String id) {
+        this.structureAttachRefId = id;
+    }
+
+    public boolean isStructureAttachRight() {
+        return structureAttachRight;
+    }
+
+    public void setStructureAttachRight(boolean right) {
+        this.structureAttachRight = right;
+    }
+
+    public double getStructureAttachAngleDeg() {
+        return structureAttachAngleDeg;
+    }
+
+    public void setStructureAttachAngleDeg(double deg) {
+        this.structureAttachAngleDeg = deg;
+    }
+
+    public boolean isStructureAttachToward() {
+        return structureAttachToward;
+    }
+
+    public void setStructureAttachToward(boolean toward) {
+        this.structureAttachToward = toward;
+    }
+
+    public int getStructureTiesPerContact() {
+        return structureTiesPerContact >= 1 ? structureTiesPerContact : DEFAULT_TIES_PER_CONTACT;
+    }
+
+    public void setStructureTiesPerContact(int n) {
+        this.structureTiesPerContact = Math.max(1, Math.min(MAX_TIES_PER_CONTACT, n));
+    }
+
+    public boolean isStructureCountTies() {
+        return structureCountTies;
+    }
+
+    public void setStructureCountTies(boolean structureCountTies) {
+        this.structureCountTies = structureCountTies;
+    }
+
+    public boolean isStructureWithoutCups() {
+        return structureWithoutCups;
+    }
+
+    public void setStructureWithoutCups(boolean structureWithoutCups) {
+        this.structureWithoutCups = structureWithoutCups;
+    }
+
+    public List<StructureTowerWidth> getStructureTowerWidths() {
+        return structureTowerWidths;
+    }
+
+    public void setStructureTowerWidths(List<StructureTowerWidth> structureTowerWidths) {
+        this.structureTowerWidths = structureTowerWidths != null ? structureTowerWidths : new ArrayList<>();
+    }
+
+    /** Рама ширины башни {@code tower} или {@code null} (стандартная). */
+    public String towerWidthFrameTypeOf(int tower) {
+        for (StructureTowerWidth w : structureTowerWidths) {
+            if (w.getTowerIndex() == tower) {
+                return w.getFrameTypeId();
+            }
+        }
+        return null;
+    }
+
+    public List<StructureCupRemoval> getStructureRemovedCups() {
+        return structureRemovedCups;
+    }
+
+    public void setStructureRemovedCups(List<StructureCupRemoval> structureRemovedCups) {
+        this.structureRemovedCups = structureRemovedCups != null ? structureRemovedCups : new ArrayList<>();
+    }
+
+    public List<StructureTowerPlacement> getStructureTowerPlacements() {
+        return structureTowerPlacements;
+    }
+
+    public void setStructureTowerPlacements(List<StructureTowerPlacement> structureTowerPlacements) {
+        this.structureTowerPlacements = structureTowerPlacements != null
+                ? structureTowerPlacements : new ArrayList<>();
+    }
+
+    /** Положение башни {@code towerIndex} в ручной расстановке или {@code null}, если записи нет. */
+    public StructureTowerPlacement towerPlacementOf(int towerIndex) {
+        for (StructureTowerPlacement p : structureTowerPlacements) {
+            if (p.getTowerIndex() == towerIndex) {
+                return p;
+            }
+        }
+        return null;
+    }
+
+    public double getStructurePoseXMm() {
+        return structurePoseXMm;
+    }
+
+    public void setStructurePoseXMm(double structurePoseXMm) {
+        this.structurePoseXMm = structurePoseXMm;
+    }
+
+    public double getStructurePoseZMm() {
+        return structurePoseZMm;
+    }
+
+    public void setStructurePoseZMm(double structurePoseZMm) {
+        this.structurePoseZMm = structurePoseZMm;
+    }
+
+    public double getStructurePoseYawDeg() {
+        return structurePoseYawDeg;
+    }
+
+    public void setStructurePoseYawDeg(double structurePoseYawDeg) {
+        this.structurePoseYawDeg = structurePoseYawDeg;
+    }
+
     public List<StructureFrameCell> getStructureFrameCells() {
         return structureFrameCells;
     }
@@ -797,6 +1004,31 @@ public class Screen {
         s.structureCurveByAngle = structureCurveByAngle;
         s.structureTowerGapMm = structureTowerGapMm;
         s.structureSeparateTowerCount = structureSeparateTowerCount;
+        s.structureManualLayout = structureManualLayout;
+        s.structureWithoutCups = structureWithoutCups;
+        s.structureAttachRefId = structureAttachRefId;
+        s.structureAttachRight = structureAttachRight;
+        s.structureAttachAngleDeg = structureAttachAngleDeg;
+        s.structureAttachToward = structureAttachToward;
+        s.structureCountTies = structureCountTies;
+        s.structureTiesPerContact = structureTiesPerContact;
+        s.structurePeremychkaIntervalMm = structurePeremychkaIntervalMm;
+        s.structurePeremychkaByRung = structurePeremychkaByRung;
+        s.structureTowerWidths = new ArrayList<>();
+        for (StructureTowerWidth w : structureTowerWidths) {
+            s.structureTowerWidths.add(w.copy());
+        }
+        s.structureRemovedCups = new ArrayList<>();
+        for (StructureCupRemoval r : structureRemovedCups) {
+            s.structureRemovedCups.add(r.copy());
+        }
+        s.structureTowerPlacements = new ArrayList<>();
+        for (StructureTowerPlacement p : structureTowerPlacements) {
+            s.structureTowerPlacements.add(p.copy());
+        }
+        s.structurePoseXMm = structurePoseXMm;
+        s.structurePoseZMm = structurePoseZMm;
+        s.structurePoseYawDeg = structurePoseYawDeg;
         s.structureFrameCells = new ArrayList<>();
         for (StructureFrameCell c : structureFrameCells) {
             // Баг-репорт (найден при переносе на объёмную башню): 2-арг конструктор не сохранял

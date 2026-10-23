@@ -57,6 +57,8 @@ public class MainFrame extends JFrame {
         super("AVE_ToolBox");
         this.model = model;
         this.settings = settings;
+        // колесо мыши в активном числовом поле меняет значение (все поля приложения)
+        SpinnerWheel.installGlobally();
 
         setupStage = new SetupStagePanel(model, settings);
         powerStage = new PowerStagePanel(model, settings);

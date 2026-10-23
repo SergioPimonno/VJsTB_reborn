@@ -69,7 +69,7 @@ class Structure3DPanelPickingTest {
         assertEquals("frame:1:0:0", panel.pickKeyAlongRay(upThrough(c), true));
         List<String> ghosts = panel.candidateKeys(false);
         assertTrue(ghosts.contains("frame:-1:0:0"), "у стены есть призрак лишнего столба сбоку");
-        assertTrue(panel.candidateKeys(true).contains("peremychka:1:0:0"), "перемычка в каждом промежутке");
+        assertTrue(panel.candidateKeys(true).contains("peremychka:1:0:4"), "перемычка в каждом промежутке");
     }
 
     @Test

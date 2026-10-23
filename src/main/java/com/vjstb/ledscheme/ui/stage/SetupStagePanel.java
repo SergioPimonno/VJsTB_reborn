@@ -159,6 +159,10 @@ public class SetupStagePanel extends JPanel {
      *  (2026-10-01): шаг стрелок — 500 мм (каталожный модуль рамы основания), т.к. глубина базы
      *  всё равно округляется вверх до целых модулей (StructureCalc#totalBaseSections). */
     private final JSpinner pStructureBaseExtension = new JSpinner(new SpinnerNumberModel(500.0, 0.0, 50_000.0, 500.0));
+    /** Интервал авто-расстановки перемычек, мм (запрос 2026-10-22): «Предварительный расчёт» ставит
+     *  перемычки через этот шаг по высоте, каждую — на ближайшую перекладину рамы. Руками — на любую. */
+    private final JSpinner pStructurePeremychkaInterval = new JSpinner(new SpinnerNumberModel(
+            Screen.DEFAULT_PEREMYCHKA_INTERVAL_MM, Screen.MIN_PEREMYCHKA_INTERVAL_MM, 10_000.0, 100.0));
     /** Коэффициент отношения требуемого веса балласта к весу экрана (2026-08-19) — раньше
      *  жёстко 1:1, теперь редактируемый (дефолт 0.6 — "в реальности хорошо если 6:10"). */
     private final JSpinner pStructureBallastRatio = new JSpinner(new SpinnerNumberModel(0.6, 0.05, 5.0, 0.05));
@@ -185,6 +189,9 @@ public class SetupStagePanel extends JPanel {
      *  ввода пересчитать уже введённое число, а не потерять его. */
     private String shownCurveMode = CURVE_BY_RADIUS;
     private final JButton toggle3DBtn = new JButton("Показать 3D");
+    /** Спецификация конструктива ГРУППЫ экранов (запрос 2026-10-22): видна, пока текущий экран входит в
+     *  группу из нескольких экранов с монтажом «конструктив». */
+    private final JButton groupSpecBtn = new JButton("Спецификация группы");
     /** Отдельное всплывающее окно (не встроенная панель — баг-репорт "вынеси в отдельное
      *  окно, как калькулятор видеотайминга", см. {@code ui.Structure3DDialog}), ленивое —
      *  GL-контекст создаётся только по первому нажатию {@link #toggle3DBtn}. {@code null} —
@@ -1476,6 +1483,13 @@ public class SetupStagePanel extends JPanel {
                 + " всегда есть рама основания.</html>");
         structureFieldsPanel.add(UiKit.formRow("Вынос базы под балласт, мм", pStructureBaseExtension));
         structureFieldsPanel.add(UiKit.vgap());
+        pStructurePeremychkaInterval.setToolTipText("<html>Шаг авто-расстановки перемычек по высоте (по умолчанию"
+                + " 1500 мм): «Предварительный расчёт»<br>ставит перемычку на каждые 1500, 3000, … мм — на ближайшую"
+                + " перекладину вертикальной рамы.<br>Руками перемычку можно поставить на ЛЮБУЮ перекладину (низ/"
+                + "середина/верх каждой рамы) в 3D: Ctrl+клик по призраку.<br>Смена интервала перестраивает"
+                + " перемычки заново (ручная расстановка перемычек сбрасывается).</html>");
+        structureFieldsPanel.add(UiKit.formRow("Интервал перемычек, мм", pStructurePeremychkaInterval));
+        structureFieldsPanel.add(UiKit.vgap());
         buildStructureCurveRows();
 
         setStructureFrameRenderer(pStructureFrameType);
@@ -1541,6 +1555,13 @@ public class SetupStagePanel extends JPanel {
             toggle3DBtn.setText("Скрыть 3D");
         });
         structureFieldsPanel.add(toggle3DBtn);
+        groupSpecBtn.setToolTipText("<html>Экран входит в группу, и у всех её экранов монтаж «конструктив» — конструктив"
+                + " собирается для группы целиком:<br>3D-окно показывает все экраны группы в общем плане (углы между"
+                + " ними, ручная расстановка башен), эта кнопка — сводная спецификация.</html>");
+        groupSpecBtn.setVisible(false); // покажется, когда у выбранного экрана есть группа с конструктивом
+        groupSpecBtn.addActionListener(e -> buildGroupStructureSpec());
+        structureFieldsPanel.add(UiKit.vgap());
+        structureFieldsPanel.add(groupSpecBtn);
 
         // Одна карточка "Подвес" на лебёдки+ферму вместе (не две отдельных) — см.
         // class-javadoc prerigLayered про баг-репорт 2026-09-14.
@@ -2487,6 +2508,36 @@ public class SetupStagePanel extends JPanel {
         setCurveValueForRadius(scr.getStructureCurveRadiusMm());
         pStructureTowerGap.setValue(scr.getStructureTowerGapMm());
         pStructureSeparateTowers.setValue(scr.getStructureSeparateTowerCount());
+        updateGroupStructureUi(scr);
+    }
+
+    /** «Спецификация группы» видна, пока конструктив группы возможен для экрана {@code scr}. */
+    private void updateGroupStructureUi(Screen scr) {
+        boolean group = com.vjstb.ledscheme.service.StructureGroupCalc
+                .viewScreens(model.getCurrentScene(), scr).size() > 1;
+        groupSpecBtn.setVisible(group);
+    }
+
+    /** Сводная спецификация конструктива группы текущего экрана ({@link
+     *  com.vjstb.ledscheme.service.StructureGroupCalc}). */
+    private void buildGroupStructureSpec() {
+        Screen scr = model.getCurrentScreen();
+        if (scr == null) {
+            return;
+        }
+        java.util.List<Screen> screens = com.vjstb.ledscheme.service.StructureGroupCalc
+                .viewScreens(model.getCurrentScene(), scr);
+        if (screens.size() < 2) {
+            return;
+        }
+        com.vjstb.ledscheme.model.ScreenGroup group = model.getCurrentScene().groupOf(scr);
+        com.vjstb.ledscheme.service.StructureGroupCalc.Result result =
+                com.vjstb.ledscheme.service.StructureGroupCalc.compute(screens, model::typeOf, model.getWorkspace());
+        boolean warn = !result.groupWarnings().isEmpty() || !result.total().curveWarnings().isEmpty();
+        JOptionPane.showMessageDialog(this,
+                com.vjstb.ledscheme.service.StructureGroupCalc.specText(group != null ? group.getName() : "", screens,
+                        result), "Спецификация конструктива группы",
+                warn ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE);
     }
 
     /** Активность полей и текст подсказки: производные величины изгиба (радиус, угол между
@@ -2594,8 +2645,11 @@ public class SetupStagePanel extends JPanel {
         // Уровни перемычек ограничены ФИЗИЧЕСКОЙ высотой заднего ряда (Round 5) -- перемычка
         // крепится к его перекладине, выше короткого заднего ряда крепить не к чему.
         double backRowHeightMm = backRowSegments * frameHeightMm;
-        int peremychkaLevels =
-                com.vjstb.ledscheme.service.StructureCalc.suggestPeremychkaLevels(backRowHeightMm, frameHeightMm);
+        // Уровни авто-перемычек — по высоте башни и интервалу из формы; каждый ряд сам ограничен высотой своей
+        // стопки (StructureCupMath#autoRungs), поэтому задний ряд короче переднего не «висит» в воздухе.
+        double peremychkaIntervalMm = ((Number) pStructurePeremychkaInterval.getValue()).doubleValue();
+        int peremychkaLevels = com.vjstb.ledscheme.service.StructureCalc
+                .suggestPeremychkaLevelsByInterval(towerHeight, peremychkaIntervalMm);
         double screenHeightMm = screenType != null ? scr.getRows() * screenType.getHeightMm() : 0;
 
         // Изогнутый экран / раздельные башни (2026-10-01): зазор меньше минимума поднимается до
@@ -2611,7 +2665,7 @@ public class SetupStagePanel extends JPanel {
                 backRowSegments, peremychkaLevels, baseExtensionMm, ballastRatio, frameTypeId,
                 cupTypeId, ballastTypeId, screenElevation, pStructureNotes.getText(), curveType,
                 structureCurveRadiusFromForm(), CURVE_BY_ANGLE.equals(shownCurveMode), towerGap,
-                ((Number) pStructureSeparateTowers.getValue()).intValue());
+                ((Number) pStructureSeparateTowers.getValue()).intValue(), peremychkaIntervalMm);
         boolean separate = com.vjstb.ledscheme.service.StructureCurveMath.separateTowers(scr);
         if (separate) {
             towers = scr.getStructureTowerCount();
@@ -2687,6 +2741,13 @@ public class SetupStagePanel extends JPanel {
                 result.baseFrameCount()));
         msg.append(String.format("Стаканов: %d%n", result.cupCount()));
         msg.append(String.format("Болтов: %d%n", result.boltCount()));
+        int tieContacts = com.vjstb.ledscheme.service.StructureLayoutMath.tieContacts(java.util.List.of(scr),
+                model::typeOf, model.getWorkspace());
+        if (tieContacts > 0) {
+            msg.append(String.format("Стяжек между встык стоящими башнями: %d (%d стыков)%n",
+                    com.vjstb.ledscheme.service.StructureLayoutMath.tieCount(java.util.List.of(scr), model::typeOf,
+                            model.getWorkspace()), tieContacts));
+        }
         if (result.requiredBallastKg() > 0) {
             msg.append(String.format("Отгрузов: %d (≈%.1f кг балласта)%n",
                     result.ballastContainerCount(), result.requiredBallastKg()));
@@ -3315,6 +3376,7 @@ public class SetupStagePanel extends JPanel {
                 // и было после Round 19 (в отличие от высоты башни выше, для этого поля авто-
                 // подстановка для нового экрана больше не делается вовсе).
                 pStructureBaseExtension.setValue(scr.getStructureBaseExtensionMm());
+                pStructurePeremychkaInterval.setValue(scr.getStructurePeremychkaIntervalMm());
                 pStructureBallastRatio.setValue(scr.getStructureBallastRatio());
                 populateStructureFrameCombo(pStructureFrameType,
                         com.vjstb.ledscheme.model.StructureFrameType.Kind.FRAME, scr.getStructureFrameTypeId());

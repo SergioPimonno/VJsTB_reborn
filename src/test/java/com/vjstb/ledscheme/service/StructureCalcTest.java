@@ -55,20 +55,21 @@ class StructureCalcTest {
         StructureCalc.Result result = StructureCalc.compute(screen, t, model.getWorkspace());
 
         assertEquals(18, result.verticalFrameCount(), "3 башни x 2 ряда x 3 сегмента");
-        assertEquals(12, result.peremychkaCount(), "2 зазора x 2 ряда x 3 уровня");
+        assertEquals(8, result.peremychkaCount(),
+                "2 зазора x 2 ряда x 2 перекладины (авто-интервал 1500: 1475 и верх стопки ~3000; третий уровень 4500 выше башни)");
         // Round 7: базовые секции тоже строятся между СОСЕДНИМИ башнями (тот же зазор, что и
         // перемычки), а не по одной на башню -- 2 зазора x 1 секция (ядро) = 2.
         assertEquals(2, result.baseFrameCount(), "2 зазора x 1 секция (ядро)");
         // 2026-08-20, по прямому указанию пользователя: спецификация выдаёт ОДНО общее число
         // рам (физически один и тот же каталожный тип, см. Result#totalFrameCount javadoc) --
-        // 18(вертикальных)+12(перемычек)+2(базы)=32.
-        assertEquals(32, result.totalFrameCount());
+        // 18(вертикальных)+8(перемычек)+2(базы)=28.
+        assertEquals(28, result.totalFrameCount());
         // Стыков: ТОЛЬКО вертикальные (рама стоит физически сверху другой рамы того же типа)
         // -- (3-1)*2ряда*3башни=12 -> 12*2=24. Round 10: перемычка (Round 8) и база больше не
         // считаются -- ни одна не стоит "сверху" другой рамы (см. StructureCalc.compute javadoc).
         assertEquals(24, result.cupCount());
-        // Всего рам 18+12+2=32, болты = ceil(32*1.5) = 48.
-        assertEquals(48, result.boltCount());
+        // Всего рам 18+8+2=28, болты = 28*1.5 = 42.
+        assertEquals(42, result.boltCount());
     }
 
     @Test
@@ -525,7 +526,7 @@ class StructureCalcTest {
             }
         }
         // 3 номинальные башни (0,1000,2000мм), 1 уровень перемычек.
-        ScreenLogic.regenerateStructureCells(screen, t, 3, 1, 1, 1, 0, 1);
+        ScreenLogic.regenerateStructureCells(screen, t, 3, 2, 2, 1, 0, 1); // две рамы: на 1500 есть перекладина
 
         var peremychkaTowers = screen.getStructurePeremychkaCells().stream()
                 .map(StructurePeremychkaCell::getTowerIndex).distinct().sorted().toList();
