@@ -483,7 +483,7 @@ public class SignalStagePanel extends JPanel {
                 com.vjstb.ledscheme.ui.SchemaCanvasPanel c =
                         new com.vjstb.ledscheme.ui.SchemaCanvasPanel(model, SchemaMode.SIGNAL, settings);
                 Dimension size = c.getPreferredSize();
-                return c.renderImage(size.width, size.height, screensAsWiring, dpiScale);
+                return c.renderImageWithMargin(size.width, size.height, screensAsWiring, dpiScale);
             });
             return;
         }

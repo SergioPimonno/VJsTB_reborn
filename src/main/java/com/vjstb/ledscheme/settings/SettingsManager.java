@@ -391,6 +391,12 @@ public class SettingsManager {
         persist();
     }
 
+    /** Оформление схем при экспорте (окно «Параметры экспорта»), см. {@link ExportSchemaStyle}. */
+    public void setExportSchemaStyle(ExportSchemaStyle style) {
+        activeProfile().setExportSchemaStyle(style);
+        persist();
+    }
+
     public void setUiScalePercent(int percent) {
         activeProfile().setUiScalePercent(percent);
         persist();

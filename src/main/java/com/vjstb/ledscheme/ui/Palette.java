@@ -39,6 +39,15 @@ public final class Palette {
     public static Color BORDER = DARK_BORDER;
     public static Color TEXT = DARK_TEXT;
     public static Color MUTED = DARK_MUTED;
+    /** Ячейки (кабинеты) в картинках схем: заливка площади экрана, заливка по умолчанию на схеме расключения и контур.
+     *  Следуют теме ({@link #applyTheme}), но в ПЕЧАТНОМ экспорте ({@link #withLightTheme}) кабинет остаётся
+     *  тёмным с хорошо видным контуром: белая заливка с бледным контуром на белом листе сливалась (отзыв 2026-10-24). */
+    public static Color CELL_BG = DARK_BG;
+    public static Color CELL_FILL = DARK_PANEL;
+    public static Color CELL_BORDER = DARK_BORDER;
+    /** Печатный экспорт: тёмный кабинет и светло-серый контур, различимый на тёмной заливке. */
+    private static final Color PRINT_CELL_FILL = new Color(0x2d333b);
+    private static final Color PRINT_CELL_BORDER = new Color(0x9aa4ad);
     /** Предупреждение о перегрузке (Task #81/#87) — фиксированный цвет, не персонализируется. */
     public static final Color WARN = new Color(0xf0883e);
     /** Метка "общий элемент библиотеки" (см. NamedRenderer) — фиксированный цвет, НЕ
@@ -73,6 +82,48 @@ public final class Palette {
         BORDER = dark ? DARK_BORDER : LIGHT_BORDER;
         TEXT = dark ? DARK_TEXT : LIGHT_TEXT;
         MUTED = dark ? DARK_MUTED : LIGHT_MUTED;
+        CELL_BG = BG;
+        CELL_FILL = PANEL;
+        CELL_BORDER = BORDER;
+    }
+
+    /** Действие, выполняемое в особой теме (может бросать проверяемое исключение — рендер для экспорта). */
+    @FunctionalInterface
+    public interface Scoped<T, E extends Exception> {
+        T get() throws E;
+    }
+
+    /** Выполняет {@code body} со СВЕТЛОЙ темой {@link #BG}/{@link #PANEL}/{@link #BORDER}/
+     *  {@link #TEXT}/{@link #MUTED} и возвращает прежние значения — для печатного стиля
+     *  экспорта (см. {@link ExportRendering}): схемы расключения, обзор сцены, таблицы и
+     *  прочие картинки рисуют именно этими полями, так что белый фон и тёмный текст
+     *  получаются без отдельного «печатного» кода в каждой. Акцентные цвета цепочек
+     *  (профиль пользователя) не трогаются. */
+    public static <T, E extends Exception> T withLightTheme(Scoped<T, E> body) throws E {
+        Color bg = BG;
+        Color panel = PANEL;
+        Color border = BORDER;
+        Color text = TEXT;
+        Color muted = MUTED;
+        Color cellBg = CELL_BG;
+        Color cellFill = CELL_FILL;
+        Color cellBorder = CELL_BORDER;
+        applyTheme(false);
+        CELL_BG = PRINT_CELL_FILL;
+        CELL_FILL = PRINT_CELL_FILL;
+        CELL_BORDER = PRINT_CELL_BORDER;
+        try {
+            return body.get();
+        } finally {
+            CELL_BG = cellBg;
+            CELL_FILL = cellFill;
+            CELL_BORDER = cellBorder;
+            BG = bg;
+            PANEL = panel;
+            BORDER = border;
+            TEXT = text;
+            MUTED = muted;
+        }
     }
 
     /** Текущая тема (тёмная/светлая) — по текущему {@link #BG}, а не отдельным

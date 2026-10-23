@@ -1257,8 +1257,8 @@ public class SceneCanvasPanel extends JPanel {
                     // В ТУ ЖЕ базу ДО зелёного оттенка расключения — оба сигнала должны
                     // читаться одновременно (метка не должна тонуть под "всё расключено").
                     java.awt.Color tag = s.getTagColor().color();
-                    Color base = tag != null ? blendTag(current ? Palette.PHASE_NONE : Palette.PANEL, tag)
-                            : (current ? Palette.PHASE_NONE : Palette.PANEL);
+                    Color base = tag != null ? blendTag(current ? Palette.PHASE_NONE : Palette.CELL_FILL, tag)
+                            : (current ? Palette.PHASE_NONE : Palette.CELL_FILL);
                     fill = blendGreen(base, wiredFraction(s) * 0.6);
                 } else {
                     fill = Palette.PHASE_NONE;
@@ -1266,7 +1266,7 @@ public class SceneCanvasPanel extends JPanel {
                 g2.setColor(fill);
                 g2.fillRect(x, y, w, h);
             }
-            g2.setColor(overlapped ? Color.RED : (current ? Palette.ACCENT : Palette.BORDER));
+            g2.setColor(overlapped ? Color.RED : (current ? Palette.ACCENT : Palette.CELL_BORDER));
             g2.setStroke(overlapped
                     ? new BasicStroke(2f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 0, new float[]{6, 4}, 0)
                     : new BasicStroke(current ? 2.5f : 1.4f));

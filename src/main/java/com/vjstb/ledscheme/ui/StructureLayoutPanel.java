@@ -404,7 +404,7 @@ public class StructureLayoutPanel extends JPanel {
                 + "спецификацию. По умолчанию не считается.</html>");
         towerSection.add(ties);
         towerSection.add(labeled("Стяжек на стык", tiesPerContact));
-        towerList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        towerList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         towerList.setVisibleRowCount(5);
         JScrollPane scroll = new JScrollPane(towerList);
         scroll.setAlignmentX(LEFT_ALIGNMENT);
@@ -447,8 +447,9 @@ public class StructureLayoutPanel extends JPanel {
         row1.setAlignmentX(LEFT_ALIGNMENT);
         towerSection.add(row1);
         WrapLabel gizmoHint = new WrapLabel("Двигать и вращать — гизмо на выбранной башне в режиме «Раскладка»: ось,"
-                + " центр, кольцо.\nShift при перетаскивании — линии привязки.\nКолесо мыши в активном поле меняет"
-                + " значение.", true);
+                + " центр, кольцо.\nShift при перетаскивании — линии привязки.\nShift/Ctrl+клик — выбрать несколько башен"
+                + " (тело одной тянет все), Ctrl+клик по выбранной — снять; Delete — удалить выбранные, Esc —"
+                + " снять выбор.\nКолесо мыши в активном поле меняет значение.", true);
         wrapLabels.add(gizmoHint);
         towerSection.add(gizmoHint);
         addTower.setToolTipText("Новая башня рядом с выбранной (или в центре экрана, если башен нет)");
@@ -457,6 +458,14 @@ public class StructureLayoutPanel extends JPanel {
     }
 
     // ---- события ----
+
+    /** Переключает режим «Рамы» ↔ «Раскладка» (горячая клавиша окна, по умолчанию Пробел — как переключение
+     *  инструмента на общей схеме): синхронизирует и кнопки режима, иначе они показывали бы прежний режим. */
+    public void toggleMode() {
+        boolean toLayout = !view.isLayoutMode();
+        (toLayout ? layoutMode : framesMode).setSelected(true);
+        view.setLayoutMode(toLayout);
+    }
 
     private void wireModeButtons() {
         framesMode.addActionListener(e -> view.setLayoutMode(false));
@@ -537,9 +546,19 @@ public class StructureLayoutPanel extends JPanel {
         });
         towerList.addListSelectionListener(e -> {
             if (!syncing && !e.getValueIsAdjusting()) {
-                view.selectTower(towerList.getSelectedIndex());
+                int[] idx = towerList.getSelectedIndices();
+                if (idx.length <= 1) {
+                    view.selectTower(towerList.getSelectedIndex());
+                } else {
+                    java.util.List<Integer> picked = new java.util.ArrayList<>();
+                    for (int i : idx) {
+                        picked.add(i);
+                    }
+                    view.selectTowers(picked, towerList.getLeadSelectionIndex());
+                }
             }
         });
+        installKeys();
         widthCombo.addActionListener(e -> {
             Screen s = model.getCurrentScreen();
             int k = view.selectedTower();
@@ -625,11 +644,51 @@ public class StructureLayoutPanel extends JPanel {
         }
     }
 
+    /** Удаляет ВСЕ выбранные башни (кнопка «Удалить» и клавиша Delete) одной записью отмены. */
     void removeSelectedTower() {
         Screen s = model.getCurrentScreen();
-        int k = view.selectedTower();
-        if (s != null && k >= 0 && model.removeStructureTower(s, k)) {
+        java.util.List<Integer> picked = view.selectedTowers();
+        if (s != null && !picked.isEmpty() && model.removeStructureTowers(s, picked) > 0) {
             view.selectTower(-1);
+        }
+    }
+
+    /** Горячие клавиши окна редактора: Delete — удалить выбранные башни, Esc — снять выбор. Действуют, пока окно в
+     *  фокусе (в том числе когда фокус на 3D-виде или списке), но НЕ когда фокус в поле ввода — там Delete стирает
+     *  символ, а Esc отменяет правку, это не команды редактора. */
+    private void installKeys() {
+        javax.swing.InputMap im = getInputMap(WHEN_IN_FOCUSED_WINDOW);
+        javax.swing.ActionMap am = getActionMap();
+        im.put(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_DELETE, 0), "layoutDeleteTowers");
+        im.put(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0), "layoutClearSelection");
+        am.put("layoutDeleteTowers", new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                if (!textFieldFocused()) {
+                    removeSelectedTower();
+                }
+            }
+        });
+        am.put("layoutClearSelection", new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                if (!textFieldFocused() && !view.selectedTowers().isEmpty()) {
+                    view.selectTower(-1);
+                }
+            }
+        });
+    }
+
+    private static boolean textFieldFocused() {
+        java.awt.Component c = java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusOwner();
+        return c instanceof javax.swing.text.JTextComponent;
+    }
+
+    /** Нажатие горячей клавиши окна (для тестов без фокуса): Delete или Esc. */
+    void pressKeyForTest(int keyCode) {
+        Object key = getInputMap(WHEN_IN_FOCUSED_WINDOW).get(javax.swing.KeyStroke.getKeyStroke(keyCode, 0));
+        if (key != null) {
+            getActionMap().get(key).actionPerformed(null);
         }
     }
 
@@ -819,12 +878,21 @@ public class StructureLayoutPanel extends JPanel {
                 }
             }
             int selected = view.selectedTower();
-            if (selected >= 0 && selected < towerListModel.size()) {
+            java.util.List<Integer> picked = view.selectedTowers();
+            if (picked.size() > 1) {
+                int[] idx = new int[picked.size()];
+                for (int i = 0; i < idx.length; i++) {
+                    idx[i] = picked.get(i);
+                }
+                towerList.setSelectedIndices(idx);
+            } else if (selected >= 0 && selected < towerListModel.size()) {
                 towerList.setSelectedIndex(selected);
             } else {
                 towerList.clearSelection();
             }
-            StructureTowerPlacement sel = isManual && selected >= 0 ? s.towerPlacementOf(selected) : null;
+            // поля показывают главную башню; при нескольких выбранных правка одной из них неочевидна — не даём
+            StructureTowerPlacement sel = isManual && selected >= 0 && picked.size() <= 1
+                    ? s.towerPlacementOf(selected) : null;
             towerList.setEnabled(isManual);
             towerX.setEnabled(sel != null);
             towerZ.setEnabled(sel != null);
@@ -872,7 +940,7 @@ public class StructureLayoutPanel extends JPanel {
             ownerLabeled.setVisible(inGroup);
             addTower.setEnabled(isManual);
             flushTower.setEnabled(isManual && sel != null);
-            removeTower.setEnabled(sel != null);
+            removeTower.setEnabled(isManual && !picked.isEmpty());
 
             List<String> notes = new ArrayList<>();
             if (s != null && structure) {

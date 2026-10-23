@@ -2001,6 +2001,27 @@ public class AppModel {
         return true;
     }
 
+    /** Убирает сразу несколько башен ручной расстановки одной записью отмены (Delete по выбору в редакторе
+     *  конструктива). Удаляются от большего номера к меньшему: после каждого удаления остальные сдвигаются
+     *  ({@link ScreenLogic#removeStructureTower}), так номера ещё не удалённых остаются верными. Возвращает число
+     *  удалённых башен. */
+    public int removeStructureTowers(Screen screen, java.util.Collection<Integer> towers) {
+        if (!screen.isStructureManualLayout()) {
+            return 0;
+        }
+        List<Integer> sorted = new java.util.ArrayList<>(new java.util.TreeSet<>(towers));
+        sorted.removeIf(k -> screen.towerPlacementOf(k) == null);
+        if (sorted.isEmpty()) {
+            return 0;
+        }
+        pushUndo(sorted.size() == 1 ? "Удаление башни конструктива" : "Удаление башен конструктива");
+        for (int i = sorted.size() - 1; i >= 0; i--) {
+            ScreenLogic.removeStructureTower(screen, sorted.get(i));
+        }
+        changed();
+        return sorted.size();
+    }
+
     /** Поза экрана в плане конструктива ГРУППЫ ({@link Screen#getStructurePoseXMm()} и др.). Жест
      *  — одна запись отмены, как у {@link #setStructureTowerPlacement}. На сигнал, питание, маски и
      *  канвас сцены не влияет — это положение только для конструктива. */

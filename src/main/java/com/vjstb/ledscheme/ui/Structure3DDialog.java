@@ -55,9 +55,20 @@ public class Structure3DDialog extends JDialog {
      *  Снимается при закрытии окна ({@link AppModel#removeListener}). */
     private final AppModel.Listener modelListener = this::refresh;
 
+    private final com.vjstb.ledscheme.settings.SettingsManager settings;
+    /** Горячая клавиша режима «Рамы»/«Раскладка» — диспетчер живёт, пока окно открыто (снимается в {@link #dispose()}). */
+    private final java.awt.KeyEventDispatcher modeKeyDispatcher = this::dispatchModeKey;
+
     public Structure3DDialog(Window owner, AppModel model) {
+        this(owner, model, null);
+    }
+
+    /** {@code settings} — для переназначаемых горячих клавиш окна (Персонализация → «Горячие клавиши»); {@code null} —
+     *  значения по умолчанию. */
+    public Structure3DDialog(Window owner, AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings) {
         super(owner, "3D-превью конструктива", ModalityType.MODELESS);
         this.model = model;
+        this.settings = settings;
 
         panel = new Structure3DPanel(model);
         controls = new Structure3DControlsPanel(model);
@@ -145,12 +156,32 @@ public class Structure3DDialog extends JDialog {
         setLocationRelativeTo(owner);
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         model.addListener(modelListener);
+        java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(modeKeyDispatcher);
     }
 
     @Override
     public void dispose() {
         model.removeListener(modelListener);
+        java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().removeKeyEventDispatcher(modeKeyDispatcher);
         super.dispose();
+    }
+
+    private boolean dispatchModeKey(java.awt.event.KeyEvent e) {
+        if (e.getID() != java.awt.event.KeyEvent.KEY_PRESSED || !isActive()) {
+            return false;
+        }
+        java.awt.Component focus = java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusOwner();
+        if (focus instanceof javax.swing.text.JTextComponent) {
+            return false; // пробел в поле ввода — это пробел
+        }
+        com.vjstb.ledscheme.settings.KeyCombo combo = settings != null
+                ? settings.bindingFor(com.vjstb.ledscheme.settings.HotkeyAction.TOGGLE_STRUCTURE_MODE)
+                : com.vjstb.ledscheme.settings.HotkeyAction.TOGGLE_STRUCTURE_MODE.getDefaultCombo();
+        if (combo.matchesKey(e)) {
+            layoutPanel.toggleMode();
+            return true;
+        }
+        return false;
     }
 
     /** Обновляет 3D-вид и ползунки. С 2026-10-01 окно само подписано на модель (у {@code

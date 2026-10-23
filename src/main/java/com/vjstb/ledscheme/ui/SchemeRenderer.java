@@ -209,7 +209,7 @@ public final class SchemeRenderer {
             int ew = (int) Math.round(ScreenLogic.effectiveCellW(effective, type, cellW));
             int eh = (int) Math.round(ScreenLogic.effectiveCellH(effective, type, cellH));
 
-            g2.setColor(Palette.BORDER);
+            g2.setColor(Palette.CELL_BORDER);
             outlineCabinetShape(g2, x, y, ew, eh, shape, rotationDeg);
 
             if (showCabinetIndexLabels) {
@@ -389,9 +389,9 @@ public final class SchemeRenderer {
             int ew = (int) Math.round(ScreenLogic.effectiveCellW(effective, type, cellW));
             int eh = (int) Math.round(ScreenLogic.effectiveCellH(effective, type, cellH));
 
-            g2.setColor(m != null ? m.color() : Palette.PANEL);
+            g2.setColor(m != null ? m.color() : Palette.CELL_FILL);
             fillCabinetShape(g2, x, y, ew, eh, shape, rotationDeg);
-            g2.setColor(Palette.BORDER);
+            g2.setColor(Palette.CELL_BORDER);
             outlineCabinetShape(g2, x, y, ew, eh, shape, rotationDeg);
 
             if (m != null && showLabels) {
@@ -1269,7 +1269,10 @@ public final class SchemeRenderer {
 
         int titleY = pad + titleH - 6;
         int headerY = titleY + 24 + headerH;
-        int firstRowY = headerY + 16;
+        // первая строка — ниже линии под шапкой на высоту шрифта строки (раньше фиксированные 16 px от базовой линии
+        // шапки: на крупном шрифте текст первой строки налезал на линию — отзыв 2026-10-24)
+        int headerLineY = headerY + 6;
+        int firstRowY = headerLineY + rowFm.getAscent() + 8;
         int h = rows.isEmpty() ? headerY + pad
                 : firstRowY + (rows.size() - 1) * rowH + rowFm.getDescent() + pad;
 
@@ -1291,7 +1294,7 @@ public final class SchemeRenderer {
         g2.drawString("Main", col2X, headerY);
         g2.drawString("Backup", col3X, headerY);
         g2.setColor(new Color(0, 0, 0, 120));
-        g2.drawLine(pad, headerY + 6, w - pad, headerY + 6);
+        g2.drawLine(pad, headerLineY, w - pad, headerLineY);
 
         g2.setFont(rowFont);
         g2.setColor(Palette.TEXT);
@@ -1624,7 +1627,10 @@ public final class SchemeRenderer {
         int screensY = titleY + 24 + trussBand;
         int tableTop = rows.isEmpty() ? screensY : screensY + planPxH + 40;
         int headerY = tableTop + headerH;
-        int firstRowY = headerY + 16;
+        // первая строка — ниже линии под шапкой на высоту шрифта строки (раньше фиксированные 16 px от базовой линии
+        // шапки: на крупном шрифте текст первой строки налезал на линию — отзыв 2026-10-24)
+        int headerLineY = headerY + 6;
+        int firstRowY = headerLineY + rowFm.getAscent() + 8;
         int h = rows.isEmpty() ? headerY + pad
                 : firstRowY + (rows.size() - 1) * rowH + rowFm.getDescent() + pad;
         if (hasPanel) {
@@ -1652,8 +1658,6 @@ public final class SchemeRenderer {
             int sy = screensY + (int) Math.round((scr.getPosYMm() + e[1] - minY) * scale);
             int sw = Math.max(2, (int) Math.round((e[2] - e[0]) * scale));
             int sh = Math.max(2, (int) Math.round((e[3] - e[1]) * scale));
-            g2.setColor(Palette.BG);
-            g2.fillRect(sx, sy, sw, sh);
             if (type != null) {
                 int cellW = Math.max(1, (int) Math.round(type.getWidthMm() * scale));
                 int cellH = Math.max(1, (int) Math.round(type.getHeightMm() * scale));
@@ -1668,6 +1672,16 @@ public final class SchemeRenderer {
                 // экран 10 «Upper Front»).
                 clipped.clipRect(sx, sy, Math.max(sw, scr.getCols() * cellW) + 2,
                         Math.max(sh, scr.getRows() * cellH) + 2);
+                // базовая заливка кабинетов (только существующие ячейки — у экранов с вырезами пустоты не
+                // закрашиваются): тёмная в печатном экспорте, иначе цвет фона (как раньше)
+                for (CabinetInstance cab : scr.getCabinets()) {
+                    if (cab.isHidden()) {
+                        continue;
+                    }
+                    java.awt.Rectangle r = cabinetScreenRect(cab, type, cellW, cellH, gx, gy, model.getWorkspace());
+                    clipped.setColor(Palette.CELL_BG);
+                    clipped.fillRect(r.x, r.y, r.width, r.height);
+                }
                 if (tintByType) {
                     // заливка цветом типа ПОД линиями сетки (тот же стабильный цвет по id типа,
                     // что и у переопределений на холсте сцены — Palette.stableColorFor)
@@ -1740,7 +1754,7 @@ public final class SchemeRenderer {
             g2.drawString(headers[i], colX[i], headerY);
         }
         g2.setColor(new Color(0, 0, 0, 120));
-        g2.drawLine(pad, headerY + 6, w - pad, headerY + 6);
+        g2.drawLine(pad, headerLineY, w - pad, headerLineY);
 
         g2.setFont(rowFont);
         g2.setColor(Palette.TEXT);

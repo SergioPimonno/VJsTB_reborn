@@ -217,12 +217,16 @@ public class Structure3DPanel extends JPanel {
         MouseAdapter mouse = new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent e) {
+                // клик в 3D забирает фокус клавиатуры из поля ввода панели параметров — иначе Delete/Esc
+                // редактора (см. StructureLayoutPanel#installKeys) считались бы вводом в поле
+                gljPanel.setFocusable(true);
+                gljPanel.requestFocusInWindow();
                 lastMouseX = e.getX();
                 lastMouseY = e.getY();
                 pressX = e.getX();
                 pressY = e.getY();
                 if (layoutMode && SwingUtilities.isLeftMouseButton(e)) {
-                    layoutPress(pixelRay(e.getX(), e.getY()));
+                    layoutPress(pixelRay(e.getX(), e.getY()), e.isShiftDown(), e.isControlDown());
                     gljPanel.repaint();
                 }
             }
@@ -1192,6 +1196,9 @@ public class Structure3DPanel extends JPanel {
      *  клики по рамам не переключают их; режим «Рамы» (по умолчанию) — как раньше. */
     private boolean layoutMode;
     private int selectedTower = -1;
+    /** Все выбранные башни текущего экрана (Shift/Ctrl+клик добавляет), {@link #selectedTower} — главная (последняя
+     *  выбранная): её поля показаны в панели параметров, ей принадлежит гизмо (только при одной выбранной). */
+    private final java.util.TreeSet<Integer> selectedTowerSet = new java.util.TreeSet<>();
     private String selectionScreenId;
     private Runnable selectionListener;
 
@@ -1216,6 +1223,8 @@ public class Structure3DPanel extends JPanel {
     private double[] dragAxis;
     private double[] dragV0;
     private double dragStartH;
+    /** Остальные выбранные башни при переносе группы: номер -> положение (система группы) на начало жеста. */
+    private java.util.Map<Integer, StructureCurveMath.Placement> dragGroup;
     private Handle dragHandle = Handle.NONE;
     private Handle hoverHandle = Handle.NONE;
     /** Shift при перетаскивании: показаны линии привязки, {@code activeGuides} — сработавшие. */
@@ -1246,8 +1255,63 @@ public class Structure3DPanel extends JPanel {
      *  выборе в списке башен. */
     public void selectTower(int tower) {
         Screen s = model.getCurrentScreen();
+        selectedTowerSet.clear();
+        if (tower >= 0) {
+            selectedTowerSet.add(tower);
+        }
         selectedTower = tower;
         selectionScreenId = s != null ? s.getId() : null;
+        notifySelection();
+    }
+
+    /** Выбранные башни текущего экрана по возрастанию номера (пусто — ничего не выбрано). */
+    public List<Integer> selectedTowers() {
+        Screen s = model.getCurrentScreen();
+        List<Integer> out = new ArrayList<>();
+        if (s == null || !s.getId().equals(selectionScreenId) || !s.isStructureManualLayout()) {
+            return out;
+        }
+        for (int k : selectedTowerSet) {
+            if (s.towerPlacementOf(k) != null) {
+                out.add(k);
+            }
+        }
+        return out;
+    }
+
+    /** Выбирает набор башен ({@code primary} — главная; должна входить в набор, иначе берётся последняя) —
+     *  панель параметров зовёт это при выборе в списке башен с Shift/Ctrl. */
+    public void selectTowers(java.util.Collection<Integer> towers, int primary) {
+        Screen s = model.getCurrentScreen();
+        selectedTowerSet.clear();
+        selectedTowerSet.addAll(towers);
+        selectedTower = selectedTowerSet.contains(primary) ? primary
+                : selectedTowerSet.isEmpty() ? -1 : selectedTowerSet.last();
+        selectionScreenId = s != null ? s.getId() : null;
+        notifySelection();
+    }
+
+    /** Shift/Ctrl+клик: добавляет башню к выбору (главной становится она); Ctrl+клик по уже выбранной — убирает. */
+    public void toggleTower(int tower, boolean removeIfSelected) {
+        Screen s = model.getCurrentScreen();
+        if (s == null) {
+            return;
+        }
+        if (!s.getId().equals(selectionScreenId)) {
+            selectedTowerSet.clear();
+            selectionScreenId = s.getId();
+        }
+        if (selectedTowerSet.contains(tower) && removeIfSelected) {
+            selectedTowerSet.remove(tower);
+            selectedTower = selectedTowerSet.isEmpty() ? -1 : selectedTowerSet.last();
+        } else {
+            selectedTowerSet.add(tower);
+            selectedTower = tower;
+        }
+        notifySelection();
+    }
+
+    private void notifySelection() {
         if (selectionListener != null) {
             selectionListener.run();
         }
@@ -1325,7 +1389,15 @@ public class Structure3DPanel extends JPanel {
      *  перетаскивания. Экран, не бывший текущим, становится текущим (выбор в дереве «Сетапа» следует
      *  за кликом в 3D). Промах — снимает выбор башни. */
     boolean layoutPress(Ray ray) {
+        return layoutPress(ray, false, false);
+    }
+
+    /** То же с модификаторами: {@code add} (Shift) — клик по башне ДОБАВЛЯЕТ её к выбору, а не заменяет; {@code ctrl}
+     *  — добавляет, а уже выбранную убирает. Shift по уже выбранной — обычный жест (перенос с привязкой). Тело
+     *  выбранной башни при нескольких выбранных переносит их все вместе. */
+    boolean layoutPress(Ray ray, boolean add, boolean ctrl) {
         dragKind = DragKind.NONE;
+        dragGroup = null;
         dragGestureStarted = false;
         dragLast = null;
         Screen active = model.getCurrentScreen();
@@ -1336,7 +1408,8 @@ public class Structure3DPanel extends JPanel {
         dragPose = null;
         dragLastPose = null;
         int selected = selectedTower();
-        if (selected >= 0 && active.getMountType() == ScreenMountType.STRUCTURE) {
+        boolean single = selectedTowers().size() == 1;
+        if (selected >= 0 && single && active.getMountType() == ScreenMountType.STRUCTURE) {
             // гизмо выбранной башни в 3D: центр основания, оси X/Z/Y, кольца рыскания, наклона и крена
             StructureCurveMath.Setup gSetup = StructureCurveMath.setupOf(active, model.typeOf(active),
                     model.getWorkspace());
@@ -1349,7 +1422,8 @@ public class Structure3DPanel extends JPanel {
             }
         }
         // тело, попавшее под луч, важнее кольца (что видно ближе, то и берётся): кольцо — только по «пустому» месту
-        if (selected < 0 && viewScreens().size() > 1 && model.typeOf(active) != null && layoutHitAlongRay(ray) == null) {
+        if (selected < 0 && viewScreens().size() > 1 && model.typeOf(active) != null && layoutHitAlongRay(ray) == null
+                && !add && !ctrl) {
             // кольцо вращения ЭКРАНА группы (запрос 2026-10-22): большой круг на земле вокруг центра экрана
             double[] g0 = StructureLayoutMath.rayGroundPoint(ray, 0);
             if (g0 != null) {
@@ -1374,16 +1448,27 @@ public class Structure3DPanel extends JPanel {
         }
         LayoutHit hit = layoutHitAlongRay(ray);
         if (hit == null) {
-            if (selectedTower() >= 0) {
+            if (selectedTower() >= 0 && !add && !ctrl) {
                 selectTower(-1);
             }
             return false;
+        }
+        if (hit.tower() >= 0 && (ctrl || (add && !selectedTowers().contains(hit.tower())))) {
+            toggleTower(hit.tower(), ctrl);
+            return false; // выбор расширен — жест переноса не начинаем
         }
         Vec3 point = ray.origin().plus(ray.direction().scale(hit.t()));
         dragPlaneY = point.y();
         dragStartGround = new double[]{point.x(), point.z()};
         if (hit.tower() >= 0) {
-            selectTower(hit.tower());
+            List<Integer> before = selectedTowers();
+            boolean inGroup = before.size() > 1 && before.contains(hit.tower());
+            if (inGroup) {
+                // тянут тело одной из выбранных при нескольких выбранных — переносим все вместе
+                toggleTower(hit.tower(), false);
+            } else {
+                selectTower(hit.tower());
+            }
             CabinetType type = model.typeOf(active);
             StructureCurveMath.Setup setup = StructureCurveMath.setupOf(active, type, model.getWorkspace());
             dragStart = StructureLayoutMath.towerPlacementInGroup(active, setup, hit.tower());
@@ -1397,6 +1482,14 @@ public class Structure3DPanel extends JPanel {
             dragHandle = Handle.CENTER;
             dragPose = StructureLayoutMath.towerPoseInGroup(active, setup, hit.tower());
             dragPivotLocal = StructureGizmoMath.pivotLocal(spec);
+            if (inGroup) {
+                dragGroup = new java.util.LinkedHashMap<>();
+                for (int k : before) {
+                    if (k != hit.tower()) {
+                        dragGroup.put(k, StructureLayoutMath.towerPlacementInGroup(active, setup, k));
+                    }
+                }
+            }
             return true;
         }
         Screen target = hit.screen();
@@ -1614,7 +1707,7 @@ public class Structure3DPanel extends JPanel {
         Handle h = Handle.NONE;
         Screen active = model.getCurrentScreen();
         int sel = selectedTower();
-        if (layoutMode && dragKind == DragKind.NONE && sel >= 0 && active != null) {
+        if (layoutMode && dragKind == DragKind.NONE && sel >= 0 && selectedTowers().size() == 1 && active != null) {
             StructureCurveMath.Setup setup = StructureCurveMath.setupOf(active, model.typeOf(active),
                     model.getWorkspace());
             h = StructureGizmoMath.hit3D(StructureLayoutMath.towerPoseInGroup(active, setup, sel),
@@ -1684,6 +1777,7 @@ public class Structure3DPanel extends JPanel {
         dragPose = null;
         dragLastPose = null;
         dragLast = null;
+        dragGroup = null;
         dragGestureStarted = false;
         guidesOn = false;
         activeGuides = new ArrayList<>();
@@ -1694,8 +1788,24 @@ public class Structure3DPanel extends JPanel {
         if (dragKind == DragKind.TOWER) {
             StructureCurveMath.Placement local = StructureLayoutMath.toFrame(
                     StructureLayoutMath.screenPose(dragScreen), world);
+            boolean alone = dragGroup == null || dragGroup.isEmpty();
             model.setStructureTowerPlacement(dragScreen, dragTower, local.anchorX(), local.anchorZ(), local.yawDeg(),
-                    first, end);
+                    first, end && alone);
+            if (!alone) {
+                // остальные выбранные едут на тот же сдвиг (одна запись отмены на весь жест)
+                double dx = world.anchorX() - dragStart.anchorX();
+                double dz = world.anchorZ() - dragStart.anchorZ();
+                int left = dragGroup.size();
+                for (var e : dragGroup.entrySet()) {
+                    StructureCurveMath.Placement w0 = e.getValue();
+                    StructureCurveMath.Placement l = StructureLayoutMath.toFrame(
+                            StructureLayoutMath.screenPose(dragScreen),
+                            new StructureCurveMath.Placement(w0.index(), w0.anchorX() + dx, w0.anchorZ() + dz,
+                                    w0.yawDeg()));
+                    model.setStructureTowerPlacement(dragScreen, e.getKey(), l.anchorX(), l.anchorZ(), l.yawDeg(),
+                            false, end && --left == 0);
+                }
+            }
         } else if (dragKind == DragKind.SCREEN) {
             model.setStructureScreenPose(dragScreen, world.anchorX(), world.anchorZ(), world.yawDeg(), first, end);
         }
@@ -2027,8 +2137,11 @@ public class Structure3DPanel extends JPanel {
                 gl.glVertex3d(kx - 120, 4, kz + 120);
                 gl.glEnd();
             }
-            int k = selectedTower();
-            if (k >= 0 && active.getMountType() == ScreenMountType.STRUCTURE) {
+            List<Integer> picked = selectedTowers();
+            for (int k : picked) {
+                if (active.getMountType() != ScreenMountType.STRUCTURE) {
+                    break;
+                }
                 StructureCurveMath.Setup setup = StructureCurveMath.setupOf(active, type, model.getWorkspace());
                 StructureOrient.TowerPose pose = StructureLayoutMath.towerPoseInGroup(active, setup, k);
                 StructureCurveMath.TowerSpec spec = StructureCurveMath.towerSpecOf(active, model.getWorkspace(), k);
@@ -2059,7 +2172,9 @@ public class Structure3DPanel extends JPanel {
                     }
                 }
                 gl.glEnd();
-                drawGizmo(gl, pose, spec);
+                if (picked.size() == 1) {
+                    drawGizmo(gl, pose, spec);
+                }
             }
             if (guidesOn) {
                 drawGuides(gl);

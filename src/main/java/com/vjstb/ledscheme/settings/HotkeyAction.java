@@ -19,6 +19,9 @@ public enum HotkeyAction {
             KeyCombo.ofKey(KeyEvent.VK_DELETE, false, false, false)),
     TOGGLE_SCHEMA_INTERACTION("toggleSchemaInteraction",
             "Общая схема: переключить инструмент «Перемещение»/«Соединение»",
+            KeyCombo.ofKey(KeyEvent.VK_SPACE, false, false, false)),
+    TOGGLE_STRUCTURE_MODE("toggleStructureMode",
+            "3D-конструктив: переключить режим «Рамы»/«Раскладка»",
             KeyCombo.ofKey(KeyEvent.VK_SPACE, false, false, false));
 
     private final String id;

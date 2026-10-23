@@ -1542,7 +1542,7 @@ public class SetupStagePanel extends JPanel {
                 structure3DDialog.dispose();
                 return;
             }
-            structure3DDialog = new com.vjstb.ledscheme.ui.Structure3DDialog(topWindow(), model);
+            structure3DDialog = new com.vjstb.ledscheme.ui.Structure3DDialog(topWindow(), model, settings);
             // Сброс текста кнопки, если окно закрыли крестиком, а не этой же кнопкой --
             // иначе кнопка молча осталась бы говорить «Скрыть 3D» для уже закрытого окна.
             structure3DDialog.addWindowListener(new java.awt.event.WindowAdapter() {
@@ -2090,8 +2090,9 @@ public class SetupStagePanel extends JPanel {
             folder.mkdirs();
             java.io.File out = new java.io.File(folder,
                     "rigging_" + com.vjstb.ledscheme.ui.OutputPaths.sanitize(scr.getName()) + ".png");
-            java.awt.image.BufferedImage img = com.vjstb.ledscheme.ui.RiggingSchemaImageWriter.render(
-                    scr, model.typeOf(scr), result, trussGeom);
+            java.awt.image.BufferedImage img = com.vjstb.ledscheme.ui.ExportRendering.run(settings.activeProfile(),
+                    () -> com.vjstb.ledscheme.ui.RiggingSchemaImageWriter.render(
+                            scr, model.typeOf(scr), result, trussGeom));
             javax.imageio.ImageIO.write(img, "png", out);
             loadMsg.append("\nСхема сохранена: ").append(out.getAbsolutePath());
             JOptionPane.showMessageDialog(this, loadMsg.toString(), "Готово",
