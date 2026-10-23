@@ -209,7 +209,7 @@ public final class SchemeRenderer {
             int ew = (int) Math.round(ScreenLogic.effectiveCellW(effective, type, cellW));
             int eh = (int) Math.round(ScreenLogic.effectiveCellH(effective, type, cellH));
 
-            g2.setColor(Palette.BORDER);
+            g2.setColor(Palette.CELL_BORDER);
             outlineCabinetShape(g2, x, y, ew, eh, shape, rotationDeg);
 
             if (showCabinetIndexLabels) {
@@ -389,15 +389,15 @@ public final class SchemeRenderer {
             int ew = (int) Math.round(ScreenLogic.effectiveCellW(effective, type, cellW));
             int eh = (int) Math.round(ScreenLogic.effectiveCellH(effective, type, cellH));
 
-            g2.setColor(m != null ? m.color() : Palette.PANEL);
+            g2.setColor(m != null ? m.color() : Palette.CELL_FILL);
             fillCabinetShape(g2, x, y, ew, eh, shape, rotationDeg);
-            g2.setColor(Palette.BORDER);
+            g2.setColor(Palette.CELL_BORDER);
             outlineCabinetShape(g2, x, y, ew, eh, shape, rotationDeg);
 
             if (m != null && showLabels) {
                 List<String> lines = new ArrayList<>();
                 lines.add(power ? "L" + m.phase()
-                        : portLabel(sceneControllers, workspace, m.port() != null ? m.port() : 0));
+                        : portLabel(sceneControllers, workspace, m.port() != null ? m.port() : 0, false));
                 lines.add("#" + m.seq());
                 if (effective != null) {
                     lines.add(power ? UiKit.fmtPower(effective.getPowerConsumptionW(), powerUnitKw)
@@ -455,7 +455,7 @@ public final class SchemeRenderer {
                 drawChainWithDots(g2, scr, chain.getCabinetInstanceIds(), cellW, cellH, offX, offY, type, workspace,
                         chain.isBackup());
                 if (chain.getPortNumber() != null) {
-                    String lbl = portLabel(sceneControllers, workspace, chain.getPortNumber());
+                    String lbl = portLabel(sceneControllers, workspace, chain.getPortNumber(), false);
                     // Раньше резервная цепочка получала префикс "рез:" — на мелких
                     // ячейках плашки бейджа он не помещался и обрезался до нечитаемого
                     // "pe...". Различаем резерв ЦВЕТОМ текста (см. drawStartLabelBadge),
@@ -464,7 +464,7 @@ public final class SchemeRenderer {
                             new LabelLine(lbl, chain.isBackup()));
                 }
                 if (chain.getBackupPortNumber() != null && !chain.getCabinetInstanceIds().isEmpty()) {
-                    String endLbl = portLabel(sceneControllers, workspace, chain.getBackupPortNumber());
+                    String endLbl = portLabel(sceneControllers, workspace, chain.getBackupPortNumber(), false);
                     List<String> ids = chain.getCabinetInstanceIds();
                     endLabelsByCabinet.computeIfAbsent(ids.get(ids.size() - 1), k -> new ArrayList<>())
                             .add(new LabelLine(endLbl, true));
@@ -742,10 +742,23 @@ public final class SchemeRenderer {
      * не находился вовсе, и метка тихо откатывалась на сырой номер порта. */
     static String portLabel(List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers,
                              Workspace workspace, int port) {
+        return portLabel(sceneControllers, workspace, port, true);
+    }
+
+    /** {@link #portLabel(List, Workspace, int)}; {@code includeController == false} — ТОЛЬКО номер порта
+     *  («P3»): без «C{n}·» при нескольких контроллерах в сцене и без «К{карта}·» у контроллера с
+     *  несколькими картами Ethernet (номер — в пределах своей карты, как в сайдбаре). Так подписан
+     *  «богатый» вид расключения экрана в общей схеме ({@link #paintWiringDiagram}): там подпись
+     *  обрезается по ширине ячейки, и при префиксе «C1·P3» в мелкой ячейке оставалось «C1·…» — номера
+     *  порта не видно (обратная связь техников 2026-10-06, проект «Лемана»; затем то же для карт —
+     *  «РК1·1» вместо «P1»). Конкретный контроллер и карту на общей схеме указывает инженер блоком
+     *  контроллера, повторять их в каждой плашке незачем. */
+    static String portLabel(List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers,
+                             Workspace workspace, int port, boolean includeController) {
         ControllerAndOffset co = controllerForPort(sceneControllers, workspace, port);
         com.vjstb.ledscheme.model.ControllerInstance ci = co.controller();
-        String portPart = resolvedPortPart(ci, port - co.offset(), port);
-        if (sceneControllers.size() <= 1) {
+        String portPart = resolvedPortPart(ci, port - co.offset(), port, includeController);
+        if (sceneControllers.size() <= 1 || !includeController) {
             return "P" + portPart;
         }
         int idx = ci != null ? sceneControllers.indexOf(ci) + 1 : 0;
@@ -761,7 +774,7 @@ public final class SchemeRenderer {
      *  не должен встречаться для реально сохранённой цепочки (та строится только
      *  на Ethernet-годных портах), но лучше показать хоть что-то, чем ничего. */
     private static String resolvedPortPart(com.vjstb.ledscheme.model.ControllerInstance t, int controllerLocalPort,
-                                            int rawFallbackPort) {
+                                            int rawFallbackPort, boolean includeCard) {
         if (t == null) {
             return String.valueOf(rawFallbackPort);
         }
@@ -769,7 +782,8 @@ public final class SchemeRenderer {
         if (pool == null) {
             return String.valueOf(rawFallbackPort);
         }
-        return t.ethernetPoolCount() > 1 ? "К" + (pool[0] + 1) + "·" + pool[1] : String.valueOf(pool[1]);
+        return includeCard && t.ethernetPoolCount() > 1 ? "К" + (pool[0] + 1) + "·" + pool[1]
+                : String.valueOf(pool[1]);
     }
 
     /** Метка НАЧАЛА сигнальной цепочки (первый кабинет) — основной порт.
@@ -1255,7 +1269,10 @@ public final class SchemeRenderer {
 
         int titleY = pad + titleH - 6;
         int headerY = titleY + 24 + headerH;
-        int firstRowY = headerY + 16;
+        // первая строка — ниже линии под шапкой на высоту шрифта строки (раньше фиксированные 16 px от базовой линии
+        // шапки: на крупном шрифте текст первой строки налезал на линию — отзыв 2026-10-24)
+        int headerLineY = headerY + 6;
+        int firstRowY = headerLineY + rowFm.getAscent() + 8;
         int h = rows.isEmpty() ? headerY + pad
                 : firstRowY + (rows.size() - 1) * rowH + rowFm.getDescent() + pad;
 
@@ -1277,7 +1294,7 @@ public final class SchemeRenderer {
         g2.drawString("Main", col2X, headerY);
         g2.drawString("Backup", col3X, headerY);
         g2.setColor(new Color(0, 0, 0, 120));
-        g2.drawLine(pad, headerY + 6, w - pad, headerY + 6);
+        g2.drawLine(pad, headerLineY, w - pad, headerLineY);
 
         g2.setFont(rowFont);
         g2.setColor(Palette.TEXT);
@@ -1610,7 +1627,10 @@ public final class SchemeRenderer {
         int screensY = titleY + 24 + trussBand;
         int tableTop = rows.isEmpty() ? screensY : screensY + planPxH + 40;
         int headerY = tableTop + headerH;
-        int firstRowY = headerY + 16;
+        // первая строка — ниже линии под шапкой на высоту шрифта строки (раньше фиксированные 16 px от базовой линии
+        // шапки: на крупном шрифте текст первой строки налезал на линию — отзыв 2026-10-24)
+        int headerLineY = headerY + 6;
+        int firstRowY = headerLineY + rowFm.getAscent() + 8;
         int h = rows.isEmpty() ? headerY + pad
                 : firstRowY + (rows.size() - 1) * rowH + rowFm.getDescent() + pad;
         if (hasPanel) {
@@ -1638,8 +1658,6 @@ public final class SchemeRenderer {
             int sy = screensY + (int) Math.round((scr.getPosYMm() + e[1] - minY) * scale);
             int sw = Math.max(2, (int) Math.round((e[2] - e[0]) * scale));
             int sh = Math.max(2, (int) Math.round((e[3] - e[1]) * scale));
-            g2.setColor(Palette.BG);
-            g2.fillRect(sx, sy, sw, sh);
             if (type != null) {
                 int cellW = Math.max(1, (int) Math.round(type.getWidthMm() * scale));
                 int cellH = Math.max(1, (int) Math.round(type.getHeightMm() * scale));
@@ -1654,6 +1672,16 @@ public final class SchemeRenderer {
                 // экран 10 «Upper Front»).
                 clipped.clipRect(sx, sy, Math.max(sw, scr.getCols() * cellW) + 2,
                         Math.max(sh, scr.getRows() * cellH) + 2);
+                // базовая заливка кабинетов (только существующие ячейки — у экранов с вырезами пустоты не
+                // закрашиваются): тёмная в печатном экспорте, иначе цвет фона (как раньше)
+                for (CabinetInstance cab : scr.getCabinets()) {
+                    if (cab.isHidden()) {
+                        continue;
+                    }
+                    java.awt.Rectangle r = cabinetScreenRect(cab, type, cellW, cellH, gx, gy, model.getWorkspace());
+                    clipped.setColor(Palette.CELL_BG);
+                    clipped.fillRect(r.x, r.y, r.width, r.height);
+                }
                 if (tintByType) {
                     // заливка цветом типа ПОД линиями сетки (тот же стабильный цвет по id типа,
                     // что и у переопределений на холсте сцены — Palette.stableColorFor)
@@ -1726,7 +1754,7 @@ public final class SchemeRenderer {
             g2.drawString(headers[i], colX[i], headerY);
         }
         g2.setColor(new Color(0, 0, 0, 120));
-        g2.drawLine(pad, headerY + 6, w - pad, headerY + 6);
+        g2.drawLine(pad, headerLineY, w - pad, headerLineY);
 
         g2.setFont(rowFont);
         g2.setColor(Palette.TEXT);

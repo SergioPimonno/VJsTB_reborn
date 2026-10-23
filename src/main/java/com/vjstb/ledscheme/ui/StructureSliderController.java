@@ -77,7 +77,7 @@ public final class StructureSliderController {
         double frameH = frameType != null && frameType.getHeightMm() != null && frameType.getHeightMm() > 0
                 ? frameType.getHeightMm() : 950.0;
         int back = StructureCalc.suggestBackRowSegments(frameH);
-        int levels = StructureCalc.suggestPeremychkaLevels(back * frameH, frameH);
+        int levels = StructureCalc.suggestPeremychkaLevelsByInterval(towerHeight, s.getStructurePeremychkaIntervalMm());
         double gap = StructureSliderMath.clampGapMm(curve, gapMm);
         double radius = radiusMm > 0 ? radiusMm : s.getStructureCurveRadiusMm();
         model.updateScreenStructureLive(s, start, !adjusting, towerHeight, StructureCalc.suggestTowerCount(s, cabinetType),

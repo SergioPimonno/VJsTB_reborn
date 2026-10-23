@@ -50,6 +50,10 @@ import org.junit.jupiter.api.io.TempDir;
  */
 class StructureSeparateTowersCellsTest {
 
+    /** Номер перекладины первой авто-перемычки (рама 1, середина): в проектах до 2026-10-22 это был «уровень 0»
+     *  (1,5 рамы) — старые данные переводятся в него при загрузке. */
+    private static final int RUNG = 4;
+
     /** Минимальная фикстура: поля конструктива экрана «Стена» пользователя (4×28 кабинетов
      *  Dicolor 500×500×65, вогнутый R = 10 м, зазор 500, 9 башен = 18 столбов) — скопированы из
      *  его workspace.json как есть, ПОСЛЕ ручных правок (перемычки переднего ряда возвращены,
@@ -249,7 +253,7 @@ class StructureSeparateTowersCellsTest {
     void manualEditsOfSeparateTowersSurviveRadiusAndGapChanges(@TempDir Path dir) {
         Screen s = screen(dir);
         calc(s, ScreenCurveType.CONCAVE, 10_000, 500);
-        model.toggleStructurePeremychkaCell(s, 4, 1, 0);
+        model.toggleStructurePeremychkaCell(s, 4, 1, RUNG);
         model.toggleStructureFrameCell(s, 3, 1, 1);
         calc(s, ScreenCurveType.CONCAVE, 12_000, 1000);
         assertFalse(visiblePeremychki(s).contains("4/1"), "убранная перемычка не вернулась");
@@ -264,12 +268,12 @@ class StructureSeparateTowersCellsTest {
     void undoAfterModeSwitchRestoresTheEditedWall(@TempDir Path dir) {
         Screen s = screen(dir);
         calc(s, ScreenCurveType.FLAT, 10_000, 0);
-        model.toggleStructurePeremychkaCell(s, 3, 0, 0);
+        model.toggleStructurePeremychkaCell(s, 3, 0, RUNG);
         calc(s, ScreenCurveType.CONCAVE, 10_000, 500);
         model.undo();
         assertEquals(ScreenCurveType.FLAT, s.getStructureCurveType());
         assertEquals(15, s.getStructureTowerCount());
-        assertTrue(s.getStructurePeremychkaCells().stream().anyMatch(c -> c.matches(3, 0, 0) && c.isHidden()),
+        assertTrue(s.getStructurePeremychkaCells().stream().anyMatch(c -> c.matches(3, 0, RUNG) && c.isHidden()),
                 "правка стены вернулась вместе со стеной");
     }
 
@@ -280,10 +284,10 @@ class StructureSeparateTowersCellsTest {
         Screen s = screen(dir);
         calc(s, ScreenCurveType.CONCAVE, 10_000, 500);
         int before = s.getStructurePeremychkaCells().size();
-        model.toggleStructurePeremychkaCell(s, 6, 0, 0);
-        model.toggleStructurePeremychkaCell(s, 6, 0, 0);
+        model.toggleStructurePeremychkaCell(s, 6, 0, RUNG);
+        model.toggleStructurePeremychkaCell(s, 6, 0, RUNG);
         assertEquals(before, s.getStructurePeremychkaCells().size());
-        assertEquals(1, s.getStructurePeremychkaCells().stream().filter(c -> c.matches(6, 0, 0)).count());
+        assertEquals(1, s.getStructurePeremychkaCells().stream().filter(c -> c.matches(6, 0, RUNG)).count());
         assertTrue(visiblePeremychki(s).contains("6/0"));
     }
 
@@ -340,7 +344,7 @@ class StructureSeparateTowersCellsTest {
         assertEquals(0, ScreenLogic.dedupeStructureCells(s), "идемпотентно");
 
         // клик в 3D после нормализации переключает единственную запись
-        model.toggleStructurePeremychkaCell(s, 2, 1, 0);
+        model.toggleStructurePeremychkaCell(s, 2, 1, RUNG);
         assertFalse(visiblePeremychki(s).contains("2/1"));
     }
 
@@ -357,7 +361,7 @@ class StructureSeparateTowersCellsTest {
         AppModel loaded = new AppModel(new WorkspaceStore(file));
         Screen s = loaded.getWorkspace().getProjects().get(0).getScenes().get(0).getScreens().get(0);
         assertEquals(18, s.getStructurePeremychkaCells().size());
-        assertTrue(s.getStructurePeremychkaCells().stream().anyMatch(c -> c.matches(0, 0, 0) && !c.isHidden()),
+        assertTrue(s.getStructurePeremychkaCells().stream().anyMatch(c -> c.matches(0, 0, RUNG) && !c.isHidden()),
                 "видимая перемычка башни 0 осталась видимой");
     }
 

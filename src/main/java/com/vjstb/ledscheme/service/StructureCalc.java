@@ -172,8 +172,21 @@ public final class StructureCalc {
      *  рамы, округление вверх. {@code null}/непригодная высота рамы в библиотеке — 0 (нечего
      *  предложить, пользователь вводит вручную). */
     public static int suggestVerticalFramesPerTower(Screen screen, StructureFrameType frameType) {
+        return suggestVerticalFramesPerTower(screen, frameType, StructureCupMath.DEFAULT_CUP_HEIGHT_MM);
+    }
+
+    /** То же с учётом стаканов (2026-10-22): модуль «рама + стакан» (950 + 50 = 1 м), а N рам со
+     *  стаканами занимают {@code N·H + (N−1)·стакан} — число рам, чья собранная высота не превышает
+     *  заданную, {@code floor((высота + стакан) / (рама + стакан))}. Экран «без стаканов» — прежняя
+     *  формула {@code floor(высота / рама)}. */
+    public static int suggestVerticalFramesPerTower(Screen screen, StructureFrameType frameType,
+            double cupHeightMm) {
         if (frameType == null || frameType.getHeightMm() == null || frameType.getHeightMm() <= 0) {
             return 0;
+        }
+        if (!screen.isStructureWithoutCups() && cupHeightMm > 0) {
+            return Math.max(1, (int) Math.floor((screen.getStructureTowerHeightMm() + cupHeightMm)
+                    / (frameType.getHeightMm() + cupHeightMm)));
         }
         // Баг-репорт: "при выставленной высоте 2м строится башня 3м высотой... высота башни
         // считается от пола до верхней грани верхней рамы" -- было Math.ceil, что округляет
@@ -209,6 +222,16 @@ public final class StructureCalc {
             return 0;
         }
         return Math.max(0, (int) Math.floor(towerHeightMm / intervalMm));
+    }
+
+    /** Число уровней авто-перемычек по высоте башни при интервале {@code intervalMm} (по умолчанию 1500):
+     *  {@code floor(высота / интервал)}. Конкретная перекладина на каждый уровень и ограничение высотой
+     *  стопки ряда — {@link StructureCupMath#autoRungs}. */
+    public static int suggestPeremychkaLevelsByInterval(double towerHeightMm, double intervalMm) {
+        if (intervalMm <= 0) {
+            return 0;
+        }
+        return Math.max(0, (int) Math.floor((towerHeightMm + 0.1 * intervalMm) / intervalMm + 1e-9));
     }
 
     /** Число ДОПОЛНИТЕЛЬНЫХ секций выноса базовой рамы под балласт (сверх обязательной секции
@@ -342,7 +365,9 @@ public final class StructureCalc {
         // типа (вертикальный стек, row 0/1 — verticalJoints выше). Перемычка (Round 8), база и
         // усилительные рамы примыкают сбоку/снизу, а не стоят друг на друге — ни одна из них
         // больше не участвует в cupCount.
-        int cupCount = verticalJoints * CUPS_PER_JOINT;
+        // Стаканы (2026-10-22): стык со стаканом, только если обе рамы стоят и стык не убран/стаканы
+        // на экране не выключены (StructureCupMath) — раньше считались все смежные стыки.
+        int cupCount = StructureCupMath.presentJoints(screen) * CUPS_PER_JOINT;
 
         int totalFrameCount = verticalFrameCount + peremychkaCount + baseFrameCount;
         int boltCount = (int) Math.ceil(totalFrameCount * BOLTS_PER_FRAME);
@@ -362,7 +387,16 @@ public final class StructureCalc {
             }
         }
 
-        double towerHeightMm = screen.getStructureTowerHeightMm();
+        // Высота башни — РЕАЛЬНАЯ собранная (2026-10-22): сумма высот рам стопки + стаканы
+        // (StructureCupMath), а не введённое число: убрали стакан или поставили короткую раму (850) —
+        // башня ниже, и предупреждения «выше экрана/безопасного предела» считаются по ней. Рам нет
+        // (экран ещё не считали) — введённая высота, как раньше.
+        StructureFrameType nominalFrame = workspace != null
+                ? workspace.structureFrameTypeById(screen.getStructureFrameTypeId()) : null;
+        double nominalFrameH = nominalFrame != null && nominalFrame.getHeightMm() != null
+                && nominalFrame.getHeightMm() > 0 ? nominalFrame.getHeightMm() : 950;
+        double assembled = StructureCupMath.assembledHeightMm(screen, workspace, nominalFrameH);
+        double towerHeightMm = assembled > 0 ? assembled : screen.getStructureTowerHeightMm();
         double screenHeightMm = type != null ? screen.getRows() * type.getHeightMm() : 0;
 
         // Высота башни автоматически предлагается РАВНОЙ высоте экрана (см.
@@ -374,9 +408,13 @@ public final class StructureCalc {
         // ТЕМ ЖЕ кодом -- раздельность выражена в самих ячейках (2 столба на башню, перемычки
         // и основание только внутри башни, см. ScreenLogic#regenerateStructureCells), здесь
         // добавляются только предупреждения геометрии (коллизии оснований и т.п.).
-        java.util.List<String> curveWarnings = StructureCurveMath.separateTowers(screen)
-                ? StructureCurveMath.analyze(StructureCurveMath.setupOf(screen, type, workspace)).warnings()
-                : java.util.List.of();
+        // Ручная расстановка (2026-10-22): положения башен задал инженер, расчётная раскладка по
+        // форме экрана не имеет смысла — проверяются пересечения башен и вход в объём экрана.
+        java.util.List<String> curveWarnings = screen.isStructureManualLayout()
+                ? StructureLayoutMath.analyzeManual(screen, type, workspace)
+                : StructureCurveMath.separateTowers(screen)
+                        ? StructureCurveMath.analyze(StructureCurveMath.setupOf(screen, type, workspace)).warnings()
+                        : java.util.List.of();
         return new Result(verticalFrameCount, peremychkaCount, baseFrameCount, totalFrameCount, cupCount,
                 boltCount, requiredBallastKg, ballastContainerCount, towerHeightMm,
                 towerHeightMm > MAX_SAFE_TOWER_HEIGHT_MM,

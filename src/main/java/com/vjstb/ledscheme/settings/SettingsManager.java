@@ -321,6 +321,11 @@ public class SettingsManager {
         persist();
     }
 
+    public void setExportLoadRingsEnabled(boolean enabled) {
+        activeProfile().setExportLoadRingsEnabled(enabled);
+        persist();
+    }
+
     public void setPowerUnitKw(boolean enabled) {
         activeProfile().setPowerUnitKw(enabled);
         persist();
@@ -383,6 +388,12 @@ public class SettingsManager {
         activeProfile().setDocExportFormat(format);
         activeProfile().setDocExportDpi(dpi);
         activeProfile().setDocExportQuality(quality);
+        persist();
+    }
+
+    /** Оформление схем при экспорте (окно «Параметры экспорта»), см. {@link ExportSchemaStyle}. */
+    public void setExportSchemaStyle(ExportSchemaStyle style) {
+        activeProfile().setExportSchemaStyle(style);
         persist();
     }
 

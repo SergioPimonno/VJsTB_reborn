@@ -1,5 +1,6 @@
 package com.vjstb.ledscheme.ui;
 
+import com.vjstb.ledscheme.settings.ExportSchemaStyle;
 import com.vjstb.ledscheme.settings.SettingsManager;
 import com.vjstb.ledscheme.settings.UserProfile;
 import java.awt.BorderLayout;
@@ -18,8 +19,8 @@ import javax.swing.JSlider;
 import javax.swing.SwingUtilities;
 
 /**
- * «Параметры экспорта» этапа «Вывод»: формат схем (JPG/PNG/WebP/PDF), DPI и
- * качество сжатия. Раньше на самом этапе был только выпадающий DPI; по запросу
+ * «Параметры экспорта» этапа «Вывод»: формат схем (JPG/PNG/WebP/PDF), DPI, способ
+ * отрисовки (оформление: как в Персонализации / экранный / печатный) и качество сжатия. Раньше на самом этапе был только выпадающий DPI; по запросу
  * пользователя всё вынесено сюда. Сохраняется в профиль (переживает перезапуск) по
  * «Сохранить»; «Отмена» ничего не меняет.
  */
@@ -31,6 +32,7 @@ public final class ExportSettingsDialog extends JDialog {
     private final JComboBox<SchemeImageWriter.Format> formatCombo =
             new JComboBox<>(SchemeImageWriter.Format.values());
     private final JComboBox<Integer> dpiCombo = new JComboBox<>(DPI_CHOICES);
+    private final JComboBox<ExportSchemaStyle> styleCombo = new JComboBox<>(ExportSchemaStyle.values());
     private final JSlider qualitySlider = new JSlider(10, 100);
     private final JLabel qualityValue = new JLabel();
     private final JLabel formatNote = new JLabel();
@@ -47,6 +49,12 @@ public final class ExportSettingsDialog extends JDialog {
         dpiCombo.setToolTipText("Плотность пикселей схем — 72 (экран) … 300 (печать). Чем выше, тем крупнее"
                 + " картинка и дольше экспорт. НЕ влияет на PNG-маски — их размер жёстко привязан к реальному"
                 + " разрешению LED-панели.");
+        styleCombo.setSelectedItem(p.getExportSchemaStyle());
+        styleCombo.setToolTipText("<html>Способ отрисовки экспортируемых схем.<br>«Как в Персонализации» — как раньше"
+                + " (оформление общей схемы из Персонализации, остальные схемы цветами темы интерфейса).<br>"
+                + "«Экранный» — цвета текущей темы.<br>«Печатный» — ВСЕ схемы (общая схема, схемы расключения"
+                + " экранов, обзор сцены, таблица экранов, риггинг, транспорт) на белом фоне, в печатном стиле,"
+                + " независимо от темы интерфейса.</html>");
         qualitySlider.setValue(p.getDocExportQuality());
         qualitySlider.addChangeListener(e -> qualityValue.setText(qualitySlider.getValue() + "%"));
         qualityValue.setText(qualitySlider.getValue() + "%");
@@ -86,6 +94,16 @@ public final class ExportSettingsDialog extends JDialog {
         c.gridx = 0;
         c.gridwidth = 1;
         c.weightx = 0;
+        form.add(new JLabel("Способ отрисовки"), c);
+        c.gridx = 1;
+        c.gridwidth = 2;
+        c.weightx = 1;
+        form.add(styleCombo, c);
+
+        c.gridy = 4;
+        c.gridx = 0;
+        c.gridwidth = 1;
+        c.weightx = 0;
         form.add(new JLabel("Сжатие (JPG/WebP)"), c);
         c.gridx = 1;
         c.weightx = 1;
@@ -94,7 +112,7 @@ public final class ExportSettingsDialog extends JDialog {
         c.weightx = 0;
         form.add(qualityValue, c);
 
-        c.gridy = 4;
+        c.gridy = 5;
         c.gridx = 0;
         c.gridwidth = 3;
         JLabel masksNote = new JLabel("Маски всегда сохраняются в PNG; сводка — TXT, спецификация — XLSX.");
@@ -148,6 +166,7 @@ public final class ExportSettingsDialog extends JDialog {
         }
         SchemeImageWriter.Format f = (SchemeImageWriter.Format) formatCombo.getSelectedItem();
         settings.setDocExportOptions(f.name(), dpi, qualitySlider.getValue());
+        settings.setExportSchemaStyle((ExportSchemaStyle) styleCombo.getSelectedItem());
         saved = true;
         dispose();
     }

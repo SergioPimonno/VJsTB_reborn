@@ -57,6 +57,8 @@ public class MainFrame extends JFrame {
         super("AVE_ToolBox");
         this.model = model;
         this.settings = settings;
+        // колесо мыши в активном числовом поле меняет значение (все поля приложения)
+        SpinnerWheel.installGlobally();
 
         setupStage = new SetupStagePanel(model, settings);
         powerStage = new PowerStagePanel(model, settings);
@@ -302,6 +304,10 @@ public class MainFrame extends JFrame {
                 + "На «Общей схеме» (Питание/Сигнал):\n"
                 + settings.bindingFor(HotkeyAction.TOGGLE_SCHEMA_INTERACTION).label()
                 + " — переключить инструмент «Перемещение»/«Соединение»\n\n"
+                + "В окне 3D-превью конструктива:\n"
+                + settings.bindingFor(HotkeyAction.TOGGLE_STRUCTURE_MODE).label()
+                + " — переключить режим «Рамы»/«Раскладка»\n"
+                + "Shift/Ctrl+клик по башне — выбрать несколько, Delete — удалить выбранные, Esc — снять выбор\n\n"
                 + "Все горячие клавиши выше можно переназначить: Персонализация → «Горячие клавиши».";
         JOptionPane.showMessageDialog(this, msg, "Горячие клавиши", JOptionPane.INFORMATION_MESSAGE);
     }

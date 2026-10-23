@@ -3754,7 +3754,7 @@ class AppModelTest {
         Screen screen = model.addScreen("E", type.getId(), 2, 6, 0, 0);
         model.updateScreenStructure(screen, 3000, 3, 3, 3, 2, 0, 0.6, null, null, null, 0, null);
 
-        model.toggleStructurePeremychkaCell(screen, 0, 0, 1);
+        model.toggleStructurePeremychkaCell(screen, 0, 0, 4); // первая авто-перекладина: середина второй рамы
         assertEquals(7, screen.getStructurePeremychkaCells().stream().filter(c -> !c.isHidden()).count(),
                 "8 всего (2 зазора x 2 ряда x 2 уровня) - 1 спрятанная");
 

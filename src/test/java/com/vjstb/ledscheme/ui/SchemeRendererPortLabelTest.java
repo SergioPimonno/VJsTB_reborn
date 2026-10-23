@@ -128,4 +128,29 @@ class SchemeRendererPortLabelTest {
         // Порт 6 = второй порт ВТОРОГО контроллера (4 порта первого + 2).
         assertEquals("C2·P2", SchemeRenderer.portLabel(sceneControllers, new Workspace(), 6));
     }
+
+    @Test
+    void labelWithoutControllerKeepsOnlyThePortEvenInAMultiControllerScene() {
+        // Обратная связь техников 2026-10-06: в «богатом» расключении экрана общей схемы подпись
+        // «C1·P3» обрезалась по ширине ячейки до «C1·…» -- номера порта не было видно. Там
+        // контроллер не пишется, только порт (контроллер инженер указывает блоком схемы).
+        ControllerInstance first = new ControllerInstance(null, "Simple #1");
+        first.setPortCount(4);
+        ControllerInstance second = new ControllerInstance(null, "Simple #2");
+        second.setPortCount(4);
+        List<ControllerInstance> sceneControllers = List.of(first, second);
+
+        assertEquals("P2", SchemeRenderer.portLabel(sceneControllers, new Workspace(), 6, false));
+        assertEquals("C2·P2", SchemeRenderer.portLabel(sceneControllers, new Workspace(), 6, true));
+    }
+
+    @Test
+    void labelWithoutControllerAlsoDropsTheCardOfAMultiPoolController() {
+        // Следом (2026-10-06): у контроллера с несколькими картами Ethernet подпись «РК1·1»/«РК2·1» тоже
+        // не нужна -- на общей схеме остаётся один номер порта в пределах карты.
+        List<ControllerInstance> sceneControllers = List.of(h2Instance("H2 #1"));
+
+        assertEquals("PК1·1", SchemeRenderer.portLabel(sceneControllers, new Workspace(), 3, true));
+        assertEquals("P1", SchemeRenderer.portLabel(sceneControllers, new Workspace(), 3, false));
+    }
 }

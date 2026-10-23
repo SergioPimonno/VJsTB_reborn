@@ -11,6 +11,10 @@ import com.vjstb.ledscheme.model.RoomEquipmentType;
 import com.vjstb.ledscheme.model.RoomFurnitureType;
 import com.vjstb.ledscheme.model.HoistType;
 import com.vjstb.ledscheme.model.StructureFrameType;
+import com.vjstb.ledscheme.model.StructureCupRemoval;
+import com.vjstb.ledscheme.model.StructureFrameCell;
+import com.vjstb.ledscheme.model.StructureTowerPlacement;
+import com.vjstb.ledscheme.model.StructureTowerWidth;
 import com.vjstb.ledscheme.model.TrussProfile;
 import com.vjstb.ledscheme.model.VehicleType;
 import com.vjstb.ledscheme.model.CableType;
@@ -146,7 +150,9 @@ public class AppModel {
                               List<SchemaSheet> schemaSheetsSnapshot,
                               String actionLabel, List<Screen> screensSnapshot, List<ScreenGroup> groupsSnapshot,
                               java.util.Map<Screen, ScreenMeta> screenMetaSnapshot,
-                              java.util.Map<Screen, MaskProps> maskPropsSnapshot) {
+                              java.util.Map<Screen, MaskProps> maskPropsSnapshot,
+                              java.util.Map<Screen, Object[]> structurePoseSnapshot,
+                              java.util.Map<Screen, Screen> extraScreensSnapshot) {
     }
 
     /** Свойства маски экрана на момент снимка отмены (2026-09-30: пресет/своя пара цветов и
@@ -1926,10 +1932,27 @@ public class AppModel {
                                        double screenElevationMm, String notes,
                                        ScreenCurveType curveType, double curveRadiusMm, boolean curveByAngle,
                                        double towerGapMm, int separateTowerCount) {
+        updateScreenStructure(screen, towerHeightMm, towerCount, verticalFramesPerTower, backRowSegments,
+                peremychkaLevels, baseExtensionMm, ballastRatio, frameTypeId, cupTypeId, ballastTypeId,
+                screenElevationMm, notes, curveType, curveRadiusMm, curveByAngle, towerGapMm, separateTowerCount,
+                screen.getStructurePeremychkaIntervalMm());
+    }
+
+    /** То же + интервал авто-расстановки перемычек, мм (запрос 2026-10-22, поле «Интервал перемычек» формы
+     *  расчёта; по умолчанию 1500). Интервал изменился — перемычки строятся заново по новому интервалу
+     *  (ручная расстановка перемычек сбрасывается; Ctrl+Z вернёт), иначе пересчёт их сохраняет. */
+    public void updateScreenStructure(Screen screen, double towerHeightMm,
+                                       int towerCount, int verticalFramesPerTower, int backRowSegments,
+                                       int peremychkaLevels, double baseExtensionMm, double ballastRatio,
+                                       String frameTypeId, String cupTypeId, String ballastTypeId,
+                                       double screenElevationMm, String notes,
+                                       ScreenCurveType curveType, double curveRadiusMm, boolean curveByAngle,
+                                       double towerGapMm, int separateTowerCount, double peremychkaIntervalMm) {
         pushUndo("Правка наземного конструктива экрана");
         applyScreenStructure(screen, towerHeightMm, towerCount, verticalFramesPerTower, backRowSegments,
                 peremychkaLevels, baseExtensionMm, ballastRatio, frameTypeId, cupTypeId, ballastTypeId,
-                screenElevationMm, notes, curveType, curveRadiusMm, curveByAngle, towerGapMm, separateTowerCount);
+                screenElevationMm, notes, curveType, curveRadiusMm, curveByAngle, towerGapMm, separateTowerCount,
+                peremychkaIntervalMm);
         changed();
     }
 
@@ -1957,12 +1980,416 @@ public class AppModel {
         }
         applyScreenStructure(screen, towerHeightMm, towerCount, verticalFramesPerTower, backRowSegments,
                 peremychkaLevels, baseExtensionMm, ballastRatio, frameTypeId, cupTypeId, ballastTypeId,
-                screenElevationMm, notes, curveType, curveRadiusMm, curveByAngle, towerGapMm, separateTowerCount);
+                screenElevationMm, notes, curveType, curveRadiusMm, curveByAngle, towerGapMm, separateTowerCount,
+                screen.getStructurePeremychkaIntervalMm());
         if (gestureEnd) {
             changed();
         } else {
             fireChanged();
         }
+    }
+
+    // ---- ручная расстановка башен и поза экрана в группе (запрос 2026-10-22) ----
+
+    /** Включает/выключает РУЧНУЮ расстановку башен экрана (одна запись отмены).
+     *
+     * <p><b>Вкл</b>: текущая авто-раскладка копируется в {@link Screen#getStructureTowerPlacements()}
+     *  стартовой ({@link StructureLayoutMath#autoLayoutOf}) — дальше инженер двигает башни сам.
+     *  Раздельные башни (изогнутый экран / зазор) сохраняют свои ячейки и ручные правки рам как
+     *  есть: нумерация ячеек не меняется. «Стена» с общими столбами переводится в раздельные
+     *  башни — ячейки строятся заново (индексы стены и раздельных башен означают разные детали,
+     *  см. {@link ScreenLogic#clearStructureCells}).
+     *
+     * <p><b>Выкл</b>: записи положений сбрасываются, башни снова считаются по форме экрана; ячейки
+     *  строятся заново (ручная расстановка могла дать любое число башен, и сохранить их правки
+     *  рам при пересчёте нечем) — Ctrl+Z вернёт всё как было.
+     *
+     * <p>Ячейки строятся по сохранённым номинальным полям конструктива: экран, ни разу не
+     *  прошедший «Предварительный расчёт» (нет рядов рам), получит башни без рам. */
+    public void setStructureManualLayout(Screen screen, boolean manual) {
+        if (screen.isStructureManualLayout() == manual) {
+            return;
+        }
+        pushUndo(manual ? "Ручная расстановка башен конструктива" : "Авто-расстановка башен конструктива");
+        if (manual) {
+            boolean wasSeparate = StructureCurveMath.separateTowers(screen);
+            List<StructureTowerPlacement> auto = StructureLayoutMath.autoLayoutOf(screen, typeOf(screen),
+                    getWorkspace());
+            if (!wasSeparate) {
+                ScreenLogic.clearStructureCells(screen);
+            }
+            screen.setStructureTowerPlacements(auto);
+            screen.setStructureManualLayout(true);
+        } else {
+            screen.setStructureManualLayout(false);
+            screen.setStructureTowerPlacements(new ArrayList<>());
+            ScreenLogic.clearStructureCells(screen);
+        }
+        regenerateStructure(screen);
+        changed();
+    }
+
+    /** Новое положение башни {@code tower} ручной расстановки (система экрана, см. {@link
+     *  StructureTowerPlacement}). Жест перетаскивания/поворота — ОДНА запись отмены: первое
+     *  событие ({@code gestureStart}) кладёт снимок, промежуточные только оповещают слушателей,
+     *  файл пишется на {@code gestureEnd} (тот же приём, что {@link #updateScreenStructureLive}).
+     *  Одиночная правка (поле ввода) — оба флага {@code true}. Не ручной режим или нет такой
+     *  башни — ничего не делает. Угол нормализуется в {@code (−180°, 180°]}. */
+    public void setStructureTowerPlacement(Screen screen, int tower, double anchorXMm, double anchorZMm,
+                                            double yawDeg, boolean gestureStart, boolean gestureEnd) {
+        StructureTowerPlacement p = screen.isStructureManualLayout() ? screen.towerPlacementOf(tower) : null;
+        if (p == null) {
+            return;
+        }
+        if (gestureStart) {
+            pushUndo("Перемещение башни конструктива");
+        }
+        p.setAnchorXMm(anchorXMm);
+        p.setAnchorZMm(anchorZMm);
+        p.setYawDeg(StructureLayoutMath.normalizeDeg(yawDeg));
+        if (gestureEnd) {
+            changed();
+        } else {
+            fireChanged();
+        }
+    }
+
+    /** Полная поза башни ручной расстановки (система экрана): положение в плане, высота точки привязки над землёй,
+     *  рыскание, наклон и крен — для гизмо и полей панели (запрос 2026-10-22: вращать башню по всем осям). Жест —
+     *  одна запись отмены, как у {@link #setStructureTowerPlacement}. Углы нормализуются в {@code (−180°, 180°]}. */
+    public void setStructureTowerPose(Screen screen, int tower, double anchorXMm, double anchorZMm,
+                                       double elevationMm, double yawDeg, double pitchDeg, double rollDeg,
+                                       boolean gestureStart, boolean gestureEnd) {
+        StructureTowerPlacement p = screen.isStructureManualLayout() ? screen.towerPlacementOf(tower) : null;
+        if (p == null) {
+            return;
+        }
+        if (gestureStart) {
+            pushUndo("Положение башни конструктива");
+        }
+        p.setAnchorXMm(anchorXMm);
+        p.setAnchorZMm(anchorZMm);
+        p.setElevationMm(elevationMm);
+        p.setYawDeg(StructureLayoutMath.normalizeDeg(yawDeg));
+        p.setPitchDeg(StructureLayoutMath.normalizeDeg(pitchDeg));
+        p.setRollDeg(StructureLayoutMath.normalizeDeg(rollDeg));
+        if (gestureEnd) {
+            changed();
+        } else {
+            fireChanged();
+        }
+    }
+
+    /** Добавляет башню в ручную расстановку на заданное положение (система экрана) — с полным
+     *  комплектом рам по номинальным полям конструктива. Возвращает номер новой башни или -1,
+     *  если расстановка не ручная. Одна запись отмены. */
+    public int addStructureTower(Screen screen, double anchorXMm, double anchorZMm, double yawDeg) {
+        if (!screen.isStructureManualLayout()) {
+            return -1;
+        }
+        pushUndo("Добавление башни конструктива");
+        int index = screen.getStructureTowerPlacements().size();
+        screen.getStructureTowerPlacements().add(new StructureTowerPlacement(index, anchorXMm, anchorZMm,
+                StructureLayoutMath.normalizeDeg(yawDeg)));
+        regenerateStructure(screen);
+        changed();
+        return index;
+    }
+
+    /** Убирает башню {@code tower} ручной расстановки вместе с её рамами, остальные сдвигаются
+     *  (см. {@link ScreenLogic#removeStructureTower}). Одна запись отмены. */
+    public boolean removeStructureTower(Screen screen, int tower) {
+        if (!screen.isStructureManualLayout() || screen.towerPlacementOf(tower) == null) {
+            return false;
+        }
+        pushUndo("Удаление башни конструктива");
+        ScreenLogic.removeStructureTower(screen, tower);
+        changed();
+        return true;
+    }
+
+    /** Убирает сразу несколько башен ручной расстановки одной записью отмены (Delete по выбору в редакторе
+     *  конструктива). Удаляются от большего номера к меньшему: после каждого удаления остальные сдвигаются
+     *  ({@link ScreenLogic#removeStructureTower}), так номера ещё не удалённых остаются верными. Возвращает число
+     *  удалённых башен. */
+    public int removeStructureTowers(Screen screen, java.util.Collection<Integer> towers) {
+        if (!screen.isStructureManualLayout()) {
+            return 0;
+        }
+        List<Integer> sorted = new java.util.ArrayList<>(new java.util.TreeSet<>(towers));
+        sorted.removeIf(k -> screen.towerPlacementOf(k) == null);
+        if (sorted.isEmpty()) {
+            return 0;
+        }
+        pushUndo(sorted.size() == 1 ? "Удаление башни конструктива" : "Удаление башен конструктива");
+        for (int i = sorted.size() - 1; i >= 0; i--) {
+            ScreenLogic.removeStructureTower(screen, sorted.get(i));
+        }
+        changed();
+        return sorted.size();
+    }
+
+    /** Поза экрана в плане конструктива ГРУППЫ ({@link Screen#getStructurePoseXMm()} и др.). Жест
+     *  — одна запись отмены, как у {@link #setStructureTowerPlacement}. На сигнал, питание, маски и
+     *  канвас сцены не влияет — это положение только для конструктива. */
+    public void setStructureScreenPose(Screen screen, double poseXMm, double poseZMm, double poseYawDeg,
+                                        boolean gestureStart, boolean gestureEnd) {
+        if (gestureStart) {
+            pushUndo("Положение экрана в группе конструктива");
+        }
+        screen.setStructurePoseXMm(poseXMm);
+        screen.setStructurePoseZMm(poseZMm);
+        screen.setStructurePoseYawDeg(StructureLayoutMath.normalizeDeg(poseYawDeg));
+        // ручная правка позы разрывает связь «примыкает к…» этого экрана, а примкнутые к нему едут следом
+        screen.setStructureAttachRefId(null);
+        propagateAttachments(screen, new java.util.HashSet<>());
+        if (gestureEnd) {
+            changed();
+        } else {
+            fireChanged();
+        }
+    }
+
+    /** Высота нижнего края экрана над землёй ({@link Screen#getStructureScreenElevationMm()}) одной
+     *  правкой с записью отмены — для панели параметров 3D-редактора (через «Предварительный расчёт»
+     *  это поле пишется вместе с остальными, здесь — отдельно и без пересчёта ячеек). */
+    public void setStructureScreenElevation(Screen screen, double elevationMm) {
+        setStructureScreenElevation(screen, elevationMm, true);
+    }
+
+    /** То же; {@code newUndoStep == false} — продолжение серии правок (вращение колеса в поле): новая запись
+     *  отмены не кладётся, вся серия откатывается одним Ctrl+Z. */
+    public void setStructureScreenElevation(Screen screen, double elevationMm, boolean newUndoStep) {
+        double clamped = Math.max(0, elevationMm);
+        if (clamped == screen.getStructureScreenElevationMm()) {
+            return;
+        }
+        if (newUndoStep) {
+            pushUndo("Высота экрана над землёй");
+        }
+        screen.setStructureScreenElevationMm(clamped);
+        changed();
+    }
+
+    /** Новая башня ручной расстановки, поставленная ВСТЫК к башне {@code targetTower}: её сторона
+     *  {@code perpendicular ? (FRONT или LEFT) : противоположная} прилегает к стороне {@code
+     *  targetSide} цели (см. {@link StructureLayoutMath#attachTowerFlush}), угол получается сам —
+     *  90° при {@code perpendicular}, иначе рядом параллельно. Возвращает номер новой башни или -1
+     *  (не ручной режим / нет такой башни). Одна запись отмены. */
+    public int addStructureTowerFlush(Screen screen, int targetTower, StructureLayoutMath.Side targetSide,
+                                       boolean perpendicular) {
+        if (!screen.isStructureManualLayout() || screen.towerPlacementOf(targetTower) == null) {
+            return -1;
+        }
+        StructureTowerPlacement t = screen.towerPlacementOf(targetTower);
+        StructureLayoutMath.Side moverSide;
+        if (perpendicular) {
+            moverSide = targetSide == StructureLayoutMath.Side.LEFT || targetSide == StructureLayoutMath.Side.RIGHT
+                    ? StructureLayoutMath.Side.FRONT : StructureLayoutMath.Side.LEFT;
+        } else {
+            moverSide = switch (targetSide) {
+                case LEFT -> StructureLayoutMath.Side.RIGHT;
+                case RIGHT -> StructureLayoutMath.Side.LEFT;
+                case FRONT -> StructureLayoutMath.Side.BACK;
+                case BACK -> StructureLayoutMath.Side.FRONT;
+            };
+        }
+        int newIndex = screen.getStructureTowerPlacements().size();
+        StructureCurveMath.TowerSpec targetSpec = StructureCurveMath.towerSpecOf(screen, getWorkspace(),
+                targetTower);
+        // у новой башни ячеек ещё нет, поэтому её габариты — номинальные (по полям конструктива)
+        StructureCurveMath.TowerSpec newSpec = StructureCurveMath.towerSpecOf(screen, getWorkspace(), newIndex);
+        StructureCurveMath.Placement placed = StructureLayoutMath.attachTowerFlush(
+                new StructureCurveMath.Placement(targetTower, t.getAnchorXMm(), t.getAnchorZMm(), t.getYawDeg()),
+                targetSpec, targetSide, newSpec, moverSide, 0, 0);
+        return addStructureTower(screen, placed.anchorX(), placed.anchorZ(), placed.yawDeg());
+    }
+
+    /** Ставит экран {@code mover} в плане группы краем к краю экрана {@code reference} под углом
+     *  (запрос 2026-10-22: левая и правая группы собираются под 90°, центральная — под 120°). {@code
+     *  moverToRight} — экран справа от опоры (иначе слева); {@code interiorAngleDeg} — угол между
+     *  лицевыми поверхностями (180° — в линию); {@code towardViewer} — загиб к зрителю. Считает абсолютную
+     *  позу один раз — связь не запоминается. Одна запись отмены. */
+    public void attachStructureScreen(Screen mover, Screen reference, boolean moverToRight,
+                                       double interiorAngleDeg, boolean towardViewer) {
+        if (mover == reference) {
+            return;
+        }
+        StructureCurveMath.Placement refEdge = StructureLayoutMath.compose(StructureLayoutMath.screenPose(reference),
+                StructureLayoutMath.screenEdgePose(reference, typeOf(reference), moverToRight));
+        StructureCurveMath.Placement moverEdge = StructureLayoutMath.screenEdgePose(mover, typeOf(mover),
+                !moverToRight);
+        if (isAttachedThrough(reference, mover)) {
+            return; // reference сам примкнут к mover (прямо или цепочкой) — получился бы цикл
+        }
+        StructureCurveMath.Placement pose = StructureLayoutMath.attachScreenByEdges(refEdge, moverToRight,
+                moverEdge, interiorAngleDeg, towardViewer);
+        setStructureScreenPose(mover, pose.anchorX(), pose.anchorZ(), pose.yawDeg(), true, true);
+        // связь запоминается: сдвинули/повернули опору — экран поедет следом (setStructureScreenPose её сбросил)
+        mover.setStructureAttachRefId(reference.getId());
+        mover.setStructureAttachRight(moverToRight);
+        mover.setStructureAttachAngleDeg(interiorAngleDeg);
+        mover.setStructureAttachToward(towardViewer);
+    }
+
+    /** {@code screen} примкнут к {@code target} прямо или цепочкой связей. */
+    private boolean isAttachedThrough(Screen screen, Screen target) {
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        Screen cur = screen;
+        while (cur != null && cur.getStructureAttachRefId() != null && seen.add(cur.getId())) {
+            if (cur.getStructureAttachRefId().equals(target.getId())) {
+                return true;
+            }
+            cur = screenById(currentScene, cur.getStructureAttachRefId());
+        }
+        return false;
+    }
+
+    /** Пересчитывает позы экранов, примкнутых к {@code changed} (рекурсивно, цепочкой), по их запомненной связи. */
+    private void propagateAttachments(Screen changed, java.util.Set<String> visited) {
+        if (currentScene == null || !visited.add(changed.getId())) {
+            return;
+        }
+        for (Screen s : currentScene.getScreens()) {
+            if (changed.getId().equals(s.getStructureAttachRefId()) && s != changed) {
+                StructureCurveMath.Placement refEdge = StructureLayoutMath.compose(
+                        StructureLayoutMath.screenPose(changed),
+                        StructureLayoutMath.screenEdgePose(changed, typeOf(changed), s.isStructureAttachRight()));
+                StructureCurveMath.Placement edge = StructureLayoutMath.screenEdgePose(s, typeOf(s),
+                        !s.isStructureAttachRight());
+                StructureCurveMath.Placement pose = StructureLayoutMath.attachScreenByEdges(refEdge,
+                        s.isStructureAttachRight(), edge, s.getStructureAttachAngleDeg(), s.isStructureAttachToward());
+                s.setStructurePoseXMm(pose.anchorX());
+                s.setStructurePoseZMm(pose.anchorZ());
+                s.setStructurePoseYawDeg(pose.yawDeg());
+                propagateAttachments(s, visited);
+            }
+        }
+    }
+
+    /** Разрывает связь «примыкает к…» экрана (поза остаётся как есть). Одна запись отмены. */
+    public void detachStructureScreen(Screen screen) {
+        if (screen.getStructureAttachRefId() == null) {
+            return;
+        }
+        pushUndo("Разрыв связи экрана");
+        screen.setStructureAttachRefId(null);
+        changed();
+    }
+
+    /** Пометка «считать стяжки между башнями» (по умолчанию нет). Одна запись отмены. */
+    public void setStructureCountTies(Screen screen, boolean count) {
+        if (screen.isStructureCountTies() == count) {
+            return;
+        }
+        pushUndo("Стяжки между башнями");
+        screen.setStructureCountTies(count);
+        changed();
+    }
+
+    /** Число стяжек на стык башен экрана (редактируемый параметр, 1…20). {@code newUndoStep == false} — продолжение
+     *  серии правок (колесо в поле): одна запись отмены на серию. */
+    public void setStructureTiesPerContact(Screen screen, int perContact, boolean newUndoStep) {
+        int clamped = Math.max(1, Math.min(Screen.MAX_TIES_PER_CONTACT, perContact));
+        if (clamped == screen.getStructureTiesPerContact()) {
+            return;
+        }
+        if (newUndoStep) {
+            pushUndo("Стяжек на стык башен");
+        }
+        screen.setStructureTiesPerContact(clamped);
+        changed();
+    }
+
+    /** Передаёт башню {@code tower} экрана {@code from} экрану {@code to} (оба — с ручной расстановкой, из одной
+     *  сцены): башня остаётся на том же месте в плане (положение пересчитывается в систему нового экрана), едут её
+     *  рамы, перемычки, основание, убранные стаканы и ширина; в {@code from} остальные башни перенумеровываются.
+     *  Балласт и спецификация следуют за владельцем (они считаются по экрану). Возвращает номер башни в {@code to}
+     *  или -1. Одна запись отмены (на оба экрана). */
+    public int moveStructureTowerToScreen(Screen from, int tower, Screen to) {
+        if (from == to || !from.isStructureManualLayout() || !to.isStructureManualLayout()
+                || from.towerPlacementOf(tower) == null) {
+            return -1;
+        }
+        undoExtraScreens = new ArrayList<>(List.of(from, to));
+        pushUndo("Смена владельца башни конструктива");
+        StructureTowerPlacement p = from.towerPlacementOf(tower);
+        StructureCurveMath.Placement world = StructureLayoutMath.compose(StructureLayoutMath.screenPose(from),
+                new StructureCurveMath.Placement(0, p.getAnchorXMm(), p.getAnchorZMm(), p.getYawDeg()));
+        StructureCurveMath.Placement local = StructureLayoutMath.toFrame(StructureLayoutMath.screenPose(to), world);
+        int n = to.getStructureTowerPlacements().size();
+        int lo = 2 * tower;
+        int newLo = 2 * n;
+        for (StructureFrameCell c : from.getStructureFrameCells()) {
+            if (c.getTowerIndex() == lo || c.getTowerIndex() == lo + 1) {
+                StructureFrameCell copy = new StructureFrameCell(newLo + (c.getTowerIndex() - lo), c.getRow(),
+                        c.getSegmentIndex());
+                copy.setHidden(c.isHidden());
+                copy.setFrameTypeId(c.getFrameTypeId());
+                to.getStructureFrameCells().add(copy);
+            }
+        }
+        for (com.vjstb.ledscheme.model.StructurePeremychkaCell c : from.getStructurePeremychkaCells()) {
+            if (c.getTowerIndex() == lo) {
+                com.vjstb.ledscheme.model.StructurePeremychkaCell copy =
+                        new com.vjstb.ledscheme.model.StructurePeremychkaCell(newLo, c.getRow(), c.getLevelIndex());
+                copy.setHidden(c.isHidden());
+                to.getStructurePeremychkaCells().add(copy);
+            }
+        }
+        for (com.vjstb.ledscheme.model.StructureBaseFrameCell c : from.getStructureBaseFrameCells()) {
+            if (c.getTowerIndex() == lo) {
+                com.vjstb.ledscheme.model.StructureBaseFrameCell copy =
+                        new com.vjstb.ledscheme.model.StructureBaseFrameCell(newLo, c.getSectionIndex());
+                copy.setHidden(c.isHidden());
+                to.getStructureBaseFrameCells().add(copy);
+            }
+        }
+        for (StructureCupRemoval r : from.getStructureRemovedCups()) {
+            if (r.getTowerIndex() == lo || r.getTowerIndex() == lo + 1) {
+                to.getStructureRemovedCups().add(new StructureCupRemoval(newLo + (r.getTowerIndex() - lo), r.getRow(),
+                        r.getSegmentIndex()));
+            }
+        }
+        String width = from.towerWidthFrameTypeOf(tower);
+        if (width != null) {
+            to.getStructureTowerWidths().add(new StructureTowerWidth(n, width));
+        }
+        to.getStructureTowerPlacements().add(new StructureTowerPlacement(n, local.anchorX(), local.anchorZ(),
+                local.yawDeg()));
+        to.setStructureTowerCount(2 * (n + 1));
+        ScreenLogic.removeStructureTower(from, tower);
+        changed();
+        return n;
+    }
+
+    /** Расставляет экраны группы в ряд слева направо в порядке списка (каждый следующий — в линию с
+     *  предыдущим, с зазором {@code gapMm}): стартовая раскладка, пока инженер не задал углы. Одна запись
+     *  отмены на всю расстановку. */
+    public void arrangeStructureScreensInLine(List<Screen> screens, double gapMm) {
+        if (screens.size() < 2) {
+            return;
+        }
+        pushUndo("Расстановка экранов группы в ряд");
+        Screen first = screens.get(0);
+        first.setStructurePoseXMm(0);
+        first.setStructurePoseZMm(0);
+        first.setStructurePoseYawDeg(0);
+        for (int i = 1; i < screens.size(); i++) {
+            Screen prev = screens.get(i - 1);
+            Screen cur = screens.get(i);
+            StructureCurveMath.Placement refEdge = StructureLayoutMath.compose(
+                    StructureLayoutMath.screenPose(prev), StructureLayoutMath.screenEdgePose(prev, typeOf(prev), true));
+            StructureCurveMath.Placement curEdge = StructureLayoutMath.screenEdgePose(cur, typeOf(cur), false);
+            StructureCurveMath.Placement pose = StructureLayoutMath.attachScreenByEdges(refEdge, true, curEdge, 180,
+                    true);
+            double[] shifted = new StructureCurveMath.Placement(0, pose.anchorX(), pose.anchorZ(), pose.yawDeg())
+                    .toWorld(gapMm, 0);
+            cur.setStructurePoseXMm(shifted[0]);
+            cur.setStructurePoseZMm(shifted[1]);
+            cur.setStructurePoseYawDeg(pose.yawDeg());
+        }
+        changed();
     }
 
     private void applyScreenStructure(Screen screen, double towerHeightMm,
@@ -1971,14 +2398,16 @@ public class AppModel {
                                       String frameTypeId, String cupTypeId, String ballastTypeId,
                                       double screenElevationMm, String notes,
                                       ScreenCurveType curveType, double curveRadiusMm, boolean curveByAngle,
-                                      double towerGapMm, int separateTowerCount) {
+                                      double towerGapMm, int separateTowerCount, double peremychkaIntervalMm) {
         // Баг-репорт 2026-10-01 («у раздельных башен не рисуются перемычки»): ячейки стены и
         // раздельных башен с одинаковыми индексами -- РАЗНЫЕ детали (см. ScreenLogic
         // #clearStructureCells). При смене режима сетка строится заново, а не мержится со
         // скрытыми записями другого режима. Режим «до» -- по полям, сохранённым вместе с
         // ячейками прошлым расчётом (форма/зазор меняются только здесь и в undo-restore).
         boolean wasSeparate = StructureCurveMath.separateTowers(screen);
-        boolean nowSeparate = StructureCurveMath.separateTowers(curveType, towerGapMm);
+        // Ручная расстановка (2026-10-22) — тоже раздельные башни, смена формы/зазора её не выключает.
+        boolean nowSeparate = StructureCurveMath.separateTowers(curveType, towerGapMm)
+                || screen.isStructureManualLayout();
         if (wasSeparate != nowSeparate) {
             ScreenLogic.clearStructureCells(screen);
         }
@@ -1989,7 +2418,6 @@ public class AppModel {
         screen.setStructureSeparateTowerCount(separateTowerCount);
         screen.setStructureTowerHeightMm(towerHeightMm);
         screen.setStructureTowerCount(towerCount);
-        screen.setStructureVerticalFramesPerTower(verticalFramesPerTower);
         screen.setStructureBackRowSegments(backRowSegments);
         screen.setStructurePeremychkaLevels(peremychkaLevels);
         screen.setStructureBaseExtensionMm(baseExtensionMm);
@@ -1999,7 +2427,130 @@ public class AppModel {
         screen.setStructureBallastTypeId(ballastTypeId);
         screen.setStructureScreenElevationMm(screenElevationMm);
         screen.setStructureNotes(notes);
-        StructureFrameType frameType = getWorkspace().structureFrameTypeById(frameTypeId);
+        // Интервал авто-перемычек изменился — перемычки перестраиваются по новому (старая авто-расстановка
+        // на другом интервале иначе осталась бы рядом с новой)
+        double interval = Math.max(Screen.MIN_PEREMYCHKA_INTERVAL_MM, peremychkaIntervalMm);
+        if (Math.abs(interval - screen.getStructurePeremychkaIntervalMm()) > 1e-6) {
+            screen.setStructurePeremychkaIntervalMm(interval);
+            screen.setStructurePeremychkaCells(new ArrayList<>());
+        }
+        StructureFrameType shortTop = planVerticalFrames(screen, verticalFramesPerTower);
+        regenerateStructure(screen);
+        markShortTop(screen, shortTop);
+    }
+
+    /** Число вертикальных рам башни под заданную высоту (2026-10-22): {@code fullFrames} полных рам и,
+     *  если в библиотеке есть короткая рама ({@code SHORT_FRAME}, у пользователя 850 мм) и она помещается
+     *  в остаток высоты вместе со стаканом, — ещё одна короткая сверху (башня точнее по высоте).
+     *  Записывает число в {@link Screen#setStructureVerticalFramesPerTower}; возвращает короткую раму,
+     *  если она добавлена, иначе {@code null}. */
+    private StructureFrameType planVerticalFrames(Screen screen, int fullFrames) {
+        int frames = fullFrames;
+        StructureFrameType shortTop = null;
+        StructureFrameType nominal = getWorkspace().structureFrameTypeById(screen.getStructureFrameTypeId());
+        StructureFrameType candidate = StructureCupMath.shortTopType(getStructureFrameTypes());
+        if (fullFrames > 0 && candidate != null && nominal != null && nominal.getHeightMm() != null
+                && nominal.getHeightMm() > 0) {
+            double cup = screen.isStructureWithoutCups() ? 0 : StructureCupMath.cupHeightMm(screen, getWorkspace());
+            double used = fullFrames * nominal.getHeightMm() + Math.max(0, fullFrames - 1) * cup;
+            if (used + cup + candidate.getHeightMm() <= screen.getStructureTowerHeightMm() + 1e-6) {
+                shortTop = candidate;
+                frames = fullFrames + 1;
+            }
+        }
+        screen.setStructureVerticalFramesPerTower(frames);
+        return shortTop;
+    }
+
+    /** Верхняя рама переднего ряда каждого столба — короткая (переопределение типа ячейки), если
+     *  {@link #planVerticalFrames} её добавила; уже заданное вручную переопределение не трогается. */
+    private void markShortTop(Screen screen, StructureFrameType shortTop) {
+        if (shortTop == null) {
+            return;
+        }
+        int top = screen.getStructureVerticalFramesPerTower() - 1;
+        for (StructureFrameCell c : screen.getStructureFrameCells()) {
+            if (c.getRow() == 0 && c.getSegmentIndex() == top && c.getFrameTypeId() == null) {
+                c.setFrameTypeId(shortTop.getId());
+            }
+        }
+    }
+
+    /** Ширина башни {@code tower} раздельной/ручной расстановки: {@code frameTypeId} — рама, из которой
+     *  собраны горизонтальные элементы башни (короткая 850 — башня уже: шаг столбов 900 вместо 1000 мм),
+     *  {@code null} — стандартная ширина. Центр башни и положение не меняются. Одна запись отмены. */
+    public void setStructureTowerWidth(Screen screen, int tower, String frameTypeId) {
+        if (java.util.Objects.equals(screen.towerWidthFrameTypeOf(tower), frameTypeId)) {
+            return;
+        }
+        pushUndo("Ширина башни конструктива");
+        screen.getStructureTowerWidths().removeIf(w -> w.getTowerIndex() == tower);
+        if (frameTypeId != null) {
+            screen.getStructureTowerWidths().add(new StructureTowerWidth(tower, frameTypeId));
+        }
+        changed();
+    }
+
+    // ---- стаканы (запрос 2026-10-22) ----
+
+    /** Убирает стакан на стыке перед рамой {@code seg} столба {@code post} ряда {@code row} (ПКМ по
+     *  стакану в 3D) или возвращает его, если он был убран (Ctrl+клик по призраку). Рамы выше стыка
+     *  опускаются/поднимаются на высоту стакана (50 мм), высота башни и ведомость пересчитываются сами —
+     *  они считаются от списка убранных стыков. Одна запись отмены. */
+    public void toggleStructureCup(Screen screen, int post, int row, int seg) {
+        pushUndo("Стакан конструктива");
+        StructureCupRemoval existing = null;
+        for (StructureCupRemoval r : screen.getStructureRemovedCups()) {
+            if (r.matches(post, row, seg)) {
+                existing = r;
+                break;
+            }
+        }
+        if (existing != null) {
+            screen.getStructureRemovedCups().remove(existing);
+        } else {
+            screen.getStructureRemovedCups().add(new StructureCupRemoval(post, row, seg));
+        }
+        changed();
+    }
+
+    /** Включает/выключает стаканы на всём экране (собирать без стаканов). Башня пересчитывается: число
+     *  рам подбирается заново под высоту с новым шагом (рама + стакан или одна рама; при выключенных
+     *  стаканах 2850 мм — три рамы по 950 вместо двух), ручные правки рам при этом сохраняются.
+     *  Включение возвращает и отдельно убранные стыки. Экран, ни разу не считавшийся (рам нет), — только
+     *  флаг. Одна запись отмены. */
+    public void setStructureCupsEnabled(Screen screen, boolean enabled) {
+        if (screen.isStructureWithoutCups() == !enabled) {
+            return;
+        }
+        pushUndo(enabled ? "Стаканы конструктива: включены" : "Стаканы конструктива: сборка без стаканов");
+        screen.setStructureWithoutCups(!enabled);
+        if (enabled) {
+            screen.setStructureRemovedCups(new ArrayList<>());
+        }
+        if (screen.getStructureVerticalFramesPerTower() > 0) {
+            StructureFrameType ft = getWorkspace().structureFrameTypeById(screen.getStructureFrameTypeId());
+            int n = StructureCalc.suggestVerticalFramesPerTower(screen, ft,
+                    StructureCupMath.cupHeightMm(screen, getWorkspace()));
+            if (n > 0) {
+                StructureFrameType shortTop = planVerticalFrames(screen, n);
+                regenerateStructure(screen);
+                markShortTop(screen, shortTop);
+            }
+        }
+        changed();
+    }
+
+    /** Пересобирает ячейки конструктива экрана по ЕГО УЖЕ СОХРАНЁННЫМ номинальным полям (высота,
+     *  число рядов, перемычки, вынос, форма, ручная расстановка) — общий хвост {@link
+     *  #applyScreenStructure} и операций ручной расстановки башен. */
+    private void regenerateStructure(Screen screen) {
+        int towerCount = screen.getStructureTowerCount();
+        int verticalFramesPerTower = screen.getStructureVerticalFramesPerTower();
+        int backRowSegments = screen.getStructureBackRowSegments();
+        int peremychkaLevels = screen.getStructurePeremychkaLevels();
+        double baseExtensionMm = screen.getStructureBaseExtensionMm();
+        StructureFrameType frameType = getWorkspace().structureFrameTypeById(screen.getStructureFrameTypeId());
         double frameW = frameType != null && frameType.getWidthMm() != null && frameType.getWidthMm() > 0
                 ? frameType.getWidthMm() : StructureCalc.DEFAULT_FRAME_WIDTH_MM;
         // Round 16 -- "короткая рама" как отдельный тип упразднена (баг-репорт: "изменение
@@ -2031,18 +2582,39 @@ public class AppModel {
             StructureCurveMath.TowerSpec spec = StructureCurveMath.towerSpecOf(screen, getWorkspace());
             double gap = StructureCurveMath.effectiveGapMm(screen.getStructureCurveType(),
                     screen.getStructureTowerGapMm());
-            int n = separateTowerCount > 0 ? separateTowerCount
-                    : StructureCurveMath.suggestTowerCount(curve, spec, gap);
-            posts = 2 * n;
+            int n;
             separateSpans = new ArrayList<>();
-            for (int k = 0; k < n; k++) {
-                separateSpans.add(StructureCurveMath.towerScreenSpanMm(curve, spec, n, gap, k));
+            if (screen.isStructureManualLayout()) {
+                // Ручная расстановка: башен ровно столько, сколько записей положения, и все они
+                // валидны (null-отрезок) — кабинеты под ними не требуются.
+                n = screen.getStructureTowerPlacements().size();
+                for (int k = 0; k < n; k++) {
+                    separateSpans.add(null);
+                }
+            } else {
+                n = screen.getStructureSeparateTowerCount() > 0 ? screen.getStructureSeparateTowerCount()
+                        : StructureCurveMath.suggestTowerCount(curve, spec, gap);
+                for (int k = 0; k < n; k++) {
+                    separateSpans.add(StructureCurveMath.towerScreenSpanMm(curve, spec, n, gap, k));
+                }
             }
+            posts = 2 * n;
         }
         screen.setStructureTowerCount(posts);
+        // Авто-перекладины перемычек (2026-10-22): через интервал из формы (1500), каждая — на ближайшей
+        // перекладине номинальной стопки ряда; руками перемычку можно на любую перекладину.
+        double nominalH = frameType != null && frameType.getHeightMm() != null && frameType.getHeightMm() > 0
+                ? frameType.getHeightMm() : 950;
+        double cup = screen.isStructureWithoutCups() ? 0 : StructureCupMath.cupHeightMm(screen, getWorkspace());
+        double crossT = StructureCupMath.crossbarThicknessMm(frameW);
+        double interval = screen.getStructurePeremychkaIntervalMm();
+        List<Integer> frontRungs = StructureCupMath.autoRungs(nominalH, cup, crossT, verticalFramesPerTower,
+                interval, peremychkaLevels);
+        List<Integer> backRungs = StructureCupMath.autoRungs(nominalH, cup, crossT, backRowSegments, interval,
+                peremychkaLevels);
         ScreenLogic.regenerateStructureCells(screen, cabinetType, posts, verticalFramesPerTower,
                 backRowSegments, peremychkaLevels, totalBaseSections - footprintSections, footprintSections,
-                separateSpans);
+                separateSpans, frontRungs, backRungs);
     }
 
     /** Параметры напольного каркаса ({@link ScreenMountType#FLOOR}, см. {@link FloorCalc},
@@ -8237,6 +8809,10 @@ public class AppModel {
         pushUndo(null);
     }
 
+    /** Экраны, чьё содержимое правит ближайшая операция и которые нужно вернуть при отмене (кроме текущего):
+     *  ставится ПЕРЕД {@code pushUndo}, сбрасывается им. */
+    private List<Screen> undoExtraScreens;
+
     /** Снимает текущее состояние сцены (экран, если выбран, + цепочки + канвасы) для
      *  «отменить». Требует только currentScene — НЕ currentScreen, т.к. правка масок
      *  (см. {@link #updatePlacementMask}/{@link #updateCanvasMaskSettings} и
@@ -8298,8 +8874,25 @@ public class AppModel {
         for (Screen scr : currentScene.getScreens()) {
             maskProps.put(scr, MaskProps.of(scr));
         }
+        // Поза экранов в плане конструктива группы (2026-10-22): как маски — по ВСЕМ экранам сцены,
+        // потому что стык/расстановка экранов группы правит позы не только выбранного экрана.
+        java.util.Map<Screen, Object[]> poses = new java.util.IdentityHashMap<>();
+        for (Screen scr : currentScene.getScreens()) {
+            poses.put(scr, new Object[]{scr.getStructurePoseXMm(), scr.getStructurePoseZMm(),
+                    scr.getStructurePoseYawDeg(), scr.getStructureAttachRefId(), scr.isStructureAttachRight(),
+                    scr.getStructureAttachAngleDeg(), scr.isStructureAttachToward()});
+        }
+        // экраны, чьё СОДЕРЖИМОЕ правит операция (смена владельца башни): снимок целиком, не только текущего
+        java.util.Map<Screen, Screen> extra = null;
+        if (undoExtraScreens != null) {
+            extra = new java.util.IdentityHashMap<>();
+            for (Screen scr : undoExtraScreens) {
+                extra.put(scr, ScreenLogic.snapshot(scr));
+            }
+            undoExtraScreens = null;
+        }
         undoStack.push(new UndoEntry(screenSnap, pc, sc, cv, sn, se, sh, actionLabel, screens, groups, meta,
-                maskProps));
+                maskProps, poses, extra));
         while (undoStack.size() > UNDO_LIMIT) {
             undoStack.removeLast();
         }
@@ -8356,6 +8949,20 @@ public class AppModel {
         // структурной отменой экран уже в нём, новый (созданный после снимка) не трогаем.
         if (snap.maskPropsSnapshot() != null) {
             snap.maskPropsSnapshot().forEach((screen, props) -> props.applyTo(screen));
+        }
+        if (snap.structurePoseSnapshot() != null) {
+            snap.structurePoseSnapshot().forEach((screen, pose) -> {
+                screen.setStructurePoseXMm((Double) pose[0]);
+                screen.setStructurePoseZMm((Double) pose[1]);
+                screen.setStructurePoseYawDeg((Double) pose[2]);
+                screen.setStructureAttachRefId((String) pose[3]);
+                screen.setStructureAttachRight((Boolean) pose[4]);
+                screen.setStructureAttachAngleDeg((Double) pose[5]);
+                screen.setStructureAttachToward((Boolean) pose[6]);
+            });
+        }
+        if (snap.extraScreensSnapshot() != null) {
+            snap.extraScreensSnapshot().forEach(ScreenLogic::restore);
         }
     }
 

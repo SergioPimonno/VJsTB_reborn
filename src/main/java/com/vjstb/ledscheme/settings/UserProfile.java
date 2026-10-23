@@ -264,6 +264,10 @@ public class UserProfile {
      *  пользователя на вопрос координатора. */
     private SchemaRenderMode schemaRenderMode;
 
+    /** Оформление схем при экспорте (см. {@link ExportSchemaStyle}); {@code null} в старых
+     *  профилях = {@link ExportSchemaStyle#FOLLOW}, т.е. поведение прежнее. */
+    private ExportSchemaStyle exportSchemaStyle;
+
     /** Отступ связи общей схемы от блоков (px) — двойное назначение (docs/schema-
      *  ports-rework/PLAN.md доводка, два пожелания пользователя 2026-09-18): (1)
      *  длина "уса" — прямого отрезка строго перпендикулярно стороне гнезда перед
@@ -312,6 +316,13 @@ public class UserProfile {
      *  целиком для нестандартного случая, который расчёт не покрывает (см. GuideDialog),
      *  и дальше считает нагрузку сам. */
     private boolean loadTrackingEnabled = true;
+
+    /** Рисовать ли круговые индикаторы загрузки силовых блоков в ЭКСПОРТЕ общей схемы
+     *  (PDF/PNG). На экране кольцо видно всегда; в печатной схеме оно раньше пропускалось
+     *  (оставался только треугольник перегрузки), и инженеры, которым загрузка нужна в
+     *  выгрузке («Жара Сила», 2026-10-22), просили вернуть — поэтому переключатель, а не
+     *  жёсткое правило. Включено по умолчанию. */
+    private boolean exportLoadRingsEnabled = true;
 
     /** Единицы отображения мощности/нагрузки везде в UI (карточки узлов, статистика
      *  этапов Питание/Сигнал, экспортные документы) — false (по умолчанию) = ватты,
@@ -857,6 +868,19 @@ public class UserProfile {
         this.schemaStylePreset = preset != null ? preset : SchemaStylePreset.SCREEN;
     }
 
+    public ExportSchemaStyle getExportSchemaStyle() {
+        return exportSchemaStyle != null ? exportSchemaStyle : ExportSchemaStyle.FOLLOW;
+    }
+
+    public void setExportSchemaStyle(ExportSchemaStyle style) {
+        this.exportSchemaStyle = style != null ? style : ExportSchemaStyle.FOLLOW;
+    }
+
+    /** Пресет общей схемы, которым она рисуется ПРИ ЭКСПОРТЕ. */
+    public SchemaStylePreset effectiveExportSchemaStylePreset() {
+        return getExportSchemaStyle().resolve(getSchemaStylePreset());
+    }
+
     public SchemaRenderMode getSchemaRenderMode() {
         return schemaRenderMode != null ? schemaRenderMode : SchemaRenderMode.MODERN;
     }
@@ -932,6 +956,14 @@ public class UserProfile {
 
     public void setLoadTrackingEnabled(boolean loadTrackingEnabled) {
         this.loadTrackingEnabled = loadTrackingEnabled;
+    }
+
+    public boolean isExportLoadRingsEnabled() {
+        return exportLoadRingsEnabled;
+    }
+
+    public void setExportLoadRingsEnabled(boolean exportLoadRingsEnabled) {
+        this.exportLoadRingsEnabled = exportLoadRingsEnabled;
     }
 
     public boolean isPowerUnitKw() {
@@ -1148,12 +1180,14 @@ public class UserProfile {
         p.orthogonalEdgeEditing = orthogonalEdgeEditing;
         p.schemaStylePreset = schemaStylePreset;
         p.schemaRenderMode = schemaRenderMode;
+        p.exportSchemaStyle = exportSchemaStyle;
         p.schemaRouteStubPx = schemaRouteStubPx;
         p.schemaScreenEntrySideSignal = schemaScreenEntrySideSignal;
         p.schemaScreenEntrySidePower = schemaScreenEntrySidePower;
         p.schemaLabelPaddingPx = schemaLabelPaddingPx;
         p.signalSideScrollUnitPx = signalSideScrollUnitPx;
         p.loadTrackingEnabled = loadTrackingEnabled;
+        p.exportLoadRingsEnabled = exportLoadRingsEnabled;
         p.powerUnitKw = powerUnitKw;
         p.maskLogoImagePath = maskLogoImagePath;
         p.maskPreviewResolution = maskPreviewResolution;

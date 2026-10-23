@@ -260,10 +260,11 @@ public class SchemaCanvasPanel extends JPanel {
     private Point rubberBandStart;
     private Point rubberBandCurrent;
 
-    /** Прямоугольник значка "⚠" (в экранных координатах) для каждого перегруженного
-     *  узла на ПОСЛЕДНЕЙ отрисовке — используется только для наведения мыши
-     *  (getToolTipText), пересчитывается заново в каждом paintComponent. */
-    private final java.util.Map<SchemaNode, java.awt.Rectangle> overloadIconRects = new java.util.HashMap<>();
+    /** Область наведения значка загрузки (кольцо или треугольник перегрузки, см.
+     *  {@link LoadBadge}) для каждого узла с известной ёмкостью на ПОСЛЕДНЕЙ отрисовке —
+     *  в модельных координатах, используется только для наведения мыши (getToolTipText),
+     *  пересчитывается заново в каждом paintComponent. */
+    private final java.util.Map<SchemaNode, java.awt.Rectangle> loadBadgeRects = new java.util.HashMap<>();
 
     /** Одна "шина" (пучок 2+ связей в одно гнездо, см. {@link #drawEdgeBundleMarkers})
      *  на ПОСЛЕДНЕЙ отрисовке — чип у точки РЕАЛЬНОГО расхождения маршрутов (см.
@@ -303,7 +304,7 @@ public class SchemaCanvasPanel extends JPanel {
         settings.addListener(this::repaint);
         // Непустое значение включает механизм подсказок Swing вообще — сам текст
         // подставляется динамически через переопределённый getToolTipText(MouseEvent)
-        // ниже (наведение на конкретный значок "⚠" перегрузки узла).
+        // ниже (наведение на значок загрузки/перегрузки узла).
         setToolTipText("");
 
         MouseAdapter mouse = new MouseAdapter() {
@@ -2726,7 +2727,7 @@ public class SchemaCanvasPanel extends JPanel {
         if (classicMode() || mode != SchemaMode.SIGNAL) {
             return false;
         }
-        if (settings.activeProfile().getSchemaStylePreset() != SchemaStylePreset.PRINT) {
+        if (activePreset() != SchemaStylePreset.PRINT) {
             return false;
         }
         CardPort fromPort = findPort(edge.getFromNodeId(), edge.getFromPortId());
@@ -3144,6 +3145,9 @@ public class SchemaCanvasPanel extends JPanel {
                 repaint();
             });
             menu.add(connectors);
+            javax.swing.JMenuItem stats = new javax.swing.JMenuItem("Статистика блока…");
+            stats.addActionListener(ev -> showNodeLoadStats(node));
+            menu.add(stats);
         }
         if (node.getType() == SchemaNodeType.SCREEN && onScreenActivated != null) {
             javax.swing.JMenuItem open = new javax.swing.JMenuItem("Открыть цепочки этого экрана");
@@ -3183,6 +3187,21 @@ public class SchemaCanvasPanel extends JPanel {
         });
         menu.add(del);
         menu.show(this, x, y);
+    }
+
+    /** ПКМ → «Статистика блока…»: окно с разбивкой загрузки силового узла (см. {@link
+     *  NodeLoadStatsDialog}). Доступно и при выключенном учёте нагрузки в профиле — это явное
+     *  действие пользователя, индикатор на блоке при этом не рисуется. */
+    private void showNodeLoadStats(SchemaNode node) {
+        Scene scene = model.getCurrentScene();
+        if (scene == null) {
+            return;
+        }
+        String title = node.getLabel() == null || node.getLabel().isEmpty()
+                ? model.categoryLabel(node.getType()) : node.getLabel();
+        NodeLoadStatsDialog.show(SwingUtilities.getWindowAncestor(this), title,
+                com.vjstb.ledscheme.service.SchemaLoadCalc.stats(node, scene, model),
+                settings.activeProfile().isPowerUnitKw());
     }
 
     /** Диалог «Сохранить блок в библиотеку…» (запрос 2026-09-30, п. 9): название
@@ -3432,16 +3451,43 @@ public class SchemaCanvasPanel extends JPanel {
         menu.show(this, x, y);
     }
 
-    /** Подсказка при наведении на значок "⚠" перегруженного узла (Task #102) —
-     *  раньше пользователю приходилось открывать «Разъёмы питания…», чтобы понять,
-     *  чем именно вызвано предупреждение; теперь достаточно навести курсор. */
+    /** Значок загрузки силового блока в его углу (см. {@link LoadBadge}): при перегрузке —
+     *  предупреждающий треугольник, иначе круговой индикатор доли загрузки. На экране кольцо
+     *  рисуется всегда, в экспорте (PDF/PNG) — только если включена настройка «Рисовать кольца
+     *  загрузки в экспорте» ({@code UserProfile#isExportLoadRingsEnabled}): в печатной схеме оно
+     *  может быть шумом, а может быть нужно (проект «Жара», 2026-10-22, «кольца не рисуются»).
+     *  Треугольник перегрузки остаётся в экспорте при любом значении. Без значка — узлы без известной ёмкости ({@code nodeLoad
+     *  == null} или нераспознанные входные разъёмы). */
+    private void paintLoadBadge(Graphics2D g2, SchemaNode n, com.vjstb.ledscheme.service.SchemaLoadCalc.NodeLoad nodeLoad) {
+        if (nodeLoad == null || !nodeLoad.capacityKnown()) {
+            return;
+        }
+        boolean overloaded = nodeLoad.overloaded();
+        if (!overloaded && exporting && !settings.activeProfile().isExportLoadRingsEnabled()) {
+            return;
+        }
+        int cx = LoadBadge.centerX((int) n.getX(), (int) n.getWidth());
+        int cy = LoadBadge.centerY((int) n.getY());
+        if (overloaded) {
+            LoadBadge.paintWarning(g2, cx, cy);
+        } else {
+            LoadBadge.paintRing(g2, cx, cy, nodeLoad.fraction());
+        }
+        if (!exporting) {
+            loadBadgeRects.put(n, LoadBadge.hitRect(cx, cy));
+        }
+    }
+
+    /** Подсказка при наведении на значок загрузки узла: при перегрузке (Task #102) — чем именно
+     *  вызвано предупреждение (раньше приходилось открывать «Разъёмы питания…»), иначе — текущая
+     *  доля загрузки. */
     @Override
     public String getToolTipText(MouseEvent e) {
-        // overloadIconRects хранит координаты в МОДЕЛЬНОМ пространстве (как и все
+        // loadBadgeRects хранит координаты в МОДЕЛЬНОМ пространстве (как и все
         // остальные хит-тесты) — курсор нужно перевести через текущий scale, иначе
         // подсказка перестаёт совпадать со значком при отличном от 1.0 масштабе.
         Point mp = toModel(e.getPoint());
-        for (var entry : overloadIconRects.entrySet()) {
+        for (var entry : loadBadgeRects.entrySet()) {
             if (entry.getValue().contains(mp)) {
                 SchemaNode n = entry.getKey();
                 Scene loadScene = model.getCurrentScene();
@@ -3451,11 +3497,19 @@ public class SchemaCanvasPanel extends JPanel {
                 com.vjstb.ledscheme.service.SchemaLoadCalc.NodeLoad load =
                         com.vjstb.ledscheme.service.SchemaLoadCalc.evaluate(n, loadScene, model);
                 boolean kw = settings.activeProfile().isPowerUnitKw();
-                return "<html>Перегрузка узла «" + escapeHtml(n.getLabel() != null && !n.getLabel().isEmpty()
-                        ? n.getLabel() : model.categoryLabel(n.getType())) + "»<br>"
+                String name = escapeHtml(n.getLabel() != null && !n.getLabel().isEmpty()
+                        ? n.getLabel() : model.categoryLabel(n.getType()));
+                if (!load.overloaded()) {
+                    return "<html>Загрузка узла «" + name + "»: " + Math.round(load.fraction() * 100) + "%<br>"
+                            + "Нагрузка: " + UiKit.fmtPower(load.loadWatts(), kw) + " из "
+                            + UiKit.fmtPower(load.capacityWatts(), kw) + "<br>"
+                            + "Подробнее — ПКМ → «Статистика блока…».</html>";
+                }
+                return "<html>Перегрузка узла «" + name + "»<br>"
                         + "Нагрузка через исходящие связи: " + UiKit.fmtPower(load.loadWatts(), kw) + "<br>"
                         + "Ёмкость входных разъёмов: " + UiKit.fmtPower(load.capacityWatts(), kw) + "<br>"
-                        + "Подтвердить/изменить запас — «Разъёмы питания…» этого узла.</html>";
+                        + "Подтвердить/изменить запас — «Разъёмы питания…» этого узла.<br>"
+                        + "Подробнее — ПКМ → «Статистика блока…».</html>";
             }
         }
         return null;
@@ -3576,12 +3630,83 @@ public class SchemaCanvasPanel extends JPanel {
      *  так же в логических {@code width}×{@code height}, просто на бОльшее число
      *  физических пикселей итоговой картинки. */
     public BufferedImage renderImage(int width, int height, boolean renderScreenWiring, double dpiScale) {
-        BufferedImage img = new BufferedImage(Math.max(1, (int) Math.round(width * dpiScale)),
-                Math.max(1, (int) Math.round(height * dpiScale)), BufferedImage.TYPE_INT_RGB);
+        return render(width, height, renderScreenWiring, dpiScale, width, height, 0, 0);
+    }
+
+    /** Доля размера схемы, которая добавляется полями с каждой стороны при экспорте (запрос 2026-10-24: «схема
+     *  режется по крайнему элементу, часто это мешает — поля примерно 5%»). */
+    public static final double EXPORT_MARGIN_FRACTION = 0.05;
+
+    /** Запас под толщину линий и стрелки у самой границы содержимого, px. */
+    private static final double EXPORT_BOUNDS_SLACK = 6;
+
+    /** Реальные границы содержимого схемы в модельных координатах {@code {minX, minY, maxX, maxY}}: прямоугольник
+     *  {@code 0,0,width,height} (размер по блокам из {@link #getPreferredSize}) плюс блоки, ВСЕ точки маршрутов связей
+     *  и чипы подписей линий. Раньше размер считался только по блокам, и линии с подписями, уходящие за крайний блок,
+     *  обрезались по краю картинки (отзыв 2026-10-24: «размер схемы не учитывает линии с подписями»). */
+    double[] exportContentBounds(int width, int height) {
+        double minX = 0;
+        double minY = 0;
+        double maxX = width;
+        double maxY = height;
+        for (SchemaNode n : nodes()) {
+            minX = Math.min(minX, n.getX());
+            minY = Math.min(minY, n.getY());
+            maxX = Math.max(maxX, n.getX() + n.getWidth());
+            maxY = Math.max(maxY, n.getY() + n.getHeight());
+        }
+        for (SchemaEdge edge : edges()) {
+            List<double[]> pts = routePoints(edge);
+            if (pts != null) {
+                for (double[] p : pts) {
+                    minX = Math.min(minX, p[0] - EXPORT_BOUNDS_SLACK);
+                    minY = Math.min(minY, p[1] - EXPORT_BOUNDS_SLACK);
+                    maxX = Math.max(maxX, p[0] + EXPORT_BOUNDS_SLACK);
+                    maxY = Math.max(maxY, p[1] + EXPORT_BOUNDS_SLACK);
+                }
+            }
+            String display = edge.displayLabel();
+            if (display != null && !display.isEmpty()) {
+                java.awt.Rectangle chip = labelChipBounds(edge);
+                if (chip != null) {
+                    minX = Math.min(minX, chip.x - EXPORT_BOUNDS_SLACK);
+                    minY = Math.min(minY, chip.y - EXPORT_BOUNDS_SLACK);
+                    maxX = Math.max(maxX, chip.x + chip.width + EXPORT_BOUNDS_SLACK);
+                    maxY = Math.max(maxY, chip.y + chip.height + EXPORT_BOUNDS_SLACK);
+                }
+            }
+        }
+        return new double[]{minX, minY, maxX, maxY};
+    }
+
+    /** Рендер ДЛЯ ЭКСПОРТА: как {@link #renderImage(int, int, boolean, double)}, но картинка охватывает ВСЁ
+     *  содержимое ({@link #exportContentBounds}: блоки, линии, подписи — в том числе левее/выше нуля) и ещё поля
+     *  {@link #EXPORT_MARGIN_FRACTION} со всех сторон. Фон полей — фон оформления схемы. */
+    public BufferedImage renderImageWithMargin(int width, int height, boolean renderScreenWiring, double dpiScale) {
+        double[] b = exportContentBounds(width, height);
+        int minX = (int) Math.floor(b[0]);
+        int minY = (int) Math.floor(b[1]);
+        int contentW = (int) Math.ceil(b[2]) - minX;
+        int contentH = (int) Math.ceil(b[3]) - minY;
+        int mx = (int) Math.round(contentW * EXPORT_MARGIN_FRACTION);
+        int my = (int) Math.round(contentH * EXPORT_MARGIN_FRACTION);
+        return render(width, height, renderScreenWiring, dpiScale, contentW + 2 * mx, contentH + 2 * my,
+                mx - minX, my - minY);
+    }
+
+    private BufferedImage render(int width, int height, boolean renderScreenWiring, double dpiScale, int imageW,
+            int imageH, int offsetX, int offsetY) {
+        BufferedImage img = new BufferedImage(Math.max(1, (int) Math.round(imageW * dpiScale)),
+                Math.max(1, (int) Math.round(imageH * dpiScale)), BufferedImage.TYPE_INT_RGB);
         Graphics2D g2 = img.createGraphics();
         g2.scale(dpiScale, dpiScale);
         exporting = true;
         try {
+            if (offsetX != 0 || offsetY != 0 || imageW != width || imageH != height) {
+                g2.setColor(SchemaStyle.forPreset(activePreset()).background);
+                g2.fillRect(0, 0, imageW, imageH);
+                g2.translate(offsetX, offsetY);
+            }
             paint(g2, width, height, renderScreenWiring);
         } finally {
             exporting = false;
@@ -3598,8 +3723,17 @@ public class SchemaCanvasPanel extends JPanel {
         return settings.activeProfile().getSchemaRenderMode() == SchemaRenderMode.CLASSIC;
     }
 
+    /** Пресет оформления текущей отрисовки: при экспорте — из «Параметров экспорта» (по умолчанию тот
+     *  же, что в Персонализации), на экране — всегда из Персонализации. */
+    private SchemaStylePreset activePreset() {
+        return exporting ? settings.activeProfile().effectiveExportSchemaStylePreset()
+                : settings.activeProfile().getSchemaStylePreset();
+    }
+
     private void paint(Graphics2D g2, int width, int height, boolean renderScreenWiring) {
-        style = SchemaStyle.forPreset(settings.activeProfile().getSchemaStylePreset());
+        // При экспорте оформление выбирается в «Параметрах экспорта» (по умолчанию — то же, что в
+        // Персонализации), на экране — всегда из Персонализации.
+        style = SchemaStyle.forPreset(activePreset());
         if (classicMode()) {
             // Классический режим (T5.5) — полностью отдельный путь отрисовки/
             // хит-тестинга, см. paintClassic() и соседние *Classic-методы в конце
@@ -3757,7 +3891,7 @@ public class SchemaCanvasPanel extends JPanel {
         }
 
         layoutCache.clear();
-        overloadIconRects.clear();
+        loadBadgeRects.clear();
         bundleChipHits.clear();
         for (SchemaNode n : ns) {
             Font titleFont = nodeTitleFont(n);
@@ -3776,14 +3910,15 @@ public class SchemaCanvasPanel extends JPanel {
             // исходящие связи узла, превышает ёмкость его входных разъёмов (см.
             // SchemaLoadCalc). Отдельный контур поверх обычной рамки + значок в углу —
             // не заменяет обычное выделение, а накладывается на него.
-            boolean overloaded = false;
+            com.vjstb.ledscheme.service.SchemaLoadCalc.NodeLoad nodeLoad = null;
             if (mode == SchemaMode.POWER && n.getType() != SchemaNodeType.SCREEN
                     && settings.activeProfile().isLoadTrackingEnabled()) {
                 Scene loadScene = model.getCurrentScene();
                 if (loadScene != null) {
-                    overloaded = com.vjstb.ledscheme.service.SchemaLoadCalc.evaluate(n, loadScene, model).overloaded();
+                    nodeLoad = com.vjstb.ledscheme.service.SchemaLoadCalc.evaluate(n, loadScene, model);
                 }
             }
+            boolean overloaded = nodeLoad != null && nodeLoad.overloaded();
             if (overloaded) {
                 g2.setColor(style.warn);
                 g2.setStroke(new BasicStroke(3f));
@@ -3845,16 +3980,7 @@ public class SchemaCanvasPanel extends JPanel {
                 drawClipped(g2, model.categoryLabel(n.getType()), (int) n.getX() + 8, (int) n.getY() + 38, nw - 16);
             }
 
-            if (overloaded) {
-                g2.setColor(style.warn);
-                g2.setFont(titleFont);
-                int iconX = (int) n.getX() + nw - 20;
-                int iconY = (int) n.getY() + 16;
-                g2.drawString("⚠", iconX, iconY);
-                // Небольшой запас вокруг символа — попадание курсором в сам глиф
-                // (не только в его базовую линию) для подсказки ниже.
-                overloadIconRects.put(n, new java.awt.Rectangle(iconX - 2, iconY - 14, 20, 18));
-            }
+            paintLoadBadge(g2, n, nodeLoad);
 
             // Уголок изменения размера — маленький треугольник в правом нижнем углу,
             // виден только у выделенного узла, чтобы не загромождать обычный вид.
@@ -5744,7 +5870,7 @@ public class SchemaCanvasPanel extends JPanel {
         }
 
         boolean verticalConnectors = settings.activeProfile().isConnectorsVertical(mode);
-        overloadIconRects.clear();
+        loadBadgeRects.clear();
         for (SchemaNode n : ns) {
             Font titleFont = nodeTitleFont(n);
             Font metaFont = nodeMetaFont(n);
@@ -5758,14 +5884,15 @@ public class SchemaCanvasPanel extends JPanel {
             g2.setStroke(new BasicStroke(selected || pending ? 2.5f : 1.4f));
             g2.drawRoundRect((int) n.getX(), (int) n.getY(), nw, nh, 10, 10);
 
-            boolean overloaded = false;
+            com.vjstb.ledscheme.service.SchemaLoadCalc.NodeLoad nodeLoad = null;
             if (mode == SchemaMode.POWER && n.getType() != SchemaNodeType.SCREEN
                     && settings.activeProfile().isLoadTrackingEnabled()) {
                 Scene loadScene = model.getCurrentScene();
                 if (loadScene != null) {
-                    overloaded = com.vjstb.ledscheme.service.SchemaLoadCalc.evaluate(n, loadScene, model).overloaded();
+                    nodeLoad = com.vjstb.ledscheme.service.SchemaLoadCalc.evaluate(n, loadScene, model);
                 }
             }
+            boolean overloaded = nodeLoad != null && nodeLoad.overloaded();
             if (overloaded) {
                 g2.setColor(style.warn);
                 g2.setStroke(new BasicStroke(3f));
@@ -5815,14 +5942,7 @@ public class SchemaCanvasPanel extends JPanel {
                 drawClipped(g2, model.categoryLabel(n.getType()), (int) n.getX() + 8, (int) n.getY() + 38, nw - 16);
             }
 
-            if (overloaded) {
-                g2.setColor(style.warn);
-                g2.setFont(titleFont);
-                int iconX = (int) n.getX() + nw - 20;
-                int iconY = (int) n.getY() + 16;
-                g2.drawString("⚠", iconX, iconY);
-                overloadIconRects.put(n, new java.awt.Rectangle(iconX - 2, iconY - 14, 20, 18));
-            }
+            paintLoadBadge(g2, n, nodeLoad);
 
             if (selected) {
                 int hx = (int) n.getX() + nw, hy = (int) n.getY() + nh;

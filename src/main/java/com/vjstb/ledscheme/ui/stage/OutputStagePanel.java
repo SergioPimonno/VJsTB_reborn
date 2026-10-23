@@ -269,7 +269,9 @@ public class OutputStagePanel extends JPanel {
         var p = settings.activeProfile();
         SchemeImageWriter.Format f = SchemeImageWriter.Format.fromId(p.getDocExportFormat());
         exportOptionsSummary.setText("Формат: " + f.name() + " · " + p.getDocExportDpi() + " DPI"
-                + (f.lossy() ? " · сжатие " + p.getDocExportQuality() + "%" : ""));
+                + (f.lossy() ? " · сжатие " + p.getDocExportQuality() + "%" : "")
+                + (p.getExportSchemaStyle() == com.vjstb.ledscheme.settings.ExportSchemaStyle.FOLLOW
+                        ? "" : " · " + p.getExportSchemaStyle().getLabel().toLowerCase() + " стиль"));
     }
 
     /** Схема в выбранном формате: {@code dir/baseName.<ext>} (см. {@link SchemeImageWriter}). */
@@ -578,18 +580,20 @@ public class OutputStagePanel extends JPanel {
                                 model.controllersInScene(scr);
                         if (doPower) {
                             progress.step(scene.getName() + " · " + scr.getName() + " · схема питания");
-                            BufferedImage powerImg = SchemeRenderer.renderImage(scr, type, true, 120,
-                                    model.getWorkspace(), scrPowerChains, scrSignalChains, sceneControllers, kw,
-                                    dpiScale);
+                            BufferedImage powerImg = com.vjstb.ledscheme.ui.ExportRendering.run(
+                                    settings.activeProfile(), () -> SchemeRenderer.renderImage(scr, type, true, 120,
+                                            model.getWorkspace(), scrPowerChains, scrSignalChains, sceneControllers,
+                                            kw, dpiScale));
                             writeScheme(powerImg, powerFolder, OutputPaths.sanitize(scr.getName() + " Сила"),
                                     docExportDpi);
                             jpegCount++;
                         }
                         if (doSignal) {
                             progress.step(scene.getName() + " · " + scr.getName() + " · схема сигнала");
-                            BufferedImage signalImg = SchemeRenderer.renderImage(scr, type, false, 120,
-                                    model.getWorkspace(), scrPowerChains, scrSignalChains, sceneControllers, kw,
-                                    dpiScale);
+                            BufferedImage signalImg = com.vjstb.ledscheme.ui.ExportRendering.run(
+                                    settings.activeProfile(), () -> SchemeRenderer.renderImage(scr, type, false, 120,
+                                            model.getWorkspace(), scrPowerChains, scrSignalChains, sceneControllers,
+                                            kw, dpiScale));
                             writeScheme(signalImg, signalFolder, OutputPaths.sanitize(scr.getName() + " Сигнал"),
                                     docExportDpi);
                             jpegCount++;
@@ -634,7 +638,8 @@ public class OutputStagePanel extends JPanel {
                         overview.setScreenFilter(withChains);
                         overview.setDetailMode(true, power, false);
                         Dimension size = overview.getPreferredSize();
-                        BufferedImage img = overview.renderImage(size.width, size.height, dpiScale);
+                        BufferedImage img = com.vjstb.ledscheme.ui.ExportRendering.run(settings.activeProfile(),
+                                () -> overview.renderImage(size.width, size.height, dpiScale));
                         writeScheme(img, power ? powerFolder : signalFolder, "_Все экраны сцены", docExportDpi);
                         jpegCount++;
                     }
@@ -665,8 +670,9 @@ public class OutputStagePanel extends JPanel {
                         model.selectSchemaSheet(sheet);
                         SchemaCanvasPanel schemaCanvas = new SchemaCanvasPanel(model, schemaMode, settings);
                         Dimension size = schemaCanvas.getPreferredSize();
-                        BufferedImage img = schemaCanvas.renderImage(size.width, size.height, screensAsWiring,
-                                dpiScale);
+                        BufferedImage img = com.vjstb.ledscheme.ui.ExportRendering.run(settings.activeProfile(),
+                                () -> schemaCanvas.renderImageWithMargin(size.width, size.height, screensAsWiring,
+                                        dpiScale));
                         writeScheme(img, modeFolder, fileNames.get(i), docExportDpi);
                         jpegCount++;
                     }
@@ -719,8 +725,10 @@ public class OutputStagePanel extends JPanel {
                             continue;
                         }
                         transportFolder.mkdirs();
-                        BufferedImage transportImg = VehicleLoadSchemaImageWriter.render(vt, resolved,
-                                "Машина " + machineIndex, dpiScale);
+                        final int machineNo = machineIndex;
+                        BufferedImage transportImg = com.vjstb.ledscheme.ui.ExportRendering.run(
+                                settings.activeProfile(), () -> VehicleLoadSchemaImageWriter.render(vt, resolved,
+                                        "Машина " + machineNo, dpiScale));
                         writeScheme(transportImg, transportFolder,
                                 OutputPaths.sanitize(scene.getName() + " Машина " + machineIndex), docExportDpi);
                         jpegCount++;
@@ -730,9 +738,11 @@ public class OutputStagePanel extends JPanel {
                 // Таблица экранов сцены (то же, что кнопка «Экспорт экранов» этапа «Настройка»)
                 if (doScreens && !scene.getScreens().isEmpty()) {
                     progress.step(scene.getName() + " · таблица экранов");
-                    BufferedImage tableImg = SchemeRenderer.renderScreensOverviewImage(scene.getName(), model,
-                            scene.getScreens(), dpiScale, screensOptions.legend(), screensOptions.stats(),
-                            screensOptions.trusses(), screensOptions.trussLegend());
+                    final ScreensExportOptions tableOptions = screensOptions;
+                    BufferedImage tableImg = com.vjstb.ledscheme.ui.ExportRendering.run(settings.activeProfile(),
+                            () -> SchemeRenderer.renderScreensOverviewImage(scene.getName(), model,
+                                    scene.getScreens(), dpiScale, tableOptions.legend(), tableOptions.stats(),
+                                    tableOptions.trusses(), tableOptions.trussLegend()));
                     sceneFolder.mkdirs();
                     writeScheme(tableImg, sceneFolder, OutputPaths.sanitize(scene.getName() + " Экраны"),
                             docExportDpi);
@@ -992,7 +1002,7 @@ public class OutputStagePanel extends JPanel {
     private java.util.function.BiFunction<com.vjstb.ledscheme.service.SceneSpecCalc.SheetData,
             com.vjstb.ledscheme.model.SchemaEdge, Integer> unlabeledEdgeColorResolver() {
         com.vjstb.ledscheme.ui.SchemaStyle style = com.vjstb.ledscheme.ui.SchemaStyle
-                .forPreset(settings.activeProfile().getSchemaStylePreset());
+                .forPreset(settings.activeProfile().effectiveExportSchemaStylePreset());
         return (sheet, edge) -> {
             if (edge.getColor() != null) {
                 return edge.getColor() & 0xFFFFFF;

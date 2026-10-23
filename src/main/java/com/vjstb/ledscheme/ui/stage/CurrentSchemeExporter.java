@@ -127,7 +127,7 @@ public final class CurrentSchemeExporter {
         File target = withExtension(fc.getSelectedFile(), format.ext);
 
         try {
-            BufferedImage img = renderer.render(dpiScale);
+            BufferedImage img = com.vjstb.ledscheme.ui.ExportRendering.run(profile, () -> renderer.render(dpiScale));
             SchemeImageWriter.write(img, target.getParentFile(), baseNameOf(target, format.ext), format, dpi,
                     profile.getDocExportQuality());
         } catch (Exception ex) {

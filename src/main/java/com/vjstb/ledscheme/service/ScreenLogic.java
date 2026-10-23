@@ -11,6 +11,7 @@ import com.vjstb.ledscheme.model.SignalChain;
 import com.vjstb.ledscheme.model.StructureBaseFrameCell;
 import com.vjstb.ledscheme.model.StructureFrameCell;
 import com.vjstb.ledscheme.model.StructurePeremychkaCell;
+import com.vjstb.ledscheme.model.StructureTowerPlacement;
 import com.vjstb.ledscheme.model.Workspace;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -649,6 +650,27 @@ public final class ScreenLogic {
     public static void regenerateStructureCells(Screen screen, CabinetType type, int towerCount,
             int verticalFramesPerTower, int backRowSegments, int peremychkaLevels, int extendedBaseSections,
             int coreBaseSectionCount, List<double[]> separateTowerSpansMm) {
+        // номинальная рама 950 / стакан 50 (в этой сигнатуре габаритов рамы нет — их знает AppModel и
+        // передаёт готовые списки перекладин в сигнатуре ниже)
+        double cup = screen.isStructureWithoutCups() ? 0 : StructureCupMath.DEFAULT_CUP_HEIGHT_MM;
+        double crossT = StructureCupMath.crossbarThicknessMm(StructureCalc.DEFAULT_FRAME_WIDTH_MM);
+        double interval = screen.getStructurePeremychkaIntervalMm();
+        regenerateStructureCells(screen, type, towerCount, verticalFramesPerTower, backRowSegments,
+                peremychkaLevels, extendedBaseSections, coreBaseSectionCount, separateTowerSpansMm,
+                StructureCupMath.autoRungs(950, cup, crossT, verticalFramesPerTower, interval, peremychkaLevels),
+                StructureCupMath.autoRungs(950, cup, crossT, backRowSegments, interval, peremychkaLevels));
+    }
+
+    /** То же с готовыми АВТО-перекладинами перемычек (запрос 2026-10-22): {@code frontRungs}/{@code
+     *  backRungs} — номера перекладин ({@code рама·3 + 0/1/2}), на которые «Предварительный расчёт»
+     *  ставит перемычки переднего/заднего ряда (по интервалу {@link
+     *  Screen#getStructurePeremychkaIntervalMm()}, {@link StructureCupMath#autoRungs}). Уже стоящие
+     *  перемычки (в том числе поставленные руками на ЛЮБУЮ перекладину) сохраняются, пока рама их ряда
+     *  существует номинально; недостающие авто-перекладины добавляются. */
+    public static void regenerateStructureCells(Screen screen, CabinetType type, int towerCount,
+            int verticalFramesPerTower, int backRowSegments, int peremychkaLevels, int extendedBaseSections,
+            int coreBaseSectionCount, List<double[]> separateTowerSpansMm, List<Integer> frontRungs,
+            List<Integer> backRungs) {
         dedupeStructureCells(screen);
         double spacing = StructureCalc.DEFAULT_TOWER_SPACING_MM;
         boolean separate = separateTowerSpansMm != null;
@@ -656,7 +678,9 @@ public final class ScreenLogic {
         if (separate) {
             for (int k = 0; k < separateTowerSpansMm.size() && 2 * k + 1 < towerCount; k++) {
                 double[] span = separateTowerSpansMm.get(k);
-                if (spanHasCabinetContent(screen, type, span[0], span[1])) {
+                // span == null — ручная расстановка (2026-10-22): башня стоит там, куда её поставил
+                // инженер, независимо от того, есть ли под ней кабинеты экрана.
+                if (span == null || spanHasCabinetContent(screen, type, span[0], span[1])) {
                     validTowers.add(2 * k);
                     validTowers.add(2 * k + 1);
                 }
@@ -731,7 +755,10 @@ public final class ScreenLogic {
         for (StructurePeremychkaCell c : peremychki) {
             boolean gapValid = validTowers.contains(c.getTowerIndex()) && validTowers.contains(c.getTowerIndex() + 1)
                     && gapAllowed.test(c.getTowerIndex());
-            if (gapValid && c.getLevelIndex() < peremychkaLevels) {
+            // перекладина принадлежит раме ряда: рамы с таким номером номинально нет — перемычке не к чему
+            // крепиться
+            int rowSegments = c.getRow() == 0 ? verticalFramesPerTower : backRowSegments;
+            if (gapValid && Math.floorDiv(c.getLevelIndex(), 3) < rowSegments) {
                 keptPeremychki.add(c);
             }
         }
@@ -740,10 +767,10 @@ public final class ScreenLogic {
                 continue;
             }
             for (int row = 0; row < 2; row++) {
-                for (int level = 0; level < peremychkaLevels; level++) {
+                for (int rung : row == 0 ? frontRungs : backRungs) {
                     int ft = t;
                     int fr = row;
-                    int fl = level;
+                    int fl = rung;
                     if (keptPeremychki.stream().noneMatch(c -> c.matches(ft, fr, fl))) {
                         keptPeremychki.add(new StructurePeremychkaCell(ft, fr, fl));
                     }
@@ -778,6 +805,106 @@ public final class ScreenLogic {
         screen.setStructureBaseFrameCells(keptBase);
     }
 
+    /** Убирает башню {@code tower} (столбы {@code 2·tower}/{@code 2·tower+1}) ручной расстановки:
+     *  её запись положения и ВСЕ её ячейки (рамы обоих столбов, усилительные рамы, перемычки и
+     *  основание — у них {@code towerIndex} левого столба {@code 2·tower}), а башни с большими
+     *  номерами сдвигаются на одну вниз — и записи положения, и ячейки: нумерация должна оставаться
+     *  сплошной (столбы {@code 2k}/{@code 2k+1}, на этом держится регенерация и 3D). Номинальное
+     *  число столбов {@code structureTowerCount} уменьшается на 2. Нет такой башни — ничего не
+     *  делает и возвращает {@code false}. */
+    public static boolean removeStructureTower(Screen screen, int tower) {
+        List<StructureTowerPlacement> placements = screen.getStructureTowerPlacements();
+        if (screen.towerPlacementOf(tower) == null) {
+            return false;
+        }
+        List<StructureTowerPlacement> keptPlacements = new ArrayList<>();
+        for (StructureTowerPlacement p : placements) {
+            if (p.getTowerIndex() == tower) {
+                continue;
+            }
+            if (p.getTowerIndex() > tower) {
+                p.setTowerIndex(p.getTowerIndex() - 1);
+            }
+            keptPlacements.add(p);
+        }
+        screen.setStructureTowerPlacements(keptPlacements);
+        int lo = 2 * tower;
+        List<StructureFrameCell> frames = new ArrayList<>();
+        for (StructureFrameCell c : screen.getStructureFrameCells()) {
+            if (c.getTowerIndex() == lo || c.getTowerIndex() == lo + 1) {
+                continue;
+            }
+            if (c.getTowerIndex() > lo + 1) {
+                c.setTowerIndex(c.getTowerIndex() - 2);
+            }
+            frames.add(c);
+        }
+        screen.setStructureFrameCells(frames);
+        List<StructurePeremychkaCell> peremychki = new ArrayList<>();
+        for (StructurePeremychkaCell c : screen.getStructurePeremychkaCells()) {
+            if (c.getTowerIndex() == lo || c.getTowerIndex() == lo + 1) {
+                continue;
+            }
+            if (c.getTowerIndex() > lo + 1) {
+                c.setTowerIndex(c.getTowerIndex() - 2);
+            }
+            peremychki.add(c);
+        }
+        screen.setStructurePeremychkaCells(peremychki);
+        List<StructureBaseFrameCell> bases = new ArrayList<>();
+        for (StructureBaseFrameCell c : screen.getStructureBaseFrameCells()) {
+            if (c.getTowerIndex() == lo || c.getTowerIndex() == lo + 1) {
+                continue;
+            }
+            if (c.getTowerIndex() > lo + 1) {
+                c.setTowerIndex(c.getTowerIndex() - 2);
+            }
+            bases.add(c);
+        }
+        screen.setStructureBaseFrameCells(bases);
+        List<com.vjstb.ledscheme.model.StructureCupRemoval> cups = new ArrayList<>();
+        for (com.vjstb.ledscheme.model.StructureCupRemoval c : screen.getStructureRemovedCups()) {
+            if (c.getTowerIndex() == lo || c.getTowerIndex() == lo + 1) {
+                continue;
+            }
+            if (c.getTowerIndex() > lo + 1) {
+                c.setTowerIndex(c.getTowerIndex() - 2);
+            }
+            cups.add(c);
+        }
+        screen.setStructureRemovedCups(cups);
+        List<com.vjstb.ledscheme.model.StructureTowerWidth> widths = new ArrayList<>();
+        for (com.vjstb.ledscheme.model.StructureTowerWidth w : screen.getStructureTowerWidths()) {
+            if (w.getTowerIndex() == tower) {
+                continue;
+            }
+            if (w.getTowerIndex() > tower) {
+                w.setTowerIndex(w.getTowerIndex() - 1);
+            }
+            widths.add(w);
+        }
+        screen.setStructureTowerWidths(widths);
+        screen.setStructureTowerCount(Math.max(0, screen.getStructureTowerCount() - 2));
+        return true;
+    }
+
+    /** Перемычки до 2026-10-22 хранили «уровень» ({@code (L+1)·1,5} высоты рамы): 1,5 → середина второй
+     *  рамы, 3 → стык второй и третьей и т.д. Теперь номер — НОМЕР ПЕРЕКЛАДИНЫ ({@code рама·3 + 0 низ / 1
+     *  середина / 2 верх}): уровень L переводится в низ рамы {@code (L+1)·3/2} (целое) или её середину
+     *  (полуцелое). Однократно, по флагу {@link Screen#isStructurePeremychkaByRung()}; пустой список —
+     *  просто ставит флаг. */
+    public static void migratePeremychkaToRungs(Screen screen) {
+        if (screen.isStructurePeremychkaByRung()) {
+            return;
+        }
+        for (StructurePeremychkaCell c : screen.getStructurePeremychkaCells()) {
+            int twice = (c.getLevelIndex() + 1) * 3; // в половинках рамы: 1,5 рамы = 3 половинки
+            int frame = twice / 2;
+            c.setLevelIndex(frame * 3 + (twice % 2 == 0 ? 0 : 1));
+        }
+        screen.setStructurePeremychkaByRung(true);
+    }
+
     /** Сбрасывает ВСЕ ячейки конструктива экрана (рамы, перемычки, основание) — следующая
      *  {@link #regenerateStructureCells} построит полную видимую сетку с нуля.
      *
@@ -798,6 +925,9 @@ public final class ScreenLogic {
      *  правками). Внутри одного режима (пересчёт стены; изменение радиуса/зазора/числа башен у
      *  раздельных) ручные правки по-прежнему сохраняются. */
     public static void clearStructureCells(Screen screen) {
+        // убранные стаканы адресуются теми же индексами столбов — при смене режима они «чужие»
+        screen.setStructureRemovedCups(new ArrayList<>());
+        screen.setStructureTowerWidths(new ArrayList<>());
         screen.setStructureFrameCells(new ArrayList<>());
         screen.setStructurePeremychkaCells(new ArrayList<>());
         screen.setStructureBaseFrameCells(new ArrayList<>());
@@ -819,6 +949,7 @@ public final class ScreenLogic {
      *
      * @return сколько записей удалено (0 — дублей не было, список не трогается). */
     public static int dedupeStructureCells(Screen screen) {
+        migratePeremychkaToRungs(screen);
         int removed = 0;
         java.util.Map<String, StructureFrameCell> frames = new java.util.LinkedHashMap<>();
         for (StructureFrameCell c : screen.getStructureFrameCells()) {
@@ -1265,6 +1396,24 @@ public final class ScreenLogic {
         live.setStructureCurveByAngle(snapshot.isStructureCurveByAngle());
         live.setStructureTowerGapMm(snapshot.getStructureTowerGapMm());
         live.setStructureSeparateTowerCount(snapshot.getStructureSeparateTowerCount());
+        // Ручная расстановка башен и поза экрана в группе (2026-10-22) откатываются вместе с
+        // ячейками: позиции башен без соответствующих ячеек (и наоборот) бессмысленны.
+        live.setStructureManualLayout(snapshot.isStructureManualLayout());
+        live.setStructureWithoutCups(snapshot.isStructureWithoutCups());
+        live.setStructureAttachRefId(snapshot.getStructureAttachRefId());
+        live.setStructureAttachRight(snapshot.isStructureAttachRight());
+        live.setStructureAttachAngleDeg(snapshot.getStructureAttachAngleDeg());
+        live.setStructureAttachToward(snapshot.isStructureAttachToward());
+        live.setStructureCountTies(snapshot.isStructureCountTies());
+        live.setStructureTiesPerContact(snapshot.getStructureTiesPerContact());
+        live.setStructurePeremychkaIntervalMm(snapshot.getStructurePeremychkaIntervalMm());
+        live.setStructurePeremychkaByRung(snapshot.isStructurePeremychkaByRung());
+        live.setStructureTowerWidths(snapshot.copy().getStructureTowerWidths());
+        live.setStructureRemovedCups(snapshot.copy().getStructureRemovedCups());
+        live.setStructureTowerPlacements(snapshot.copy().getStructureTowerPlacements());
+        live.setStructurePoseXMm(snapshot.getStructurePoseXMm());
+        live.setStructurePoseZMm(snapshot.getStructurePoseZMm());
+        live.setStructurePoseYawDeg(snapshot.getStructurePoseYawDeg());
         live.setStructureTowerHeightMm(snapshot.getStructureTowerHeightMm());
         live.setStructureTowerCount(snapshot.getStructureTowerCount());
         live.setStructureVerticalFramesPerTower(snapshot.getStructureVerticalFramesPerTower());

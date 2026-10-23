@@ -39,27 +39,54 @@ import javax.swing.JPanel;
  * путём, что «Предварительный расчёт», одна запись отмены на жест, предупреждения расчёта строкой
  * под ползунками. Окно подписано на модель, поэтому поля «Сетапа» и ползунки всегда показывают
  * одно состояние.
+ *
+ * <p><b>Панель «Раскладка»</b> (запрос 2026-10-22) — {@link StructureLayoutPanel}: группа экранов в
+ * общем плане (позы, стык под углом), ручная расстановка башен (встык, под любым углом),
+ * режимы «Рамы»/«Раскладка» ({@link Structure3DPanel#setLayoutMode}).
  */
 public class Structure3DDialog extends JDialog {
 
     private final Structure3DPanel panel;
     private final Structure3DControlsPanel controls;
+    private final StructureLayoutPanel layoutPanel;
     private final AppModel model;
     /** Подписка на модель (2026-10-01, ползунки радиуса/зазора/числа башен): 3D-вид и ползунки
      *  перерисовываются после ЛЮБОГО изменения — полей «Сетапа», Ctrl+Z, самих ползунков.
      *  Снимается при закрытии окна ({@link AppModel#removeListener}). */
     private final AppModel.Listener modelListener = this::refresh;
 
+    private final com.vjstb.ledscheme.settings.SettingsManager settings;
+    /** Горячая клавиша режима «Рамы»/«Раскладка» — диспетчер живёт, пока окно открыто (снимается в {@link #dispose()}). */
+    private final java.awt.KeyEventDispatcher modeKeyDispatcher = this::dispatchModeKey;
+
     public Structure3DDialog(Window owner, AppModel model) {
+        this(owner, model, null);
+    }
+
+    /** {@code settings} — для переназначаемых горячих клавиш окна (Персонализация → «Горячие клавиши»); {@code null} —
+     *  значения по умолчанию. */
+    public Structure3DDialog(Window owner, AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings) {
         super(owner, "3D-превью конструктива", ModalityType.MODELESS);
         this.model = model;
+        this.settings = settings;
 
         panel = new Structure3DPanel(model);
         controls = new Structure3DControlsPanel(model);
+        layoutPanel = new StructureLayoutPanel(model, panel);
 
         JPanel content = new JPanel(new BorderLayout(0, 8));
         content.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
-        content.add(panel, BorderLayout.CENTER);
+        // Панель «Раскладка» (2026-10-22): режим «Рамы/Раскладка», параметры экранов группы и ручная
+        // расстановка башен -- справа от 3D-вида; граница между ними ТЯНЕТСЯ (ширина панели не фиксирована,
+        // запрос «ширина инспектора не меняется»), 3D забирает остаток при изменении размера окна.
+        panel.setMinimumSize(new Dimension(320, 240));
+        javax.swing.JSplitPane split = new javax.swing.JSplitPane(javax.swing.JSplitPane.HORIZONTAL_SPLIT, panel,
+                layoutPanel);
+        split.setResizeWeight(1.0);
+        split.setContinuousLayout(true);
+        split.setDividerSize(8);
+        split.setBorder(null);
+        content.add(split, BorderLayout.CENTER);
 
         // Стандартные CAD-виды -- быстрый сброс угла камеры на канонический ракурс (без
         // изменения зума/панорамирования), тот же смысл, что navcube/view-cube в CAD-пакетах,
@@ -124,16 +151,37 @@ public class Structure3DDialog extends JDialog {
         content.add(bottom, BorderLayout.SOUTH);
 
         setContentPane(content);
-        setSize(new Dimension(980, 780));
+        setSize(new Dimension(1300, 780));
+        split.setDividerLocation(1300 - 16 - 360);
         setLocationRelativeTo(owner);
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         model.addListener(modelListener);
+        java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(modeKeyDispatcher);
     }
 
     @Override
     public void dispose() {
         model.removeListener(modelListener);
+        java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().removeKeyEventDispatcher(modeKeyDispatcher);
         super.dispose();
+    }
+
+    private boolean dispatchModeKey(java.awt.event.KeyEvent e) {
+        if (e.getID() != java.awt.event.KeyEvent.KEY_PRESSED || !isActive()) {
+            return false;
+        }
+        java.awt.Component focus = java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusOwner();
+        if (focus instanceof javax.swing.text.JTextComponent) {
+            return false; // пробел в поле ввода — это пробел
+        }
+        com.vjstb.ledscheme.settings.KeyCombo combo = settings != null
+                ? settings.bindingFor(com.vjstb.ledscheme.settings.HotkeyAction.TOGGLE_STRUCTURE_MODE)
+                : com.vjstb.ledscheme.settings.HotkeyAction.TOGGLE_STRUCTURE_MODE.getDefaultCombo();
+        if (combo.matchesKey(e)) {
+            layoutPanel.toggleMode();
+            return true;
+        }
+        return false;
     }
 
     /** Обновляет 3D-вид и ползунки. С 2026-10-01 окно само подписано на модель (у {@code
@@ -142,6 +190,7 @@ public class Structure3DDialog extends JDialog {
     public void refresh() {
         panel.refresh();
         controls.syncFromModel();
+        layoutPanel.syncFromModel();
     }
 
     private static JButton viewButton(Structure3DPanel panel, String label, double yawDeg, double pitchDeg) {

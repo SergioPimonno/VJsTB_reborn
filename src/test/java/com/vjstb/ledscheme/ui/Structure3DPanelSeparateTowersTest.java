@@ -77,7 +77,7 @@ class Structure3DPanelSeparateTowersTest {
         Set<String> expectedB = new TreeSet<>();
         for (int k = 0; k < 9; k++) {
             for (int i = 0; i < 2; i++) {
-                expectedP.add("peremychka:" + 2 * k + ":" + i + ":0");
+                expectedP.add("peremychka:" + 2 * k + ":" + i + ":4");
                 expectedB.add("base:" + 2 * k + ":" + i + ":0");
             }
         }
