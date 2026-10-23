@@ -173,11 +173,12 @@ final class RoomDnd {
         }
     }
 
-    /** Прозрачная для мыши стеклянная панель с подписью у указателя. */
+    /** Прозрачная для мыши стеклянная панель с подписью у указателя. Перерисовывает только свой прямоугольник. */
     private static final class Ghost extends JComponent {
         private Point at;
         private String label = "";
         private Feedback feedback = Feedback.NONE;
+        private java.awt.Rectangle box;
 
         Ghost() {
             setOpaque(false);
@@ -189,37 +190,62 @@ final class RoomDnd {
             return false;
         }
 
+        private Font labelFont() {
+            Font f = getFont() != null ? getFont() : new Font(Font.DIALOG, Font.PLAIN, 12);
+            return RoomFonts.derive(f, Font.BOLD, RoomTheme.fontSize(12f));
+        }
+
         void move(Point p, String text, Feedback fb) {
+            java.awt.Rectangle old = box;
             at = p;
             label = text == null ? "" : text;
             feedback = fb;
-            repaint();
+            if (label.isEmpty()) {
+                box = null;
+            } else {
+                FontMetrics fm = getFontMetrics(labelFont());
+                box = new java.awt.Rectangle(p.x + 12, p.y + 8, fm.stringWidth(label) + 18, fm.getHeight() + 8);
+            }
+            java.awt.Rectangle dirty = old == null ? box : box == null ? old : old.union(box);
+            if (dirty != null) {
+                repaint(dirty.x - 2, dirty.y - 2, dirty.width + 4, dirty.height + 4);
+            }
         }
 
         void setFeedback(Feedback fb) {
-            feedback = fb;
+            if (fb != feedback) {
+                feedback = fb;
+                if (box != null) {
+                    repaint(box.x - 2, box.y - 2, box.width + 4, box.height + 4);
+                }
+            }
+        }
+
+        @Override
+        public void setVisible(boolean v) {
+            if (!v) {
+                box = null;
+            }
+            super.setVisible(v);
         }
 
         @Override
         protected void paintComponent(Graphics g0) {
-            if (at == null || label.isEmpty()) {
+            if (box == null) {
                 return;
             }
             Graphics2D g = (Graphics2D) g0.create();
             try {
                 g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
                 g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-                Font f = getFont() != null ? getFont().deriveFont(Font.BOLD, RoomTheme.fontSize(12f)) : g.getFont();
-                g.setFont(f);
+                g.setFont(labelFont());
                 FontMetrics fm = g.getFontMetrics();
-                int w = fm.stringWidth(label) + 18;
-                int h = fm.getHeight() + 8;
                 RoomTheme th = RoomTheme.current();
                 Color bg = feedback == Feedback.DELETE ? th.err : feedback == Feedback.NONE ? th.muted : th.accent;
                 g.setColor(new Color(bg.getRed(), bg.getGreen(), bg.getBlue(), 230));
-                g.fillRoundRect(at.x + 12, at.y + 8, w, h, 10, 10);
+                g.fillRoundRect(box.x, box.y, box.width, box.height, 10, 10);
                 g.setColor(RoomTheme.readableOn(bg));
-                g.drawString(label, at.x + 21, at.y + 8 + 4 + fm.getAscent());
+                g.drawString(label, box.x + 9, box.y + 4 + fm.getAscent());
             } finally {
                 g.dispose();
             }

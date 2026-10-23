@@ -10,6 +10,7 @@ import com.vjstb.ledscheme.service.room.RoomLibraryEdit;
 import com.vjstb.ledscheme.service.room.RoomLibraryAdapter;
 import com.vjstb.ledscheme.service.room.RoomUnits;
 import com.vjstb.ledscheme.settings.SettingsManager;
+import com.vjstb.ledscheme.ui.room.EdtStallWatchdog;
 import com.vjstb.ledscheme.ui.room.PlannerEditorPanel;
 import com.vjstb.ledscheme.ui.room.RoomTheme;
 import java.awt.BorderLayout;
@@ -69,6 +70,9 @@ public class ControlRoomPlannerDialog extends JDialog {
     private final JButton dupBtn = new JButton("Дублировать");
     private final JButton delBtn = new JButton("Удалить");
     private final PlannerEditorPanel editor;
+    private final RoomLibraryUi libraryUi;
+    /** Журнал зависаний интерфейса, пока окно открыто из меню (в тестах не запускается). */
+    private EdtStallWatchdog stallWatchdog;
     private final LibraryTableModel libModel = new LibraryTableModel();
     private final JCheckBox onlyMissing = new JCheckBox("Только без габаритов");
     private final JLabel libCount = new JLabel(" ");
@@ -89,6 +93,9 @@ public class ControlRoomPlannerDialog extends JDialog {
             return;
         }
         instance = new ControlRoomPlannerDialog(owner, model, settings);
+        // ~/.led-scheme/logs/planner-stalls.log — длительность и стек каждого зависания интерфейса (см. EdtStallWatchdog)
+        instance.stallWatchdog = EdtStallWatchdog.start(java.nio.file.Path.of(System.getProperty("user.home"), ".led-scheme",
+                "logs", "planner-stalls.log"));
         instance.setVisible(true);
     }
 
@@ -101,7 +108,8 @@ public class ControlRoomPlannerDialog extends JDialog {
         super(owner, "Планнер пультовой", ModalityType.MODELESS);
         this.model = model;
         this.settings = settings;
-        editor = new PlannerEditorPanel(model, ref -> RoomDimensionsDialog.show(this, model, settings, ref));
+        libraryUi = new RoomLibraryUi(this, model, settings);
+        editor = new PlannerEditorPanel(model, libraryUi);
 
         JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
         bar.add(new JLabel("Раскладка:"));
@@ -150,6 +158,10 @@ public class ControlRoomPlannerDialog extends JDialog {
             @Override
             public void windowClosed(WindowEvent e) {
                 model.removeListener(modelListener);
+                model.flushPendingSave();
+                if (stallWatchdog != null) {
+                    stallWatchdog.stop();
+                }
                 if (instance == ControlRoomPlannerDialog.this) {
                     instance = null;
                 }
@@ -199,12 +211,22 @@ public class ControlRoomPlannerDialog extends JDialog {
                 + "пока в общей библиотеке нет данных.");
         proposeBtn.setToolTipText("Отправить габариты администратору: они появятся в общей библиотеке у всех.");
         JPopupMenu newMenu = new JPopupMenu();
-        JMenuItem newEquip = new JMenuItem("Оборудование пультовой…");
-        JMenuItem newFurn = new JMenuItem("Мебель, станок, монитор…");
-        newEquip.addActionListener(e -> RoomItemDialog.createEquipment(this, model));
-        newFurn.addActionListener(e -> RoomItemDialog.createFurniture(this, model));
-        newMenu.add(newEquip);
+        JMenuItem newDeck = new JMenuItem("Станок…");
+        newDeck.addActionListener(e -> libraryUi.createFurniture(RoomFurnitureType.Kind.DECK));
+        JMenuItem newMon = new JMenuItem("Монитор…");
+        newMon.addActionListener(e -> libraryUi.createFurniture(RoomFurnitureType.Kind.MONITOR));
+        JMenuItem newEquip = new JMenuItem("Блок в стойку или мелочь…");
+        JMenuItem newFurn = new JMenuItem("Стол, стул, мебель…");
+        newEquip.addActionListener(e -> libraryUi.createEquipment());
+        newFurn.addActionListener(e -> libraryUi.createFurniture(RoomFurnitureType.Kind.FURNITURE));
+        JMenuItem newCase = new JMenuItem("Рэк-кофр…");
+        newCase.addActionListener(e -> libraryUi.createCase());
+        newMenu.add(newDeck);
         newMenu.add(newFurn);
+        newMenu.add(newMon);
+        newMenu.addSeparator();
+        newMenu.add(newEquip);
+        newMenu.add(newCase);
         newItemBtn.addActionListener(e -> newMenu.show(newItemBtn, 0, newItemBtn.getHeight()));
         table.getSelectionModel().addListSelectionListener(e -> updateLibraryButtons());
         table.addMouseListener(new java.awt.event.MouseAdapter() {
@@ -316,81 +338,28 @@ public class ControlRoomPlannerDialog extends JDialog {
         return libModel.at(libTable.convertRowIndexToModel(row)).ref();
     }
 
-    private RoomLibraryEdit.Found selectedFound() {
-        RoomLibRef ref = selectedLibraryRef();
-        return ref != null ? RoomLibraryEdit.find(model, ref) : null;
-    }
-
-    private static boolean isPersonalRoomItem(RoomLibraryEdit.Found f) {
-        return f != null && !f.shared() && (f.ref().getKind() == RoomLibRef.Kind.ROOM_EQUIPMENT
-                || f.ref().getKind() == RoomLibRef.Kind.ROOM_FURNITURE);
-    }
-
     private void updateLibraryButtons() {
-        RoomLibraryEdit.Found f = selectedFound();
-        dimsBtn.setEnabled(f != null);
-        editItemBtn.setEnabled(isPersonalRoomItem(f));
-        deleteItemBtn.setEnabled(isPersonalRoomItem(f));
-        boolean personalData = f != null && libAdapter != null
-                && (isPersonalRoomItem(f) || libAdapter.usesPersonalPhysical(f.ref()));
-        proposeBtn.setEnabled(settings != null && personalData && libAdapter.resolve(f.ref()).complete());
+        RoomLibRef ref = selectedLibraryRef();
+        dimsBtn.setEnabled(ref != null);
+        editItemBtn.setEnabled(ref != null && libraryUi.canEdit(ref));
+        deleteItemBtn.setEnabled(ref != null && libraryUi.canEdit(ref));
+        proposeBtn.setEnabled(ref != null && libraryUi.canPropose(ref));
     }
 
     private void specifyDimensions() {
-        RoomLibRef ref = selectedLibraryRef();
-        if (ref != null) {
-            RoomDimensionsDialog.show(this, model, settings, ref);
-        }
+        libraryUi.specifyDimensions(selectedLibraryRef());
     }
 
     private void editPersonalItem() {
-        RoomLibraryEdit.Found f = selectedFound();
-        if (!isPersonalRoomItem(f)) {
-            return;
-        }
-        if (f.item() instanceof RoomEquipmentType e) {
-            RoomItemDialog.editEquipment(this, model, e);
-        } else if (f.item() instanceof RoomFurnitureType t) {
-            RoomItemDialog.editFurniture(this, model, t);
-        }
+        libraryUi.edit(selectedLibraryRef());
     }
 
     private void deletePersonalItem() {
-        RoomLibraryEdit.Found f = selectedFound();
-        if (!isPersonalRoomItem(f)) {
-            return;
-        }
-        int used = model.countRoomLayoutReferences(f.ref());
-        String text = "Удалить «" + f.name() + "» из личной библиотеки?"
-                + (used > 0 ? "\nПозиция стоит в раскладках (" + used + " шт.) — там она станет «неизвестной»." : "");
-        if (JOptionPane.showConfirmDialog(this, text, "Удалить позицию", JOptionPane.OK_CANCEL_OPTION,
-                JOptionPane.WARNING_MESSAGE) != JOptionPane.OK_OPTION) {
-            return;
-        }
-        if (f.ref().getKind() == RoomLibRef.Kind.ROOM_EQUIPMENT) {
-            model.deleteRoomEquipmentType(f.id());
-        } else {
-            model.deleteRoomFurnitureType(f.id());
-        }
+        libraryUi.delete(selectedLibraryRef());
     }
 
-    /** Предлагает на сервер позицию с теми габаритами, что действуют сейчас (личными или собственной записи). */
     private void proposeSelected() {
-        RoomLibraryEdit.Found f = selectedFound();
-        if (f == null || settings == null) {
-            return;
-        }
-        com.vjstb.ledscheme.model.PhysicalSpec spec = model.getPhysicalOverrides().get(f.ref().key());
-        if (spec == null) {
-            spec = RoomLibraryEdit.physicalOf(f.item());
-        }
-        if (!RoomLibraryEdit.isComplete(f.item(), spec)) {
-            JOptionPane.showMessageDialog(this, "Сначала заполните габариты полностью.", "Предложить на сервер",
-                    JOptionPane.WARNING_MESSAGE);
-            return;
-        }
-        ProposeDialog.show(this, settings, f.serverKind(), f.name(), RoomLibraryEdit.draftWith(f.item(), spec),
-                f.shared() ? f.id() : null);
+        libraryUi.propose(selectedLibraryRef());
     }
 
     private void renderLibrary() {

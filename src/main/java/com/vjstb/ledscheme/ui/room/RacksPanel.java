@@ -144,6 +144,11 @@ final class RacksPanel extends JPanel implements RoomDnd.Target, PlannerSession.
     }
 
     @Override
+    public void sessionLive() {
+        rebuild();
+    }
+
+    @Override
     public void sessionChanged() {
         theme = RoomTheme.current();
         rebuild();
@@ -416,8 +421,10 @@ final class RacksPanel extends JPanel implements RoomDnd.Target, PlannerSession.
     @Override
     public RoomDnd.Feedback hover(RoomDnd.Info info, Point p) {
         Target t = resolve(info, p);
-        hoverTarget = t;
-        repaint();
+        if (!java.util.Objects.equals(t, hoverTarget)) {
+            hoverTarget = t;
+            repaint();
+        }
         if (t == null) {
             return RoomDnd.Feedback.NONE;
         }
@@ -493,7 +500,9 @@ final class RacksPanel extends JPanel implements RoomDnd.Target, PlannerSession.
         super.paintComponent(g0);
         Graphics2D g = (Graphics2D) g0.create();
         try {
-            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            // пока тащат блок, углы скруглений можно не сглаживать — кадр быстрее; по отпусканию вернётся полное качество
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                    dnd.isActive() ? RenderingHints.VALUE_ANTIALIAS_OFF : RenderingHints.VALUE_ANTIALIAS_ON);
             g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
             g.setColor(theme.panel);
             g.fillRect(0, 0, getWidth(), getHeight());
@@ -503,8 +512,11 @@ final class RacksPanel extends JPanel implements RoomDnd.Target, PlannerSession.
             if (topView) {
                 paintTop(g);
             } else {
+                Rectangle clip = g.getClipBounds();
                 for (RackGeometry.TowerBox t : geo.towers) {
-                    paintTower(g, t);
+                    if (clip == null || clip.intersects(t.card)) {
+                        paintTower(g, t);
+                    }
                 }
             }
             paintZone(g);
@@ -923,7 +935,7 @@ final class RacksPanel extends JPanel implements RoomDnd.Target, PlannerSession.
     // ---------------------------------------------------------------- рисование текста
 
     private void text(Graphics2D g, String s, int x, int y, int size, boolean bold, boolean centered) {
-        g.setFont(getFont().deriveFont(bold ? Font.BOLD : Font.PLAIN, RoomTheme.fontSize(size)));
+        g.setFont(RoomFonts.derive(getFont(), bold ? Font.BOLD : Font.PLAIN, RoomTheme.fontSize(size)));
         FontMetrics fm = g.getFontMetrics();
         int w = fm.stringWidth(s);
         int bx = centered ? x - w / 2 : x;

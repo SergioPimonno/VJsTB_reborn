@@ -71,7 +71,7 @@ class PlannerGestureTest {
         if (withTower) {
             RoomRackLayout.newTower(layout, new RoomLibRef(RoomLibRef.Kind.CASE, rackCase.getId()), 200, 300);
         }
-        panel = new PlannerEditorPanel(model, ref -> { });
+        panel = new PlannerEditorPanel(model, RoomLibraryActions.NONE);
         frame = new JFrame();
         frame.add(panel);
         frame.setSize(1380, 860);

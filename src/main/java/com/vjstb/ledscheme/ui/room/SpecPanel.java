@@ -42,6 +42,7 @@ final class SpecPanel extends JPanel implements PlannerSession.Listener {
     private final Consumer<String> toast;
     private final JEditorPane html = new JEditorPane();
     private final JButton copyBtn = new JButton("Копировать спецификацию");
+    private boolean stale;
 
     SpecPanel(PlannerSession session, Consumer<String> toast) {
         super(new BorderLayout(0, 6));
@@ -66,7 +67,21 @@ final class SpecPanel extends JPanel implements PlannerSession.Listener {
 
     @Override
     public void sessionChanged() {
-        render();
+        // скрытая панель HTML не строит (это самая дорогая часть обновления); дособерёт при показе
+        if (isVisible()) {
+            render();
+        } else {
+            stale = true;
+        }
+    }
+
+    @Override
+    public void setVisible(boolean visible) {
+        super.setVisible(visible);
+        if (visible && stale) {
+            stale = false;
+            render();
+        }
     }
 
     private void follow(String ref) {

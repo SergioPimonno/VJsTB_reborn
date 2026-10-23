@@ -118,6 +118,11 @@ public final class RoomTheme {
         return new Color(rgb);
     }
 
+    /** Смесь двух цветов: {@code t = 0} — {@code a}, {@code t = 1} — {@code b}. */
+    public static Color blend(Color a, Color b, double t) {
+        return mix(a, b, t);
+    }
+
     private static Color mix(Color a, Color b, double t) {
         return new Color((int) Math.round(a.getRed() + (b.getRed() - a.getRed()) * t),
                 (int) Math.round(a.getGreen() + (b.getGreen() - a.getGreen()) * t),

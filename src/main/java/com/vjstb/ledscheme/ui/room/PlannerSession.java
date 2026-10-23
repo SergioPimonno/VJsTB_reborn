@@ -26,6 +26,14 @@ public final class PlannerSession {
     /** Слушатель изменений состояния: раскладка, выбор или расчёт. */
     public interface Listener {
         void sessionChanged();
+
+        /**
+         * Промежуточный шаг жеста (перетаскивание): раскладка и расчёт обновились, выбор и библиотека — нет. Тяжёлые
+         * панели (список библиотеки, спецификация, панель выбранного) его пропускают и обновятся по окончании жеста;
+         * холсты перерисовываются.
+         */
+        default void sessionLive() {
+        }
     }
 
     private final AppModel model;
@@ -154,6 +162,11 @@ public final class PlannerSession {
     }
 
     /** Начало перетаскивания: один снимок на весь жест. */
+    /** Идёт жест (перетаскивание): рисовать можно упрощённо — без сглаживания фигур. */
+    public boolean isLive() {
+        return liveStarted;
+    }
+
     public void beginLive() {
         if (layout != null && !liveStarted) {
             history().push(layout);
@@ -164,7 +177,9 @@ public final class PlannerSession {
     /** Промежуточный шаг жеста: пересчитать и перерисовать, не сохраняя проект. */
     public void live() {
         recalc();
-        fire();
+        for (Listener l : new ArrayList<>(listeners)) {
+            l.sessionLive();
+        }
     }
 
     /** Конец жеста: сохранить проект. */

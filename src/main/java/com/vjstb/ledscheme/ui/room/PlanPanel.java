@@ -109,6 +109,11 @@ final class PlanPanel extends JPanel implements RoomDnd.Target, PlannerSession.L
     }
 
     @Override
+    public void sessionLive() {
+        repaint();
+    }
+
+    @Override
     public void sessionChanged() {
         view.refreshTheme();
         repaint();
@@ -438,15 +443,12 @@ final class PlanPanel extends JPanel implements RoomDnd.Target, PlannerSession.L
     public RoomDnd.Feedback hover(RoomDnd.Info info, Point p) {
         ControlRoomLayout l = session.layout();
         if (l == null || info.source() != RoomDnd.Source.LIBRARY) {
-            view.preview = null;
-            view.snapHintRun = null;
-            repaint();
-            return info.source() == RoomDnd.Source.LIBRARY ? RoomDnd.Feedback.NONE : RoomDnd.Feedback.NONE;
+            setPreview(null);
+            return RoomDnd.Feedback.NONE;
         }
         RoomPoint w = view.toWorld(p.x, p.y);
         if (w.getX() < -40 || w.getX() > l.getRoomWidthCm() + 40 || w.getY() < -40 || w.getY() > l.getRoomDepthCm() + 40) {
-            view.preview = null;
-            repaint();
+            setPreview(null);
             return RoomDnd.Feedback.NONE;
         }
         RoomItemSpec spec = session.catalog().resolve(info.ref());
@@ -493,8 +495,7 @@ final class PlanPanel extends JPanel implements RoomDnd.Target, PlannerSession.L
             default -> {
             }
         }
-        view.preview = new PlanView.Preview(x, y, pw, pd, ok);
-        repaint();
+        setPreview(new PlanView.Preview(x, y, pw, pd, ok));
         return RoomDnd.Feedback.OK;
     }
 
@@ -518,8 +519,15 @@ final class PlanPanel extends JPanel implements RoomDnd.Target, PlannerSession.L
 
     @Override
     public void dragLeft() {
-        view.preview = null;
         view.snapHintRun = null;
-        repaint();
+        setPreview(null);
+    }
+
+    /** Подсветка места под переносимым; перерисовывает план, только если она действительно изменилась. */
+    private void setPreview(PlanView.Preview p) {
+        if (!java.util.Objects.equals(p, view.preview)) {
+            view.preview = p;
+            repaint();
+        }
     }
 }

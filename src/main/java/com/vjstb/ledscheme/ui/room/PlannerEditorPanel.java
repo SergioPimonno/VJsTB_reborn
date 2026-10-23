@@ -63,7 +63,7 @@ public final class PlannerEditorPanel extends JPanel implements PlannerSession.L
     private final JButton redoBtn = new JButton("Вернуть");
     private final JToggleButton libToggle = new JToggleButton("Библиотека", true);
     private final JToggleButton specToggle = new JToggleButton("Спецификация");
-    private final JButton roomBtn = new JButton("Площадка…");
+    private final JButton roomBtn = new JButton("Размер зоны…");
     private final JComboBox<RoomUnitsFormat.Mode> unitsBox = new JComboBox<>(RoomUnitsFormat.Mode.values());
     private final JSplitPane leftSplit;
     private final JSplitPane rightSplit;
@@ -73,14 +73,14 @@ public final class PlannerEditorPanel extends JPanel implements PlannerSession.L
     private boolean planFront;
     private boolean syncing;
 
-    public PlannerEditorPanel(AppModel model, Consumer<RoomLibRef> specifyDimensions) {
+    public PlannerEditorPanel(AppModel model, RoomLibraryActions libraryActions) {
         super(new BorderLayout());
         session = new PlannerSession(model);
         dnd = new RoomDnd.Controller(this);
         racks = new RacksPanel(session, dnd);
         plan = new PlanPanel(session, this::refreshPlanTools);
         elevation = new ElevationPanel(session);
-        palette = new LibraryPalette(session, dnd, this::showToast, () -> tab == Tab.PLAN && planFront, specifyDimensions);
+        palette = new LibraryPalette(session, dnd, this::showToast, () -> tab == Tab.PLAN && planFront, libraryActions);
         spec = new SpecPanel(session, this::showToast);
 
         center.add(new JScrollPane(racks), "racks");
@@ -163,7 +163,7 @@ public final class PlannerEditorPanel extends JPanel implements PlannerSession.L
         left.add(unitsBox);
         left.add(Box.createHorizontalStrut(4));
         roomBtn.addActionListener(e -> editRoomSize());
-        roomBtn.setToolTipText("Размер площадки пультовой: ширина и глубина");
+        roomBtn.setToolTipText("Размер зоны пультовой: ширина и глубина");
         left.add(roomBtn);
         bar.add(left, BorderLayout.NORTH);
         JPanel info = new JPanel(new BorderLayout(10, 0));
@@ -216,7 +216,7 @@ public final class PlannerEditorPanel extends JPanel implements PlannerSession.L
         p.add(w);
         p.add(new JLabel("Глубина (от сцены), м"));
         p.add(d);
-        if (JOptionPane.showConfirmDialog(this, p, "Размер площадки", JOptionPane.OK_CANCEL_OPTION,
+        if (JOptionPane.showConfirmDialog(this, p, "Размер зоны", JOptionPane.OK_CANCEL_OPTION,
                 JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) {
             return;
         }
@@ -231,7 +231,7 @@ public final class PlannerEditorPanel extends JPanel implements PlannerSession.L
                 l.setRoomDepthCm(Math.round(dm * 100));
             });
         } catch (NumberFormatException ex) {
-            JOptionPane.showMessageDialog(this, "Размер — число метров от 1 до 60.", "Размер площадки",
+            JOptionPane.showMessageDialog(this, "Размер — число метров от 1 до 60.", "Размер зоны",
                     JOptionPane.WARNING_MESSAGE);
         }
     }
@@ -306,6 +306,11 @@ public final class PlannerEditorPanel extends JPanel implements PlannerSession.L
     // ---------------------------------------------------------------- сессия
 
     @Override
+    public void sessionLive() {
+        updateStats();
+    }
+
+    @Override
     public void sessionChanged() {
         undoBtn.setEnabled(session.canUndo());
         redoBtn.setEnabled(session.canRedo());
@@ -325,7 +330,7 @@ public final class PlannerEditorPanel extends JPanel implements PlannerSession.L
                 + " · " + RoomUnits.num(t.kg(), 0) + " кг · " + RoomUnits.num(t.powerW() / 1000, 2) + " кВт ("
                 + RoomUnits.num(t.powerW() / 230, 1) + " А)"
                 + (t.deck().count() > 0 ? " · пол из станков " + RoomUnits.num(t.floorM2(), 1) + " м²" : "")
-                + " · площадка " + RoomUnits.num(l.getRoomWidthCm() / 100, 1) + "×" + RoomUnits.num(l.getRoomDepthCm() / 100, 1) + " м");
+                + " · зона " + RoomUnits.num(l.getRoomWidthCm() / 100, 1) + "×" + RoomUnits.num(l.getRoomDepthCm() / 100, 1) + " м");
     }
 
     // ---------------------------------------------------------------- инструменты плана

@@ -84,6 +84,11 @@ final class ElevationPanel extends JPanel implements RoomDnd.Target, PlannerSess
     }
 
     @Override
+    public void sessionLive() {
+        repaint();
+    }
+
+    @Override
     public void sessionChanged() {
         view.refreshTheme();
         repaint();

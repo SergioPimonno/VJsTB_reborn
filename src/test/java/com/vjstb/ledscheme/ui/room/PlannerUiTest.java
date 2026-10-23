@@ -293,7 +293,7 @@ class PlannerUiTest {
     void editorPanelBuildsShowsALayoutAndPaintsEveryTab() throws Exception {
         org.junit.jupiter.api.Assumptions.assumeFalse(java.awt.GraphicsEnvironment.isHeadless(), "Нет дисплея — UI-тест пропущен");
         javax.swing.SwingUtilities.invokeAndWait(() -> {
-            PlannerEditorPanel panel = new PlannerEditorPanel(model, ref -> { });
+            PlannerEditorPanel panel = new PlannerEditorPanel(model, RoomLibraryActions.NONE);
             javax.swing.JFrame frame = new javax.swing.JFrame();
             frame.add(panel);
             frame.setSize(1300, 780);

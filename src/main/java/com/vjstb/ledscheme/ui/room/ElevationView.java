@@ -78,7 +78,8 @@ final class ElevationView {
     void paint(Graphics2D g0, int w, int h) {
         Graphics2D g = (Graphics2D) g0.create();
         try {
-            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                    session.isLive() ? RenderingHints.VALUE_ANTIALIAS_OFF : RenderingHints.VALUE_ANTIALIAS_ON);
             g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
             g.setColor(theme.panel);
             g.fillRect(0, 0, w, h);
@@ -377,19 +378,19 @@ final class ElevationView {
     }
 
     private static void centered(Graphics2D g, Font base, String text, double cx, double cy, double size) {
-        g.setFont(base.deriveFont(Font.PLAIN, (float) size));
+        g.setFont(RoomFonts.derive(base, Font.PLAIN, (float) size));
         java.awt.FontMetrics fm = g.getFontMetrics();
         g.drawString(text, (float) (cx - fm.stringWidth(text) / 2.0), (float) (cy + fm.getAscent() / 2.0 - fm.getDescent() / 2.0));
     }
 
     private static void right(Graphics2D g, Font base, String text, double x, double cy, double size) {
-        g.setFont(base.deriveFont(Font.PLAIN, (float) size));
+        g.setFont(RoomFonts.derive(base, Font.PLAIN, (float) size));
         java.awt.FontMetrics fm = g.getFontMetrics();
         g.drawString(text, (float) (x - fm.stringWidth(text)), (float) (cy + fm.getAscent() / 2.0 - fm.getDescent() / 2.0));
     }
 
     private static void left(Graphics2D g, Font base, String text, double x, double cy, double size) {
-        g.setFont(base.deriveFont(Font.PLAIN, (float) size));
+        g.setFont(RoomFonts.derive(base, Font.PLAIN, (float) size));
         java.awt.FontMetrics fm = g.getFontMetrics();
         g.drawString(text, (float) x, (float) (cy + fm.getAscent() / 2.0 - fm.getDescent() / 2.0));
     }

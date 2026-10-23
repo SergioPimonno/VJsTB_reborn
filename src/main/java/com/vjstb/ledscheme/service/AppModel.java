@@ -268,8 +268,40 @@ public class AppModel {
     }
 
     private void persist() {
+        if (layoutSaveTimer != null) {
+            layoutSaveTimer.stop();
+        }
+        drainBackgroundSave();
         store.save(workspace);
         libraryStore.save(workspace.getLibrary());
+    }
+
+    /** Отложенное сохранение правок раскладок пультовой: серия правок (перетаскивания, вставки) пишет проект один раз. */
+    private javax.swing.Timer layoutSaveTimer;
+    /** Однопоточная очередь фоновой записи проекта: сериализация делается сразу, запись на диск — вне потока интерфейса. */
+    private java.util.concurrent.ExecutorService backgroundSaver;
+
+    private void drainBackgroundSave() {
+        if (backgroundSaver != null) {
+            try {
+                backgroundSaver.submit(() -> { }).get(10, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (Exception ignored) {
+                // дожидаться дольше не будем: следующая запись всё равно перепишет файл целиком
+            }
+        }
+    }
+
+    /** Записать только проект (без библиотеки: правки раскладок её не меняют, а файл библиотеки — десятки МБ). */
+    private void saveWorkspaceInBackground() {
+        byte[] content = store.serialize(workspace);
+        if (backgroundSaver == null) {
+            backgroundSaver = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "workspace-saver");
+                t.setDaemon(true);
+                return t;
+            });
+        }
+        backgroundSaver.execute(() -> store.writeBytes(content));
     }
 
     private void changed() {
@@ -316,7 +348,31 @@ public class AppModel {
     /** Планнер изменил содержимое раскладки (свой undo у окна планнера, общий {@code pushUndo} к
      *  нему не относится): сохранить проект и оповестить слушателей. */
     public void controlRoomLayoutEdited() {
-        changed();
+        // Раскладка пультовой не нужна остальному приложению, поэтому слушателей НЕ будим (иначе на каждую правку
+        // перестраивались бы дерево проекта и все этапы), а проект пишем отложенно, одним разом на серию правок.
+        if (layoutSaveTimer == null) {
+            layoutSaveTimer = new javax.swing.Timer(1200, e -> saveWorkspaceInBackground());
+            layoutSaveTimer.setRepeats(false);
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                try {
+                    flushPendingSave();
+                } catch (RuntimeException ignored) {
+                    // при выходе записать уже нечего или некуда — не мешаем завершению
+                }
+            }));
+        }
+        layoutSaveTimer.restart();
+    }
+
+    /** Дописать на диск отложенные правки раскладок (закрытие окна Планнера, выход из приложения). */
+    public void flushPendingSave() {
+        if (layoutSaveTimer != null && layoutSaveTimer.isRunning()) {
+            layoutSaveTimer.stop();
+            drainBackgroundSave();
+            store.save(workspace);
+        } else {
+            drainBackgroundSave();
+        }
     }
 
     private void requireSceneForLayouts() {

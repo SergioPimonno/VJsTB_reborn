@@ -209,6 +209,30 @@ public class WorkspaceStore {
         }
     }
 
+    /** Содержимое workspace.json в памяти — быстрая часть записи (без обращения к диску). */
+    public byte[] serialize(Workspace workspace) {
+        try {
+            return mapper.writeValueAsBytes(workspace);
+        } catch (IOException e) {
+            throw new RuntimeException("Не удалось подготовить данные к сохранению: " + e.getMessage(), e);
+        }
+    }
+
+    /** Записать готовое содержимое тем же способом, что и {@link #save}: временный файл и атомарная подмена. */
+    public void writeBytes(byte[] content) {
+        try {
+            File dir = workspaceFile.getParentFile();
+            if (dir != null && !dir.exists() && !dir.mkdirs()) {
+                throw new IOException("не удалось создать каталог " + dir);
+            }
+            File tmp = new File(dir, workspaceFile.getName() + ".tmp");
+            java.nio.file.Files.write(tmp.toPath(), content);
+            moveAtomicallyIfPossible(tmp, workspaceFile);
+        } catch (IOException e) {
+            throw new RuntimeException("Не удалось сохранить данные в " + workspaceFile + ": " + e.getMessage(), e);
+        }
+    }
+
     private static void moveAtomicallyIfPossible(File from, File to) throws IOException {
         try {
             java.nio.file.Files.move(from.toPath(), to.toPath(),

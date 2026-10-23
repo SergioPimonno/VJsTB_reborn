@@ -64,6 +64,27 @@ class ControlRoomLayoutsModelTest {
     }
 
     @Test
+    void layoutEditsAreSavedLaterAndDoNotWakeTheRestOfTheApp(@TempDir Path dir) {
+        AppModel m = open(dir);
+        m.selectProject(m.addProject("Проект"));
+        m.selectScene(m.addScene("Сцена"));
+        ControlRoomLayout l = m.addControlRoomLayout("FOH");
+        int[] notified = {0};
+        m.addListener(() -> notified[0]++);
+
+        l.setRoomWidthCm(900);
+        m.controlRoomLayoutEdited();
+        m.controlRoomLayoutEdited();
+
+        assertEquals(0, notified[0], "правка раскладки не перестраивает остальное приложение");
+        Scene before = open(dir).getWorkspace().getProjects().get(0).getScenes().get(0);
+        assertEquals(700.0, before.getControlRoomLayouts().get(0).getRoomWidthCm(), "до записи на диске старое значение");
+        m.flushPendingSave();
+        Scene after = open(dir).getWorkspace().getProjects().get(0).getScenes().get(0);
+        assertEquals(900.0, after.getControlRoomLayouts().get(0).getRoomWidthCm(), "после сброса отложенная правка записана");
+    }
+
+    @Test
     void withoutASceneThereAreNoLayoutsAndAddingIsRefused(@TempDir Path dir) {
         AppModel m = open(dir);
         assertTrue(m.controlRoomLayouts().isEmpty());
