@@ -55,7 +55,9 @@ fi
 
 # --- 3. ротация ------------------------------------------------------------------------
 # shellcheck disable=SC2012
-ls -1d "$PREV"/*/ 2>/dev/null | sort | head -n -"$KEEP" | while IFS= read -r old; do rm -rf "$old"; done
+# `|| true`: в свежем worktree каталог previous/ пуст, ls возвращает ошибку, и под set -e/pipefail скрипт
+# молча завершался до сборки.
+{ ls -1d "$PREV"/*/ 2>/dev/null || true; } | sort | head -n -"$KEEP" | while IFS= read -r old; do rm -rf "$old"; done
 
 # --- 4. сборка -------------------------------------------------------------------------
 mvn -q -DskipTests package

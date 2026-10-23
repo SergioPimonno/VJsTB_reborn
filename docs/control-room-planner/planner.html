@@ -1,0 +1,1923 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Планнер пультовой: автономный интерактивный прототип (один файл, без сборки).
+     Открывается двойным щелчком в браузере. Данные оборудования УСЛОВНЫЕ, состояние хранится в localStorage
+     (ключ planner-proto-v1), кнопка «Сбросить пример» возвращает исходный пример.
+     Шрифты подтягиваются с Google Fonts, без сети работают запасные системные.
+     Это референс поведения для внедрения в приложение: см. PLAN.md рядом. -->
+<style>/* автономная страница: то, что в Artifact давал внешний каркас */
+html{color-scheme:light}html,body{margin:0}[hidden]{display:none!important}</style>
+<title>Планнер пультовой</title>
+<meta name="color-scheme" content="light dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Oswald:wght@500;600&display=swap">
+<style>
+/* Раскладка: полоса итогов → библиотека | рабочая зона (башни / план) | сводка.
+   Стойки нарисованы как в кофрах: тёмный корпус, серебристые лицевые панели с «ушами». */
+:root{
+  --bg:#E6EAED; --panel:#F4F6F7; --panel2:#FFFFFF; --ink:#16202A; --muted:#586873; --line:#C6CFD5;
+  --accent:#3447D1; --accent-soft:#DDE2FA;
+  --warn:#8F5400; --warn-bg:#FFEFD0; --err:#B5301F; --err-bg:#FBE0DC; --ok:#1B7F4F;
+  --case:#262D33; --case-ink:#C9D2D8; --rail:#8D99A2; --slot:#0E1215; --slotline:#2A333A;
+  --face:#D3D9DD; --face-ink:#141B20; --hole:#4E5A63;
+  --k-video:#3A7BD5; --k-net:#2E9E5B; --k-pwr:#D13B3B; --k-misc:#8A6FCF;
+  --c-optic:#D9A400; --c-sdi:#E8710A; --c-net:#2E9E5B; --c-pwr:#D13B3B;
+  --floor:#F3F5F6; --grid:#D2D9DE; --furn:#CBD3D8; --stage:#2A3139; --stage-ink:#D7DEE3;
+  --f-disp:"Oswald","Arial Narrow",sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+  --uh:26px;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#11161A; --panel:#182027; --panel2:#1F2830; --ink:#E4EBEF; --muted:#8B9CA7; --line:#2F3B45;
+  --accent:#93A2FF; --accent-soft:#242E63;
+  --warn:#F2B24C; --warn-bg:#3A2D12; --err:#FF9382; --err-bg:#3E1D19; --ok:#54C58C;
+  --case:#0C1013; --case-ink:#A9B5BD; --rail:#55626C; --slot:#07090B; --slotline:#222B32;
+  --face:#98A3AA; --face-ink:#0D1317; --hole:#39444C;
+  --floor:#151B20; --grid:#25303A; --furn:#2B3740; --stage:#0A0D10;
+  color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#11161A; --panel:#182027; --panel2:#1F2830; --ink:#E4EBEF; --muted:#8B9CA7; --line:#2F3B45;
+  --accent:#93A2FF; --accent-soft:#242E63;
+  --warn:#F2B24C; --warn-bg:#3A2D12; --err:#FF9382; --err-bg:#3E1D19; --ok:#54C58C;
+  --case:#0C1013; --case-ink:#A9B5BD; --rail:#55626C; --slot:#07090B; --slotline:#222B32;
+  --face:#98A3AA; --face-ink:#0D1317; --hole:#39444C;
+  --floor:#151B20; --grid:#25303A; --furn:#2B3740; --stage:#0A0D10;
+  color-scheme:dark;}
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:14px;line-height:1.4;
+  padding-block:12px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+body.dragging{user-select:none;-webkit-user-select:none;cursor:grabbing}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.mono{font-family:var(--f-mono)}
+.app{max-width:1560px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+
+/* шапка */
+.top{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;justify-content:space-between}
+.brand{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;min-width:0}
+h1{font-family:var(--f-disp);font-weight:600;font-size:26px;letter-spacing:.02em;text-transform:uppercase;margin:0}
+.proj{color:var(--muted);font-size:13px}
+.tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--panel2)}
+.seg button{border:0;background:transparent;padding:6px 12px;font-weight:500;border-right:1px solid var(--line)}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--accent);color:#fff}
+:root[data-theme="dark"] .seg button[aria-pressed="true"]{color:#0b1020}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .seg button[aria-pressed="true"]{color:#0b1020}}
+.btn{border:1px solid var(--line);background:var(--panel2);border-radius:6px;padding:6px 12px;font-weight:500}
+.btn:hover{border-color:var(--accent)}
+.btn:disabled{opacity:.45;cursor:default}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
+:root[data-theme="dark"] .btn.pri{color:#0b1020}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .btn.pri{color:#0b1020}}
+.btn.sm{padding:3px 9px;font-size:12.5px}
+
+/* итоги */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(138px,1fr));gap:8px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:8px 12px;min-width:0}
+.stat .l{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+.stat .v{font-family:var(--f-disp);font-weight:500;font-size:24px;line-height:1.15;font-variant-numeric:tabular-nums;white-space:nowrap}
+.stat .v small{font-family:var(--f-body);font-size:12px;color:var(--muted);font-weight:400;margin-left:4px}
+.stat.warn .v{color:var(--warn)} .stat.err .v{color:var(--err)}
+
+/* колонки */
+.layout{display:grid;grid-template-columns:300px minmax(0,1fr) 330px;gap:12px;align-items:start}
+.lib,.side,.work{min-width:0}
+.lib{position:sticky;top:8px;max-height:calc(100vh - 16px);overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px}
+.lib.over-trash{outline:2px dashed var(--err);background:var(--err-bg)}
+.lib-head{position:sticky;top:0;z-index:2;background:var(--panel);padding:10px 10px 8px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.lib-head input[type=search]{width:100%;padding:7px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel2)}
+.chips{display:flex;flex-wrap:wrap;gap:4px}
+.chip{border:1px solid var(--line);background:var(--panel2);border-radius:99px;padding:2px 10px;font-size:12.5px}
+.chip[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600}
+.lib-trash{display:none;padding:10px;color:var(--err);font-weight:600;text-align:center}
+.lib.over-trash .lib-trash{display:block}
+.cat{font-family:var(--f-disp);font-weight:500;text-transform:uppercase;letter-spacing:.08em;font-size:12px;color:var(--muted);padding:10px 12px 4px}
+.card{display:flex;align-items:center;gap:10px;padding:6px 10px 6px 12px;border-left:3px solid var(--kc,var(--line));margin:1px 0;cursor:grab;user-select:none;-webkit-user-select:none;touch-action:pan-y}
+.card:hover{background:var(--panel2)}
+.glyph{flex:0 0 38px;height:30px;display:flex;align-items:center;justify-content:center}
+.glyph i{display:block;background:var(--face);border:1px solid var(--hole);border-radius:2px}
+.glyph .g-case{border:2px solid var(--muted);background:transparent;border-radius:3px}
+.glyph .g-furn{background:var(--furn);border-color:var(--muted)}
+.glyph .g-loose{background:var(--ink);opacity:.8;border:0}
+.ci{flex:1;min-width:0}
+.cn{font-weight:500;font-size:13px;line-height:1.25}
+.cd{font-family:var(--f-mono);font-size:11px;color:var(--muted)}
+.card .add{border:1px solid var(--line);background:var(--panel2);border-radius:5px;width:26px;height:26px;line-height:1;font-size:16px;flex:0 0 auto}
+.card .add:hover{border-color:var(--accent);color:var(--accent)}
+.lib-foot{padding:10px;border-top:1px solid var(--line)}
+
+/* единицы измерения */
+.m-u .cm-part,.m-u .sep{display:none}
+.m-cm .u-part,.m-cm .sep{display:none}
+.m-u .cm-only,.m-cm .u-only{display:none}
+
+/* рабочая зона */
+.work{display:flex;flex-direction:column;gap:10px}
+.tabs{display:flex;gap:2px;border-bottom:2px solid var(--line)}
+.tab{border:0;background:transparent;padding:8px 16px;font-family:var(--f-disp);font-weight:500;font-size:16px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:3px solid transparent;margin-bottom:-2px}
+.tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+.towers-scroll{display:flex;gap:26px;overflow-x:auto;padding:4px 4px 14px;align-items:flex-start}
+.tower{flex:0 0 auto;width:268px}
+.t-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.tag{font-family:var(--f-disp);font-weight:600;font-size:20px;background:var(--ink);color:var(--bg);width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:4px;flex:0 0 auto}
+.t-name{flex:1;min-width:0;border:1px solid transparent;background:transparent;font-weight:600;padding:4px 6px;border-radius:4px}
+.t-name:hover,.t-name:focus{border-color:var(--line);background:var(--panel2)}
+.x{border:0;background:transparent;color:var(--muted);font-size:20px;line-height:1;width:26px;height:26px;border-radius:4px}
+.x:hover{background:var(--err-bg);color:var(--err)}
+.tower.on .tag{background:var(--accent);color:#fff}
+.t-body{display:flex;gap:8px}
+.bracket{flex:0 0 22px;display:flex;flex-direction:column;align-items:center;padding:4px 0}
+.bracket::before,.bracket::after{content:"";flex:1;width:1px;background:var(--muted)}
+.bracket span{writing-mode:vertical-rl;transform:rotate(180deg);font-family:var(--f-mono);font-size:11px;color:var(--muted);padding:6px 0;white-space:nowrap}
+.stack{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.addcase{width:100%;padding:5px 8px;border:1px dashed var(--muted);background:transparent;border-radius:6px;color:var(--muted);margin-bottom:3px}
+.case{background:var(--case);border-radius:7px;padding:5px 8px 8px;color:var(--case-ink);border:1px solid #000}
+.c-head{display:flex;align-items:center;gap:6px;font-family:var(--f-disp);font-weight:500;font-size:12.5px;letter-spacing:.05em;text-transform:uppercase;padding:2px 0 5px}
+.c-head .grow{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.c-head .mono{font-size:10.5px;letter-spacing:0;text-transform:none;opacity:.85}
+.c-head .x{color:var(--case-ink);width:20px;height:20px;font-size:16px}
+.rack{display:grid;grid-template-columns:20px 1fr 24px;height:calc(var(--uh) * var(--u))}
+.ruler{display:flex;flex-direction:column;font-family:var(--f-mono);font-size:10px;color:var(--case-ink);opacity:.8}
+.ruler i{font-style:normal;height:var(--uh);display:flex;align-items:center}
+.ruler.l i{justify-content:flex-start}
+.ruler.r i{justify-content:flex-end;font-size:9.5px}
+.slots{position:relative;background-color:var(--slot);background-image:linear-gradient(to bottom,var(--slotline) 1px,transparent 1px);background-size:100% var(--uh);border-left:6px solid var(--rail);border-right:6px solid var(--rail);border-radius:2px}
+.ritem{position:absolute;left:0;right:0;padding:0 14px;color:var(--face-ink);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;
+  background:
+   radial-gradient(circle at 6px 50%,var(--hole) 0 2.2px,transparent 2.8px),
+   radial-gradient(circle at calc(100% - 6px) 50%,var(--hole) 0 2.2px,transparent 2.8px),
+   linear-gradient(to bottom,rgba(255,255,255,.28),rgba(0,0,0,.06)),var(--face);
+  box-shadow:inset 0 -3px 0 var(--k,var(--k-misc)),0 0 0 1px rgba(0,0,0,.5);border-radius:2px;
+  display:flex;flex-direction:column;justify-content:center;gap:1px;overflow:hidden}
+.ritem.u1{flex-direction:row;align-items:center;justify-content:space-between;gap:8px;padding-bottom:3px}
+.ritem .nm{font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.ritem .dm{font-family:var(--f-mono);font-size:10px;opacity:.85;white-space:nowrap}
+.ritem.on{outline:2px solid var(--accent);outline-offset:1px;z-index:2}
+.ritem.lifted{opacity:.35}
+.ritem.bad{box-shadow:inset 0 -3px 0 var(--err),0 0 0 2px var(--err)}
+.warnmark{position:absolute;right:14px;top:2px;background:var(--err);color:#fff;border-radius:50%;width:15px;height:15px;font-size:11px;display:flex;align-items:center;justify-content:center;font-style:normal;font-weight:700}
+.slot-prev{position:absolute;left:0;right:0;border:2px dashed var(--ok);background:rgba(46,158,91,.28);pointer-events:none;z-index:3}
+.slot-prev.no{border-color:var(--err);background:rgba(209,59,59,.3)}
+.t-foot{margin-top:6px;font-family:var(--f-mono);font-size:11.5px;color:var(--muted);display:flex;flex-wrap:wrap;gap:2px 12px}
+.new-tower{flex:0 0 190px;min-height:200px;border:2px dashed var(--line);border-radius:10px;display:flex;align-items:center;justify-content:center;text-align:center;padding:16px;color:var(--muted);font-size:13px}
+.new-tower.hot{border-color:var(--ok);color:var(--ok);background:rgba(46,158,91,.08)}
+.boxcard{flex:0 0 250px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px}
+.boxcard h3{font-family:var(--f-disp);font-weight:500;font-size:15px;text-transform:uppercase;letter-spacing:.06em;margin:0}
+.boxcard.hot{border-color:var(--ok);background:rgba(46,158,91,.08)}
+.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent)}
+.bar.hi i{background:var(--warn)}
+.pill{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);background:var(--panel2);border-radius:99px;padding:1px 9px;font-size:12px;margin:0 4px 4px 0;cursor:pointer}
+.pill.on{border-color:var(--accent);background:var(--accent-soft)}
+
+/* план */
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;color:var(--muted);align-items:center}
+.legend b{display:inline-block;width:22px;height:5px;border-radius:2px;margin-right:6px;vertical-align:middle}
+#plan{width:100%;height:auto;display:block;background:var(--panel);border:1px solid var(--line);border-radius:8px;touch-action:pan-y}
+#plan .floor{fill:var(--floor)}
+#plan .wall{fill:none;stroke:var(--ink);stroke-width:3}
+#plan .stage{fill:var(--stage)}
+#plan .stage-t{fill:var(--stage-ink);font-family:var(--f-disp);font-size:15px;letter-spacing:.2em}
+#plan .rl{font-family:var(--f-disp);font-size:12px;letter-spacing:.08em;font-weight:500}
+#plan .run{fill:none;stroke-width:5;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:12 6;opacity:.9}
+#plan .run.hot{stroke-width:9;stroke-dasharray:none;opacity:1}
+#plan .dimt{fill:var(--muted);font-family:var(--f-mono);font-size:12px}
+#plan .tw{fill:var(--case);stroke:var(--rail);stroke-width:2}
+#plan .front{stroke:var(--accent);stroke-width:5;stroke-linecap:round}
+#plan .tagt{fill:#fff;font-family:var(--f-disp);font-weight:600;font-size:26px;text-anchor:middle}
+#plan .subt{fill:var(--case-ink);font-family:var(--f-mono);font-size:10px;text-anchor:middle}
+#plan .fu{fill:var(--furn);stroke:var(--muted);stroke-width:1.2}
+#plan .fut{fill:var(--muted);font-size:11px;text-anchor:middle;font-family:var(--f-body)}
+#plan .obj{cursor:grab;touch-action:none}
+#plan .obj.sel .tw,#plan .obj.sel .fu{stroke:var(--accent);stroke-width:4}
+#plan .obj.bad .tw,#plan .obj.bad .fu{stroke:var(--err);stroke-width:4}
+#plan .lrect{fill:var(--ink)}
+#plan .ring{fill:transparent;stroke:var(--ink);stroke-width:1.4;opacity:.7}
+#plan .obj.sel .ring{stroke:var(--accent);stroke-width:3;opacity:1}
+#plan .badge{fill:var(--accent)}
+#plan .badget{fill:#fff;font-size:9px;font-weight:600;text-anchor:middle;font-family:var(--f-mono)}
+#plan .prev{fill:rgba(63,81,209,.18);stroke:var(--accent);stroke-width:2;stroke-dasharray:6 4}
+#plan .prev.no{fill:rgba(209,59,59,.2);stroke:var(--err)}
+
+
+/* виды */
+.viewbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.top-svg{width:100%;height:auto;display:block;background:var(--panel2);border:1px solid #000;border-radius:6px}
+.top-svg text{font-family:var(--f-mono);font-size:3.6px;fill:var(--case-ink)}
+.top-svg .dim{fill:var(--muted)}
+.top-svg .gapw{fill:#FFC266}
+.ct-case{fill:var(--case)} .ct-open{fill:var(--slot)}
+.ti{cursor:pointer}
+.ti rect{fill-opacity:.62;stroke:var(--face);stroke-width:.4}
+.ti text{fill:#fff;font-size:3.4px}
+.ti.sel rect{stroke:var(--accent);stroke-width:1.2;fill-opacity:.85}
+.ritem.frac{padding:0 10px}
+.ritem.frac .dm{display:none}
+#elev{width:100%;height:auto;display:block;background:var(--panel);border:1px solid var(--line);border-radius:8px}
+#elev .tw{fill:var(--case);stroke:var(--rail);stroke-width:1}
+#elev .it{fill:var(--face);stroke:var(--hole);stroke-width:.3}
+#elev .fu{fill:var(--furn);stroke:var(--muted);stroke-width:1}
+#elev .obj{cursor:grab;touch-action:none}
+#elev .obj.sel .dkx{stroke:var(--accent);stroke-width:3}
+#plan .dk2{fill-opacity:.92;stroke:var(--accent);stroke-dasharray:6 3}
+#elev .obj.sel .tw,#elev .obj.sel .fu{stroke:var(--accent);stroke-width:3}
+#elev .lab{fill:var(--ink);font-family:var(--f-mono);font-size:10px;text-anchor:middle}
+#elev .lab2{fill:var(--muted);font-family:var(--f-mono);font-size:9px}
+#elev .eg{stroke:var(--grid);stroke-width:.8}
+#elev .eye{stroke:var(--accent);stroke-dasharray:6 4;stroke-width:1.3}
+#elev .lo{fill:var(--ink)}
+#elev .floorl{fill:var(--ink)}
+/* сворачиваемые блоки сводки */
+.sec>summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between}
+.sec>summary::-webkit-details-marker{display:none}
+.sec>summary::after{content:"▾";color:var(--muted);font-size:12px}
+.sec:not([open])>summary::after{content:"▸"}
+.sec>summary h2{margin:0}
+.sec[open]>summary{margin-bottom:8px}
+
+/* панель выбранного */
+.inspector{position:sticky;bottom:8px;z-index:5;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:9px 12px;display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;box-shadow:0 4px 14px rgba(0,0,0,.12)}
+.inspector .ttl{font-weight:600}
+.inspector .meta{font-family:var(--f-mono);font-size:12px;color:var(--muted)}
+.inspector .grow{flex:1;min-width:140px}
+.inspector select{padding:4px 6px;border:1px solid var(--line);border-radius:5px;background:var(--panel)}
+.hint{color:var(--muted);font-size:13px}
+
+/* сводка */
+.side{display:flex;flex-direction:column;gap:10px}
+.sec{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.sec h2{font-family:var(--f-disp);font-weight:500;font-size:14px;letter-spacing:.08em;text-transform:uppercase;margin:0 0 8px;color:var(--muted)}
+.row{display:flex;gap:8px;align-items:baseline;justify-content:space-between;padding:5px 0;border-top:1px solid var(--line);cursor:pointer}
+.row:first-of-type{border-top:0}
+.row .n{font-weight:500;min-width:0}
+.row .v{font-family:var(--f-mono);font-size:11.5px;color:var(--muted);text-align:right}
+.row.on .n{color:var(--accent)}
+.gh{font-size:12px;font-weight:600;margin:8px 0 2px;display:flex;align-items:center;gap:6px}
+.gh i{width:14px;height:4px;border-radius:2px;display:inline-block}
+.warns{display:flex;flex-direction:column;gap:5px}
+.w{padding:6px 9px;border-radius:6px;font-size:12.5px;background:var(--warn-bg);color:var(--warn);cursor:pointer}
+.w.err{background:var(--err-bg);color:var(--err)}
+.w.info{background:var(--panel2);color:var(--muted);border:1px solid var(--line)}
+.ok{color:var(--ok);font-size:13px}
+.tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+.tbl td{padding:3px 0;border-top:1px solid var(--line)}
+.tbl tr:first-child td{border-top:0}
+.tbl td:last-child{text-align:right;font-family:var(--f-mono);font-size:11.5px;color:var(--muted);white-space:nowrap}
+.note{font-size:12px;color:var(--muted);margin:8px 0 0}
+
+/* прочее */
+.ghost{position:fixed;z-index:100;pointer-events:none;background:var(--ink);color:var(--bg);padding:5px 10px;border-radius:6px;font-size:12.5px;box-shadow:0 6px 18px rgba(0,0,0,.3);max-width:260px;transform:translate(10px,10px)}
+.ghost .mono{opacity:.8;font-size:11px;display:block}
+.toast{position:fixed;left:50%;bottom:calc(18px + env(safe-area-inset-bottom,0px));transform:translateX(-50%) translateY(20px);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:8px;opacity:0;pointer-events:none;transition:.2s;z-index:200;max-width:90vw;font-size:13px}
+.toast.on{opacity:1;transform:translateX(-50%)}
+.modal-back{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:150;display:flex;align-items:center;justify-content:center;padding:16px}
+.modal{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:16px;width:min(420px,100%);display:flex;flex-direction:column;gap:10px;max-height:90vh;overflow:auto}
+.modal h3{margin:0;font-family:var(--f-disp);font-weight:500;font-size:18px;text-transform:uppercase;letter-spacing:.05em}
+.modal label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted);flex:1;min-width:0}
+.modal input,.modal select{padding:6px 8px;border:1px solid var(--line);border-radius:5px;background:var(--panel);width:100%}
+.modal .fr{display:flex;gap:8px}
+.modal .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}
+
+@media (max-width:1180px){.layout{grid-template-columns:260px minmax(0,1fr)}.side{grid-column:1 / -1;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));align-items:start}}
+@media (max-width:760px){
+  .layout{grid-template-columns:minmax(0,1fr)}
+  .lib{position:static;max-height:340px;order:2}
+  .work{order:1}.side{order:3;display:flex}
+  h1{font-size:22px}
+  .inspector{bottom:calc(8px + env(safe-area-inset-bottom,0px))}
+}
+@media (prefers-reduced-motion:reduce){.toast{transition:none}}
+
+/* ===== варианты оформления: «Спокойный» и «Фокус» (поверх исходного) ===== */
+.drawer-btn{display:none}
+.v-calm .proj,.v-calm #viewhint{display:none}
+.v-calm h1{font-size:20px;letter-spacing:.01em}
+.v-calm .stats{display:flex;flex-wrap:wrap;gap:4px 26px}
+.v-calm .stat{background:none;border:0;padding:0;display:flex;align-items:baseline;gap:6px;min-width:0}
+.v-calm .stat:nth-child(1),.v-calm .stat:nth-child(3),.v-calm .stat:nth-child(6){display:none}
+.v-calm .stat .l{order:2;text-transform:none;letter-spacing:0;font-size:12.5px}
+.v-calm .stat .v{font-family:var(--f-body);font-weight:600;font-size:17px}
+.v-calm .stat .v small{font-size:12px}
+.v-calm .layout{grid-template-columns:250px minmax(0,1fr) 290px;gap:22px}
+.v-calm .lib{background:none;border:0;border-right:1px solid var(--line);border-radius:0;padding-right:8px}
+.v-calm .lib-head{background:var(--bg);padding:0 0 8px;border:0}
+.v-calm .lib-foot{border:0;padding:8px 0}
+.v-calm .cat{font-family:var(--f-body);text-transform:none;letter-spacing:0;font-weight:600;font-size:12px;padding:12px 4px 3px}
+.v-calm .card{border-left:0;padding:5px 6px;border-radius:6px;margin:0}
+.v-calm .glyph{display:none}
+.v-calm .card .add{opacity:0}
+.v-calm .card:hover .add,.v-calm .card .add:focus-visible{opacity:1}
+.v-calm .tabs{border-bottom:1px solid var(--line)}
+.v-calm .tab{font-family:var(--f-body);text-transform:none;letter-spacing:0;font-size:14px;font-weight:600;padding:6px 12px}
+.v-calm .towers-scroll{gap:34px}
+.v-calm .tag{background:var(--line);color:var(--ink);width:24px;height:24px;font-size:16px}
+.v-calm .tower.on .tag{background:var(--accent);color:#fff}
+.v-calm .case{background:var(--panel);border:1px solid var(--line);color:var(--ink);border-radius:6px}
+.v-calm .c-head{font-family:var(--f-body);text-transform:none;letter-spacing:0;font-weight:500;font-size:12px;color:var(--muted)}
+.v-calm .c-head .x{color:var(--muted)}
+.v-calm .rack{grid-template-columns:20px 1fr}
+.v-calm.m-cm .rack{grid-template-columns:20px 1fr 24px}
+.v-calm .ruler{color:var(--muted);opacity:1}
+.v-calm .ruler.r{display:none}
+.v-calm.m-cm .ruler.r{display:flex}
+.v-calm .slots{background-color:var(--panel2);background-image:linear-gradient(to bottom,var(--line) 1px,transparent 1px);border-left:0;border-right:0;border-radius:3px}
+.v-calm .ritem{background:var(--panel2);color:var(--ink);padding:0 10px 0 12px;border-radius:3px;box-shadow:inset 3px 0 0 var(--k,var(--k-misc)),0 0 0 1px var(--line)}
+.v-calm .ritem.u1{padding-bottom:0}
+.v-calm .ritem .dm{opacity:1;color:var(--muted)}
+.v-calm .ritem.frac{padding:0 8px 0 10px}
+.v-calm .ritem.on{box-shadow:inset 3px 0 0 var(--k,var(--k-misc)),0 0 0 2px var(--accent);outline:0}
+.v-calm .ritem.bad{box-shadow:inset 3px 0 0 var(--err),0 0 0 2px var(--err)}
+.v-calm .addcase{border-style:solid;border-color:var(--line);font-size:12.5px}
+.v-calm .t-foot{font-size:11px}
+.v-calm .new-tower{min-height:120px;border-width:1px}
+.v-calm .boxcard{background:none}
+.v-calm .ct-case{fill:var(--line)} .v-calm .ct-open{fill:var(--panel2)}
+.v-calm .top-svg{border-color:var(--line)}
+.v-calm .top-svg text{fill:var(--muted)}
+.v-calm .ti text{fill:var(--ink)}
+.v-calm .inspector.empty{display:none}
+.v-calm .inspector{box-shadow:0 2px 10px rgba(0,0,0,.08)}
+.v-calm .side{gap:0}
+.v-calm .sec{background:none;border:0;border-top:1px solid var(--line);border-radius:0;padding:10px 0 6px}
+.v-calm .sec h2{font-family:var(--f-body);text-transform:none;letter-spacing:0;font-size:13px;font-weight:600;color:var(--ink)}
+.v-calm .w{border-radius:4px}
+.v-calm .btn.pri{margin-top:10px}
+/* Фокус: библиотека и сводка выезжают по кнопке, рабочая зона на всю ширину */
+.v-focus .drawer-btn{display:inline-block}
+.v-focus .layout{grid-template-columns:auto minmax(0,1fr) auto;gap:22px}
+.v-focus .lib{display:none;width:270px}
+.v-focus.lib-open .lib{display:block}
+.v-focus .side{grid-column:auto;display:none;width:300px}
+.v-focus.side-open .side{display:flex}
+@media (max-width:760px){.v-calm .layout,.v-focus .layout{grid-template-columns:minmax(0,1fr)}.v-focus .lib,.v-focus .side{width:auto}.v-calm .lib{border-right:0}}
+
+/* стопка без кофра */
+.stackseg{border:1px dashed var(--muted);border-radius:7px;padding:5px 8px 8px}
+.stackseg .c-head .x{color:var(--muted)}
+.sbody{display:flex;flex-direction:column;align-items:center;gap:1px;min-height:30px}
+.sitem{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 10px;min-width:0;max-width:100%;color:var(--face-ink);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;background:linear-gradient(to bottom,rgba(255,255,255,.28),rgba(0,0,0,.06)),var(--face);box-shadow:inset 0 -3px 0 var(--k,var(--k-misc)),0 0 0 1px rgba(0,0,0,.5);border-radius:3px;overflow:hidden}
+.sitem .nm{font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.sitem .dm{font-family:var(--f-mono);font-size:10px;opacity:.85;white-space:nowrap}
+.sitem.frac .dm{display:none}
+.sitem.on{outline:2px solid var(--accent);outline-offset:1px}
+.sitem.lifted{opacity:.35}
+.ghost.del{background:var(--err);color:#fff}
+.ghost.del::after{content:" · отпустите, чтобы удалить";font-weight:600}
+.slots .ins-line{position:absolute;left:0;right:0;width:auto;z-index:4}
+.case.lifted,.stackseg.lifted{opacity:.4}
+.c-head{cursor:grab;user-select:none;-webkit-user-select:none;touch-action:none}
+.ins-line{height:3px;width:100%;background:var(--ok);border-radius:2px;flex:0 0 auto}
+.tower.hot .stack{outline:2px dashed var(--ok);outline-offset:3px;border-radius:6px}
+.top-svg.lt text{fill:var(--muted)}
+.top-svg.lt .ti text{fill:var(--ink)}
+.v-calm .sitem{background:var(--panel2);color:var(--ink);box-shadow:inset 3px 0 0 var(--k,var(--k-misc)),0 0 0 1px var(--line)}
+.v-calm .sitem .dm{color:var(--muted);opacity:1}
+.v-calm .sitem.on{box-shadow:inset 3px 0 0 var(--k,var(--k-misc)),0 0 0 2px var(--accent);outline:0}
+
+/* нижнее окошко замечаний */
+.v-calm .stat:nth-child(7){display:none}
+.app{padding-bottom:60px}
+.warnbar{position:fixed;left:max(16px,env(safe-area-inset-left,0px));right:max(16px,env(safe-area-inset-right,0px));bottom:calc(8px + env(safe-area-inset-bottom,0px));max-width:1560px;margin:0 auto;z-index:30;background:var(--panel2);border:1px solid var(--line);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.2);overflow:hidden}
+.wb-head{display:flex;align-items:center;gap:10px;width:100%;padding:9px 14px;border:0;background:transparent;text-align:left}
+.wb-head b{font-size:13px}
+.wb-chip{border-radius:99px;padding:1px 10px;font-size:12px;font-weight:600;white-space:nowrap}
+.wb-chip.err{background:var(--err-bg);color:var(--err)}
+.wb-chip.warn{background:var(--warn-bg);color:var(--warn)}
+.wb-chip.info{background:var(--panel);color:var(--muted);border:1px solid var(--line)}
+.wb-chip.ok{background:rgba(46,158,91,.14);color:var(--ok)}
+.wb-first{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:12.5px}
+.wb-chev{color:var(--muted);margin-left:auto}
+.wb-list{max-height:min(40vh,320px);overflow:auto;padding:10px 12px 12px;display:flex;flex-direction:column;gap:5px;border-top:1px solid var(--line)}
+.inspector{bottom:66px}
+.toast{bottom:calc(74px + env(safe-area-inset-bottom,0px))}
+@media (max-width:760px){.inspector{bottom:calc(66px + env(safe-area-inset-bottom,0px))}.wb-first{display:none}}
+
+/* трассы, станки, руководство */
+:root{--c-misc:#8A6FCF;--deck:#C9D0D5;--deck-line:#8E9AA3}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--deck:#2E3A44;--deck-line:#4B5A66}}
+:root[data-theme="dark"]{--deck:#2E3A44;--deck-line:#4B5A66}
+.v-calm .stat:nth-child(7){display:flex}
+#plan .run{pointer-events:none}
+#plan .run.rsel{stroke-width:7}
+#plan .runhit{fill:none;stroke:transparent;stroke-width:18;pointer-events:none}
+#plan.pm-runs .runhit{pointer-events:stroke;cursor:pointer}
+#plan.pm-runs .obj,#plan.pm-draw .obj{pointer-events:none}
+#plan.pm-draw{cursor:crosshair}
+#plan .vtx{fill:var(--panel2);stroke:var(--accent);stroke-width:2.5;cursor:grab}
+#plan .mid{cursor:copy}
+#plan .mid circle{fill:var(--panel2);stroke:var(--accent);stroke-width:1.5}
+#plan .mid path{stroke:var(--accent);stroke-width:1.5;fill:none}
+#plan .drawl{fill:none;stroke-width:5;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
+#plan .dk{fill:var(--deck);stroke:var(--deck-line);stroke-width:1}
+#plan .obj.sel .dk{stroke:var(--accent);stroke-width:3}
+#plan .obj.bad .dk{stroke:var(--err);stroke-width:3}
+#plan .dkt{fill:var(--muted);font-family:var(--f-mono);font-size:10px;text-anchor:middle}
+#elev .dkx{fill:var(--deck);stroke:var(--deck-line);stroke-width:1}
+.glyph .g-deck{background:var(--deck);border:1px solid var(--muted)}
+.plan-tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.plan-tools select{padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel2)}
+.legend .lg{border:1px solid transparent;background:none;border-radius:6px;padding:2px 8px;font-size:12.5px;color:var(--muted)}
+.legend .lg:hover{border-color:var(--line)}
+.legend .lg.on{border-color:var(--accent);color:var(--ink);background:var(--accent-soft)}
+.rn{border:1px solid var(--line);border-radius:5px;background:var(--panel);padding:3px 8px;font-weight:600;min-width:0;width:100%}
+.guide-back{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:160;display:flex;justify-content:center;align-items:stretch;padding:16px}
+.guide{background:var(--panel2);border:1px solid var(--line);border-radius:12px;width:min(1040px,100%);display:flex;overflow:hidden}
+.g-toc{flex:0 0 220px;border-right:1px solid var(--line);padding:14px 10px;overflow:auto;display:flex;flex-direction:column;gap:2px}
+.g-toc b{font-family:var(--f-disp);font-weight:500;font-size:15px;padding:2px 8px 8px}
+.g-toc button{border:0;background:none;text-align:left;padding:6px 8px;border-radius:6px;font-size:13px}
+.g-toc button:hover{background:var(--panel)}
+.g-body{flex:1;min-width:0;overflow:auto;padding:16px 26px 44px}
+.g-head{display:flex;justify-content:flex-end;position:sticky;top:0;background:var(--panel2);padding-bottom:6px}
+.g-body section{margin-bottom:36px;max-width:640px}
+.g-body h3{font-family:var(--f-disp);font-weight:500;font-size:21px;margin:0 0 8px}
+.g-body p{margin:0 0 8px;font-size:14px;line-height:1.55}
+.gfig svg{width:100%;max-width:580px;height:auto;display:block;margin:10px 0 4px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+.rlab{paint-order:stroke;stroke:var(--floor);stroke-width:3px;stroke-linejoin:round}
+.glyph .g-mon{background:var(--case);border:1px solid var(--muted);border-radius:2px}
+#plan .mn{fill:var(--case);stroke:var(--rail);stroke-width:1}
+#plan .mnf{stroke:var(--k-video);stroke-width:3;stroke-linecap:round}
+#plan .mnt{fill:#fff;font-family:var(--f-mono);font-size:9px;text-anchor:middle;pointer-events:none}
+#plan .obj.sel .mn{stroke:var(--accent);stroke-width:2.5}
+#plan .obj.bad .mn{stroke:var(--err);stroke-width:2.5}
+#plan .obj.und .tw{stroke-dasharray:5 3;fill-opacity:.8}
+#elev .mnx{fill:var(--case);stroke:var(--rail);stroke-width:1}
+#elev .obj.sel .mnx{stroke:var(--accent);stroke-width:3}
+.eyet{paint-order:stroke;stroke:var(--panel);stroke-width:3px}
+.kb{font-family:var(--f-mono);font-size:12px;border:1px solid var(--line);border-radius:4px;padding:0 5px;background:var(--panel)}
+@media (max-width:760px){.g-toc{display:none}.guide-back{padding:0}.guide{border-radius:0}}
+
+/* станки-столы и «в воздухе» */
+:root{--dtab:#E6D3A0;--dtab-line:#B08A2E}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--dtab:#4C4224;--dtab-line:#B8963A}}
+:root[data-theme="dark"]{--dtab:#4C4224;--dtab-line:#B8963A}
+#plan .dk2{fill:var(--dtab);fill-opacity:1;stroke:var(--dtab-line);stroke-width:1.5;stroke-dasharray:none}
+#elev .obj.dtb .dkx{fill:var(--dtab)}
+#elev .obj.dtb:not(.sel):not(.air) .dkx{stroke:var(--dtab-line)}
+#plan .obj.air .tw,#plan .obj.air .fu,#plan .obj.air .dk,#plan .obj.air .mn{stroke:var(--err);stroke-width:3;stroke-dasharray:4 3}
+#elev .obj.air .tw,#elev .obj.air .fu,#elev .obj.air .dkx,#elev .obj.air .mnx{stroke:var(--err);stroke-width:2.5;stroke-dasharray:4 3}
+.legend .lg2{display:inline-flex;align-items:center;font-size:12.5px;color:var(--muted);padding:0 4px}
+.legend .lg2 b{width:18px;height:12px;border:1px solid var(--deck-line);border-radius:2px}
+</style>
+</head>
+<body>
+<div class="app m-both" id="app">
+  <header class="top">
+    <div class="brand">
+      <h1>Планнер пультовой</h1>
+      <span class="proj">Прототип · площадка FOH 7,0 × 4,5 м · в приложении оборудование берётся из общей библиотеки, здесь данные условные</span>
+    </div>
+    <div class="tools">
+      <div class="seg" role="group" aria-label="Единицы размеров">
+        <button data-act="unit" data-u="u" aria-pressed="false">U</button>
+        <button data-act="unit" data-u="cm" aria-pressed="false">см</button>
+        <button data-act="unit" data-u="both" aria-pressed="true">U + см</button>
+      </div>
+      <button class="btn drawer-btn" data-act="drawer" data-d="lib">Библиотека</button><button class="btn drawer-btn" id="sideBtn" data-act="drawer" data-d="side">Спецификация</button>
+      <button class="btn" data-act="guide">Руководство</button>
+      <button class="btn" id="undoBtn" data-act="undo">Отменить</button>
+      <button class="btn" data-act="reset">Сбросить пример</button>
+    </div>
+  </header>
+
+  <section class="stats" id="stats" aria-label="Итоги"></section>
+
+  <div class="layout">
+    <aside class="lib" id="lib" aria-label="Библиотека оборудования">
+      <div class="lib-head">
+        <input type="search" id="q" placeholder="Поиск по библиотеке" aria-label="Поиск по библиотеке">
+        <div class="chips" id="kinds" role="group" aria-label="Тип"></div>
+      </div>
+      <div class="lib-trash">Отпустите здесь, чтобы убрать</div>
+      <div id="libList"></div>
+      <div class="lib-foot"><button class="btn" style="width:100%" data-act="custom">+ Добавить в библиотеку</button></div>
+    </aside>
+
+    <main class="work">
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" data-act="tab" data-tab="racks" aria-selected="true">Стойки и башни</button>
+        <button class="tab" role="tab" data-act="tab" data-tab="plan" aria-selected="false">План пультовой</button>
+      </div>
+      <div class="viewbar"><span class="hint">Вид</span><div class="seg" role="group" aria-label="Вид"><button data-act="view" data-v="front" aria-pressed="true">Спереди</button><button data-act="view" data-v="top" aria-pressed="false">Сверху</button></div><span class="hint" id="viewhint"></span></div>
+      <div id="main"></div>
+      <div class="inspector" id="inspector"></div>
+    </main>
+
+    <aside class="side" id="side" aria-label="Спецификация"></aside>
+  </div>
+  <div class="warnbar" id="warnbar" role="region" aria-label="Замечания"></div>
+  <div class="toast" id="toast" role="status"></div>
+  <div id="modal"></div>
+  <div id="guide"></div>
+</div>
+
+<script>
+(function(){
+'use strict';
+var UCM=4.445, UH=26;
+document.documentElement.style.setProperty('--uh',UH+'px');
+var $=function(s,r){return (r||document).querySelector(s)};
+var $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))};
+var esc=function(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})};
+var nf=function(n,d){d=d==null?1:d;return String(+(+n).toFixed(d)).replace('.',',')};
+var dv=function(v){return v>=10?String(Math.round(v)):nf(v,1)};
+var _n=0, uid=function(){return 'i'+Date.now().toString(36)+(++_n)};
+
+/* ---------- библиотека (условные данные) ---------- */
+var CAT_CASE='Кофры и стойки', CAT_VID='Видео и LED', CAT_NET='Сеть и оптика', CAT_PWR='Питание', CAT_CNV='Конвертеры', CAT_FUR='Мебель';
+function mkCase(u,d){return {id:'c'+u+'_'+d,kind:'case',cat:CAT_CASE,name:'Рэк-кофр '+u+'U · глубина '+d,u:u,inD:d,w:60,h:Math.round(u*UCM+16),d:d+17,kg:Math.round(5+u*1.2),p:0}}
+function mkRack(id,cat,name,u,d,kg,p,cw){cw=cw||12;return {id:id,kind:'rack',cat:cat,name:name,u:u,cw:cw,w:+(48.3*cw/12).toFixed(1),h:+(u*UCM).toFixed(1),d:d,kg:kg,p:p}}
+var FRAC={12:'',6:'1/2 rack',4:'1/3 rack',3:'1/4 rack'};
+function cwOf(I){return I.cw||12}
+function mkLoose(id,cat,name,w,h,d,kg,p){return {id:id,kind:'loose',cat:cat,name:name,w:w,h:h,d:d,kg:kg,p:p}}
+function mkMonitor(id,diag,w,d,h,kg,p){return {id:id,kind:'monitor',cat:'Мониторы',name:'Монитор '+nf(diag,1)+'″',diag:diag,w:w,d:d,h:h,kg:kg,p:p}}
+function mkDeck(id,name,w,d,h,kg){return {id:id,kind:'deck',cat:'Станки',name:name,w:w,h:h,d:d,kg:kg,p:0}}
+function mkFurn(id,name,w,d,h,kg){return {id:id,kind:'furn',cat:CAT_FUR,name:name,w:w,h:h,d:d,kg:kg,p:0}}
+var BASE=[
+  mkCase(4,35),mkCase(6,45),mkCase(8,45),mkCase(10,55),mkCase(12,55),mkCase(16,60),
+  mkRack('ledp2',CAT_VID,'LED-процессор',2,40,7,80),
+  mkRack('ledc1',CAT_VID,'LED-контроллер',1,30,3,30),
+  mkRack('msrv4',CAT_VID,'Медиасервер',4,55,16,650),
+  mkRack('mix3',CAT_VID,'Видеомикшер',3,45,9,150),
+  mkRack('mview1',CAT_VID,'Мультивьюер',1,25,2,25),
+  mkRack('mtx2',CAT_VID,'Видеоматрица 16×16',2,30,6,60),
+  mkRack('mon1',CAT_VID,'Монитор выдвижной',1,45,5,35),
+  mkRack('sw24',CAT_NET,'Коммутатор 24×1G',1,30,4,40),
+  mkRack('sw10g',CAT_NET,'Коммутатор 10G SFP+',1,35,5,60),
+  mkRack('optpp',CAT_NET,'Оптическая панель LC×24',1,25,2,0),
+  mkRack('cat6pp',CAT_NET,'Патч-панель Cat6 24×',1,10,1.2,0),
+  mkRack('mview_h',CAT_VID,'Мультивьюер 1/2 rack',1,20,1.2,15,6),
+  mkRack('sw8h',CAT_NET,'Коммутатор 8 портов 1/2 rack',1,22,1.5,12,6),
+  mkRack('cnv_t',CAT_CNV,'Конвертер SDI/HDMI 1/3 rack',1,20,0.8,8,4),
+  mkRack('psu_q',CAT_PWR,'Блок питания 1/4 rack',1,15,0.9,0,3),
+  mkRack('pdu',CAT_PWR,'PDU 8 розеток',1,10,2,0),
+  mkRack('ups2',CAT_PWR,'ИБП 1500 ВА',2,40,22,40),
+  mkRack('fan1',CAT_PWR,'Блок вентиляторов',1,15,1.5,30),
+  mkRack('shelf2',CAT_PWR,'Полка',2,40,3,0),
+  mkLoose('ctl_s',CAT_VID,'LED-контроллер компактный',31,4.5,20,1.2,25),
+  mkLoose('ctl_m',CAT_VID,'LED-контроллер средний',38,6.5,25,2.2,45),
+  mkLoose('h2s',CAT_CNV,'Конвертер HDMI→SDI',11,3,7,0.15,3),
+  mkLoose('s2h',CAT_CNV,'Конвертер SDI→HDMI',11,3,7,0.15,3),
+  mkLoose('osdi',CAT_CNV,'Оптический конвертер SDI',10,3.5,6.5,0.2,3),
+  mkLoose('mcnv',CAT_CNV,'Медиаконвертер Ethernet↔оптика',11,3,7,0.2,5),
+  mkLoose('spl14',CAT_CNV,'Разветвитель HDMI 1×4',15,2.5,9,0.4,5),
+  mkLoose('ext',CAT_CNV,'Удлинитель HDMI по Cat6',9,2.5,6,0.3,5),
+  mkLoose('mtxd',CAT_CNV,'Матрица HDMI 4×4 настольная',22,4,11,0.9,12),
+  mkLoose('sw8',CAT_NET,'Коммутатор 8 портов настольный',20,3,12,0.5,8),
+  mkLoose('psu',CAT_PWR,'Блок питания внешний',10,4,6,0.3,0),
+  mkFurn('tbl180','Стол 180×60',180,60,75,18),
+  mkFurn('tbl120','Стол 120×60',120,60,75,12),
+  mkFurn('chair','Стул оператора',50,50,95,6),
+  mkFurn('cart','Тумба-кейс 60×60',60,60,70,25),
+  mkDeck('dk100x100','Станок 1×1 м',100,100,40,14),
+  mkDeck('dk200x100','Станок 2×1 м',200,100,40,26),
+  mkDeck('dk100x50','Станок 1×0,5 м',100,50,40,8),
+  mkDeck('dk200x50','Станок 2×0,5 м',200,50,40,14),
+  mkMonitor('mon15',15.6,36,20,25,1,15),
+  mkMonitor('mon22',21.5,49,20,40,3.5,25),
+  mkMonitor('mon24',24,54,20,44,4,30),
+  mkMonitor('mon27',27,61,22,48,5.5,35),
+  mkMonitor('mon32',32,72,24,55,7.5,50),
+  mkMonitor('mon43',43,96,25,70,12,90),
+  mkMonitor('mon55',55,123,30,85,18,110)
+];
+var KINDS=[['all','Всё'],['case','Кофры'],['rack','В стойку'],['loose','Мелочь'],['furn','Мебель'],['deck','Станки'],['monitor','Мониторы']];
+var KIND_LABEL={case:'Кофр',rack:'В стойку',loose:'Мелочь',furn:'Мебель',deck:'Станок',monitor:'Монитор'};
+function catKey(cat){return cat===CAT_VID?'video':cat===CAT_NET?'net':cat===CAT_PWR?'pwr':'misc'}
+
+/* ---------- площадка и трассы ---------- */
+var ROOM={w:700,d:450};
+var RUNS=[];
+function defaultRuns(){return [
+  {id:'optic',k:'optic',name:'Оптика (закладная)',short:'ОПТИКА',cv:'--c-optic',pts:[[110,0],[110,175],[340,175]]},
+  {id:'sdi',k:'sdi',name:'SDI',short:'SDI',cv:'--c-sdi',pts:[[190,0],[190,145],[400,145]]},
+  {id:'net',k:'net',name:'Сеть Cat6',short:'СЕТЬ',cv:'--c-net',pts:[[270,0],[270,115],[460,115]]},
+  {id:'pwr',k:'pwr',name:'Силовая 230 В',short:'230 В',cv:'--c-pwr',pts:[[610,0],[610,300]]}
+]}
+var RTYPES=[{k:'optic',n:'Оптика',short:'ОПТИКА',cv:'--c-optic'},{k:'sdi',n:'SDI',short:'SDI',cv:'--c-sdi'},{k:'net',n:'Сеть Cat6',short:'СЕТЬ',cv:'--c-net'},{k:'pwr',n:'Силовая 230 В',short:'230 В',cv:'--c-pwr'},{k:'misc',n:'Другая',short:'ТРАССА',cv:'--c-misc'}];
+function rtype(k){return RTYPES.filter(function(t){return t.k===k})[0]||RTYPES[4]}
+function rkind(r){return r.k||(RTYPES.filter(function(t){return t.cv===r.cv})[0]||{k:'misc'}).k}
+function runLen(r){var s=0;for(var i=1;i<r.pts.length;i++)s+=Math.hypot(r.pts[i][0]-r.pts[i-1][0],r.pts[i][1]-r.pts[i-1][1]);return s}
+function pointAt(r,s){s=Math.max(0,Math.min(runLen(r),s));for(var i=1;i<r.pts.length;i++){var a=r.pts[i-1],b=r.pts[i],l=Math.hypot(b[0]-a[0],b[1]-a[1]);if(s<=l||i===r.pts.length-1){var t=l?s/l:0;return {x:a[0]+(b[0]-a[0])*t,y:a[1]+(b[1]-a[1])*t}}s-=l}return {x:r.pts[0][0],y:r.pts[0][1]}}
+function nearestOnRun(r,x,y){var best=null,acc=0;for(var i=1;i<r.pts.length;i++){var a=r.pts[i-1],b=r.pts[i],dx=b[0]-a[0],dy=b[1]-a[1],l2=dx*dx+dy*dy,l=Math.sqrt(l2);var t=l2?((x-a[0])*dx+(y-a[1])*dy)/l2:0;t=Math.max(0,Math.min(1,t));var px=a[0]+dx*t,py=a[1]+dy*t,d=Math.hypot(x-px,y-py);if(!best||d<best.d)best={d:d,s:acc+l*t,x:px,y:py,run:r.id};acc+=l}return best}
+function runById(id){return RUNS.filter(function(r){return r.id===id})[0]}
+var SNAP=30;
+function locOf(l){if(l.mode==='run'){var r=runById(l.run);if(r)return pointAt(r,l.s)}return {x:l.x||0,y:l.y||0}}
+function snapRunPt(p){
+  var x=Math.round(p.x/5)*5,y=Math.round(p.y/5)*5;
+  if(Math.abs(y)<=12)y=0;else if(Math.abs(y-ROOM.d)<=12)y=ROOM.d;
+  if(Math.abs(x)<=12)x=0;else if(Math.abs(x-ROOM.w)<=12)x=ROOM.w;
+  return {x:Math.max(0,Math.min(ROOM.w,x)),y:Math.max(0,Math.min(ROOM.d,y))};
+}
+
+/* ---------- состояние ---------- */
+var KEY='planner-proto-v1';
+function sample(){return {
+  towers:[
+    {id:'tA',tag:'A',name:'Башня A · LED-процессинг',x:70,y:261,r:0,cases:[
+      {id:'cA1',caseId:'c6_45',items:[{id:'a1',libId:'sw24',u0:0},{id:'a2',libId:'optpp',u0:1},{id:'a3',libId:'pdu',u0:2},{id:'a4',libId:'ups2',u0:4}]},
+      {id:'cA2',caseId:'c8_45',items:[{id:'a5',libId:'ledp2',u0:0},{id:'a6',libId:'ledp2',u0:2},{id:'a7',libId:'ledc1',u0:4},{id:'a8',libId:'fan1',u0:5}]}
+    ]},
+    {id:'tB',tag:'B',name:'Башня B · Видеопульт',x:140,y:266,r:0,cases:[
+      {id:'cB1',caseId:'c10_55',items:[{id:'b3',libId:'mview1',u0:0},{id:'b2',libId:'mix3',u0:1},{id:'b5',libId:'mview_h',u0:4,c0:0},{id:'b6',libId:'sw8h',u0:4,c0:6},{id:'b4',libId:'pdu',u0:5},{id:'b1',libId:'msrv4',u0:6}]}
+    ]},
+    {id:'tC',tag:'C',name:'Башня C · Контроллеры стопкой',x:220,y:300,r:0,cases:[
+      {id:'sC1',stack:true,items:[{id:'c1',libId:'ledc1'},{id:'c2',libId:'ctl_m'},{id:'c3',libId:'ctl_s'},{id:'c4',libId:'ctl_s'}]}
+    ]}
+  ],
+  loose:[
+    {id:'l1',libId:'h2s',mode:'run',run:'sdi',s:195},{id:'l2',libId:'h2s',mode:'run',run:'sdi',s:230},
+    {id:'l3',libId:'s2h',mode:'run',run:'sdi',s:315},{id:'l4',libId:'s2h',mode:'run',run:'sdi',s:345},
+    {id:'l5',libId:'osdi',mode:'run',run:'optic',s:215},{id:'l6',libId:'osdi',mode:'run',run:'optic',s:260},
+    {id:'l7',libId:'mcnv',mode:'run',run:'optic',s:330},
+    {id:'l8',libId:'spl14',mode:'free',x:430,y:190},{id:'l9',libId:'sw8',mode:'free',x:520,y:185},
+    {id:'l10',libId:'psu',mode:'box'},{id:'l11',libId:'psu',mode:'box'}
+  ],
+  furn:[
+    {id:'d1',libId:'dk200x100',x:100,y:250,r:0},{id:'d2',libId:'dk200x100',x:300,y:250,r:0},{id:'d3',libId:'dk200x100',x:500,y:250,r:0},{id:'d4',libId:'dk100x100',x:650,y:250,r:0},
+    {id:'d5',libId:'dk200x50',x:100,y:325,r:0},{id:'d6',libId:'dk200x50',x:300,y:325,r:0},{id:'d7',libId:'dk200x50',x:500,y:325,r:0},{id:'d8',libId:'dk100x50',x:650,y:325,r:0},
+    {id:'d9',libId:'dk100x50',x:650,y:225,r:0,on:true},
+    {id:'f1',libId:'tbl180',x:360,y:245,r:0},{id:'f2',libId:'tbl120',x:530,y:245,r:0},
+    {id:'f3',libId:'chair',x:360,y:315,r:0},{id:'f4',libId:'chair',x:530,y:315,r:0},
+    {id:'m1',libId:'mon27',x:315,y:230,r:0},{id:'m2',libId:'mon27',x:395,y:230,r:0},{id:'m3',libId:'mon32',x:530,y:230,r:0}
+  ],
+  custom:[],
+  runs:defaultRuns()
+}}
+var S=sample();
+S.units='both'; S.tab='racks'; S.view={racks:'front',plan:'top'}; S.variant='focus'; S.open={}; S.libOpen=true; S.sideOpen=false; S.wbOpen=false;
+S.sel=null; S.q=''; S.kind='all'; S.preview=null; S.snapHint=null; S.pmode='obj'; S.drawPts=[]; S.drawType='sdi'; S.drawHover=null;
+try{var raw=localStorage.getItem(KEY);if(raw){var d=JSON.parse(raw);if(d&&d.towers){S.towers=d.towers;S.loose=d.loose||[];S.furn=d.furn||[];S.custom=d.custom||[];if(d.runs)S.runs=d.runs;S.units=d.units||'both'}}}catch(e){}
+var hist=[];
+function data(){return {towers:S.towers,loose:S.loose,furn:S.furn,custom:S.custom,runs:S.runs,units:S.units}}
+function persist(){try{localStorage.setItem(KEY,JSON.stringify(data()))}catch(e){}}
+function snap(){hist.push(JSON.stringify(data()));if(hist.length>60)hist.shift()}
+function mutate(fn){snap();fn();persist();render()}
+function undo(){var h=hist.pop();if(!h){toast('Отменять нечего');return}var d=JSON.parse(h);S.towers=d.towers;S.loose=d.loose;S.furn=d.furn;S.custom=d.custom;S.runs=d.runs||S.runs;S.sel=null;if(S.pmode==='draw'){S.pmode='runs';S.drawPts=[]}persist();renderLib();render()}
+
+var LIBMAP={};
+function fullLib(){return BASE.concat(S.custom)}
+function lib(id){return LIBMAP[id]||{id:id,kind:'loose',cat:'?',name:'Неизвестно',u:1,w:10,h:5,d:10,kg:0,p:0,inD:30}}
+function rebuildMap(){LIBMAP={};fullLib().forEach(function(i){LIBMAP[i.id]=i})}
+
+/* ---------- размеры ---------- */
+function dimStr(it){
+  var u,cm;
+  if(it.kind==='rack'){u=it.u+'U'+(FRAC[it.cw]?' · '+FRAC[it.cw]:'');cm=dv(it.w)+'×'+dv(it.h)+'×'+dv(it.d)+' см'}
+  else if(it.kind==='case'){u=it.u+'U';cm=dv(it.w)+'×'+dv(it.h)+'×'+dv(it.d)+' см'}
+  else if(it.kind==='loose'){u='≈'+Math.max(1,Math.ceil(it.h/UCM))+'U на полке';cm=dv(it.w)+'×'+dv(it.h)+'×'+dv(it.d)+' см'}
+  else if(it.kind==='monitor'){u='—';cm=dv(it.w)+'×'+dv(it.d)+'×'+dv(it.h)+' см'+(it.diag?' · '+nf(it.diag,1)+'″':'')}
+  else if(it.kind==='deck'){u='—';cm=dv(it.w)+'×'+dv(it.d)+' см · выс. '+dv(it.h)}
+  else {u='—';cm=dv(it.w)+'×'+dv(it.d)+' см (пол)'}
+  return '<span class="u-part">'+u+'</span><span class="sep"> · </span><span class="cm-part">'+cm+'</span>';
+}
+function plain(html){return html.replace(/<[^>]+>/g,'')}
+function furnI(f){var I=lib(f.libId);return f.ov?Object.assign({},I,f.ov):I}
+function fid(I){return I.base||I.id}
+
+/* ---------- расчёт ---------- */
+function towerCalc(t){
+  var U=0,used=0,h=0,kg=0,p=0,w=0,d=0,items=[],off=0,ncase=0,sn=0,sh=0;
+  var top=t.cases.slice().reverse();
+  top.forEach(function(c){
+    if(c.stack){var h2=0;c.items.forEach(function(i){var I=lib(i.libId);h2+=I.h;kg+=I.kg;p+=I.p;w=Math.max(w,I.w);d=Math.max(d,I.d);sn++});h+=h2;sh+=h2;return}
+    ncase++;var K=lib(c.caseId);U+=K.u;h+=K.h;w=Math.max(w,K.w);d=Math.max(d,K.d);kg+=K.kg;
+    c.items.forEach(function(i){var I=lib(i.libId);used+=I.u;kg+=I.kg;p+=I.p;items.push({item:i,I:I,caseObj:c,K:K,mid:off+i.u0+I.u/2})});off+=K.u});
+  items.forEach(function(x){x.upper=x.mid<U/2});
+  var r=((t.r||0)%180)!==0;
+  var ww=w||20,dd=d||20;
+  return {U:U,used:used,h:h,kg:kg,p:p,w:ww,d:dd,items:items,fw:r?dd:ww,fd:r?ww:dd,cases:ncase,sn:sn,sh:sh};
+}
+var BOXES=[[35,25,15],[45,32,20],[60,40,25],[80,50,30]];
+function boxCalc(){
+  var all=S.loose.map(function(l){return lib(l.libId)});
+  var vol=all.reduce(function(a,I){return a+I.w*I.h*I.d},0)/1000;
+  var need=vol*1.6, pick=null, avail=0;
+  for(var i=0;i<BOXES.length;i++){var b=BOXES[i],v=b[0]*b[1]*b[2]/1000*0.8;if(v>=need){pick=b;avail=v;break}}
+  return {n:all.length,vol:vol,need:need,pick:pick,fill:pick?need/avail:null,kg:all.reduce(function(a,I){return a+I.kg},0),p:all.reduce(function(a,I){return a+I.p},0)};
+}
+function bounds(){
+  var out=[];
+  S.towers.forEach(function(t){var c=towerCalc(t);out.push({t:'tower',id:t.id,name:'Башня '+t.tag,h:c.h,kg:c.kg,lay:t.lay,ref:t,x0:t.x-c.fw/2,x1:t.x+c.fw/2,y0:t.y-c.fd/2,y1:t.y+c.fd/2})});
+  S.furn.forEach(function(f){var I=furnI(f),sw=(f.r||0)%180!==0,w=sw?I.d:I.w,d=sw?I.w:I.d;out.push({t:'furn',id:f.id,name:I.name,deck:I.kind==='deck',mon:I.kind==='monitor',chair:fid(I)==='chair',ref:f,on:!!f.on,h:I.h,x0:f.x-w/2,x1:f.x+w/2,y0:f.y-d/2,y1:f.y+d/2})});
+  out.forEach(function(o){o.cx=(o.x0+o.x1)/2;o.cy=(o.y0+o.y1)/2});
+  var L0=out.filter(function(o){return o.deck&&!o.on});
+  out.forEach(function(o){
+    if(!o.deck)return;
+    o.base=0;o.top=o.h;
+    if(o.on){var bb=0;L0.forEach(function(d){if(o.cx>=d.x0&&o.cx<=d.x1&&o.cy>=d.y0&&o.cy<=d.y1)bb=Math.max(bb,d.h)});o.base=bb;o.top=bb+o.h}
+  });
+  return out;
+}
+function deckHAt(DK,x,y){var h=-1;DK.forEach(function(d){if(x>=d.x0-.01&&x<=d.x1+.01&&y>=d.y0-.01&&y<=d.y1+.01)h=Math.max(h,d.top!=null?d.top:d.h)});return h}
+function deckInfo(B){
+  var all=B.filter(function(b){return b.deck});if(!all.length)return {n:0,w:0,d:0,area:0};
+  var D=all.filter(function(b){return !b.on});if(!D.length)D=all;
+  var x0=1e9,y0=1e9,x1=-1e9,y1=-1e9,ar=0;
+  D.forEach(function(b){x0=Math.min(x0,b.x0);y0=Math.min(y0,b.y0);x1=Math.max(x1,b.x1);y1=Math.max(y1,b.y1);ar+=(b.x1-b.x0)*(b.y1-b.y0)/10000});
+  return {n:all.length,w:x1-x0,d:y1-y0,area:ar};
+}
+function overlaps(a,b){return a.x0<b.x1-.5&&a.x1>b.x0+.5&&a.y0<b.y1-.5&&a.y1>b.y0+.5}
+function layerPair(a,b,bad,warns){
+  if(a.t===b.t||(a.t!=='tower'&&b.t!=='tower'))return false;
+  var tw=a.t==='tower'?a:b, fu=a.t==='tower'?b:a;
+  if(fu.mon)return true;
+  if(fu.chair)return false;
+  if(!overlaps(a,b))return true;
+  var sel={t:'tower',id:tw.id};
+  if(fu.deck){
+    if(tw.lay==='under'&&tw.h>fu.h-8){bad[tw.id]=1;warns.push({lvl:'err',text:tw.name+' (высота '+nf(tw.h,0)+' см) не помещается под «'+fu.name+'» ('+nf(fu.h,0)+' см)',sel:sel})}
+    return true;
+  }
+  var cx=(tw.x0+tw.x1)/2, cy=(tw.y0+tw.y1)/2, inside=cx>=fu.x0&&cx<=fu.x1&&cy>=fu.y0&&cy<=fu.y1;
+  var onlyStack=tw.ref.cases.every(function(c){return c.stack});
+  var mode=tw.lay||(inside?((onlyStack||tw.h>fu.h-5)?'on':'under'):'floor');
+  if(mode==='floor'){bad[tw.id]=bad[fu.id]=1;warns.push({lvl:'err',text:tw.name+' пересекается с «'+fu.name+'»: поставьте её целиком на стол или выберите положение «под столом»',sel:sel});return true}
+  if(mode==='on'){
+    var full=tw.x0>=fu.x0-.5&&tw.x1<=fu.x1+.5&&tw.y0>=fu.y0-.5&&tw.y1<=fu.y1+.5;
+    if(!full){bad[tw.id]=bad[fu.id]=1;warns.push({lvl:'err',text:tw.name+' не помещается целиком на «'+fu.name+'»',sel:sel})}
+    else if(tw.kg>40)warns.push({lvl:'warn',text:tw.name+' весит '+nf(tw.kg,0)+' кг: проверьте, что «'+fu.name+'» выдержит',sel:sel});
+  }else if(tw.h>fu.h-5){bad[tw.id]=bad[fu.id]=1;warns.push({lvl:'err',text:tw.name+' (высота '+nf(tw.h,0)+' см) не помещается под «'+fu.name+'» ('+nf(fu.h,0)+' см)',sel:sel})}
+  return true;
+}
+function hostOf(t,c){
+  var best=null;
+  S.furn.forEach(function(f){
+    var I=furnI(f); if(I.kind==='monitor'||fid(I)==='chair')return;
+    var sw=(f.r||0)%180!==0, w=sw?I.d:I.w, d=sw?I.w:I.d;
+    if(Math.abs(t.x-f.x)<=w/2&&Math.abs(t.y-f.y)<=d/2){var rank=I.kind==='deck'?1:2;if(!best||rank>best.rank)best={f:f,I:I,rank:rank,deck:I.kind==='deck'}}
+  });
+  return best;
+}
+function layMode(t,c){
+  var h=hostOf(t,c); if(!h)return 'floor';
+  if(t.lay==='on'||t.lay==='under')return t.lay;
+  if(h.deck)return 'on';
+  var onlyStack=t.cases.every(function(x){return x.stack});
+  return (onlyStack||c.h>h.I.h-5)?'on':'under';
+}
+function towerBase(t,c,dat){
+  var h=hostOf(t,c); if(!h)return dat(t.x,t.y);
+  if(layMode(t,c)==='under')return h.deck?0:dat(t.x,t.y);
+  return dat(t.x,t.y)+(h.deck?0:h.I.h);
+}
+function calc(){
+  var T=S.towers.map(function(t){return {t:t,c:towerCalc(t)}});
+  var B=bounds(), bad={}, air={}, warns=[];
+  for(var i=0;i<B.length;i++){
+    var a=B[i];
+    if(a.x0<0||a.y0<0||a.x1>ROOM.w||a.y1>ROOM.d){bad[a.id]=1;warns.push({lvl:'err',text:a.name+': выходит за границы площадки',sel:{t:a.t,id:a.id}})}
+    for(var j=i+1;j<B.length;j++){var b=B[j];if(layerPair(a,b,bad,warns))continue;if(!!a.deck!==!!b.deck||!!a.mon!==!!b.mon||(a.deck&&b.deck&&!!a.on!==!!b.on))continue;if(overlaps(a,b)){bad[a.id]=bad[b.id]=1;warns.push({lvl:'err',text:a.name+' пересекается с «'+b.name+'»',sel:{t:a.t,id:a.id}})}}
+  }
+  var L0s=B.filter(function(o){return o.deck&&!o.on});
+  B.forEach(function(o){
+    if(!o.deck||!o.on)return;
+    var q4=[[o.x0+.5,o.y0+.5],[o.x1-.5,o.y0+.5],[o.x0+.5,o.y1-.5],[o.x1-.5,o.y1-.5]];
+    var cov=q4.filter(function(q){return deckHAt(L0s,q[0],q[1])>=0}).length;
+    if(cov<4){air[o.id]=1;warns.push({lvl:'err',text:o.name+(cov?': висит в воздухе, часть опоры за краем нижних станков':': висит в воздухе, под ним нет станков'),sel:{t:'furn',id:o.id}})}
+  });
+  var DK=B.filter(function(o){return o.deck});
+  if(DK.length)B.forEach(function(o){
+    if(o.deck||o.lay==='under')return;
+    var pts=[[o.x0+.5,o.y0+.5],[o.x1-.5,o.y0+.5],[o.x0+.5,o.y1-.5],[o.x1-.5,o.y1-.5],[(o.x0+o.x1)/2,(o.y0+o.y1)/2]];
+    var hs=pts.map(function(q){return deckHAt(DK,q[0],q[1])});
+    var any=hs.some(function(h){return h>=0}), all=hs.every(function(h){return h>=0});
+    if(any&&!all){air[o.id]=1;warns.push({lvl:o.mon?'warn':'err',text:o.name+(o.mon?': выходит за край станка':': висит в воздухе, часть опоры за краем станка'),sel:{t:o.t,id:o.id}})}
+    else if(all&&hs.some(function(h){return h!==hs[0]})){air[o.id]=1;warns.push({lvl:o.mon?'warn':'err',text:o.name+': стоит на станках разной высоты, часть опоры в воздухе',sel:{t:o.t,id:o.id}})}
+  });
+  T.forEach(function(x){
+    x.c.items.forEach(function(it){
+      if(it.I.d<=it.K.inD&&it.K.inD-it.I.d<5)warns.push({lvl:'warn',text:it.I.name+': до задней крышки '+nf(it.K.inD-it.I.d,0)+' см, кабелям тесно',sel:{t:'ritem',id:it.item.id,tower:x.t.id,cas:it.caseObj.id}});
+      if(it.I.d>it.K.inD)warns.push({lvl:'err',text:it.I.name+': глубина '+it.I.d+' см больше, чем внутри кофра ('+it.K.inD+' см)',sel:{t:'ritem',id:it.item.id,tower:x.t.id,cas:it.caseObj.id}});
+      if(it.I.kg>=15&&it.upper)warns.push({lvl:'warn',text:'Башня '+x.t.tag+': «'+it.I.name+'» ('+nf(it.I.kg,0)+' кг) в верхней половине — тяжёлое лучше вниз',sel:{t:'ritem',id:it.item.id,tower:x.t.id,cas:it.caseObj.id}});
+    });
+    if(x.c.h>150)warns.push({lvl:'warn',text:'Башня '+x.t.tag+' выше 1,5 м ('+nf(x.c.h,0)+' см) — может закрывать обзор',sel:{t:'tower',id:x.t.id}});
+    if(x.t.cases.length&&x.c.used===0&&!x.c.sn)warns.push({lvl:'info',text:'Башня '+x.t.tag+' пока пустая',sel:{t:'tower',id:x.t.id}});
+  });
+  var free=S.loose.filter(function(l){return l.mode==='free'}).length;
+  if(free)warns.push({lvl:'info',text:'Без привязки лежит: '+free+' шт. Это нормально для мелочи, но кабель до неё надо учесть'});
+  var tot={towers:T.length,U:0,used:0,kg:0,p:0,floor:0,cases:0};
+  T.forEach(function(x){tot.U+=x.c.U;tot.used+=x.c.used;tot.kg+=x.c.kg;tot.p+=x.c.p;tot.floor+=x.c.fw*x.c.fd/10000;tot.cases+=x.c.cases});
+  tot.deck=deckInfo(B); S.furn.forEach(function(f){var FI=furnI(f);tot.kg+=FI.kg;tot.p+=FI.p||0});
+  var box=boxCalc(); tot.kg+=box.kg; tot.p+=box.p; if(box.n)tot.cases+=1;
+  if(tot.p>3680)warns.push({lvl:'warn',text:'Нагрузка '+nf(tot.p/230,1)+' А — больше одной линии 16 А'});
+  return {T:T,warns:warns,bad:bad,air:air,tot:tot,box:box};
+}
+var CALC=null;
+
+/* ---------- отрисовка: итоги ---------- */
+function renderStats(){
+  var t=CALC.tot;
+  var items=[
+    ['Башни',t.towers,'',''],
+    ['Юниты занято',t.used+' / '+t.U,'U',t.U&&t.used/t.U>.9?'warn':''],
+    ['Кофров везти',t.cases,'шт.',''],
+    ['Вес',nf(t.kg,0),'кг',''],
+    ['Нагрузка',nf(t.p/1000,2),'кВт · '+nf(t.p/230,1)+' А',t.p>3680?'warn':''],
+    ['Пол под башнями',nf(t.floor,2),'м²',''],
+    ['Пол станков',t.deck.n?nf(t.deck.w/100,1)+' × '+nf(t.deck.d/100,1):'—',t.deck.n?'м · '+nf(t.deck.area,1)+' м² · '+t.deck.n+' шт.':'станков нет',''],
+  ];
+  $('#stats').innerHTML=items.map(function(x){return '<div class="stat '+x[3]+'"><div class="l">'+x[0]+'</div><div class="v">'+x[1]+(x[2]?'<small>'+x[2]+'</small>':'')+'</div></div>'}).join('');
+}
+
+/* ---------- отрисовка: библиотека ---------- */
+function glyph(it){
+  if(it.kind==='rack')return '<i style="width:34px;height:'+Math.min(28,it.u*6+2)+'px"></i>';
+  if(it.kind==='case')return '<i class="g-case" style="width:30px;height:'+Math.min(28,10+it.u*1.5)+'px"></i>';
+  if(it.kind==='monitor')return '<i class="g-mon" style="width:'+Math.min(34,it.w/3.6)+'px;height:'+Math.min(22,it.h/3.5)+'px"></i>';
+  if(it.kind==='deck')return '<i class="g-deck" style="width:'+Math.min(34,it.w/6)+'px;height:'+Math.min(24,it.d/4)+'px"></i>';
+  if(it.kind==='loose')return '<i class="g-loose" style="width:'+Math.max(8,Math.min(26,it.w*1.2))+'px;height:'+Math.max(5,Math.min(16,it.d*1.2))+'px"></i>';
+  return '<i class="g-furn" style="width:'+Math.min(34,it.w/6)+'px;height:'+Math.min(24,it.d/4)+'px"></i>';
+}
+function renderLib(){
+  rebuildMap();
+  $('#kinds').innerHTML=KINDS.map(function(k){return '<button class="chip" data-act="kind" data-k="'+k[0]+'" aria-pressed="'+(S.kind===k[0])+'">'+k[1]+'</button>'}).join('');
+  var q=S.q.trim().toLowerCase(), cats={}, order=[];
+  fullLib().forEach(function(it){
+    if(S.kind!=='all'&&it.kind!==S.kind)return;
+    if(q&&(it.name+' '+it.cat).toLowerCase().indexOf(q)<0)return;
+    var c=it.kind==='case'?CAT_CASE:it.cat; if(!cats[c]){cats[c]=[];order.push(c)} cats[c].push(it)});
+  var html=order.map(function(c){return '<div class="cat">'+esc(c)+'</div>'+cats[c].map(function(it){
+    var kc=it.kind==='case'?'var(--muted)':'var(--k-'+catKey(it.cat)+')';
+    return '<div class="card" data-lib="'+it.id+'" style="--kc:'+kc+'"><div class="glyph">'+glyph(it)+'</div><div class="ci"><div class="cn">'+esc(it.name)+'</div><div class="cd">'+dimStr(it)+(it.kind==='rack'||it.kind==='loose'?' · '+nf(it.kg,1)+' кг':'')+'</div></div>'+(S.custom.indexOf(it)>=0?'<button class="add" data-act="libdel" data-id="'+it.id+'" title="Удалить из библиотеки" aria-label="Удалить из библиотеки">×</button>':'')+'<button class="add" data-act="add" data-id="'+it.id+'" title="Добавить" aria-label="Добавить: '+esc(it.name)+'">+</button></div>'}).join('')}).join('');
+  $('#libList').innerHTML=html||'<div class="hint" style="padding:14px">Ничего не найдено. Добавьте своё оборудование кнопкой ниже.</div>';
+}
+
+/* ---------- отрисовка: башни ---------- */
+function caseHTML(t,c){
+  var K=lib(c.caseId), used=c.items.reduce(function(a,i){return a+lib(i.libId).u},0), l='',r='';
+  for(var i=0;i<K.u;i++){l+='<i>'+(i+1)+'</i>';var hcm=(K.u-i)*UCM;r+='<i class="cm-only">'+((K.u-i)%2===0?Math.round(hcm):'')+'</i>'}
+  var items=c.items.map(function(i){
+    var I=lib(i.libId), bad=I.d>K.inD, on=S.sel&&S.sel.t==='ritem'&&S.sel.id===i.id;
+    return '<div class="ritem u'+(I.u===1?'1':'n')+(cwOf(I)<12?' frac':'')+(on?' on':'')+(bad?' bad':'')+'" data-ritem="'+i.id+'" title="'+esc(I.name+' · '+plain(dimStr(I)))+'" style="top:'+(i.u0*UH+1)+'px;height:'+(I.u*UH-2)+'px;left:'+((i.c0||0)/12*100)+'%;width:'+(cwOf(I)/12*100)+'%;right:auto;--k:var(--k-'+catKey(I.cat)+')">'+
+      '<span class="nm">'+esc(I.name)+'</span><span class="dm">'+dimStr(I)+'</span>'+(bad?'<i class="warnmark" title="Глубже кофра">!</i>':'')+'</div>'}).join('');
+  return '<div class="case" data-case="'+c.id+'" data-tower="'+t.id+'" data-segid="'+c.id+'"><div class="c-head"><span class="grow">Кофр '+K.u+'U · гл. '+K.inD+'</span><span class="mono"><span class="cm-part">'+dv(K.w)+'×'+dv(K.h)+'×'+dv(K.d)+' см</span><span class="u-part">'+used+'/'+K.u+'U</span></span><button class="x" data-act="rm-case" data-t="'+t.id+'" data-c="'+c.id+'" title="Убрать кофр" aria-label="Убрать кофр">×</button></div>'+
+    '<div class="rack" style="--u:'+K.u+'"><div class="ruler l">'+l+'</div><div class="slots" data-tower="'+t.id+'" data-case="'+c.id+'">'+items+'</div><div class="ruler r">'+r+'</div></div></div>';
+}
+var PXCM=UH/UCM;
+function stackHTML(t,c){
+  var its=c.items.slice().reverse(), mw=its.reduce(function(a,i){return Math.max(a,lib(i.libId).w)},1), tot=its.reduce(function(a,i){return a+lib(i.libId).h},0);
+  var body=its.map(function(i){
+    var I=lib(i.libId), on=S.sel&&S.sel.t==='sitem'&&S.sel.id===i.id, wp=Math.max(32,Math.round(I.w/mw*100));
+    return '<div class="sitem'+(wp<62?' frac':'')+(on?' on':'')+'" data-sitem="'+i.id+'" title="'+esc(I.name+' · '+plain(dimStr(I)))+'" style="height:'+Math.max(20,Math.round(I.h*PXCM))+'px;width:'+wp+'%;--k:var(--k-'+catKey(I.cat)+')"><span class="nm">'+esc(I.name)+'</span><span class="dm">'+dimStr(I)+'</span></div>'}).join('');
+  return '<div class="stackseg" data-tower="'+t.id+'" data-seg="'+c.id+'" data-segid="'+c.id+'"><div class="c-head"><span class="grow">Без кофра · стопкой</span><span class="mono">'+its.length+' шт. · '+nf(tot,0)+' см</span><button class="x" data-act="rm-case" data-t="'+t.id+'" data-c="'+c.id+'" title="Убрать стопку" aria-label="Убрать стопку">×</button></div><div class="sbody">'+(body||'<div class="hint">Перетащите сюда оборудование</div>')+'</div></div>';
+}
+function stackTopHTML(t,c){
+  var its=c.items.map(function(i){return {i:i,I:lib(i.libId)}});
+  var mw=Math.max.apply(null,its.map(function(x){return x.I.w}).concat([10])), md=Math.max.apply(null,its.map(function(x){return x.I.d}).concat([10]));
+  var vw=Math.max(mw,48), vh=Math.max(md,28), ox=(vw-mw)/2, oy=(vh-md)/2, g='';
+  g+='<rect x="'+ox+'" y="'+oy+'" width="'+mw+'" height="'+md+'" fill="none" style="stroke:var(--muted)" stroke-dasharray="2 1.5" stroke-width=".5"/>';
+  its.slice().sort(function(a,b){return b.I.w*b.I.d-a.I.w*a.I.d}).forEach(function(x){
+    var I=x.I, ix=ox+(mw-I.w)/2, iy=oy+md-I.d, sel=S.sel&&S.sel.t==='sitem'&&S.sel.id===x.i.id;
+    var mx=Math.max(2,Math.floor(I.w/1.9)-1), txt=I.name.length>mx+1?I.name.slice(0,mx)+'…':I.name;
+    g+='<g class="ti'+(sel?' sel':'')+'" data-act="sel" data-t="sitem" data-id="'+x.i.id+'" data-tower="'+t.id+'" data-cas="'+c.id+'"><title>'+esc(I.name+' · '+dv(I.w)+'×'+dv(I.d)+' см')+'</title><rect x="'+ix+'" y="'+iy+'" width="'+I.w+'" height="'+I.d+'" style="fill:var(--k-'+catKey(I.cat)+')"/><text x="'+(ix+1.5)+'" y="'+(iy+4.6)+'">'+esc(txt)+'</text></g>';
+  });
+  g+='<text x="'+(vw/2)+'" y="'+(vh+4.5)+'" text-anchor="middle">ПЕРЕД</text><text x="'+(vw/2)+'" y="-2" text-anchor="middle" class="dim">'+dv(mw)+'×'+dv(md)+' см на полу</text>';
+  return '<div class="stackseg"><div class="c-head"><span class="grow">Без кофра · сверху</span><span class="mono">'+its.length+' шт.</span></div><svg class="top-svg lt" viewBox="0 -6 '+vw+' '+(vh+14)+'" role="img" aria-label="Вид сверху на стопку">'+g+'</svg></div>';
+}
+function caseTopHTML(t,c){
+  var K=lib(c.caseId), LID=8.5, ow=K.w, od=K.d, rw=48.3, rx=(ow-rw)/2, front=od-LID;
+  var its=c.items.map(function(i){return {i:i,I:lib(i.libId)}}).sort(function(a,b){return b.I.d-a.I.d});
+  var maxD=its.reduce(function(a,x){return Math.max(a,x.I.d)},0), gap=K.inD-maxD, g='', lab=[];
+  g+='<rect class="ct-case" x="0" y="0" width="'+ow+'" height="'+od+'" rx="3"/>';
+  g+='<rect class="ct-open" x="'+rx+'" y="'+LID+'" width="'+rw+'" height="'+K.inD+'"/>';
+  g+='<rect x="'+(rx-2)+'" y="'+LID+'" width="2" height="'+K.inD+'" style="fill:var(--rail)"/><rect x="'+(rx+rw)+'" y="'+LID+'" width="2" height="'+K.inD+'" style="fill:var(--rail)"/>';
+  its.forEach(function(x){
+    var I=x.I, cw=cwOf(I), c0=x.i.c0||0, ix=rx+c0/12*rw, iw=cw/12*rw, sel=S.sel&&S.sel.t==='ritem'&&S.sel.id===x.i.id, bad=I.d>K.inD;
+    var y=front-I.d, show=!lab.some(function(l){return c0<l[1]&&c0+cw>l[0]});
+    if(show)lab.push([c0,c0+cw]);
+    var mx=Math.max(2,Math.floor(iw/1.9)-1), txt=I.name.length>mx+1?I.name.slice(0,mx)+'…':I.name;
+    g+='<g class="ti'+(sel?' sel':'')+'" data-act="sel" data-t="ritem" data-id="'+x.i.id+'" data-tower="'+t.id+'" data-cas="'+c.id+'"><title>'+esc(I.name+' · глубина '+I.d+' см')+'</title><rect x="'+ix+'" y="'+y+'" width="'+iw+'" height="'+I.d+'" style="fill:'+(bad?'var(--err)':'var(--k-'+catKey(I.cat)+')')+'"/>'+(show?'<text x="'+(ix+1.5)+'" y="'+(y+4.6)+'">'+esc(txt)+'</text>':'')+'</g>';
+  });
+  g+='<text x="'+(ow/2)+'" y="'+(od-2.4)+'" text-anchor="middle">ПЕРЕД</text>';
+  g+='<text x="'+(ow/2)+'" y="'+(LID-2.6)+'" text-anchor="middle" class="'+(gap<5?'gapw':'')+'">сзади свободно '+nf(Math.max(gap,0),0)+' см</text>';
+  g+='<text x="'+(ow/2)+'" y="-3" text-anchor="middle" class="dim">'+dv(ow)+' см</text><text transform="translate('+(ow+7)+' '+(od/2)+') rotate(90)" text-anchor="middle" class="dim">'+dv(od)+' см</text>';
+  return '<div class="case"><div class="c-head"><span class="grow">Кофр '+K.u+'U · сверху</span><span class="mono">гл. '+K.inD+' см</span></div><svg class="top-svg" viewBox="-3 -9 '+(ow+17)+' '+(od+13)+'" role="img" aria-label="Вид сверху на кофр">'+g+'</svg></div>';
+}
+function towerHTML(x){
+  var t=x.t,c=x.c, on=S.sel&&((S.sel.t==='tower'&&S.sel.id===t.id)||((S.sel.t==='ritem'||S.sel.t==='sitem')&&S.sel.tower===t.id));
+  var opts='<option value="">+ сверху…</option><option value="__stack">Стопка без кофра</option>'+BASE.filter(function(i){return i.kind==='case'}).map(function(i){return '<option value="'+i.id+'">'+esc(i.name)+'</option>'}).join('');
+  return '<section class="tower'+(on?' on':'')+'" data-tower="'+t.id+'"><header class="t-head"><span class="tag">'+esc(t.tag)+'</span><input class="t-name" data-rename="'+t.id+'" value="'+esc(t.name)+'" aria-label="Название башни"><button class="x" data-act="rm-tower" data-id="'+t.id+'" title="Убрать башню" aria-label="Убрать башню">×</button></header>'+
+   '<div class="t-body">'+(S.view.racks==='front'?'<div class="bracket"><span><span class="cm-part">'+nf(c.h,0)+' см</span><span class="sep"> · </span><span class="u-part">'+c.U+'U</span></span></div>':'')+'<div class="stack"><select class="addcase" data-addcase="'+t.id+'" aria-label="Добавить кофр">'+opts+'</select>'+
+   t.cases.slice().reverse().map(function(cs){return S.view.racks==='front'?(cs.stack?stackHTML(t,cs):caseHTML(t,cs)):(cs.stack?stackTopHTML(t,cs):caseTopHTML(t,cs))}).join('')+'<select class="addcase" data-addcase-bottom="'+t.id+'" aria-label="Добавить кофр снизу">'+opts.replace('+ сверху…','+ снизу…')+'</select></div></div>'+
+   '<div class="t-foot"><span>'+(c.U?c.used+'/'+c.U+'U':'без кофра')+'</span>'+(c.U&&c.sn?'<span>+'+c.sn+' без кофра</span>':'')+'<span class="cm-part">'+nf(c.w,0)+'×'+nf(c.d,0)+' см на полу</span><span>'+nf(c.kg,0)+' кг</span><span>'+c.p+' Вт</span></div></section>';
+}
+function boxCardHTML(){
+  var b=CALC.box, boxed=S.loose.filter(function(l){return l.mode==='box'});
+  var pills=boxed.map(function(l){var I=lib(l.libId);return '<span class="pill'+(S.sel&&S.sel.id===l.id?' on':'')+'" data-act="sel" data-t="loose" data-id="'+l.id+'">'+esc(I.name)+'</span>'}).join('');
+  return '<div class="boxcard" data-drop="box"><h3>Кофр мелочёвки</h3>'+
+   '<div class="hint">Вся мелочь едет в одном кейсе. Перетащите сюда предмет, если он остаётся лежать в кейсе, а не раскладывается на площадке.</div>'+
+   (b.n?'<div><b class="mono">'+nf(b.vol,1)+' л</b> предметов · '+b.n+' шт. · '+nf(b.kg,1)+' кг</div>'+
+     (b.pick?'<div>Подойдёт кейс <b class="mono">'+b.pick[0]+'×'+b.pick[1]+'×'+b.pick[2]+' см</b></div><div class="bar'+(b.fill>.8?' hi':'')+'"><i style="width:'+Math.round(b.fill*100)+'%"></i></div><div class="hint">заполнение с запасом на поролон: '+Math.round(b.fill*100)+'%</div>':'<div class="w">Больше самого большого кейса (80×50×30 см). Разбейте на два.</div>'):'<div class="hint">Пока пусто.</div>')+
+   (boxed.length?'<div><div class="gh">В кейсе сейчас</div>'+pills+'</div>':'')+'</div>';
+}
+function renderRacks(){
+  var h='<div class="towers-scroll" id="tsc">'+CALC.T.map(towerHTML).join('')+
+   '<div class="new-tower" data-drop="newtower">Перетащите сюда рэк-кофр, чтобы собрать башню,<br>или любое оборудование: оно ляжет стопкой без кофра</div>'+boxCardHTML()+'</div>';
+  return h;
+}
+
+/* ---------- отрисовка: план ---------- */
+function runLabel(r){
+  var first=Math.hypot(r.pts[1][0]-r.pts[0][0],r.pts[1][1]-r.pts[0][1]), best=0, bl=0;
+  if(first<60)for(var i=0;i<r.pts.length-1;i++){var l=Math.hypot(r.pts[i+1][0]-r.pts[i][0],r.pts[i+1][1]-r.pts[i][1]);if(l>bl){bl=l;best=i}}
+  var a=r.pts[best], b=r.pts[best+1], ang=Math.atan2(b[1]-a[1],b[0]-a[0])*180/Math.PI;
+  while(ang>=90)ang-=180;
+  while(ang<-90)ang+=180;
+  return '<text class="rl rlab" transform="translate('+((a[0]+b[0])/2)+' '+((a[1]+b[1])/2)+') rotate('+ang.toFixed(1)+')" y="-8" text-anchor="middle" style="fill:var('+r.cv+')">'+esc(r.name)+'</text>';
+}
+function planInner(){
+  var W=ROOM.w,D=ROOM.d,g='';
+  g+='<defs><pattern id="g50" width="50" height="50" patternUnits="userSpaceOnUse"><path d="M50 0H0V50" fill="none" style="stroke:var(--grid)" stroke-width=".7"/></pattern><pattern id="g100" width="100" height="100" patternUnits="userSpaceOnUse"><path d="M100 0H0V100" fill="none" style="stroke:var(--grid)" stroke-width="1.5"/></pattern></defs>';
+  g+='<rect x="0" y="0" width="'+W+'" height="'+D+'" class="floor"/><rect x="0" y="0" width="'+W+'" height="'+D+'" fill="url(#g50)"/><rect x="0" y="0" width="'+W+'" height="'+D+'" fill="url(#g100)"/>';
+  g+='<rect x="0" y="-40" width="'+W+'" height="40" class="stage"/><text x="445" y="-14" class="stage-t" text-anchor="middle">СЦЕНА</text>';
+  var badSet=CALC.bad;
+  S.furn.slice().sort(function(a,b){return (a.on?1:0)-(b.on?1:0)}).forEach(function(f){
+    var I=furnI(f); if(I.kind!=='deck')return;
+    var sw=(f.r||0)%180!==0, w=sw?I.d:I.w, d=sw?I.w:I.d, sel=S.sel&&S.sel.t==='furn'&&S.sel.id===f.id;
+    g+='<g class="obj'+(sel?' sel':'')+(badSet[f.id]?' bad':'')+(CALC.air[f.id]?' air':'')+'" data-obj="furn" data-id="'+f.id+'" transform="translate('+f.x+' '+f.y+')"><rect class="dk'+(f.on?' dk2':'')+'" x="'+(-w/2)+'" y="'+(-d/2)+'" width="'+w+'" height="'+d+'"/><text y="4" class="dkt">'+nf(w/100,1)+'×'+nf(d/100,1)+' · '+dv(I.h)+(f.on?' ↑':'')+'</text></g>';
+  });
+  RUNS.forEach(function(r){
+    var hot=S.snapHint===r.id, rsel=S.sel&&S.sel.t==='run'&&S.sel.id===r.id, pts=r.pts.map(function(p){return p.join(',')}).join(' ');
+    g+='<polyline class="run'+(hot?' hot':'')+(rsel?' rsel':'')+'" points="'+pts+'" style="stroke:var('+r.cv+')"/>';
+    g+='<polyline class="runhit" data-run="'+r.id+'" points="'+pts+'"/>';
+    var e=r.pts[r.pts.length-1], b0=r.pts[0];
+    g+='<rect x="'+(e[0]-6)+'" y="'+(e[1]-6)+'" width="12" height="12" rx="2" style="fill:var('+r.cv+')"/>';
+    g+=runLabel(r);
+    if(rsel&&S.pmode==='runs'){
+      for(var i=0;i<r.pts.length-1;i++){var a=r.pts[i],b=r.pts[i+1];g+='<g class="mid" data-mid="'+i+'" transform="translate('+((a[0]+b[0])/2)+' '+((a[1]+b[1])/2)+')"><circle r="7"/><path d="M-3.5 0H3.5M0 -3.5V3.5"/></g>'}
+      r.pts.forEach(function(q,i){g+='<circle class="vtx" data-vtx="'+i+'" cx="'+q[0]+'" cy="'+q[1]+'" r="7"/>'});
+    }
+  });
+  g+='<rect x="0" y="0" width="'+W+'" height="'+D+'" class="wall"/>';
+  S.furn.forEach(function(f){
+    var I=furnI(f); if(I.kind==='deck'||I.kind==='monitor')return;
+    var sel=S.sel&&S.sel.t==='furn'&&S.sel.id===f.id, sw=(f.r||0)%180!==0, w=sw?I.d:I.w, d=sw?I.w:I.d;
+    g+='<g class="obj'+(sel?' sel':'')+(badSet[f.id]?' bad':'')+(CALC.air[f.id]?' air':'')+'" data-obj="furn" data-id="'+f.id+'" transform="translate('+f.x+' '+f.y+')"><rect x="'+(-w/2)+'" y="'+(-d/2)+'" width="'+w+'" height="'+d+'" rx="'+(fid(I)==='chair'?20:3)+'" class="fu"/>'+(fid(I)==='chair'?'':'<text y="4" class="fut">'+esc(I.name)+'</text>')+'</g>';
+  });
+  CALC.T.forEach(function(x){
+    var t=x.t,c=x.c, sel=S.sel&&((S.sel.t==='tower'&&S.sel.id===t.id)||((S.sel.t==='ritem'||S.sel.t==='sitem')&&S.sel.tower===t.id));
+    g+='<g class="obj'+(sel?' sel':'')+(badSet[t.id]?' bad':'')+(CALC.air[t.id]?' air':'')+(layMode(t,c)==='under'?' und':'')+'" data-obj="tower" data-id="'+t.id+'" transform="translate('+t.x+' '+t.y+')"><g transform="rotate('+(t.r||0)+')"><rect x="'+(-c.w/2)+'" y="'+(-c.d/2)+'" width="'+c.w+'" height="'+c.d+'" rx="4" class="tw"/><line x1="'+(-c.w/2+4)+'" y1="'+(c.d/2-1)+'" x2="'+(c.w/2-4)+'" y2="'+(c.d/2-1)+'" class="front"/></g><text y="4" class="tagt">'+esc(t.tag)+'</text><text y="19" class="subt">'+nf(c.fw,0)+'×'+nf(c.fd,0)+'</text></g>';
+  });
+  S.furn.forEach(function(f){
+    var I=furnI(f); if(I.kind!=='monitor')return;
+    var sel=S.sel&&S.sel.t==='furn'&&S.sel.id===f.id;
+    g+='<g class="obj'+(sel?' sel':'')+(badSet[f.id]?' bad':'')+(CALC.air[f.id]?' air':'')+'" data-obj="furn" data-id="'+f.id+'" transform="translate('+f.x+' '+f.y+')"><g transform="rotate('+(f.r||0)+')"><rect class="mn" x="'+(-I.w/2)+'" y="'+(-I.d/2)+'" width="'+I.w+'" height="'+I.d+'" rx="2"/><line class="mnf" x1="'+(-I.w/2+2)+'" y1="'+(I.d/2)+'" x2="'+(I.w/2-2)+'" y2="'+(I.d/2)+'"/></g><text y="3" class="mnt">'+(I.diag?nf(I.diag,1)+'″':'')+'</text></g>';
+  });
+  var n=0;
+  S.loose.forEach(function(l){
+    if(l.mode==='box')return; n++;
+    var I=lib(l.libId), p=locOf(l), sel=S.sel&&S.sel.t==='loose'&&S.sel.id===l.id;
+    g+='<g class="obj'+(sel?' sel':'')+'" data-obj="loose" data-id="'+l.id+'" transform="translate('+p.x+' '+p.y+')"><circle r="14" class="ring"/><rect x="'+(-I.w/2)+'" y="'+(-I.d/2)+'" width="'+I.w+'" height="'+I.d+'" class="lrect"/><circle cx="12" cy="-12" r="7.5" class="badge"/><text x="12" y="-9" class="badget">'+n+'</text></g>';
+  });
+  if(S.pmode==='draw'){
+    var DT=rtype(S.drawType), dp=S.drawPts, all=dp.concat(S.drawHover?[[S.drawHover.x,S.drawHover.y]]:[]);
+    if(all.length>1)g+='<polyline class="drawl" points="'+all.map(function(q){return q.join(',')}).join(' ')+'" style="stroke:var('+DT.cv+')" stroke-dasharray="6 5"/>';
+    dp.forEach(function(q){g+='<circle cx="'+q[0]+'" cy="'+q[1]+'" r="5" style="fill:var('+DT.cv+')"/>'});
+    if(S.drawHover)g+='<circle cx="'+S.drawHover.x+'" cy="'+S.drawHover.y+'" r="8" fill="none" style="stroke:var(--accent)" stroke-width="2"/>';
+  }
+  var pv=S.preview;
+  if(pv)g+='<rect class="prev'+(pv.ok?'':' no')+'" x="'+(pv.x-pv.w/2)+'" y="'+(pv.y-pv.d/2)+'" width="'+pv.w+'" height="'+pv.d+'" rx="3"/>';
+  g+='<text x="'+(W/2)+'" y="'+(D+28)+'" class="dimt" text-anchor="middle">'+W+' см</text><text transform="translate(-16 '+(D/2)+') rotate(-90)" class="dimt" text-anchor="middle">'+D+' см</text>';
+  g+='<g><line x1="0" y1="'+(D+42)+'" x2="100" y2="'+(D+42)+'" style="stroke:var(--ink)" stroke-width="2"/><line x1="0" y1="'+(D+37)+'" x2="0" y2="'+(D+47)+'" style="stroke:var(--ink)" stroke-width="2"/><line x1="100" y1="'+(D+37)+'" x2="100" y2="'+(D+47)+'" style="stroke:var(--ink)" stroke-width="2"/><text x="110" y="'+(D+46)+'" class="dimt">1 м</text></g>';
+  return g;
+}
+function renderPlan(){
+  var host=$('#plan'); if(!host)return;
+  host.setAttribute('class',S.pmode==='obj'?'':'pm-'+S.pmode);
+  host.innerHTML=planInner();
+}
+function planShell(){
+  return '<div id="planTools"></div><svg id="plan" viewBox="-45 -52 '+(ROOM.w+90)+' '+(ROOM.d+110)+'" role="img" aria-label="План пультовой"></svg><div class="hint" id="planHint"></div>';
+}
+function renderPlanTools(){
+  var el=$('#planTools'); if(!el)return;
+  var leg=RUNS.map(function(r){return '<button class="lg'+(S.sel&&S.sel.t==='run'&&S.sel.id===r.id?' on':'')+'" data-act="selrun" data-id="'+r.id+'"><b style="background:var('+r.cv+')"></b>'+esc(r.name)+' · '+nf(runLen(r)/100,1)+' м</button>'}).join('');
+  var tools='<div class="seg" role="group" aria-label="Режим плана"><button data-act="pmode" data-m="obj" aria-pressed="'+(S.pmode==='obj')+'">Объекты</button><button data-act="pmode" data-m="runs" aria-pressed="'+(S.pmode!=='obj')+'">Трассы</button></div>';
+  if(S.pmode!=='obj'){
+    tools+='<select data-drawtype aria-label="Тип новой трассы">'+RTYPES.map(function(t){return '<option value="'+t.k+'"'+(S.drawType===t.k?' selected':'')+'>'+esc(t.n)+'</option>'}).join('')+'</select>';
+    tools+=S.pmode==='draw'?'<button class="btn sm pri" data-act="draw-done">Готово</button><button class="btn sm" data-act="draw-cancel">Отмена</button>':'<button class="btn sm" data-act="draw-start">＋ Нарисовать трассу</button>';
+  }
+  var hasDeck=S.furn.some(function(f){return furnI(f).kind==='deck'});
+  var legD=hasDeck?'<span class="lg2"><b style="background:var(--deck)"></b>Станок на полу</span><span class="lg2"><b style="background:var(--dtab)"></b>Станок-стол</span>':'';
+  el.innerHTML='<div class="plan-tools">'+tools+'</div><div class="legend">'+(leg||'<span>Трасс пока нет</span>')+legD+'</div>';
+  var hints={obj:'Рамка пина — мелочь в реальном размере. Если отпустить её ближе 30 см к трассе, она встанет на трассу и запомнит расстояние от ввода. Синяя черта у башни — лицевая сторона. Правый клик по мебели или станку открывает параметры.',
+    runs:'Выберите трассу кликом по линии или в легенде. Тяните белые точки, чтобы изменить маршрут. Кружок с плюсом на середине отрезка добавляет точку. Двойной клик по точке удаляет её.',
+    draw:'Кликайте по плану, чтобы ставить точки. Двойной клик или «Готово» завершает, Backspace убирает последнюю точку, Esc отменяет. У стен точки примагничиваются к краю.'};
+  $('#planHint').textContent=hints[S.pmode];
+}
+
+function elevationHTML(){
+  var W=ROOM.w, g='', objs=[], h, DK=bounds().filter(function(b){return b.deck});
+  for(h=0;h<=250;h+=50){g+='<line class="eg" x1="0" x2="'+W+'" y1="'+(-h)+'" y2="'+(-h)+'"/><text class="lab2" x="-6" y="'+(-h+3)+'" text-anchor="end">'+h+'</text>'}
+  g+='<text class="lab2" x="-6" y="-266" text-anchor="end">см</text>';
+  var eyes=[];
+  S.furn.forEach(function(f){var FI=furnI(f);if(fid(FI)!=='chair')return;var eh=Math.max(0,deckHAt(DK,f.x,f.y)),e=eyes.filter(function(z){return z.h===eh})[0];if(e)e.xs.push(f.x);else eyes.push({h:eh,xs:[f.x]})});
+  if(!eyes.length){var mh=0;DK.forEach(function(d){mh=Math.max(mh,d.h)});eyes.push({h:mh,xs:null})}
+  eyes.forEach(function(e){
+    var ey=-(e.h+120), xa=0, xb=W;
+    if(e.xs&&eyes.length>1){xa=Math.max(0,Math.min.apply(null,e.xs)-70);xb=Math.min(W,Math.max.apply(null,e.xs)+70)}
+    g+='<line class="eye" x1="'+xa+'" x2="'+xb+'" y1="'+ey+'" y2="'+ey+'"/><text class="lab2 eyet" x="'+(xb-4)+'" y="'+(ey-5)+'" text-anchor="end" style="fill:var(--accent)">глаза сидя ≈ 120 см от '+(e.h?'пола станка ('+(e.h+120)+' см от земли)':'пола')+'</text>';
+  });
+  g+='<rect class="floorl" x="-20" y="0" width="'+(W+40)+'" height="6"/>';
+  DK.slice().sort(function(a,b){return (a.on?1:0)-(b.on?1:0)||a.y0-b.y0}).forEach(function(d){
+    var sel=S.sel&&S.sel.t==='furn'&&S.sel.id===d.id, bs=d.base||0, tp=bs+d.h;
+    g+='<g class="obj'+(sel?' sel':'')+(d.on?' dtb':'')+(CALC.air[d.id]?' air':'')+'" data-act="sel" data-t="furn" data-id="'+d.id+'" data-base="'+bs+'">';
+    if(d.h>60)g+='<rect class="dkx" x="'+d.x0+'" y="'+(-tp)+'" width="'+(d.x1-d.x0)+'" height="8"/><rect class="dkx" x="'+d.x0+'" y="'+(-tp+8)+'" width="6" height="'+(d.h-8)+'"/><rect class="dkx" x="'+(d.x1-6)+'" y="'+(-tp+8)+'" width="6" height="'+(d.h-8)+'"/>';
+    else g+='<rect class="dkx" x="'+d.x0+'" y="'+(-tp)+'" width="'+(d.x1-d.x0)+'" height="'+d.h+'"/>';
+    g+='</g>';
+  });
+  var dat=function(x,y){return Math.max(0,deckHAt(DK,x,y))};
+  S.furn.forEach(function(f){var I=furnI(f);if(I.kind==='deck'||I.kind==='monitor')return;var sw=(f.r||0)%180!==0;objs.push({k:'furn',o:f,I:I,x:f.x,y:f.y,w:sw?I.d:I.w,d:sw?I.w:I.d,dh:dat(f.x,f.y)})});
+  CALC.T.forEach(function(x){objs.push({k:'tower',o:x.t,c:x.c,x:x.t.x,y:x.t.y,w:x.c.fw,d:x.c.fd,dh:towerBase(x.t,x.c,dat)})});
+  objs.sort(function(a,b){return a.y-b.y});
+  objs.forEach(function(ob){
+    var sel=S.sel&&((S.sel.t===ob.k&&S.sel.id===ob.o.id)||(ob.k==='tower'&&(S.sel.t==='ritem'||S.sel.t==='sitem')&&S.sel.tower===ob.o.id));
+    g+='<g class="obj'+(sel?' sel':'')+(CALC.air[ob.o.id]?' air':'')+'" data-act="sel" data-t="'+ob.k+'" data-id="'+ob.o.id+'" data-base="'+ob.dh+'" transform="translate('+ob.x+' '+(-ob.dh)+')">';
+    if(ob.k==='tower'){
+      var base=0, front=((ob.o.r||0)%180)===0, w=ob.w;
+      ob.o.cases.forEach(function(cs){
+        if(cs.stack){cs.items.forEach(function(i){var I=lib(i.libId);g+='<rect class="it" x="'+(-I.w/2)+'" y="'+(-(base+I.h))+'" width="'+I.w+'" height="'+I.h+'"/>';base+=I.h});return}
+        var K=lib(cs.caseId);
+        g+='<rect class="tw" x="'+(-w/2)+'" y="'+(-(base+K.h))+'" width="'+w+'" height="'+K.h+'" rx="2"/>';
+        if(front)cs.items.forEach(function(i){var I=lib(i.libId),cw=cwOf(I),ix=-24.15+(i.c0||0)/12*48.3,iy=-(base+K.h-8-i.u0*UCM);
+          g+='<rect class="it" x="'+ix+'" y="'+iy+'" width="'+(cw/12*48.3)+'" height="'+(I.u*UCM-.5)+'"/>'});
+        g+='<text class="lab2" x="'+(w/2+4)+'" y="'+(-(base+K.h/2)+3)+'">'+K.u+'U</text>';
+        base+=K.h;
+      });
+      g+='<text class="lab" x="0" y="'+(-(base+8))+'">'+esc(ob.o.tag)+' · '+nf(base,0)+' см'+(ob.dh?' (+'+ob.dh+' см опора)':'')+'</text>';
+    }else{
+      var I=ob.I, w2=ob.w;
+      if(fid(I)==='chair')g+='<rect class="fu" x="'+(-w2/2)+'" y="-95" width="'+w2+'" height="50" rx="8"/><rect class="fu" x="'+(-w2/2)+'" y="-47" width="'+w2+'" height="8" rx="3"/><rect class="fu" x="-3" y="-39" width="6" height="39"/>';
+      else if(fid(I).indexOf('tbl')===0)g+='<rect class="fu" x="'+(-w2/2)+'" y="'+(-I.h)+'" width="'+w2+'" height="5"/><rect class="fu" x="'+(-w2/2+4)+'" y="'+(-I.h+5)+'" width="4" height="'+(I.h-5)+'"/><rect class="fu" x="'+(w2/2-8)+'" y="'+(-I.h+5)+'" width="4" height="'+(I.h-5)+'"/>';
+      else g+='<rect class="fu" x="'+(-w2/2)+'" y="'+(-I.h)+'" width="'+w2+'" height="'+I.h+'" rx="2"/>';
+    }
+    g+='</g>';
+  });
+  S.furn.forEach(function(f){
+    var I=furnI(f); if(I.kind!=='monitor')return;
+    var sw=(f.r||0)%180!==0, w2=sw?I.d:I.w, base=dat(f.x,f.y)+supportAt(f.x,f.y), H=I.h, sel=S.sel&&S.sel.t==='furn'&&S.sel.id===f.id;
+    g+='<g class="obj'+(sel?' sel':'')+(CALC.air[f.id]?' air':'')+'" data-act="sel" data-t="furn" data-id="'+f.id+'" data-base="'+base+'" transform="translate('+f.x+' '+(-base)+')"><rect class="mnx" x="'+(-w2/2)+'" y="'+(-H)+'" width="'+w2+'" height="'+(H*0.72)+'" rx="2"/><rect class="fu" x="-3" y="'+(-H*0.28)+'" width="6" height="'+(H*0.28)+'"/><rect class="fu" x="-14" y="-2" width="28" height="2"/>'+(I.diag?'<text class="lab2" x="0" y="'+(-H+H*0.36+3)+'" text-anchor="middle" style="fill:#fff">'+nf(I.diag,1)+'″</text>':'')+'</g>';
+  });
+  S.loose.forEach(function(l){
+    if(l.mode==='box')return;
+    var I=lib(l.libId), p=locOf(l), base=dat(p.x,p.y);
+    S.furn.forEach(function(f){var FI=furnI(f);if(FI.kind==='deck'||fid(FI).indexOf('tbl')!==0)return;var sw=(f.r||0)%180!==0,fw=sw?FI.d:FI.w,fd=sw?FI.w:FI.d;if(Math.abs(p.x-f.x)<=fw/2&&Math.abs(p.y-f.y)<=fd/2)base=dat(f.x,f.y)+FI.h});
+    g+='<rect class="lo" x="'+(p.x-I.w/2)+'" y="'+(-(base+Math.max(I.h,3)))+'" width="'+I.w+'" height="'+Math.max(I.h,3)+'"/>';
+  });
+  g+='<text class="lab2" x="'+(W/2)+'" y="26" text-anchor="middle">'+W+' см · смотрим от операторов в сторону сцены</text>';
+  return '<svg id="elev" viewBox="-45 -285 '+(W+90)+' 325" role="img" aria-label="Вид спереди">'+g+'</svg><div class="hint">Объекты можно двигать и здесь: вбок — по плану, вверх на стол, станок или башню — поставить сверху, вниз — на пол или под стол. Глубина (расстояние от сцены) здесь меняется только при постановке на опору. Всё, что стоит на станках, поднято на высоту станка. Мелочь на столах стоит на столешнице, остальная лежит на полу или на станке.</div>';
+}
+
+/* ---------- панель выбранного ---------- */
+function findRitem(id){for(var i=0;i<S.towers.length;i++){var t=S.towers[i];for(var j=0;j<t.cases.length;j++){var c=t.cases[j];for(var k=0;k<c.items.length;k++)if(c.items[k].id===id)return {t:t,c:c,i:c.items[k],k:k}}}return null}
+function renderInspector(){
+  var el=$('#inspector'), s=S.sel, h='';
+  el.className='inspector'+(s?'':' empty');
+  if(!s){h='<span class="hint">Перетащите оборудование из библиотеки в кофр, в стопку без кофра или на план. Кнопка «+» на карточке добавляет сразу. Выбранное можно убрать клавишей Delete или перетащив обратно в библиотеку.</span>'}
+  else if(s.t==='ritem'){var f=findRitem(s.id);if(!f){S.sel=null;return renderInspector()}var I=lib(f.i.libId);
+    h='<div class="grow"><div class="ttl">'+esc(I.name)+'</div><div class="meta">Башня '+esc(f.t.tag)+' · U'+(f.i.u0+1)+(I.u>1?'–'+(f.i.u0+I.u):'')+' в кофре · '+plain(dimStr(I))+' · '+nf(I.kg,1)+' кг · '+I.p+' Вт</div></div><button class="btn sm" data-act="rm-sel">Убрать из стойки</button>'}
+  else if(s.t==='tower'){var T=S.towers.filter(function(t){return t.id===s.id})[0];if(!T){S.sel=null;return renderInspector()}var c=towerCalc(T);
+    h='<div class="grow"><div class="ttl">'+esc(T.name)+'</div><div class="meta">'+c.cases+' кофр.'+(c.sn?' + '+c.sn+' шт. без кофра':'')+' · '+c.used+'/'+c.U+'U · '+nf(c.h,0)+' см высота · '+nf(c.w,0)+'×'+nf(c.d,0)+' см на полу · '+nf(c.kg,0)+' кг</div></div>'+(function(){var hm=hostOf(T,c),md=layMode(T,c);return '<select data-lay aria-label="Положение башни"><option value="">Положение: авто'+(hm&&!T.lay?' ('+(md==='under'?'под ':'на ')+(hm.deck?'станком':'столом')+')':'')+'</option><option value="on"'+(T.lay==='on'?' selected':'')+'>На столе или станке</option><option value="under"'+(T.lay==='under'?' selected':'')+'>Под столом или станком</option></select>'})()+'<button class="btn sm" data-act="rot">Повернуть на 90°</button><button class="btn sm" data-act="rm-sel">Убрать башню</button>'}
+  else if(s.t==='sitem'){var f2=findRitem(s.id);if(!f2){S.sel=null;return renderInspector()}var SI=lib(f2.i.libId);
+    h='<div class="grow"><div class="ttl">'+esc(SI.name)+'</div><div class="meta">Башня '+esc(f2.t.tag)+' · без кофра, в стопке · '+plain(dimStr(SI))+' · высота '+dv(SI.h)+' см · '+nf(SI.kg,1)+' кг</div></div><button class="btn sm" data-act="smove" data-d="up">Выше</button><button class="btn sm" data-act="smove" data-d="down">Ниже</button><button class="btn sm" data-act="rm-sel">Убрать из стопки</button>'}
+  else if(s.t==='furn'){var F=S.furn.filter(function(f){return f.id===s.id})[0];if(!F){S.sel=null;return renderInspector()}var FI=furnI(F);
+    h='<div class="grow"><div class="ttl">'+esc(FI.name)+'</div><div class="meta">'+dv(FI.w)+'×'+dv(FI.d)+' см'+(FI.h?' · выс. '+dv(FI.h)+' см':'')+' · '+nf(FI.kg,0)+' кг'+(FI.p?' · '+FI.p+' Вт':'')+' · поворот '+(F.r||0)+'°</div></div>'+(FI.kind==='deck'?'<select data-deckon aria-label="Положение станка"><option value="">Станок на полу</option><option value="1"'+(F.on?' selected':'')+'>Сверху на станках (как стол)</option></select>':'')+'<button class="btn sm" data-act="fedit">Параметры…</button><button class="btn sm" data-act="rot">Повернуть на 90°</button><button class="btn sm" data-act="rm-sel">Убрать</button>'}
+  else if(s.t==='run'){var RR=runById(s.id);if(!RR){S.sel=null;return renderInspector()}
+    var nOn=S.loose.filter(function(l){return l.mode==='run'&&l.run===RR.id}).length;
+    var topts=RTYPES.map(function(t){return '<option value="'+t.k+'"'+(rkind(RR)===t.k?' selected':'')+'>'+esc(t.n)+'</option>'}).join('');
+    h='<div class="grow"><input class="rn" data-runname value="'+esc(RR.name)+'" aria-label="Название трассы"><div class="meta">'+nf(runLen(RR)/100,2)+' м · '+RR.pts.length+' точек · мелочи на трассе: '+nOn+'</div></div><select data-runtype aria-label="Тип трассы">'+topts+'</select><button class="btn sm" data-act="run-rev">Развернуть</button><button class="btn sm" data-act="rm-sel">Удалить трассу</button>'}
+  else if(s.t==='loose'){var L=S.loose.filter(function(l){return l.id===s.id})[0];if(!L){S.sel=null;return renderInspector()}var LI=lib(L.libId);
+    var ropts=RUNS.map(function(r){return '<option value="'+r.id+'"'+(L.run===r.id?' selected':'')+'>'+esc(r.name)+'</option>'}).join('');
+    var where=L.mode==='run'?'на трассе «'+esc(runById(L.run).name)+'», '+nf(L.s/100,1)+' м от ввода':L.mode==='free'?'свободно на площадке':'лежит в кофре мелочёвки';
+    h='<div class="grow"><div class="ttl">'+esc(LI.name)+'</div><div class="meta">'+plain(dimStr(LI))+' · '+nf(LI.kg,2)+' кг · '+where+'</div></div>'+
+      '<div class="seg" role="group" aria-label="Где лежит"><button data-act="lmode" data-m="free" aria-pressed="'+(L.mode==='free')+'">Свободно</button><button data-act="lmode" data-m="run" aria-pressed="'+(L.mode==='run')+'">На трассе</button><button data-act="lmode" data-m="box" aria-pressed="'+(L.mode==='box')+'">В кофре</button></div>'+
+      (L.mode==='run'?'<select data-lrun aria-label="Трасса">'+ropts+'</select>':'')+'<button class="btn sm" data-act="rm-sel">Убрать</button>'}
+  el.innerHTML=h;
+}
+
+/* ---------- сводка справа ---------- */
+function isOpen(k){if(k in S.open)return S.open[k];return k==='towers'}
+function op(k){return isOpen(k)?' open':''}
+function renderWarn(){
+  var W=CALC.warns, ne=0, nw=0, ni=0;
+  W.forEach(function(x){if(x.lvl==='err')ne++;else if(x.lvl==='warn')nw++;else ni++});
+  var chips=(ne?'<span class="wb-chip err">Ошибки '+ne+'</span>':'')+(nw?'<span class="wb-chip warn">Предупреждения '+nw+'</span>':'')+(ni?'<span class="wb-chip info">К сведению '+ni+'</span>':'');
+  var first=W.filter(function(x){return x.lvl!=='info'})[0]||W[0];
+  var h='<button class="wb-head" data-act="wb" aria-expanded="'+(!!S.wbOpen)+'"><b>Замечания</b>'+(W.length?chips:'<span class="wb-chip ok">Всё в порядке</span>')+'<span class="wb-first">'+(S.wbOpen||!first?'':esc(first.text))+'</span><span class="wb-chev">'+(S.wbOpen?'▾':'▴')+'</span></button>';
+  if(S.wbOpen&&W.length)h+='<div class="wb-list">'+W.map(function(x,i){return '<div class="w '+x.lvl+'" data-act="warn" data-i="'+i+'">'+esc(x.text)+'</div>'}).join('')+'</div>';
+  $('#warnbar').innerHTML=h;
+}
+function renderSide(){
+  var C=CALC, h='';
+  h+='<details class="sec" data-key="towers"'+op('towers')+'><summary><h2>Башни</h2></summary>'+(C.T.length?C.T.map(function(x){var t=x.t,c=x.c,on=S.sel&&((S.sel.t==='tower'&&S.sel.id===t.id)||((S.sel.t==='ritem'||S.sel.t==='sitem')&&S.sel.tower===t.id));var pct=c.U?Math.round(c.used/c.U*100):0;
+    return '<div class="row'+(on?' on':'')+'" data-act="sel" data-t="tower" data-id="'+t.id+'" style="flex-direction:column;align-items:stretch;gap:4px"><div style="display:flex;justify-content:space-between;gap:8px"><span class="n">'+esc(t.name)+'</span><span class="v">'+(c.U?c.used+'/'+c.U+'U':'без кофра')+'</span></div><div class="bar'+(pct>90?' hi':'')+'"><i style="width:'+pct+'%"></i></div><div class="v" style="text-align:left"><span class="cm-part">'+nf(c.w,0)+'×'+nf(c.d,0)+'×'+nf(c.h,0)+' см · </span>'+nf(c.kg,0)+' кг · '+c.p+' Вт</div></div>'}).join(''):'<div class="hint">Башен нет. Перетащите рэк-кофр в рабочую зону.</div>')+'</details>';
+  var groups=[], n=0, numById={};
+  S.loose.forEach(function(l){if(l.mode!=='box'){n++;numById[l.id]=n}});
+  RUNS.forEach(function(r){var ls=S.loose.filter(function(l){return l.mode==='run'&&l.run===r.id}).sort(function(a,b){return a.s-b.s});if(ls.length)groups.push({title:r.name,cv:r.cv,ls:ls})});
+  var fr=S.loose.filter(function(l){return l.mode==='free'});if(fr.length)groups.push({title:'Свободно на площадке',cv:'--muted',ls:fr});
+  var bx=S.loose.filter(function(l){return l.mode==='box'});if(bx.length)groups.push({title:'В кофре мелочёвки',cv:'--line',ls:bx});
+  h+='<details class="sec" data-key="loose"'+op('loose')+'><summary><h2>Мелочь · '+S.loose.length+' шт.</h2></summary>'+(groups.length?groups.map(function(g){
+    return '<div class="gh"><i style="background:var('+g.cv+')"></i>'+esc(g.title)+'</div>'+g.ls.map(function(l){var I=lib(l.libId);
+      return '<div class="row'+(S.sel&&S.sel.id===l.id?' on':'')+'" data-act="sel" data-t="loose" data-id="'+l.id+'"><span class="n">'+(numById[l.id]?'<span class="mono" style="color:var(--accent)">'+numById[l.id]+'</span> ':'')+esc(I.name)+'</span><span class="v">'+(l.mode==='run'?nf(l.s/100,1)+' м':'')+'</span></div>'}).join('')}).join(''):'<div class="hint">Конвертеры и прочая мелочь появятся здесь.</div>')+'</details>';
+  var cnt={}; var stk=0;S.towers.forEach(function(t){t.cases.forEach(function(c){if(c.stack){stk+=c.items.length;return}cnt[c.caseId]=(cnt[c.caseId]||0)+1})});
+  var rows=Object.keys(cnt).map(function(k){var K=lib(k);return '<tr><td>'+cnt[k]+' × '+esc(K.name)+'</td><td>'+dv(K.w)+'×'+dv(K.h)+'×'+dv(K.d)+'</td></tr>'}).join('');
+  var dk2={};S.furn.forEach(function(f){var I=furnI(f);if(I.kind==='deck'){var k=I.name+' · выс. '+dv(I.h);if(!dk2[k])dk2[k]={n:0,s:dv(I.w)+'×'+dv(I.d)};dk2[k].n++}});
+  Object.keys(dk2).forEach(function(k){rows+='<tr><td>'+dk2[k].n+' × '+esc(k)+'</td><td>'+dk2[k].s+'</td></tr>'});
+  var nmon=S.furn.filter(function(f){return furnI(f).kind==='monitor'}).length;
+  if(nmon)rows+='<tr><td>'+nmon+' × мониторы (едут в своих кейсах)</td><td>—</td></tr>';
+  if(stk)rows+='<tr><td>'+stk+' × оборудование без кофра (едет в своих кейсах)</td><td>—</td></tr>';
+  if(C.box.n)rows+='<tr><td>1 × Кейс мелочёвки'+(C.box.pick?'':' (не помещается)')+'</td><td>'+(C.box.pick?C.box.pick.join('×'):'—')+'</td></tr>';
+  h+='<details class="sec" data-key="ship"'+op('ship')+'><summary><h2>К перевозке</h2></summary>'+(rows?'<table class="tbl">'+rows+'</table><p class="note">Размеры кофров в см (ширина × высота × глубина), вес с оборудованием: '+nf(C.tot.kg,0)+' кг.</p>':'<div class="hint">Пока ничего.</div>')+'</details>';
+  h+='<button class="btn pri" data-act="copy">Копировать спецификацию</button>';
+  $('#side').innerHTML=h;
+}
+
+/* ---------- главная отрисовка ---------- */
+function render(){
+  RUNS=S.runs; CALC=calc(); rebuildMap();
+  $('#app').className='app m-'+S.units+' v-calm v-focus'+(S.libOpen?' lib-open':'')+(S.sideOpen?' side-open':'');
+  $$('[data-act="unit"]').forEach(function(b){b.setAttribute('aria-pressed',b.dataset.u===S.units)});
+  $$('.tab').forEach(function(b){b.setAttribute('aria-selected',b.dataset.tab===S.tab)});
+  $$('[data-act="view"]').forEach(function(b){b.setAttribute('aria-pressed',b.dataset.v===S.view[S.tab])});
+  $('#viewhint').textContent=VIEWHINT[S.tab+'-'+S.view[S.tab]];
+  $('#undoBtn').disabled=!hist.length;
+  renderStats(); renderMain(); renderInspector(); renderSide(); renderWarn();
+}
+var VIEWHINT={'racks-front':'Лицевые панели: юниты слева, высота в см справа','racks-top':'Глубина оборудования от передней крышки. Только просмотр','plan-top':'Перетаскивайте башни, мебель и мелочь','plan-front':'Тяните объекты: вбок — по плану, вверх — на опору, вниз — на пол или под стол'};
+function renderMain(){
+  var m=$('#main'), sc=$('#tsc'), pos=sc?[sc.scrollLeft,sc.scrollTop]:null;
+  if(S.tab==='racks'){m.innerHTML=renderRacks();var n=$('#tsc');if(n&&pos){n.scrollLeft=pos[0];n.scrollTop=pos[1]}}
+  else if(S.view.plan==='front')m.innerHTML=elevationHTML();
+  else{if(!$('#plan'))m.innerHTML=planShell();renderPlanTools();renderPlan()}
+}
+function toast(msg){var t=$('#toast');t.textContent=msg;t.classList.add('on');clearTimeout(toast._t);toast._t=setTimeout(function(){t.classList.remove('on')},2200)}
+
+/* ---------- операции ---------- */
+function pushLayout(cs,I,b,c0,selfId){
+  var K=lib(cs.caseId), cw=cwOf(I);
+  var its=cs.items.filter(function(i){return i.id!==selfId}).map(function(i){var J=lib(i.libId);return {id:i.id,u0:i.u0,u:J.u,c0:i.c0||0,cw:cwOf(J)}});
+  its.forEach(function(x){if(x.c0<c0+cw&&x.c0+x.cw>c0&&x.u0<b&&b<x.u0+x.u)b=(b-x.u0<=x.u0+x.u-b)?x.u0:x.u0+x.u});
+  if(b+I.u>K.u)return null;
+  var placed=[{u0:b,u:I.u,c0:c0,cw:cw}], moves={};
+  its.sort(function(a,z){return a.u0-z.u0});
+  for(var k=0;k<its.length;k++){
+    var x=its[k], top=x.u0, again=true, guard=0;
+    while(again&&guard++<60){again=false;for(var q=0;q<placed.length;q++){var pl=placed[q];if(pl.c0<x.c0+x.cw&&pl.c0+pl.cw>x.c0&&top<pl.u0+pl.u&&top+x.u>pl.u0){top=pl.u0+pl.u;again=true}}}
+    if(top+x.u>K.u)return null;
+    if(top!==x.u0)moves[x.id]=top;
+    placed.push({u0:top,u:x.u,c0:x.c0,cw:x.cw});
+  }
+  return {u0:b,moves:moves};
+}
+function insertSeg(tw,seg,posTop,movedId){
+  var L=tw.cases.slice().reverse();
+  if(movedId){var oi=-1;L.forEach(function(x,k){if(x.id===movedId)oi=k});if(oi>=0){L.splice(oi,1);if(oi<posTop)posTop--}}
+  L.splice(Math.max(0,Math.min(L.length,posTop)),0,seg);tw.cases=L.reverse();
+}
+function segInsTarget(tw,e){
+  var segs=$$('.stack>.case,.stack>.stackseg',tw), pos=segs.length;
+  for(var q=0;q<segs.length;q++){var r=segs[q].getBoundingClientRect();if(e.clientY<r.top+r.height/2){pos=q;break}}
+  return {type:'segins',el:tw,t:tw.dataset.tower,pos:pos,segs:segs};
+}
+function fits(cs,u0,u,selfId,c0,cw){
+  c0=c0||0;cw=cw||12;
+  var K=lib(cs.caseId); if(u0<0||u0+u>K.u||c0<0||c0+cw>12)return false;
+  return cs.items.every(function(i){if(i.id===selfId)return true;var I=lib(i.libId),ic=i.c0||0,iw=cwOf(I);
+    return u0+u<=i.u0||u0>=i.u0+I.u||c0+cw<=ic||c0>=ic+iw});
+}
+function getCase(tid,cid){var t=S.towers.filter(function(x){return x.id===tid})[0];return t?t.cases.filter(function(c){return c.id===cid})[0]:null}
+function selTower(){var s=S.sel;if(!s)return null;var id=s.t==='tower'?s.id:(s.t==='ritem'||s.t==='sitem')?s.tower:null;return id?S.towers.filter(function(x){return x.id===id})[0]||null:null}
+function topStack(t){var top=t.cases[t.cases.length-1];if(top&&top.stack)return top;var sg={id:uid(),stack:true,items:[]};t.cases.push(sg);return sg}
+function insertStack(seg,item,posTop,movedId){
+  var L=seg.items.slice().reverse();
+  if(movedId){var oi=-1;L.forEach(function(x,k){if(x.id===movedId)oi=k});if(oi>=0){L.splice(oi,1);if(oi<posTop)posTop--}}
+  L.splice(Math.max(0,Math.min(L.length,posTop)),0,item);seg.items=L.reverse();
+}
+function addToStack(t,libId){var sg=topStack(t),it={id:uid(),libId:libId};insertStack(sg,it,0,null);S.sel={t:'sitem',id:it.id,tower:t.id,seg:sg.id};return it}
+function newStackTower(libId,at){
+  var I=libId?lib(libId):null, spot=at||findSpot(I?Math.max(I.w,20):50,I?Math.max(I.d,20):30), tag=nextTag();
+  var t={id:uid(),tag:tag,name:'Башня '+tag,x:spot.x,y:spot.y,r:0,cases:[{id:uid(),stack:true,items:libId?[{id:uid(),libId:libId}]:[]}]};
+  S.towers.push(t);S.sel={t:'tower',id:t.id};return t;
+}
+function autoPlace(t,I){
+  var cs=t.cases.slice().reverse();
+  for(var i=0;i<cs.length;i++){if(cs[i].stack)continue;var K=lib(cs[i].caseId);for(var u0=0;u0+I.u<=K.u;u0++)for(var c0=0;c0+cwOf(I)<=12;c0+=cwOf(I))if(fits(cs[i],u0,I.u,null,c0,cwOf(I))){cs[i].items.push({id:uid(),libId:I.id,u0:u0,c0:c0});return true}}
+  return false;
+}
+function findSpot(w,d){
+  var B=bounds();
+  for(var y=ROOM.d-d/2-10;y>=d/2+10;y-=10)for(var x=w/2+10;x<=ROOM.w-w/2-10;x+=10){
+    var b={x0:x-w/2,x1:x+w/2,y0:y-d/2,y1:y+d/2};if(!B.some(function(o){return overlaps(b,o)}))return {x:x,y:y}}
+  return {x:ROOM.w/2,y:ROOM.d/2};
+}
+function nextTag(){var used=S.towers.map(function(t){return t.tag});for(var i=0;i<26;i++){var c=String.fromCharCode(65+i);if(used.indexOf(c)<0)return c}return '?'}
+function newTower(caseId,at){
+  var K=lib(caseId), tag=nextTag(), spot=at||findSpot(K.w,K.d);
+  var t={id:uid(),tag:tag,name:'Башня '+tag,x:spot.x,y:spot.y,r:0,cases:[{id:uid(),caseId:caseId,items:[]}]};
+  S.towers.push(t); S.sel={t:'tower',id:t.id}; return t;
+}
+function placeLoose(libId,p){
+  var best=null;RUNS.forEach(function(r){var n=nearestOnRun(r,p.x,p.y);if(!best||n.d<best.d)best=n});
+  var o={id:uid(),libId:libId};
+  if(best&&best.d<SNAP){o.mode='run';o.run=best.run;o.s=best.s}else{o.mode='free';o.x=p.x;o.y=p.y}
+  S.loose.push(o);S.sel={t:'loose',id:o.id};
+}
+function addFromLib(id){
+  var I=lib(id);
+  if(I.kind==='case'){mutate(function(){newTower(id)});toast('Добавлена новая башня');return}
+  if(I.kind==='rack'){
+    var t=null;
+    if(S.sel&&S.sel.t==='tower')t=S.towers.filter(function(x){return x.id===S.sel.id})[0];
+    else if(S.sel&&S.sel.t==='ritem')t=S.towers.filter(function(x){return x.id===S.sel.tower})[0];
+    t=t||S.towers[0];
+    if(!t){mutate(function(){newStackTower(I.id)});toast('Новая башня: оборудование лежит без кофра');return}
+    snap();var ok=autoPlace(t,I);var msg='«'+I.name+'» добавлен в башню '+t.tag;if(!ok){addToStack(t,I.id);msg='Нет места в кофрах: «'+I.name+'» лёг сверху стопкой без кофра'}
+    S.sel={t:'tower',id:t.id};persist();render();toast(msg);return;
+  }
+  if(I.kind==='loose'){var st=selTower();if(st){mutate(function(){addToStack(st,id)});toast('«'+I.name+'» лёг стопкой в башню '+st.tag);return}mutate(function(){placeLoose(id,{x:420+Math.random()*60,y:190+Math.random()*10})});toast('Мелочь добавлена на площадку. Выберите башню, чтобы класть в неё');return}
+  mutate(function(){var front=S.tab==='plan'&&S.view.plan==='front';var sp=I.kind==='deck'?(front?findDeckOnSpot(I):findDeckSpot(I)):I.kind==='monitor'?findMonitorSpot(I):findSpot(I.w,I.d);var o={id:uid(),libId:id,x:sp.x,y:sp.y,r:0};if(sp.on)o.on=true;S.furn.push(o);S.sel={t:'furn',id:o.id}});
+}
+function removeSel(){
+  var s=S.sel; if(!s)return;
+  mutate(function(){
+    if(s.t==='ritem'||s.t==='sitem'){var f=findRitem(s.id);if(f)f.c.items.splice(f.k,1)}
+    else if(s.t==='tower')S.towers=S.towers.filter(function(t){return t.id!==s.id});
+    else if(s.t==='furn')S.furn=S.furn.filter(function(t){return t.id!==s.id});
+    else if(s.t==='loose')S.loose=S.loose.filter(function(t){return t.id!==s.id});
+    else if(s.t==='run'){var R=runById(s.id);if(R){S.loose.forEach(function(l){if(l.mode==='run'&&l.run===R.id){var q=pointAt(R,l.s);l.mode='free';l.x=q.x;l.y=q.y;delete l.run;delete l.s}});S.runs=S.runs.filter(function(r){return r!==R})}}
+    S.sel=null;
+  });
+}
+function rotateSel(){
+  var s=S.sel;if(!s)return;
+  var o=s.t==='tower'?S.towers.filter(function(t){return t.id===s.id})[0]:s.t==='furn'?S.furn.filter(function(t){return t.id===s.id})[0]:null;
+  if(!o)return;mutate(function(){o.r=((o.r||0)+90)%360});
+}
+function elevSnap(what,o,nx,bh){
+  var B=bounds(), DKb=B.filter(function(b){return b.deck});
+  var I=what==='furn'?furnI(o):null, isDeck=!!I&&I.kind==='deck', isMon=!!I&&I.kind==='monitor';
+  var c=null, w, d;
+  if(what==='tower'){c=towerCalc(o);w=c.fw;d=c.fd}
+  else{var sw=(o.r||0)%180!==0;w=sw?I.d:I.w;d=sw?I.w:I.d}
+  var x=isDeck?Math.round((nx-w/2)/50)*50+w/2:Math.round(nx/5)*5;
+  var dat=function(px,py){return Math.max(0,deckHAt(DKb,px,py))};
+  var hosts=[];
+  B.forEach(function(b){
+    if(b.ref===o)return;
+    if(b.deck){if(isDeck&&b.on)return;hosts.push({x0:b.x0,x1:b.x1,y0:b.y0,y1:b.y1,top:b.top,kind:'deck',h:b.h});return}
+    if(isDeck)return;
+    if(b.t==='furn'&&!b.chair&&!b.mon){if(what==='furn'&&!isMon)return;hosts.push({x0:b.x0,x1:b.x1,y0:b.y0,y1:b.y1,top:dat(b.cx,b.cy)+b.h,kind:'table',h:b.h});return}
+    if(b.t==='tower'&&isMon){var tc=towerCalc(b.ref);hosts.push({x0:b.x0,x1:b.x1,y0:b.y0,y1:b.y1,top:towerBase(b.ref,tc,dat)+tc.h,kind:'tower',h:tc.h})}
+  });
+  var cand=null;
+  hosts.forEach(function(h){if(x<h.x0||x>h.x1)return;if(h.top<=bh+25&&(!cand||h.top>cand.top))cand=h});
+  var yy=isDeck?Math.round((o.y-d/2)/50)*50+d/2:o.y;
+  var clampY=function(h){var lo=h.y0+d/2,hi=h.y1-d/2;return Math.round((lo<=hi?Math.max(lo,Math.min(hi,yy)):(h.y0+h.y1)/2)/5)*5};
+  var res={x:x,y:isDeck?yy:o.y,lay:null,on:false};
+  if(cand&&bh>=cand.top-15){res.y=clampY(cand);res.on=true;if(what==='tower'&&cand.kind==='table')res.lay='on'}
+  else if(what==='tower'){
+    var tb=null;
+    hosts.forEach(function(h){if(!tb&&h.kind==='table'&&x>=h.x0&&x<=h.x1&&c.h<=h.h-5&&o.y+d/2>h.y0&&o.y-d/2<h.y1)tb=h});
+    if(tb)res.lay='under';
+  }
+  return res;
+}
+function elevMove(info,e){
+  var p=svgPt(e);if(!p)return;
+  var o=planObj({kind:info.what,id:info.id});if(!o)return;
+  var r=elevSnap(info.what,o,p.x+info.dx,-p.y+info.dh);
+  o.x=r.x;o.y=r.y;
+  if(info.what==='tower'){if(r.lay)o.lay=r.lay;else delete o.lay}
+  else if(furnI(o).kind==='deck'){if(r.on)o.on=true;else delete o.on}
+  CALC=calc();
+  $('#main').innerHTML=elevationHTML();
+}
+function findDeckOnSpot(I,excl){
+  var B=bounds().filter(function(b){return b.ref!==excl});
+  var L0=B.filter(function(b){return b.deck&&!b.on}), L1=B.filter(function(b){return b.deck&&b.on});
+  if(!L0.length)return findDeckSpot(I);
+  var x0=Math.min.apply(null,L0.map(function(b){return b.x0})), x1=Math.max.apply(null,L0.map(function(b){return b.x1}));
+  var y0=Math.min.apply(null,L0.map(function(b){return b.y0})), y1=Math.max.apply(null,L0.map(function(b){return b.y1}));
+  for(var y=y0;y+I.d<=y1+.1;y+=50)for(var x=x0;x+I.w<=x1+.1;x+=50){
+    var bb={x0:x,x1:x+I.w,y0:y,y1:y+I.d};
+    var cov=[[bb.x0+.5,bb.y0+.5],[bb.x1-.5,bb.y0+.5],[bb.x0+.5,bb.y1-.5],[bb.x1-.5,bb.y1-.5]].every(function(q){return deckHAt(L0,q[0],q[1])>=0});
+    if(cov&&!L1.some(function(o){return overlaps(bb,o)}))return {x:x+I.w/2,y:y+I.d/2,on:true};
+  }
+  return findDeckSpot(I);
+}
+function supportAt(x,y){
+  var h=0;
+  S.furn.forEach(function(f){var I=furnI(f);if(I.kind!=='furn'||fid(I)==='chair')return;var sw=(f.r||0)%180!==0,w=sw?I.d:I.w,d=sw?I.w:I.d;if(Math.abs(x-f.x)<=w/2&&Math.abs(y-f.y)<=d/2)h=Math.max(h,I.h)});
+  CALC.T.forEach(function(t){if(Math.abs(x-t.t.x)<=t.c.fw/2&&Math.abs(y-t.t.y)<=t.c.fd/2)h=Math.max(h,t.c.h)});
+  return h;
+}
+function findMonitorSpot(I){
+  var tbs=S.furn.filter(function(f){var T=furnI(f);return T.kind==='furn'&&fid(T).indexOf('tbl')===0&&(f.r||0)%180===0});
+  var mons=bounds().filter(function(b){return b.mon});
+  for(var i=0;i<tbs.length;i++){
+    var f=tbs[i], T=furnI(f), y=f.y-T.d/2+I.d/2+3;
+    for(var x=f.x-T.w/2+I.w/2+3;x+I.w/2<=f.x+T.w/2;x+=I.w+6){
+      var bb={x0:x-I.w/2,x1:x+I.w/2,y0:y-I.d/2,y1:y+I.d/2};
+      if(!mons.some(function(o){return overlaps(bb,o)}))return {x:Math.round(x/5)*5,y:Math.round(y/5)*5};
+    }
+  }
+  return findSpot(I.w,I.d);
+}
+function findDeckSpot(I){
+  var D=bounds().filter(function(b){return b.deck}), cand=[];
+  if(!D.length)cand.push([0,Math.round(ROOM.d/2/50)*50]);
+  D.forEach(function(b){cand.push([b.x1,b.y0]);cand.push([b.x0-I.w,b.y0]);cand.push([b.x0,b.y1]);cand.push([b.x0,b.y0-I.d])});
+  for(var i=0;i<cand.length;i++){
+    var x0=cand[i][0], y0=cand[i][1];
+    if(x0<0||y0<0||x0+I.w>ROOM.w||y0+I.d>ROOM.d)continue;
+    var bb={x0:x0,x1:x0+I.w,y0:y0,y1:y0+I.d};
+    if(!D.some(function(o){return overlaps(bb,o)}))return {x:x0+I.w/2,y:y0+I.d/2};
+  }
+  return {x:I.w/2,y:I.d/2};
+}
+function snapDrop(I,p){
+  if(I.kind==='deck')return {x:Math.round((p.x-I.w/2)/50)*50+I.w/2,y:Math.round((p.y-I.d/2)/50)*50+I.d/2};
+  return {x:Math.round(p.x/5)*5,y:Math.round(p.y/5)*5};
+}
+function snapPos(kind,o,x,y){
+  if(kind==='furn'){var I=furnI(o);if(I.kind==='deck'){var sw=(o.r||0)%180!==0,w=sw?I.d:I.w,d=sw?I.w:I.d;return {x:Math.round((x-w/2)/50)*50+w/2,y:Math.round((y-d/2)/50)*50+d/2}}}
+  return {x:Math.round(x/5)*5,y:Math.round(y/5)*5};
+}
+function finishDraw(){
+  if(S.drawPts.length<2){toast('Нужно минимум две точки');return}
+  var T=rtype(S.drawType), n=RUNS.filter(function(r){return rkind(r)===T.k}).length+1;
+  mutate(function(){var r={id:uid(),k:T.k,name:T.n+(n>1?' '+n:''),short:T.short,cv:T.cv,pts:S.drawPts.map(function(q){return [q[0],q[1]]})};S.runs.push(r);S.sel={t:'run',id:r.id};S.pmode='runs';S.drawPts=[];S.drawHover=null});
+  toast('Трасса добавлена. Тяните точки, чтобы поправить маршрут');
+}
+function cancelDraw(){S.pmode='runs';S.drawPts=[];S.drawHover=null;render()}
+function libUsed(id){
+  var u=false;
+  S.towers.forEach(function(t){t.cases.forEach(function(c){if(c.caseId===id)u=true;c.items.forEach(function(i){if(i.libId===id)u=true})})});
+  S.loose.forEach(function(l){if(l.libId===id)u=true});S.furn.forEach(function(f){if(f.libId===id)u=true});
+  return u;
+}
+function openFurnEditor(id){
+  var f=S.furn.filter(function(x){return x.id===id})[0]; if(!f)return;
+  var I=furnI(f), B=lib(f.libId);
+  $('#modal').innerHTML='<div class="modal-back" data-act="close-modal"><form class="modal" id="fform" data-id="'+id+'" novalidate><h3>'+(I.kind==='deck'?'Станок':I.kind==='monitor'?'Монитор':'Мебель')+': параметры</h3><div class="hint">Основа в библиотеке: «'+esc(B.name)+'»</div>'+
+   '<label>Название<input id="ff-name" value="'+esc(I.name)+'"></label>'+
+   '<div class="fr"><label>Ширина, см<input id="ff-w" type="number" min="5" max="600" step="0.5" value="'+I.w+'"></label><label>Глубина, см<input id="ff-d" type="number" min="5" max="600" step="0.5" value="'+I.d+'"></label><label>Высота, см<input id="ff-h" type="number" min="1" max="300" step="0.5" value="'+I.h+'"></label></div>'+
+   '<div class="fr"><label>Вес, кг<input id="ff-kg" type="number" min="0" step="0.5" value="'+I.kg+'"></label>'+(I.kind==='monitor'?'<label>Мощность, Вт<input id="ff-p" type="number" min="0" step="1" value="'+(I.p||0)+'"></label>':'<div></div>')+'</div>'+
+   '<div class="hint">«Применить» меняет только этот объект на плане. «Сохранить как пресет» добавляет новую позицию в библиотеку и ставит её на место этого объекта.</div>'+
+   '<div class="acts" style="flex-wrap:wrap"><button type="button" class="btn" data-act="close-modal-btn">Отмена</button><button type="button" class="btn" data-act="fpreset">Сохранить как пресет</button><button type="submit" class="btn pri">Применить</button></div></form></div>';
+  $('#ff-name').focus();
+}
+function readFurn(){
+  var num=function(id,d){var v=parseFloat($(id).value);return isFinite(v)&&v>0?v:d};
+  var o={name:$('#ff-name').value.trim()||'Без названия',w:num('#ff-w',100),d:num('#ff-d',60),h:num('#ff-h',75),kg:Math.max(0,parseFloat($('#ff-kg').value)||0)};
+  if($('#ff-p'))o.p=Math.max(0,parseFloat($('#ff-p').value)||0);
+  return o;
+}
+function furnOfForm(){var fm=$('#fform');return fm?S.furn.filter(function(x){return x.id===fm.dataset.id})[0]:null}
+function applyFurn(){var f=furnOfForm();if(!f)return;var v=readFurn();mutate(function(){f.ov=v});$('#modal').innerHTML='';toast('Параметры применены к этому объекту')}
+function presetFurn(){
+  var f=furnOfForm();if(!f)return;var B=lib(f.libId), v=readFurn(), nm=v.name;
+  if(fullLib().some(function(x){return x.name===nm}))nm+=' (своё)';
+  var it={id:'u'+uid(),kind:B.kind,cat:B.cat,name:nm,w:v.w,d:v.d,h:v.h,kg:v.kg,p:(v.p!=null?v.p:(B.p||0)),diag:B.diag,base:fid(B),preset:true};
+  mutate(function(){S.custom.push(it);f.libId=it.id;delete f.ov});
+  renderLib();$('#modal').innerHTML='';toast('Пресет «'+nm+'» сохранён в библиотеку');
+}
+function specText(){
+  var C=CALC,L=[];
+  L.push('ПЛАННЕР ПУЛЬТОВОЙ · площадка '+nf(ROOM.w/100,1)+' × '+nf(ROOM.d/100,1)+' м');
+  L.push('Итого: '+C.tot.towers+' башн., '+C.tot.used+'/'+C.tot.U+'U, '+C.tot.cases+' кофр., '+nf(C.tot.kg,0)+' кг, '+nf(C.tot.p/1000,2)+' кВт ('+nf(C.tot.p/230,1)+' А)');
+  C.T.forEach(function(x){
+    L.push('');L.push('Башня '+x.t.tag+' — '+x.t.name+': '+x.c.U+'U, '+nf(x.c.h,0)+' см высота, '+nf(x.c.w,0)+'×'+nf(x.c.d,0)+' см, '+nf(x.c.kg,0)+' кг');
+    x.t.cases.slice().reverse().forEach(function(cs){if(cs.stack){L.push('  Без кофра, стопкой (сверху вниз):');cs.items.slice().reverse().forEach(function(i){var I=lib(i.libId);L.push('    '+I.name+'  ('+dv(I.w)+'×'+dv(I.h)+'×'+dv(I.d)+' см)')});return}var K=lib(cs.caseId);L.push('  Кофр '+K.u+'U (снаружи '+dv(K.w)+'×'+dv(K.h)+'×'+dv(K.d)+' см)');
+      cs.items.slice().sort(function(a,b){return a.u0-b.u0}).forEach(function(i){var I=lib(i.libId);L.push('    U'+(i.u0+1)+(I.u>1?'–'+(i.u0+I.u):'')+'  '+I.name+'  ('+I.u+'U'+(FRAC[I.cw]?' '+FRAC[I.cw]:'')+', гл. '+I.d+' см)')})});
+  });
+  var dk={};S.furn.forEach(function(f){var I=furnI(f);if(I.kind==='deck'){var k=I.name+' · выс. '+dv(I.h)+' см';dk[k]=(dk[k]||0)+1}});
+  if(C.tot.deck&&C.tot.deck.n){L.push('');L.push('Пол из станков: '+nf(C.tot.deck.w/100,1)+' × '+nf(C.tot.deck.d/100,1)+' м, '+nf(C.tot.deck.area,1)+' м², '+C.tot.deck.n+' шт.');Object.keys(dk).forEach(function(k){L.push('  '+dk[k]+' × '+k)})}
+  var mn={};S.furn.forEach(function(f){var I=furnI(f);if(I.kind==='monitor')mn[I.name]=(mn[I.name]||0)+1});
+  if(Object.keys(mn).length){L.push('');L.push('Мониторы:');Object.keys(mn).forEach(function(k){L.push('  '+mn[k]+' × '+k)})}
+  L.push('');L.push('Мелочь:');
+  RUNS.forEach(function(r){var ls=S.loose.filter(function(l){return l.mode==='run'&&l.run===r.id}).sort(function(a,b){return a.s-b.s});ls.forEach(function(l){L.push('  '+r.name+', '+nf(l.s/100,1)+' м от ввода: '+lib(l.libId).name)})});
+  S.loose.filter(function(l){return l.mode==='free'}).forEach(function(l){L.push('  свободно: '+lib(l.libId).name)});
+  S.loose.filter(function(l){return l.mode==='box'}).forEach(function(l){L.push('  в кофре: '+lib(l.libId).name)});
+  if(C.box.n)L.push('  Кейс мелочёвки: '+(C.box.pick?C.box.pick.join('×')+' см':'не помещается в 80×50×30'));
+  return L.join('\n');
+}
+function copySpec(){
+  var txt=specText();
+  var fallback=function(){var ta=document.createElement('textarea');ta.value=txt;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');toast('Спецификация скопирована')}catch(e){toast('Не удалось скопировать')}ta.remove()};
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(txt).then(function(){toast('Спецификация скопирована')},fallback);else fallback();
+}
+
+/* ---------- своё оборудование ---------- */
+function openCustom(){
+  $('#modal').innerHTML='<div class="modal-back" data-act="close-modal"><form class="modal" id="cform" novalidate>'+
+   '<h3>Новая позиция библиотеки</h3>'+
+   '<label>Название<input id="cf-name" required placeholder="Например, Видеопроцессор"></label>'+
+   '<label>Тип<select id="cf-kind"><option value="rack">В стойку (в юнитах)</option><option value="loose">Мелочь (в сантиметрах)</option><option value="case">Рэк-кофр</option><option value="furn">Мебель</option></select></label>'+
+   '<div class="fr" data-k="rack case"><label>Высота, U<input id="cf-u" type="number" min="1" max="48" value="1"></label><label>Глубина, см<input id="cf-dep" type="number" min="5" max="120" value="30"></label><label data-k="rack"><span>Ширина</span><select id="cf-cw"><option value="12">19″ (полная)</option><option value="6">1/2 rack</option><option value="4">1/3 rack</option><option value="3">1/4 rack</option></select></label></div>'+
+   '<div class="fr" data-k="loose furn"><label>Ширина, см<input id="cf-w" type="number" min="1" max="400" step="0.1" value="10"></label><label data-k="loose"><span>Высота, см</span><input id="cf-h" type="number" min="1" max="200" step="0.1" value="4"></label><label>Глубина, см<input id="cf-d" type="number" min="1" max="400" step="0.1" value="7"></label></div>'+
+   '<div class="fr" data-k="rack loose furn"><label>Вес, кг<input id="cf-kg" type="number" min="0" step="0.1" value="1"></label><label data-k="rack loose"><span>Мощность, Вт</span><input id="cf-p" type="number" min="0" value="10"></label></div>'+
+   '<div class="acts"><button type="button" class="btn" data-act="close-modal-btn">Отмена</button><button type="submit" class="btn pri">Добавить в библиотеку</button></div></form></div>';
+  syncCustom(); $('#cf-name').focus();
+}
+function syncCustom(){var k=$('#cf-kind').value;$$('#cform [data-k]').forEach(function(e){e.hidden=e.dataset.k.split(' ').indexOf(k)<0})}
+function saveCustom(){
+  var name=$('#cf-name').value.trim(); if(!name){$('#cf-name').focus();return}
+  var k=$('#cf-kind').value, num=function(id,def){var v=parseFloat($(id).value);return isFinite(v)&&v>=0?v:def};
+  var id='u'+uid(), it;
+  if(k==='rack')it=mkRack(id,'Своё',name,Math.max(1,Math.round(num('#cf-u',1))),num('#cf-dep',30),num('#cf-kg',1),num('#cf-p',0),parseInt($('#cf-cw').value,10)||12);
+  else if(k==='case'){var c=mkCase(Math.max(1,Math.round(num('#cf-u',4))),num('#cf-dep',45));c.id=id;c.name=name;it=c}
+  else if(k==='loose')it=mkLoose(id,'Своё',name,Math.max(1,num('#cf-w',10)),Math.max(1,num('#cf-h',4)),Math.max(1,num('#cf-d',7)),num('#cf-kg',.2),num('#cf-p',0));
+  else it=mkFurn(id,name,Math.max(10,num('#cf-w',100)),Math.max(10,num('#cf-d',60)),75,num('#cf-kg',10));
+  it.cat=k==='case'?CAT_CASE:'Своё';
+  snap();S.custom.push(it);persist();$('#modal').innerHTML='';S.kind='all';S.q='';$('#q').value='';renderLib();render();toast('«'+name+'» добавлено в библиотеку');
+}
+
+
+/* ---------- руководство ---------- */
+function gsvg(w,h,body){return '<svg viewBox="0 0 '+w+' '+h+'" role="img" aria-hidden="true"><defs><marker id="gah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" style="fill:var(--accent)"/></marker></defs>'+body+'</svg>'}
+function gr(x,y,w,h,f,st,rx,dash){return '<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" rx="'+(rx||0)+'" style="fill:'+f+';stroke:'+(st||'none')+';stroke-width:1'+(dash?';stroke-dasharray:'+dash:'')+'"/>'}
+function gt(x,y,t,c,an,sz){return '<text x="'+x+'" y="'+y+'" text-anchor="'+(an||'start')+'" style="fill:'+(c||'var(--ink)')+';font:'+(sz||11)+'px var(--f-body)">'+t+'</text>'}
+function gl(x1,y1,x2,y2,c,w,dash){return '<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" style="stroke:'+c+';stroke-width:'+(w||1.5)+(dash?';stroke-dasharray:'+dash:'')+'"/>'}
+function ga(x1,y1,x2,y2){return '<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" marker-end="url(#gah)" style="stroke:var(--accent);stroke-width:2"/>'}
+function gc(x,y,r,f,st){return '<circle cx="'+x+'" cy="'+y+'" r="'+r+'" style="fill:'+f+';stroke:'+(st||'none')+';stroke-width:2"/>'}
+function gpoly(pts,c,w,dash){return '<polyline points="'+pts+'" fill="none" style="stroke:'+c+';stroke-width:'+(w||4)+';stroke-linecap:round;stroke-linejoin:round'+(dash?';stroke-dasharray:'+dash:'')+'"/>'}
+var G_FACE='var(--face)',G_CASE='var(--case)',G_LINE='var(--line)',G_MUT='var(--muted)';
+function gItem(x,y,w,h,label,col){return gr(x,y,w,h,G_FACE,'var(--hole)',2)+gr(x,y+h-3,w,3,col||'var(--k-video)')+(label?gt(x+6,y+h/2+3,label,'var(--face-ink)','start',9.5):'')}
+
+function figStart(){return gsvg(560,190,
+  gr(1,1,558,188,'var(--bg)',G_LINE,10)+
+  gr(10,10,540,22,'var(--panel)',G_LINE,5)+gt(20,25,'Планнер пультовой','var(--ink)','start',12)+gt(540,25,'U / см   Руководство   Отменить','var(--muted)','end',10)+
+  gr(10,40,112,110,'var(--panel)',G_LINE,6)+gt(18,56,'Библиотека','var(--ink)','start',11)+gr(16,64,98,16,'var(--panel2)',G_LINE,3)+gt(22,76,'Рэк-кофр 8U','var(--ink)','start',9.5)+gr(16,84,98,16,'var(--panel2)',G_LINE,3)+gt(22,96,'LED-процессор 2U','var(--ink)','start',9.5)+gr(16,104,98,16,'var(--panel2)',G_LINE,3)+gt(22,116,'Конвертер HDMI→SDI','var(--ink)','start',9.5)+
+  gr(130,40,280,110,'var(--panel2)',G_LINE,6)+gt(140,56,'Стойки и башни  |  План пультовой','var(--ink)','start',11)+gr(142,66,54,76,G_CASE,null,4)+gr(206,66,54,56,G_CASE,null,4)+gr(270,66,60,40,'none',G_MUT,4,'3 3')+gt(300,90,'стопка','var(--muted)','middle',9)+
+  gr(418,40,132,110,'none',G_MUT,6,'4 3')+gt(484,95,'Спецификация','var(--muted)','middle',11)+gt(484,109,'(кнопка в шапке)','var(--muted)','middle',9)+
+  gr(10,158,540,24,'var(--panel2)',G_LINE,8)+gt(22,174,'Замечания   Предупреждения 1   нажмите, чтобы раскрыть','var(--warn)','start',10.5)
+)}
+function figTower(){return gsvg(560,200,
+  gr(10,16,120,26,'var(--panel2)',G_LINE,5)+gt(18,33,'Рэк-кофр 8U · гл. 45','var(--ink)','start',10)+ga(132,29,200,60)+
+  gr(205,10,130,180,G_CASE,null,8)+gt(215,26,'КОФР 8U · 60×52×62 см','var(--case-ink)','start',9.5)+
+  gr(222,34,96,148,'var(--slot)')+gItem(222,36,96,48,'LED-процессор 2U')+gItem(222,86,96,48,'LED-процессор 2U')+gItem(222,136,96,23,'LED-контроллер 1U','var(--k-net)')+
+  gt(212,52,'1','var(--case-ink)','end',9)+gt(212,76,'2','var(--case-ink)','end',9)+gt(212,100,'3','var(--case-ink)','end',9)+gt(212,150,'6','var(--case-ink)','end',9)+
+  gr(222,162,96,20,'rgba(46,158,91,.28)','var(--ok)',2,'4 3')+gt(270,176,'свободно','var(--ok)','middle',9.5)+
+  gt(360,50,'Зелёный предпросмотр: блок влезает.','var(--ink)')+gt(360,66,'Красный: места нет или блок занят.','var(--ink)')+
+  gt(360,96,'Слева юниты U, справа высота в см.','var(--muted)')+gt(360,112,'Глубина больше кофра: красная метка.','var(--muted)')+
+  gt(360,142,'Тяжёлое (от 15 кг) в верхней половине:','var(--muted)')+gt(360,158,'предупреждение, лучше вниз.','var(--muted)')
+)}
+function figWidth(){
+  var rows=[['19″ целиком',[12]],['1/2 + 1/2',[6,6]],['1/3 × 3',[4,4,4]],['1/4 × 4',[3,3,3,3]]], g='';
+  rows.forEach(function(r,i){var y=14+i*42,x=160;g+=gt(10,y+20,r[0],'var(--ink)','start',11)+gr(x-4,y-4,336,34,G_CASE,null,4);r[1].forEach(function(cw){var w=cw/12*320;g+=gr(x+1,y,w-2,26,G_FACE,'var(--hole)',2);x+=w});});
+  return gsvg(560,184,g+gt(160,180,'Доли ширины занимают один ряд юнитов вместе. Ширина задаётся в карточке библиотеки.','var(--muted)','start',10));
+}
+function figStack(){return gsvg(560,200,
+  gr(40,16,160,170,'none',G_MUT,8,'5 4')+
+  gr(70,22,100,26,G_FACE,'var(--hole)',3)+gt(120,39,'Компактный контроллер','var(--face-ink)','middle',9)+
+  gr(55,52,130,30,G_FACE,'var(--hole)',3)+gt(120,71,'Средний контроллер','var(--face-ink)','middle',9)+
+  gl(50,88,190,88,'var(--ok)',3)+
+  gr(45,92,150,26,G_FACE,'var(--hole)',3)+gt(120,109,'LED-контроллер 1U','var(--face-ink)','middle',9)+
+  gr(70,122,100,40,G_FACE,'var(--hole)',3)+gt(120,146,'Конвертер','var(--face-ink)','middle',9)+
+  gt(120,180,'Σ 29 см высота','var(--muted)','middle',10)+
+  gt(240,50,'Зелёная линия: куда ляжет предмет.','var(--ink)')+gt(240,68,'Перетаскивайте внутри стопки,','var(--muted)')+gt(240,82,'чтобы поменять порядок, или кнопками','var(--muted)')+gt(240,96,'«Выше» и «Ниже» в нижней панели.','var(--muted)')+
+  gt(240,128,'Бросьте оборудование на пустую зону','var(--ink)')+gt(240,142,'«новая башня» или на любую башню:','var(--ink)')+gt(240,156,'оно ляжет стопкой без кофра.','var(--ink)')
+)}
+function figViews(){return gsvg(560,200,
+  gt(20,16,'Спереди','var(--ink)','start',11)+gr(20,22,110,170,G_CASE,null,6)+gr(32,32,86,150,'var(--slot)')+gItem(32,34,86,40,'Блок 2U')+gItem(32,78,86,20,'1U','var(--k-net)')+gItem(32,100,41,20,'1/2','var(--k-video)')+gItem(77,100,41,20,'1/2','var(--k-video)')+gt(75,200,'юниты и см по высоте','var(--muted)','middle',9)+
+  gt(230,16,'Сверху','var(--ink)','start',11)+gr(230,22,130,170,G_CASE,null,6)+gr(246,36,98,142,'var(--slot)')+
+  gr(246,70,98,108,'var(--k-video)')+gr(246,110,50,68,'var(--k-net)')+gr(300,126,44,52,'var(--k-pwr)')+
+  gt(295,32,'сзади свободно 5 см','#FFC266','middle',9)+gt(295,188,'ПЕРЕД','var(--case-ink)','middle',9)+
+  gt(385,60,'Спереди: лицевые панели.','var(--ink)')+gt(385,76,'Сверху: глубина каждого блока','var(--ink)')+gt(385,90,'от передней крышки.','var(--ink)')+gt(385,118,'Если сзади меньше 5 см,','var(--muted)')+gt(385,132,'кабелям тесно: предупреждение.','var(--muted)')
+)}
+function figPlan(){return gsvg(560,220,
+  gr(10,40,540,170,'var(--panel2)',G_LINE,2)+gr(10,10,540,30,'var(--stage)')+gt(280,30,'СЦЕНА','var(--stage-ink)','middle',13)+gt(110,30,'SDI','var(--c-sdi)','middle',11)+
+  gpoly('110,40 110,120 330,120','var(--c-sdi)',5,'10 5')+
+  gc(110,40,7,'var(--panel2)','var(--accent)')+gc(110,120,7,'var(--panel2)','var(--accent)')+gc(330,120,7,'var(--panel2)','var(--accent)')+
+  gc(220,120,8,'var(--panel2)','var(--accent)')+gt(220,124,'+','var(--accent)','middle',12)+
+  gc(270,120,14,'transparent','var(--accent)')+gr(263,117,14,6,'var(--ink)')+gt(270,102,'2,6 м от ввода','var(--accent)','middle',9.5)+
+  gpoly('430,40 430,150 500,150 500,185','var(--c-net)',5,'6 5')+gc(500,185,5,'var(--c-net)')+gt(440,90,'новая трасса: клики','var(--muted)','start',9.5)+
+  gr(40,150,60,40,G_CASE,null,3)+gt(70,174,'A','#fff','middle',16)+
+  gt(120,196,'Режим «Трассы»: тяните точки, плюс добавляет точку, двойной клик удаляет.','var(--muted)','start',10)
+)}
+function figDeck(){return gsvg(560,230,
+  gt(14,16,'Сверху','var(--ink)','start',11)+gr(14,22,320,90,'var(--panel2)',G_LINE,2)+
+  gr(20,28,100,40,'var(--deck)','var(--deck-line)')+gr(120,28,100,40,'var(--deck)','var(--deck-line)')+gr(220,28,100,40,'var(--deck)','var(--deck-line)')+
+  gr(20,68,50,40,'var(--deck)','var(--deck-line)')+gr(70,68,100,40,'var(--deck)','var(--deck-line)')+gt(75,52,'2×1 · 40','var(--muted)','middle',9)+
+  gr(28,36,26,22,G_CASE,null,2)+gt(41,51,'A','#fff','middle',11)+gr(150,40,110,22,'var(--furn)',G_MUT,2)+gt(205,55,'Стол 180×60','var(--muted)','middle',9)+
+  gt(14,138,'Спереди','var(--ink)','start',11)+gl(14,214,334,214,'var(--ink)',5)+
+  gr(20,184,300,30,'var(--deck)','var(--deck-line)')+gr(28,130,26,54,G_CASE,null,2)+gr(150,134,110,6,'var(--furn)',G_MUT)+gr(160,140,5,44,'var(--furn)')+gr(245,140,5,44,'var(--furn)')+
+  gl(14,162,334,162,'var(--accent)',1.2,'6 4')+gt(334,158,'глаза ≈120','var(--accent)','end',9)+
+  gt(360,40,'Станки задают пол пультовой:','var(--ink)')+gt(360,56,'габариты по сетке 50 см.','var(--ink)')+gt(360,84,'Высота станка поднимает всё, что','var(--muted)')+gt(360,98,'стоит на нём (вид спереди).','var(--muted)')+gt(360,126,'Предупреждения:','var(--ink)')+gt(360,142,'объект свисает за край станка;','var(--muted)')+gt(360,156,'стоит на станках разной высоты.','var(--muted)')
+)}
+function figEditor(){return gsvg(560,200,
+  gr(20,60,150,60,'var(--furn)',G_MUT,3)+gt(95,94,'Стол 180×60','var(--muted)','middle',11)+ga(172,90,232,90)+gt(178,78,'правый клик','var(--accent)','start',10)+
+  gr(240,14,300,172,'var(--panel2)',G_LINE,8)+gt(254,36,'Мебель: параметры','var(--ink)','start',12)+
+  gr(254,46,270,20,'var(--panel)',G_LINE,3)+gt(260,60,'Название: Стол 200×70','var(--ink)','start',10)+
+  gr(254,72,84,20,'var(--panel)',G_LINE,3)+gt(260,86,'Ш 200','var(--ink)','start',10)+gr(344,72,84,20,'var(--panel)',G_LINE,3)+gt(350,86,'Г 70','var(--ink)','start',10)+gr(434,72,90,20,'var(--panel)',G_LINE,3)+gt(440,86,'В 75','var(--ink)','start',10)+
+  gr(254,150,110,24,'var(--panel)',G_LINE,5)+gt(309,166,'Сохранить как пресет','var(--ink)','middle',9.5)+gr(372,150,152,24,'var(--accent)',null,5)+gt(448,166,'Применить','#fff','middle',10)+
+  gt(254,116,'Применить меняет только этот объект.','var(--muted)','start',9.5)+gt(254,130,'Пресет добавляет позицию в библиотеку.','var(--muted)','start',9.5)
+)}
+function figMon(){return gsvg(560,206,
+  gt(14,16,'Сверху','var(--ink)','start',11)+gr(14,22,260,66,'var(--furn)',G_MUT,3)+
+  gr(34,28,84,22,G_CASE,null,2)+gl(36,50,116,50,'var(--k-video)',3)+gt(76,43,'27″','#fff','middle',9)+
+  gr(150,28,84,22,G_CASE,null,2)+gl(152,50,232,50,'var(--k-video)',3)+gt(192,43,'27″','#fff','middle',9)+
+  gt(144,80,'экран смотрит к оператору (вниз по плану)','var(--muted)','middle',9.5)+
+  gt(14,116,'Спереди','var(--ink)','start',11)+gr(14,170,260,6,'var(--furn)',G_MUT)+gr(24,176,6,22,'var(--furn)')+gr(258,176,6,22,'var(--furn)')+
+  gr(34,122,84,34,G_CASE,'var(--rail)',2)+gr(73,156,6,14,'var(--furn)')+gr(150,122,84,34,G_CASE,'var(--rail)',2)+gr(189,156,6,14,'var(--furn)')+
+  gt(300,44,'Мониторы ставятся на стол или на башню.','var(--ink)')+gt(300,60,'Бросьте монитор на стол: он встанет','var(--muted)')+gt(300,74,'у дальнего края и не мешает столу.','var(--muted)')+
+  gt(300,104,'«+» на карточке кладёт монитор на','var(--ink)')+gt(300,120,'свободное место стола.','var(--ink)')+
+  gt(300,150,'Вид спереди ставит монитор на высоту','var(--muted)')+gt(300,164,'стола или башни (и станка под ними).','var(--muted)')
+)}
+function figLayer(){return gsvg(560,200,
+  gt(14,16,'Башня на столе','var(--ink)','start',11)+gr(14,100,150,6,'var(--furn)',G_MUT)+gr(22,106,6,50,'var(--furn)')+gr(150,106,6,50,'var(--furn)')+gr(60,56,60,44,G_CASE,null,3)+gItem(66,62,48,14,'','var(--k-video)')+gt(90,150,'станок вместо стола тоже подходит','var(--muted)','middle',9)+
+  gt(214,16,'Башня под столом','var(--ink)','start',11)+gr(214,100,150,6,'var(--furn)',G_MUT)+gr(222,106,6,50,'var(--furn)')+gr(350,106,6,50,'var(--furn)')+gr(262,112,60,44,G_CASE,null,3)+gItem(268,118,48,14,'','var(--k-net)')+gl(214,156,364,156,'var(--ink)',3)+
+  gt(14,176,'Положение выбирается в нижней панели башни. «Авто» решает само:','var(--muted)','start',10)+gt(14,190,'низкая башня с кофрами идёт под стол, стопка и высокая башня встают на него.','var(--muted)','start',10)
+)}
+var GUIDE=[
+ {id:'start',t:'Экран и общая идея',f:figStart,p:['Планнер собирает пультовую: башни из рэк-кофров, оборудование без кофров, мелочь на трассах кабеля и пол из станков.','Слева библиотека, в центре рабочая зона с вкладками «Стойки и башни» и «План пультовой», справа спецификация (кнопка в шапке), внизу окошко замечаний.','Размеры показываются в юнитах и сантиметрах. Переключатель «U / см / U + см» в шапке выбирает, что видно. В приложении оборудование будет браться из общей библиотеки, в прототипе данные условные.']},
+ {id:'tower',t:'Башни из кофров',f:figTower,p:['Перетащите рэк-кофр на пустую зону «новая башня» или нажмите «+» на карточке. Блок из библиотеки перетаскивается в слот кофра. Кнопка «+ сверху…» над башней ставит ещё один кофр или стопку без кофра.','Блок, брошенный на занятое место, вставляется между соседями: нижние сдвигаются вниз, если им хватает места (появляется зелёная линия). Кофры и стопки тоже переносятся: берите за заголовок и бросайте между другими слоями башни или на «новая башня». Кнопка «+ снизу…» ставит слой под башню, «+ сверху…» над ней. Блок можно переносить между слотами и между башнями. Чтобы убрать, перетащите его в пустое место рабочей зоны или в библиотеку, либо нажмите Delete. Любое удаление отменяется кнопкой «Отменить» или Ctrl+Z.']},
+ {id:'width',t:'Доли ширины',f:figWidth,p:['По умолчанию всё занимает 19″. Блоки 1/2, 1/3 и 1/4 rack встают в один ряд юнитов рядом друг с другом. Перетаскивайте блок к нужной части ряда, предпросмотр покажет, куда он ляжет.']},
+ {id:'stack',t:'Оборудование без кофра',f:figStack,p:['Контроллеры часто лежат друг на друге без рэка и кофра. Для этого у башни есть слой «Стопка без кофра»: высота считается по габаритам, площадь на полу по самому широкому и глубокому предмету.','Если выбрана башня, «+» на карточке кладёт мелочь или блок в её стопку. Если в кофрах нет места, блок тоже ляжет стопкой сверху.']},
+ {id:'views',t:'Вид спереди и сверху',f:figViews,p:['Переключатель «Вид» работает на обеих вкладках. В башнях: спереди лицевые панели, сверху глубина оборудования и запас сзади. На плане: сверху обычный план, спереди высоты башен и мебели с линией глаз оператора.','В башнях виды сверху и спереди только для просмотра. На плане вид спереди тоже позволяет двигать объекты: вбок по плану, вверх на стол, станок или башню, вниз на пол или под стол. Позже можно добавить полноценную 3D-отрисовку.']},
+ {id:'plan',t:'План и трассы',f:figPlan,p:['Мелочь (конвертеры и подобное) не привязана к стойкам. Отпустите её ближе 30 см к трассе, и она встанет на трассу и запомнит расстояние от ввода. Можно оставить её свободной или убрать в кейс мелочёвки.','Кнопка «Трассы» над планом включает редактирование. Кнопка «＋ Нарисовать трассу»: ставьте точки кликами, двойной клик или «Готово» завершает. Точки трассы тяните, кружок с плюсом на отрезке добавляет точку, двойной клик по точке удаляет её. Название трассы пишется на плане вдоль линии. Тип и название меняются в нижней панели, «Развернуть» меняет направление ввода.']},
+ {id:'decks',t:'Станки и пол',f:figDeck,p:['Пультовая чаще всего стоит на станках, поэтому в библиотеке есть вкладка «Станки». Они ложатся по сетке 50 см. Башни и мебель на станках не считаются пересечением, а пол из станков показывается в итогах как габариты в метрах и площадь.','Высота станка поднимает башни и мебель на виде спереди, а линия глаз оператора отсчитывается от пола станка, на котором стоит стул. Если объект выходит за край станка или стоит на станках разной высоты, внизу появится предупреждение. Башни и мебель на станках не считаются пересечением: станок работает как пол или как стол. Станок, стоящий сверху на станках пола, выделен тёплым цветом как «станок-стол». Если стол, станок-стол, башня или стул висят в воздухе (часть опоры за краем станка или на станках разной высоты), внизу появится ошибка, а объект подсветится красным пунктиром.']},
+ {id:'mon',t:'Мониторы',f:figMon,p:['В библиотеке есть вкладка «Мониторы» от 15,6″ до 55″ с габаритами, весом и мощностью. Монитор ставится на стол или сверху на башню, на плане он рисуется с яркой чертой со стороны экрана.','Монитор можно повернуть клавишей R. Вес и мощность попадают в итоги и спецификацию, размеры и мощность редактируются правым кликом.']},
+ {id:'layer',t:'Башни на столах и под ними',f:figLayer,p:['Башню можно ставить на стол или станок и под них. Станки нередко работают вместо столов, поэтому правила для них такие же.','Выберите башню и задайте положение в нижней панели: «Авто», «На столе или станке», «Под столом или станком». Проверки: башня должна помещаться целиком на столе, а под столом её высота должна быть меньше высоты стола. Тяжёлая башня на столе (больше 40 кг) даёт предупреждение. На виде спереди башня поднимается на высоту стола или станка.','На виде спереди то же делается перетаскиванием: поднимите башню над столом или станком, чтобы поставить её сверху, опустите на пол, чтобы поставить под стол. Станок, добавленный на виде спереди, по умолчанию встаёт сверху на станки пола как стол. Положение станка можно сменить в нижней панели.']},
+ {id:'edit',t:'Редактор по правому клику',f:figEditor,p:['Правый клик по мебели или станку на плане (или кнопка «Параметры…» в нижней панели) открывает редактор: название, ширина, глубина, высота и вес.','«Применить» меняет только выбранный объект. «Сохранить как пресет» добавляет новую позицию в библиотеку, и она встаёт на место этого объекта. Свои позиции библиотеки удаляются крестиком на карточке, если они нигде не используются.']},
+ {id:'keys',t:'Клавиши',f:null,p:['<span class="kb">Delete</span> убрать выбранное. <span class="kb">R</span> повернуть башню, мебель или станок. <span class="kb">Ctrl+Z</span> отменить. <span class="kb">Esc</span> снять выделение, закрыть окно или отменить рисование трассы. <span class="kb">Backspace</span> в режиме рисования убирает последнюю точку, <span class="kb">Enter</span> завершает трассу.']}
+];
+function guideHTML(){
+  var toc='<b>Руководство</b>'+GUIDE.map(function(x){return '<button data-act="gto" data-id="'+x.id+'">'+esc(x.t)+'</button>'}).join('');
+  var body=GUIDE.map(function(x){return '<section id="g-'+x.id+'"><h3>'+esc(x.t)+'</h3>'+x.p.map(function(t){return '<p>'+t+'</p>'}).join('')+(x.f?'<div class="gfig">'+x.f()+'</div>':'')+'</section>'}).join('');
+  return '<div class="guide-back" data-act="close-guide"><div class="guide" role="dialog" aria-label="Руководство"><nav class="g-toc">'+toc+'</nav><div class="g-body"><div class="g-head"><button class="btn sm" data-act="close-guide-btn">Закрыть</button></div>'+body+'</div></div></div>';
+}
+
+/* ---------- перетаскивание ---------- */
+var drag=null;
+function startDrag(e,info){
+  if(e.button!=null&&e.button>0)return;
+  drag={info:info,sx:e.clientX,sy:e.clientY,active:false,ghost:null,pid:e.pointerId};
+  window.addEventListener('pointermove',onMove);window.addEventListener('pointerup',onUp);window.addEventListener('pointercancel',onCancel);
+}
+function dragItem(){var i=drag.info;return i.src==='lib'?lib(i.libId):i.src==='ritem'?lib(i.libId):null}
+function svgPt(e){var svg=$('#plan')||$('#elev');if(!svg)return null;var pt=svg.createSVGPoint();pt.x=e.clientX;pt.y=e.clientY;var m=svg.getScreenCTM();if(!m)return null;var p=pt.matrixTransform(m.inverse());return {x:p.x,y:p.y}}
+function clearPrev(){$$('.slot-prev,.ins-line').forEach(function(n){n.remove()});$$('.hot').forEach(function(n){if(n.classList.contains('new-tower')||n.classList.contains('boxcard')||n.classList.contains('tower'))n.classList.remove('hot')});$('#lib').classList.remove('over-trash')}
+function target(e){
+  var info=drag.info, I=dragItem(), el=document.elementFromPoint(e.clientX,e.clientY);
+  if(!el)return null;
+  if(el.closest('#lib'))return info.src!=='lib'?{type:'trash',lib:true}:null;
+  if(el.closest('#plan')){
+    var p=svgPt(e);if(!p)return null;
+    return {type:'plan',p:p};
+  }
+  if(el.closest('#elev')){var pe=svgPt(e);return pe?{type:'elev',p:pe}:null}
+  var topv=S.tab==='racks'&&S.view.racks==='top';
+  if(info.src==='seg'){
+    if(topv)return null;
+    if(el.closest('.new-tower'))return {type:'newtower',el:el.closest('.new-tower')};
+    var tws=el.closest('.tower');
+    return tws?segInsTarget(tws,e):null;
+  }
+  var sl=el.closest('.slots');
+  if(sl&&I&&I.kind==='rack'){
+    var cs=getCase(sl.dataset.tower,sl.dataset.case);if(!cs)return null;
+    var K=lib(cs.caseId), rect=sl.getBoundingClientRect(), u0=Math.round((e.clientY-rect.top)/UH-I.u/2);
+    u0=Math.max(0,Math.min(K.u-I.u,u0));
+    var cw=cwOf(I), relx=(e.clientX-rect.left)/rect.width, kk=Math.max(0,Math.min(12/cw-1,Math.floor(relx*12/cw))), c0=kk*cw;
+    var selfId=info.src==='ritem'?info.id:null;
+    if(fits(cs,u0,I.u,selfId,c0,cw))return {type:'slot',el:sl,cs:cs,t:sl.dataset.tower,u0:u0,c0:c0,cw:cw,ok:true};
+    var bb=Math.max(0,Math.min(K.u,Math.round((e.clientY-rect.top)/UH))), lay=pushLayout(cs,I,bb,c0,selfId);
+    if(lay)return {type:'slot',el:sl,cs:cs,t:sl.dataset.tower,u0:lay.u0,b:lay.u0,c0:c0,cw:cw,ok:true,insert:true,lay:lay};
+    return {type:'slot',el:sl,cs:cs,t:sl.dataset.tower,u0:u0,c0:c0,cw:cw,ok:false};
+  }
+  if(I&&(I.kind==='rack'||I.kind==='loose')){
+    var ss=el.closest('.stackseg');
+    if(ss&&!topv){var its=$$('[data-sitem]',ss),pos=its.length;for(var q=0;q<its.length;q++){var rr=its[q].getBoundingClientRect();if(e.clientY<rr.top+rr.height/2){pos=q;break}}
+      return {type:'stack',el:ss,t:ss.dataset.tower,seg:ss.dataset.seg,pos:pos,its:its}}
+    if(el.closest('.new-tower'))return {type:'newstack',el:el.closest('.new-tower')};
+  }
+  if(I&&I.kind==='case'){
+    if(el.closest('.new-tower'))return {type:'newtower',el:el.closest('.new-tower')};
+    var twc=el.closest('.tower');
+    if(twc&&!topv)return segInsTarget(twc,e);
+    if(twc)return {type:'newtower',el:$('.new-tower')};
+  }
+  if(I&&I.kind==='loose'&&el.closest('.boxcard'))return {type:'box',el:el.closest('.boxcard')};
+  if(I&&(I.kind==='rack'||I.kind==='loose')&&el.closest('.tower')&&!topv){var tw=el.closest('.tower');return {type:'towerstack',el:tw,t:tw.dataset.tower}}
+  if(info.src==='ritem'&&el.closest('#main')&&!el.closest('.boxcard'))return {type:'trash'};
+  return null;
+}
+function onMove(e){
+  if(!drag)return;
+  if(!drag.active){
+    if(Math.hypot(e.clientX-drag.sx,e.clientY-drag.sy)<5)return;
+    drag.active=true;document.body.classList.add('dragging');
+    var info=drag.info;
+    if(info.src==='plan'&&!info.nosnap){snap()}
+    if(info.src==='seg'){var sgel=$('[data-segid="'+info.seg+'"]');if(sgel)sgel.classList.add('lifted')}
+    if(info.src==='ritem'){var n=$('[data-ritem="'+info.id+'"],[data-sitem="'+info.id+'"]');if(n)n.classList.add('lifted')}
+    var g=document.createElement('div');g.className='ghost';
+    var I=dragItem();
+    g.innerHTML=(info.src==='plan'||info.src==='seg')?esc(info.label||'Объект'):esc(I.name)+'<span class="mono">'+esc(plain(dimStr(I)))+'</span>';
+    if(info.kind==='vtx'||info.kind==='elev')g.style.display='none';
+    document.body.appendChild(g);drag.ghost=g;
+  }
+  drag.ghost.style.left=e.clientX+'px';drag.ghost.style.top=e.clientY+'px';
+  var info2=drag.info;
+  if(info2.src==='plan'&&info2.kind==='elev'){elevMove(info2,e);return}
+  if(info2.src==='plan'){
+    var p=svgPt(e);if(!p)return;
+    var o=planObj(info2);if(!o)return;
+    if(info2.kind==='vtx'){var vp=snapRunPt(p);o.pts[info2.idx]=[vp.x,vp.y];renderPlan();return}
+    var px=p.x+info2.dx, py=p.y+info2.dy;
+    if(info2.kind==='loose'){
+      var best=null;RUNS.forEach(function(r){var n=nearestOnRun(r,p.x,p.y);if(!best||n.d<best.d)best=n});
+      if(best&&best.d<SNAP){o.mode='run';o.run=best.run;o.s=best.s;S.snapHint=best.run}
+      else{o.mode='free';delete o.run;o.x=Math.max(-30,Math.min(ROOM.w+30,p.x));o.y=Math.max(-30,Math.min(ROOM.d+30,p.y));S.snapHint=null}
+    }else{var q2=snapPos(info2.kind,o,px,py);o.x=q2.x;o.y=q2.y}
+    CALC=calc();renderPlan();return;
+  }
+  clearPrev();
+  var tg=target(e);drag.tg=tg;drag.ghost.classList.toggle('del',!!(tg&&tg.type==='trash'));
+  if(S.preview||S.snapHint){S.preview=null;S.snapHint=null;if(S.tab==='plan')renderPlan()}
+  if(!tg)return;
+  var I2=dragItem();
+  if(tg.type==='trash'){if(tg.lib)$('#lib').classList.add('over-trash')}
+  else if(tg.type==='slot'){if(tg.insert){var il=document.createElement('div');il.className='ins-line';il.style.top=(tg.b*UH-1)+'px';tg.el.appendChild(il)}var pv=document.createElement('div');pv.className='slot-prev'+(tg.ok?'':' no');pv.style.top=(tg.u0*UH)+'px';pv.style.height=(I2.u*UH)+'px';pv.style.left=(tg.c0/12*100)+'%';pv.style.width=(tg.cw/12*100)+'%';pv.style.right='auto';tg.el.appendChild(pv)}
+  else if(tg.type==='stack'){var ln=document.createElement('div');ln.className='ins-line';tg.el.querySelector('.sbody').insertBefore(ln,tg.its[tg.pos]||null)}
+  else if(tg.type==='segins'){var ln2=document.createElement('div');ln2.className='ins-line';tg.el.querySelector('.stack').insertBefore(ln2,tg.segs[tg.pos]||tg.el.querySelector('[data-addcase-bottom]'))}
+  else if(tg.type==='newtower'||tg.type==='box'||tg.type==='newstack'||tg.type==='towerstack'){if(tg.el)tg.el.classList.add('hot')}
+  else if(tg.type==='plan'){
+    var pp=tg.p, w=I2.kind==='case'?I2.w:I2.w, d=I2.kind==='case'?I2.d:I2.d, ok=true;
+    if(I2.kind==='rack'){var hit=towerAt(pp);ok=!!hit;w=hit?towerCalc(hit).fw:48;d=hit?towerCalc(hit).fd:30}
+    if(I2.kind==='loose'){var best2=null;RUNS.forEach(function(r){var n=nearestOnRun(r,pp.x,pp.y);if(!best2||n.d<best2.d)best2=n});S.snapHint=best2&&best2.d<SNAP?best2.run:null;w=I2.w;d=I2.d}
+    if(I2.kind==='deck'||I2.kind==='furn'||I2.kind==='monitor'||I2.kind==='case')pp=snapDrop(I2,pp);
+    S.preview={x:pp.x,y:pp.y,w:Math.max(w,12),d:Math.max(d,12),ok:ok};
+    renderPlan();
+  }
+}
+function towerAt(p){
+  var f=null;S.towers.forEach(function(t){var c=towerCalc(t);if(Math.abs(p.x-t.x)<=c.fw/2&&Math.abs(p.y-t.y)<=c.fd/2)f=t});return f;
+}
+function planObj(info){
+  if(info.kind==='vtx')return runById(info.id);
+  if(info.kind==='tower')return S.towers.filter(function(t){return t.id===info.id})[0];
+  if(info.kind==='furn')return S.furn.filter(function(t){return t.id===info.id})[0];
+  return S.loose.filter(function(t){return t.id===info.id})[0];
+}
+function endDrag(){
+  window.removeEventListener('pointermove',onMove);window.removeEventListener('pointerup',onUp);window.removeEventListener('pointercancel',onCancel);
+  if(drag&&drag.ghost)drag.ghost.remove();
+  document.body.classList.remove('dragging');clearPrev();S.preview=null;S.snapHint=null;
+}
+function onCancel(){var d=drag;endDrag();drag=null;if(d&&d.active)render()}
+function onUp(e){
+  var d=drag;if(!d){endDrag();return}
+  if(!d.active){endDrag();drag=null;return}
+  var info=d.info, tg=info.src==='plan'?null:target(e);
+  endDrag();drag=null;
+  if(info.src==='plan'){persist();render();return}
+  if(info.src==='seg'){
+    if(!tg){render();return}
+    var srcT=S.towers.filter(function(x){return x.id===info.tower})[0], sgm=srcT&&srcT.cases.filter(function(c){return c.id===info.seg})[0];
+    if(!sgm){render();return}
+    if(tg.type==='segins'){
+      mutate(function(){
+        var tw=S.towers.filter(function(x){return x.id===tg.t})[0], same=tw===srcT;
+        if(!same){srcT.cases=srcT.cases.filter(function(c){return c!==sgm});if(!srcT.cases.length)S.towers=S.towers.filter(function(x){return x!==srcT})}
+        insertSeg(tw,sgm,tg.pos,same?sgm.id:null);S.sel={t:'tower',id:tw.id};
+      });
+      return;
+    }
+    if(tg.type==='newtower'){
+      mutate(function(){
+        srcT.cases=srcT.cases.filter(function(c){return c!==sgm});if(!srcT.cases.length)S.towers=S.towers.filter(function(x){return x!==srcT});
+        var tag=nextTag(), sp=findSpot(60,70), nt={id:uid(),tag:tag,name:'Башня '+tag,x:sp.x,y:sp.y,r:0,cases:[sgm]};S.towers.push(nt);S.sel={t:'tower',id:nt.id};
+      });
+      toast('Слой вынесен в новую башню');return;
+    }
+    render();return;
+  }
+  var I=info.src==='lib'?lib(info.libId):lib(info.libId);
+  if(!tg){render();return}
+  if(tg.type==='trash'){
+    if(info.src==='ritem'){var f=findRitem(info.id),nm=lib(info.libId).name;mutate(function(){f.c.items.splice(f.k,1);S.sel=null});toast('Удалено: «'+nm+'». Отменить: Ctrl+Z или кнопка «Отменить»')}
+    else render();
+    return;
+  }
+  if(tg.type==='slot'){
+    if(!tg.ok){toast('Сюда не помещается: '+I.u+'U'+(FRAC[I.cw]?' '+FRAC[I.cw]:''));render();return}
+    mutate(function(){
+      if(info.src==='ritem'){var f2=findRitem(info.id);f2.c.items.splice(f2.k,1)}
+      if(tg.insert)tg.cs.items.forEach(function(i){if(tg.lay.moves[i.id]!=null)i.u0=tg.lay.moves[i.id]});
+      var id=info.src==='ritem'?info.id:uid();
+      tg.cs.items.push({id:id,libId:info.libId,u0:tg.u0,c0:tg.c0});
+      S.sel={t:'ritem',id:id,tower:tg.t,cas:tg.cs.id};
+    });
+    return;
+  }
+  if(tg.type==='stack'||tg.type==='towerstack'||tg.type==='newstack'){
+    if(I.kind!=='rack'&&I.kind!=='loose'){render();return}
+    mutate(function(){
+      var moved=info.src==='ritem'?findRitem(info.id):null, item, same=false;
+      if(moved){item={id:moved.i.id,libId:moved.i.libId};same=tg.type==='stack'&&moved.c.id===tg.seg;if(!same)moved.c.items.splice(moved.k,1)}
+      else item={id:uid(),libId:I.id};
+      var tw=tg.type==='newstack'?newStackTower(null):S.towers.filter(function(x){return x.id===tg.t})[0];
+      var seg=tg.type==='stack'?tw.cases.filter(function(c){return c.id===tg.seg})[0]:topStack(tw);
+      insertStack(seg,item,tg.type==='stack'?tg.pos:0,same?item.id:null);
+      S.sel={t:'sitem',id:item.id,tower:tw.id,seg:seg.id};
+    });
+    return;
+  }
+  if(tg.type==='segins'&&I.kind==='case'){mutate(function(){var tw=S.towers.filter(function(x){return x.id===tg.t})[0];insertSeg(tw,{id:uid(),caseId:I.id,items:[]},tg.pos,null);S.sel={t:'tower',id:tw.id}});toast('Кофр добавлен в башню');return}
+  if(tg.type==='newtower'&&I.kind==='case'){mutate(function(){newTower(I.id)});toast('Новая башня собрана');return}
+  if(tg.type==='box'&&I.kind==='loose'){mutate(function(){var o={id:uid(),libId:I.id,mode:'box'};S.loose.push(o);S.sel={t:'loose',id:o.id}});return}
+  if(tg.type==='elev'){
+    if(info.src!=='lib'||(I.kind!=='furn'&&I.kind!=='deck'&&I.kind!=='monitor')){toast('Башни и оборудование кладутся на вкладке «Стойки и башни» или на плане сверху. Здесь можно ставить станки, мебель и мониторы');render();return}
+    mutate(function(){
+      var o={id:uid(),libId:I.id,x:tg.p.x,y:ROOM.d/2,r:0}, dks=bounds().filter(function(b){return b.deck&&!b.on});
+      if(dks.length)o.y=dks[0].cy;
+      var r=elevSnap('furn',o,tg.p.x,-tg.p.y);o.x=r.x;o.y=r.y;if(r.on&&I.kind==='deck')o.on=true;
+      S.furn.push(o);S.sel={t:'furn',id:o.id};
+    });
+    return;
+  }
+  if(tg.type==='plan'){
+    var p=tg.p;
+    if(p.x<-40||p.x>ROOM.w+40||p.y<-40||p.y>ROOM.d+40){render();return}
+    if(I.kind==='case'){mutate(function(){newTower(I.id,{x:Math.round(p.x/5)*5,y:Math.round(p.y/5)*5})});return}
+    if(I.kind==='loose'){var tl=towerAt(p);if(tl){mutate(function(){addToStack(tl,I.id)});toast('«'+I.name+'» лёг стопкой в башню '+tl.tag);return}mutate(function(){placeLoose(I.id,p)});return}
+    if(I.kind==='furn'||I.kind==='deck'||I.kind==='monitor'){var qd=snapDrop(I,p);mutate(function(){var o={id:uid(),libId:I.id,x:qd.x,y:qd.y,r:0};S.furn.push(o);S.sel={t:'furn',id:o.id}});return}
+    if(I.kind==='rack'){
+      var t=towerAt(p);
+      if(!t){mutate(function(){newStackTower(I.id,{x:Math.round(p.x/5)*5,y:Math.round(p.y/5)*5})});toast('Новая башня: оборудование лежит без кофра');return}
+      snap();var ok=autoPlace(t,I);if(!ok)addToStack(t,I.id);
+      S.sel={t:'tower',id:t.id};persist();render();toast(ok?'Добавлено в кофр башни '+t.tag:'Нет места в кофрах: лёг стопкой сверху башни '+t.tag);return;
+    }
+  }
+  render();
+}
+
+/* ---------- события ---------- */
+document.addEventListener('pointerdown',function(e){
+  var card=e.target.closest('.card');
+  if(card&&!e.target.closest('.add')){startDrag(e,{src:'lib',libId:card.dataset.lib});return}
+  var ri=e.target.closest('.ritem');
+  if(ri){
+    var sl=ri.closest('.slots'), id=ri.dataset.ritem, f=findRitem(id);
+    if(!f)return;
+    S.sel={t:'ritem',id:id,tower:sl.dataset.tower,cas:sl.dataset.case};
+    $$('.ritem.on').forEach(function(n){n.classList.remove('on')});ri.classList.add('on');renderInspector();renderStats();
+    startDrag(e,{src:'ritem',id:id,libId:f.i.libId});return;
+  }
+  var chd=e.target.closest('.c-head');
+  if(chd&&!e.target.closest('.x')&&S.tab==='racks'&&S.view.racks==='front'){
+    var se=chd.closest('.case,.stackseg');
+    if(se&&se.dataset.tower&&se.dataset.segid){startDrag(e,{src:'seg',tower:se.dataset.tower,seg:se.dataset.segid,label:(chd.querySelector('.grow')||chd).textContent.trim()});return}
+  }
+  var si=e.target.closest('.sitem');
+  if(si){
+    var sb=si.closest('.stackseg'), sid=si.dataset.sitem, sf=findRitem(sid);
+    if(!sf)return;
+    S.sel={t:'sitem',id:sid,tower:sb.dataset.tower,seg:sb.dataset.seg};
+    $$('.sitem.on,.ritem.on').forEach(function(n){n.classList.remove('on')});si.classList.add('on');renderInspector();renderStats();
+    startDrag(e,{src:'ritem',id:sid,libId:sf.i.libId});return;
+  }
+  var eo=e.target.closest('#elev .obj[data-id]');
+  if(eo){
+    var ek=eo.dataset.t, eid=eo.dataset.id, ep=svgPt(e), eob=planObj({kind:ek,id:eid});
+    if(eob&&ep){
+      S.sel={t:ek,id:eid};
+      $$('#elev .obj.sel').forEach(function(n){n.classList.remove('sel')});eo.classList.add('sel');renderInspector();
+      startDrag(e,{src:'plan',kind:'elev',what:ek,id:eid,dx:eob.x-ep.x,dh:(+eo.dataset.base||0)+ep.y,label:''});
+      return;
+    }
+  }
+  if(S.pmode!=='obj'&&e.target.closest('#plan')){
+    if(S.pmode==='draw'){
+      var dpt=svgPt(e); if(!dpt)return;
+      var sp=snapRunPt(dpt), last=S.drawPts[S.drawPts.length-1];
+      if(!last||Math.hypot(last[0]-sp.x,last[1]-sp.y)>3)S.drawPts.push([sp.x,sp.y]);
+      renderPlan();return;
+    }
+    var vt=e.target.closest('[data-vtx]'), md=e.target.closest('[data-mid]'), rh=e.target.closest('[data-run]');
+    var RS=S.sel&&S.sel.t==='run'?runById(S.sel.id):null;
+    if(vt&&RS){startDrag(e,{src:'plan',kind:'vtx',id:RS.id,idx:+vt.dataset.vtx,dx:0,dy:0,label:''});return}
+    if(md&&RS){var mi=+md.dataset.mid, pa=RS.pts[mi], pb=RS.pts[mi+1];snap();RS.pts.splice(mi+1,0,[Math.round((pa[0]+pb[0])/10)*5,Math.round((pa[1]+pb[1])/10)*5]);persist();renderPlan();startDrag(e,{src:'plan',kind:'vtx',id:RS.id,idx:mi+1,dx:0,dy:0,label:'',nosnap:true});return}
+    if(rh){S.sel={t:'run',id:rh.dataset.run};renderPlan();renderPlanTools();renderInspector();return}
+    return;
+  }
+  var ob=e.target.closest('[data-obj]');
+  if(ob&&ob.closest('#plan')){
+    var kind=ob.dataset.obj, oid=ob.dataset.id, p=svgPt(e), o=planObj({kind:kind,id:oid});
+    if(!o||!p)return;
+    var pos=kind==='loose'?locOf(o):{x:o.x,y:o.y};
+    S.sel={t:kind,id:oid};
+    var label=kind==='tower'?'Башня '+o.tag:(kind==='furn'?furnI(o):lib(o.libId)).name;
+    $$('#plan .obj.sel').forEach(function(n){n.classList.remove('sel')});ob.classList.add('sel');renderInspector();
+    startDrag(e,{src:'plan',kind:kind,id:oid,dx:pos.x-p.x,dy:pos.y-p.y,label:label});
+  }
+});
+
+document.addEventListener('click',function(e){
+  var el=e.target.closest('[data-act]');if(!el)return;
+  var a=el.dataset.act;
+  if(a==='unit'){S.units=el.dataset.u;persist();renderLib();render()}
+  else if(a==='tab'){S.tab=el.dataset.tab;S.sel=null;S.pmode='obj';S.drawPts=[];$('#main').innerHTML='';render()}
+  else if(a==='undo')undo();
+  else if(a==='wb'){S.wbOpen=!S.wbOpen;renderWarn()}
+  else if(a==='view'){S.view[S.tab]=el.dataset.v;S.pmode='obj';S.drawPts=[];$('#main').innerHTML='';render()}
+  else if(a==='drawer'){if(el.dataset.d==='lib')S.libOpen=!S.libOpen;else S.sideOpen=!S.sideOpen;render()}
+  else if(a==='reset'){snap();var d=sample();S.towers=d.towers;S.loose=d.loose;S.furn=d.furn;S.custom=[];S.runs=d.runs;S.sel=null;persist();renderLib();render();toast('Пример восстановлен. Можно отменить')}
+  else if(a==='kind'){S.kind=el.dataset.k;renderLib()}
+  else if(a==='add')addFromLib(el.dataset.id);
+  else if(a==='custom')openCustom();
+  else if(a==='close-modal'){if(e.target===el)$('#modal').innerHTML=''}
+  else if(a==='close-modal-btn')$('#modal').innerHTML='';
+  else if(a==='rm-tower'){var tid=el.dataset.id;mutate(function(){S.towers=S.towers.filter(function(t){return t.id!==tid});S.sel=null})}
+  else if(a==='rm-case'){var t=S.towers.filter(function(x){return x.id===el.dataset.t})[0],cid=el.dataset.c;mutate(function(){t.cases=t.cases.filter(function(c){return c.id!==cid});if(!t.cases.length)S.towers=S.towers.filter(function(x){return x!==t});S.sel=null})}
+  else if(a==='rm-sel')removeSel();
+  else if(a==='rot')rotateSel();
+  else if(a==='smove'){var sf2=S.sel&&findRitem(S.sel.id);if(sf2){var j=sf2.k+(el.dataset.d==='up'?1:-1);if(j>=0&&j<sf2.c.items.length)mutate(function(){var tmp=sf2.c.items[sf2.k];sf2.c.items[sf2.k]=sf2.c.items[j];sf2.c.items[j]=tmp})}}
+  else if(a==='sel'){S.sel={t:el.dataset.t,id:el.dataset.id};if(el.dataset.tower){S.sel.tower=el.dataset.tower;S.sel.cas=el.dataset.cas}renderMain();renderInspector();renderSide()}
+  else if(a==='warn'){var w=CALC.warns[+el.dataset.i];if(w&&w.sel){S.sel=w.sel;renderMain();renderInspector();renderSide()}}
+  else if(a==='lmode'){
+    var L=S.loose.filter(function(l){return l.id===S.sel.id})[0],m=el.dataset.m;if(!L||L.mode===m)return;
+    mutate(function(){
+      if(m==='box'){L.mode='box';delete L.run;delete L.s;delete L.x;delete L.y}
+      else if(m==='run'){var r=RUNS[0];if(!r){toast('Сначала нарисуйте трассу на плане');return}L.mode='run';L.run=L.run||r.id;L.s=runLen(runById(L.run))/2;delete L.x;delete L.y}
+      else{var p=L.mode==='run'&&runById(L.run)?pointAt(runById(L.run),L.s):{x:430,y:200};L.mode='free';L.x=p.x;L.y=p.y+30;delete L.run;delete L.s}
+    });
+  }
+  else if(a==='copy')copySpec();
+  else if(a==='pmode'){S.pmode=el.dataset.m==='obj'?'obj':'runs';S.drawPts=[];if(S.pmode==='obj'&&S.sel&&S.sel.t==='run')S.sel=null;render()}
+  else if(a==='draw-start'){S.pmode='draw';S.drawPts=[];S.sel=null;render()}
+  else if(a==='draw-done')finishDraw();
+  else if(a==='draw-cancel')cancelDraw();
+  else if(a==='selrun'){S.sel={t:'run',id:el.dataset.id};if(S.pmode==='obj')S.pmode='runs';render()}
+  else if(a==='run-rev'){var R3=S.sel&&runById(S.sel.id);if(R3){var len3=runLen(R3);mutate(function(){S.loose.forEach(function(l){if(l.mode==='run'&&l.run===R3.id)l.s=len3-l.s});R3.pts.reverse()})}}
+  else if(a==='fedit'){if(S.sel&&S.sel.t==='furn')openFurnEditor(S.sel.id)}
+  else if(a==='fpreset')presetFurn();
+  else if(a==='libdel'){var lid=el.dataset.id;if(libUsed(lid)){toast('Позиция используется в проекте. Сначала уберите её с плана или из башен')}else{var nm3=lib(lid).name;mutate(function(){S.custom=S.custom.filter(function(x){return x.id!==lid})});renderLib();toast('Удалено из библиотеки: «'+nm3+'»')}}
+  else if(a==='guide'){$('#guide').innerHTML=guideHTML()}
+  else if(a==='close-guide'){if(e.target===el)$('#guide').innerHTML=''}
+  else if(a==='close-guide-btn')$('#guide').innerHTML='';
+  else if(a==='gto'){var tg2=document.getElementById('g-'+el.dataset.id);if(tg2)tg2.scrollIntoView({behavior:'smooth',block:'start'})}
+});
+document.addEventListener('dblclick',function(e){var c=e.target.closest('.card');if(c&&!e.target.closest('.add'))addFromLib(c.dataset.lib)});
+document.addEventListener('change',function(e){
+  var t=e.target;
+  if(t.dataset.deckon!=null){var Fd=S.sel&&S.furn.filter(function(x){return x.id===S.sel.id})[0];if(Fd)mutate(function(){if(t.value){var spd=findDeckOnSpot(furnI(Fd),Fd);Fd.x=spd.x;Fd.y=spd.y;if(spd.on)Fd.on=true}else delete Fd.on});return}
+  if(t.dataset.lay!=null){var Tl=S.sel&&S.towers.filter(function(x){return x.id===S.sel.id})[0];if(Tl)mutate(function(){if(t.value)Tl.lay=t.value;else delete Tl.lay});return}
+  if(t.dataset.drawtype!=null){S.drawType=t.value;renderPlanTools();renderPlan();return}
+  if(t.dataset.runname!=null){var Rn=S.sel&&runById(S.sel.id);if(Rn)mutate(function(){Rn.name=t.value.trim()||Rn.name});return}
+  if(t.dataset.runtype!=null){var Rt=S.sel&&runById(S.sel.id),TT=rtype(t.value);if(Rt)mutate(function(){Rt.k=TT.k;Rt.cv=TT.cv;Rt.short=TT.short});return}
+  if(t.dataset.addcaseBottom!=null&&t.value){var tb=S.towers.filter(function(x){return x.id===t.dataset.addcaseBottom})[0],cb=t.value;mutate(function(){tb.cases.unshift(cb==='__stack'?{id:uid(),stack:true,items:[]}:{id:uid(),caseId:cb,items:[]})});return}
+  if(t.dataset.addcase!=null&&t.value){var tw=S.towers.filter(function(x){return x.id===t.dataset.addcase})[0],cid=t.value;mutate(function(){tw.cases.push(cid==='__stack'?{id:uid(),stack:true,items:[]}:{id:uid(),caseId:cid,items:[]})});return}
+  if(t.dataset.rename){var tw2=S.towers.filter(function(x){return x.id===t.dataset.rename})[0];if(tw2){snap();tw2.name=t.value.trim()||('Башня '+tw2.tag);persist();render()}return}
+  if(t.dataset.lrun!=null){var L=S.loose.filter(function(l){return l.id===S.sel.id})[0];if(L)mutate(function(){L.run=t.value;L.s=runLen(runById(t.value))/2})}
+  if(t.id==='cf-kind')syncCustom();
+});
+document.addEventListener('input',function(e){if(e.target.id==='q'){S.q=e.target.value;renderLib()}});
+document.addEventListener('submit',function(e){if(e.target.id==='cform'){e.preventDefault();saveCustom()}else if(e.target.id==='fform'){e.preventDefault();applyFurn()}});
+document.addEventListener('keydown',function(e){
+  var tag=(e.target.tagName||'').toLowerCase();
+  if(tag==='input'||tag==='select'||tag==='textarea'){if(e.key==='Escape')$('#modal').innerHTML='';return}
+  if(S.pmode==='draw'){
+    if(e.key==='Backspace'||e.key==='Delete'){e.preventDefault();S.drawPts.pop();renderPlan();renderPlanTools();return}
+    if(e.key==='Enter'){finishDraw();return}
+    if(e.key==='Escape'){cancelDraw();return}
+  }
+  if(e.key==='Delete'||e.key==='Backspace'){if(S.sel){e.preventDefault();removeSel()}}
+  else if((e.key==='r'||e.key==='к'||e.key==='R')&&S.sel&&(S.sel.t==='tower'||S.sel.t==='furn'))rotateSel();
+  else if((e.ctrlKey||e.metaKey)&&(e.key==='z'||e.key==='я')){e.preventDefault();undo()}
+  else if(e.key==='Escape'){$('#modal').innerHTML='';$('#guide').innerHTML='';S.sel=null;render()}
+});
+
+document.addEventListener('contextmenu',function(e){
+  var ob=e.target.closest('#plan [data-obj="furn"]');
+  if(!ob||S.pmode!=='obj')return;
+  e.preventDefault();S.sel={t:'furn',id:ob.dataset.id};renderPlan();renderInspector();openFurnEditor(ob.dataset.id);
+});
+document.addEventListener('dblclick',function(e){
+  var vt=e.target.closest('[data-vtx]');
+  if(vt&&S.pmode==='runs'){var R=S.sel&&runById(S.sel.id);if(R&&R.pts.length>2){var i=+vt.dataset.vtx;mutate(function(){R.pts.splice(i,1)})}else toast('В трассе должно остаться минимум две точки');return}
+  if(S.pmode==='draw'&&e.target.closest('#plan'))finishDraw();
+});
+document.addEventListener('pointermove',function(e){
+  if(S.pmode!=='draw'||drag)return;
+  if(!(e.target.closest&&e.target.closest('#plan')))return;
+  var p=svgPt(e);if(!p)return;S.drawHover=snapRunPt(p);renderPlan();
+});
+document.addEventListener('toggle',function(e){var d=e.target;if(d&&d.dataset&&d.dataset.key)S.open[d.dataset.key]=d.open},true);
+renderLib();render();
+})();
+</script>
+
+</body>
+</html>

@@ -81,6 +81,10 @@ public class Scene {
     /** Группы экранов этой сцены в дереве навигации (см. {@link ScreenGroup}) —
      *  старые проекты без поля десериализуются с пустым списком. */
     private List<ScreenGroup> screenGroups = new ArrayList<>();
+    /** Раскладки пультовой этой сцены (Планнер пультовой, см. {@link ControlRoomLayout} и
+     *  {@code docs/control-room-planner/PLAN.md}) — у каждой сцены свой список, раскладок может
+     *  быть несколько. Старые проекты без поля десериализуются с пустым списком. */
+    private List<ControlRoomLayout> controlRoomLayouts = new ArrayList<>();
 
     public Scene() {
     }
@@ -418,6 +422,14 @@ public class Scene {
 
     public void setNetworkManagerPlan(NetworkManagerPlan networkManagerPlan) {
         this.networkManagerPlan = networkManagerPlan;
+    }
+
+    public List<ControlRoomLayout> getControlRoomLayouts() {
+        return controlRoomLayouts;
+    }
+
+    public void setControlRoomLayouts(List<ControlRoomLayout> controlRoomLayouts) {
+        this.controlRoomLayouts = controlRoomLayouts != null ? controlRoomLayouts : new ArrayList<>();
     }
 
     public ScreenDefaults getScreenDefaults() {

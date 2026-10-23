@@ -274,6 +274,54 @@ public class AppModel {
         fireChanged();
     }
 
+    // ---- раскладки пультовой (Планнер пультовой, docs/control-room-planner/PLAN.md) ----
+
+    /** Раскладки текущей сцены (у каждой сцены свой список); без сцены — пустой список. */
+    public List<com.vjstb.ledscheme.model.ControlRoomLayout> controlRoomLayouts() {
+        return currentScene != null ? currentScene.getControlRoomLayouts() : List.of();
+    }
+
+    public com.vjstb.ledscheme.model.ControlRoomLayout addControlRoomLayout(String name) {
+        requireSceneForLayouts();
+        com.vjstb.ledscheme.model.ControlRoomLayout l =
+                com.vjstb.ledscheme.service.room.RoomLayouts.create(currentScene, name);
+        changed();
+        return l;
+    }
+
+    public void renameControlRoomLayout(com.vjstb.ledscheme.model.ControlRoomLayout layout, String name) {
+        requireSceneForLayouts();
+        com.vjstb.ledscheme.service.room.RoomLayouts.rename(currentScene, layout, name);
+        changed();
+    }
+
+    public com.vjstb.ledscheme.model.ControlRoomLayout duplicateControlRoomLayout(
+            com.vjstb.ledscheme.model.ControlRoomLayout layout) {
+        requireSceneForLayouts();
+        com.vjstb.ledscheme.model.ControlRoomLayout copy =
+                com.vjstb.ledscheme.service.room.RoomLayouts.duplicate(currentScene, layout);
+        changed();
+        return copy;
+    }
+
+    public void deleteControlRoomLayout(com.vjstb.ledscheme.model.ControlRoomLayout layout) {
+        requireSceneForLayouts();
+        com.vjstb.ledscheme.service.room.RoomLayouts.delete(currentScene, layout);
+        changed();
+    }
+
+    /** Планнер изменил содержимое раскладки (свой undo у окна планнера, общий {@code pushUndo} к
+     *  нему не относится): сохранить проект и оповестить слушателей. */
+    public void controlRoomLayoutEdited() {
+        changed();
+    }
+
+    private void requireSceneForLayouts() {
+        if (currentScene == null) {
+            throw new IllegalStateException("Не выбрана сцена");
+        }
+    }
+
     // ---- getters ----
 
     public Workspace getWorkspace() {
