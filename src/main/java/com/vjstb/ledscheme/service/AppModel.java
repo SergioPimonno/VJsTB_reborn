@@ -1947,6 +1947,32 @@ public class AppModel {
         }
     }
 
+    /** Полная поза башни ручной расстановки (система экрана): положение в плане, высота точки привязки над землёй,
+     *  рыскание, наклон и крен — для гизмо и полей панели (запрос 2026-10-22: вращать башню по всем осям). Жест —
+     *  одна запись отмены, как у {@link #setStructureTowerPlacement}. Углы нормализуются в {@code (−180°, 180°]}. */
+    public void setStructureTowerPose(Screen screen, int tower, double anchorXMm, double anchorZMm,
+                                       double elevationMm, double yawDeg, double pitchDeg, double rollDeg,
+                                       boolean gestureStart, boolean gestureEnd) {
+        StructureTowerPlacement p = screen.isStructureManualLayout() ? screen.towerPlacementOf(tower) : null;
+        if (p == null) {
+            return;
+        }
+        if (gestureStart) {
+            pushUndo("Положение башни конструктива");
+        }
+        p.setAnchorXMm(anchorXMm);
+        p.setAnchorZMm(anchorZMm);
+        p.setElevationMm(elevationMm);
+        p.setYawDeg(StructureLayoutMath.normalizeDeg(yawDeg));
+        p.setPitchDeg(StructureLayoutMath.normalizeDeg(pitchDeg));
+        p.setRollDeg(StructureLayoutMath.normalizeDeg(rollDeg));
+        if (gestureEnd) {
+            changed();
+        } else {
+            fireChanged();
+        }
+    }
+
     /** Добавляет башню в ручную расстановку на заданное положение (система экрана) — с полным
      *  комплектом рам по номинальным полям конструктива. Возвращает номер новой башни или -1,
      *  если расстановка не ручная. Одна запись отмены. */

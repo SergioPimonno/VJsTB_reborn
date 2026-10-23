@@ -110,34 +110,56 @@ public final class StructurePickMath {
      *  поворачивает башню целиком. {@link #IDENTITY} — прямой экран с зазором 0, ничего не
      *  меняется. */
     public record YawTransform(double anchorX, double anchorZ, double yawDeg, double localOffsetX,
-            double localOffsetZ) {
+            double localOffsetZ, double anchorY, double pitchDeg, double rollDeg) {
+
+        public YawTransform(double anchorX, double anchorZ, double yawDeg, double localOffsetX, double localOffsetZ) {
+            this(anchorX, anchorZ, yawDeg, localOffsetX, localOffsetZ, 0, 0, 0);
+        }
 
         public static final YawTransform IDENTITY = new YawTransform(0, 0, 0, 0, 0);
 
         public boolean isIdentity() {
-            return anchorX == 0 && anchorZ == 0 && yawDeg == 0 && localOffsetX == 0 && localOffsetZ == 0;
+            return anchorX == 0 && anchorZ == 0 && yawDeg == 0 && localOffsetX == 0 && localOffsetZ == 0
+                    && anchorY == 0 && pitchDeg == 0 && rollDeg == 0;
+        }
+
+        /** Матрица поворота {@code R = Ry(yaw)·Rx(pitch)·Rz(roll)} — порядок вызовов {@code glRotate} в 3D
+         *  (запрос 2026-10-22: башню можно вращать по всем осям): крен вокруг её оси Z, затем наклон вокруг X, и
+         *  самым внешним — рыскание вокруг вертикали (прежний поворот башни в плане). */
+        public double[][] rotation() {
+            double cy = Math.cos(Math.toRadians(yawDeg));
+            double sy = Math.sin(Math.toRadians(yawDeg));
+            double cp = Math.cos(Math.toRadians(pitchDeg));
+            double sp = Math.sin(Math.toRadians(pitchDeg));
+            double cr = Math.cos(Math.toRadians(rollDeg));
+            double sr = Math.sin(Math.toRadians(rollDeg));
+            return new double[][]{
+                    {cy * cr + sy * sp * sr, -cy * sr + sy * sp * cr, sy * cp},
+                    {cp * sr, cp * cr, -sp},
+                    {-sy * cr + cy * sp * sr, sy * sr + cy * sp * cr, cy * cp}};
         }
 
         public Vec3 toWorld(Vec3 local) {
-            double a = Math.toRadians(yawDeg);
-            double cos = Math.cos(a);
-            double sin = Math.sin(a);
+            double[][] m = rotation();
             double x = local.x() - localOffsetX;
+            double y = local.y();
             double z = local.z() - localOffsetZ;
-            return new Vec3(anchorX + x * cos + z * sin, local.y(), anchorZ - x * sin + z * cos);
+            return new Vec3(anchorX + m[0][0] * x + m[0][1] * y + m[0][2] * z,
+                    anchorY + m[1][0] * x + m[1][1] * y + m[1][2] * z,
+                    anchorZ + m[2][0] * x + m[2][1] * y + m[2][2] * z);
         }
 
         public Vec3 toLocal(Vec3 world) {
-            Vec3 d = rotateInverse(new Vec3(world.x() - anchorX, world.y(), world.z() - anchorZ));
+            Vec3 d = rotateInverse(new Vec3(world.x() - anchorX, world.y() - anchorY, world.z() - anchorZ));
             return new Vec3(d.x() + localOffsetX, d.y(), d.z() + localOffsetZ);
         }
 
-        /** Направление (без переноса) в локальную систему. */
+        /** Направление (без переноса) в локальную систему: {@code Rᵀ·v}. */
         public Vec3 rotateInverse(Vec3 v) {
-            double a = Math.toRadians(yawDeg);
-            double cos = Math.cos(a);
-            double sin = Math.sin(a);
-            return new Vec3(v.x() * cos - v.z() * sin, v.y(), v.x() * sin + v.z() * cos);
+            double[][] m = rotation();
+            return new Vec3(m[0][0] * v.x() + m[1][0] * v.y() + m[2][0] * v.z(),
+                    m[0][1] * v.x() + m[1][1] * v.y() + m[2][1] * v.z(),
+                    m[0][2] * v.x() + m[1][2] * v.y() + m[2][2] * v.z());
         }
 
         public Ray toLocal(Ray ray) {

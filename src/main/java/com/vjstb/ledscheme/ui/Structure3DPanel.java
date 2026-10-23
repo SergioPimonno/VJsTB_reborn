@@ -23,6 +23,7 @@ import com.vjstb.ledscheme.service.StructureGizmoMath.Handle;
 import com.vjstb.ledscheme.service.StructureGizmoMath.RefLine;
 import com.vjstb.ledscheme.service.StructureGroupCalc;
 import com.vjstb.ledscheme.service.StructureLayoutMath;
+import com.vjstb.ledscheme.service.StructureOrient;
 import com.vjstb.ledscheme.service.StructurePickMath;
 import com.vjstb.ledscheme.service.StructurePickMath.Ray;
 import com.vjstb.ledscheme.service.StructurePickMath.Vec3;
@@ -450,10 +451,10 @@ public class Structure3DPanel extends JPanel {
         // Положение башни в системе ГРУППЫ: поза экрана ∘ (ручное положение башни или расчётное по
         // форме экрана) — см. StructureLayoutMath. У одиночного экрана поза нулевая, и числа те же,
         // что до группового режима.
-        StructureCurveMath.Placement p = StructureLayoutMath.towerPlacementInGroup(g.screen(), g.curveSetup(),
-                userTower);
-        return new YawTransform(p.anchorX(), p.anchorZ(), p.yawDeg(), (2 * userTower + 0.5) * g.spacing(),
-                -SCREEN_CLEARANCE_MM);
+        StructureOrient.TowerPose p = StructureLayoutMath.towerPoseInGroup(g.screen(), g.curveSetup(), userTower);
+        // + высота над землёй, наклон и крен (запрос 2026-10-22: вращать башню по всем осям)
+        return new YawTransform(p.x(), p.z(), p.yawDeg(), (2 * userTower + 0.5) * g.spacing(),
+                -SCREEN_CLEARANCE_MM, p.y(), p.pitchDeg(), p.rollDeg());
     }
 
     /** «Стена» (общие столбы) стоит в системе экрана; сдвигается и поворачивается только позой
@@ -1207,6 +1208,14 @@ public class Structure3DPanel extends JPanel {
     private StructureCurveMath.Placement dragLast;
     private boolean dragGestureStarted;
     /** Ручка гизмо, за которую тащат ({@link Handle#CENTER} — тело башни/экрана), и ручка под курсором. */
+    /** Поза выбранной башни на начало жеста (система группы), опорная точка (центр основания, локально), ось и
+     *  стартовый вектор вращения кольца наклона/крена, стартовая высота при перетаскивании по оси Y. */
+    private StructureOrient.TowerPose dragPose;
+    private StructureOrient.TowerPose dragLastPose;
+    private double[] dragPivotLocal;
+    private double[] dragAxis;
+    private double[] dragV0;
+    private double dragStartH;
     private Handle dragHandle = Handle.NONE;
     private Handle hoverHandle = Handle.NONE;
     /** Shift при перетаскивании: показаны линии привязки, {@code activeGuides} — сработавшие. */
@@ -1324,30 +1333,19 @@ public class Structure3DPanel extends JPanel {
             return false;
         }
         dragHandle = Handle.NONE;
+        dragPose = null;
+        dragLastPose = null;
         int selected = selectedTower();
         if (selected >= 0 && active.getMountType() == ScreenMountType.STRUCTURE) {
-            // гизмо выбранной башни лежит на земле: ручка под лучом — центр, ось X/Z или кольцо вращения
-            double[] g0 = StructureLayoutMath.rayGroundPoint(ray, 0);
-            if (g0 != null) {
-                StructureCurveMath.Setup gSetup = StructureCurveMath.setupOf(active, model.typeOf(active),
-                        model.getWorkspace());
-                StructureCurveMath.Placement gw = StructureLayoutMath.towerPlacementInGroup(active, gSetup, selected);
-                StructureCurveMath.TowerSpec gSpec = StructureCurveMath.towerSpecOf(active, model.getWorkspace(),
-                        selected);
-                Handle h = StructureGizmoMath.hit(gw, gSpec, g0[0], g0[1]);
-                if (h != Handle.NONE) {
-                    dragPlaneY = 0;
-                    dragStartGround = g0;
-                    dragStart = gw;
-                    double[] cl = StructureGizmoMath.centerLocal(gSpec);
-                    dragCenterX = cl[0];
-                    dragCenterZ = cl[1];
-                    dragScreen = active;
-                    dragTower = selected;
-                    dragKind = DragKind.TOWER;
-                    dragHandle = h;
-                    return true;
-                }
+            // гизмо выбранной башни в 3D: центр основания, оси X/Z/Y, кольца рыскания, наклона и крена
+            StructureCurveMath.Setup gSetup = StructureCurveMath.setupOf(active, model.typeOf(active),
+                    model.getWorkspace());
+            StructureOrient.TowerPose gp = StructureLayoutMath.towerPoseInGroup(active, gSetup, selected);
+            StructureCurveMath.TowerSpec gSpec = StructureCurveMath.towerSpecOf(active, model.getWorkspace(),
+                    selected);
+            Handle h = StructureGizmoMath.hit3D(gp, gSpec, ray);
+            if (h != Handle.NONE && beginGizmoDrag(ray, active, selected, gp, gSpec, h)) {
+                return true;
             }
         }
         // тело, попавшее под луч, важнее кольца (что видно ближе, то и берётся): кольцо — только по «пустому» месту
@@ -1397,6 +1395,8 @@ public class Structure3DPanel extends JPanel {
             dragTower = hit.tower();
             dragKind = DragKind.TOWER;
             dragHandle = Handle.CENTER;
+            dragPose = StructureLayoutMath.towerPoseInGroup(active, setup, hit.tower());
+            dragPivotLocal = StructureGizmoMath.pivotLocal(spec);
             return true;
         }
         Screen target = hit.screen();
@@ -1428,6 +1428,12 @@ public class Structure3DPanel extends JPanel {
         if (dragKind == DragKind.NONE) {
             return;
         }
+        if (dragKind == DragKind.TOWER && dragPose != null && dragHandle != Handle.NONE
+                && (dragHandle == Handle.RING_PITCH || dragHandle == Handle.RING_ROLL
+                || dragHandle == Handle.AXIS_Y || (dragHandle == Handle.RING && !dragPose.upright()))) {
+            dragSpatial(ray, snap);
+            return;
+        }
         double[] g = StructureLayoutMath.rayGroundPoint(ray, dragPlaneY);
         if (g == null) {
             return;
@@ -1457,7 +1463,7 @@ public class Structure3DPanel extends JPanel {
                     g[1] - dragStartGround[1]);
             next = new StructureCurveMath.Placement(dragStart.index(), dragStart.anchorX() + d[0],
                     dragStart.anchorZ() + d[1], dragStart.yawDeg());
-            if (snap && dragKind == DragKind.TOWER) {
+            if (snap && dragKind == DragKind.TOWER && dragPose != null && dragPose.upright()) {
                 StructureCurveMath.TowerSpec spec = StructureCurveMath.towerSpecOf(dragScreen, model.getWorkspace(),
                         dragTower);
                 StructureCurveMath.Placement flush = dragHandle == Handle.CENTER
@@ -1478,6 +1484,107 @@ public class Structure3DPanel extends JPanel {
             }
         }
         applyDrag(next, false);
+    }
+
+    /** Начало жеста за ручку гизмо выбранной башни ({@code h} из {@link StructureGizmoMath#hit3D}); {@code false} —
+     *  жест начать нельзя (луч параллелен плоскости ручки). */
+    private boolean beginGizmoDrag(Ray ray, Screen active, int tower, StructureOrient.TowerPose gp,
+            StructureCurveMath.TowerSpec gSpec, Handle h) {
+        double[] pw = StructureGizmoMath.pivotWorld(gp, gSpec);
+        dragPose = gp;
+        dragPivotLocal = StructureGizmoMath.pivotLocal(gSpec);
+        dragScreen = active;
+        dragTower = tower;
+        dragKind = DragKind.TOWER;
+        dragHandle = h;
+        dragPlaneY = pw[1];
+        StructureCurveMath.Setup setup = StructureCurveMath.setupOf(active, model.typeOf(active),
+                model.getWorkspace());
+        dragStart = StructureLayoutMath.towerPlacementInGroup(active, setup, tower);
+        double[] cl = StructureGizmoMath.centerLocal(gSpec);
+        dragCenterX = cl[0];
+        dragCenterZ = cl[1];
+        if (h == Handle.RING_PITCH || h == Handle.RING_ROLL || (h == Handle.RING && !gp.upright())) {
+            dragAxis = StructureGizmoMath.ringAxis(gp, h);
+            double[] hit = StructureGizmoMath.rayPlane(ray, pw, dragAxis);
+            if (hit == null) {
+                dragKind = DragKind.NONE;
+                dragHandle = Handle.NONE;
+                return false;
+            }
+            dragV0 = new double[]{hit[0] - pw[0], hit[1] - pw[1], hit[2] - pw[2]};
+            return true;
+        }
+        if (h == Handle.AXIS_Y) {
+            Double h0 = StructureGizmoMath.heightOnVerticalLine(ray, pw[0], pw[2]);
+            if (h0 == null) {
+                dragKind = DragKind.NONE;
+                dragHandle = Handle.NONE;
+                return false;
+            }
+            dragStartH = h0;
+            return true;
+        }
+        double[] g0 = StructureLayoutMath.rayGroundPoint(ray, dragPlaneY);
+        if (g0 == null) {
+            dragKind = DragKind.NONE;
+            dragHandle = Handle.NONE;
+            return false;
+        }
+        dragStartGround = g0;
+        return true;
+    }
+
+    /** Перетаскивание ручек, меняющих положение В ПРОСТРАНСТВЕ: кольцо наклона/крена (и рыскания у уже наклонённой
+     *  башни) — поворот вокруг оси мира через центр основания; ось Y — высота над землёй. Shift: углы — к шагу
+     *  {@link #ROTATE_STEP_DEG} (по каждому), высота — к шагу 50 мм (и к земле). */
+    private void dragSpatial(Ray ray, boolean snap) {
+        StructureOrient.TowerPose next;
+        if (dragHandle == Handle.AXIS_Y) {
+            double[] pw = dragPose.toWorld(dragPivotLocal[0], dragPivotLocal[1], dragPivotLocal[2]);
+            Double h = StructureGizmoMath.heightOnVerticalLine(ray, pw[0], pw[2]);
+            if (h == null) {
+                return;
+            }
+            double elev = dragPose.y() + (h - dragStartH);
+            if (snap) {
+                elev = Math.round(elev / 50.0) * 50.0;
+            }
+            next = new StructureOrient.TowerPose(dragPose.x(), elev, dragPose.z(), dragPose.yawDeg(),
+                    dragPose.pitchDeg(), dragPose.rollDeg());
+        } else {
+            double[] pw = dragPose.toWorld(dragPivotLocal[0], dragPivotLocal[1], dragPivotLocal[2]);
+            double[] hit = StructureGizmoMath.rayPlane(ray, pw, dragAxis);
+            if (hit == null) {
+                return;
+            }
+            double[] v1 = {hit[0] - pw[0], hit[1] - pw[1], hit[2] - pw[2]};
+            if (Math.sqrt(StructureOrient.dot(v1, v1)) < 50
+                    || Math.sqrt(StructureOrient.dot(dragV0, dragV0)) < 50) {
+                return;
+            }
+            double delta = StructureGizmoMath.angleAbout(dragAxis, dragV0, v1);
+            next = dragPose.rotatedAbout(dragAxis, delta, dragPivotLocal);
+            if (snap) {
+                next = next.withAnglesKeepingPivot(dragPivotLocal,
+                        StructureLayoutMath.snapAngle(next.yawDeg(), ROTATE_STEP_DEG),
+                        StructureLayoutMath.snapAngle(next.pitchDeg(), ROTATE_STEP_DEG),
+                        StructureLayoutMath.snapAngle(next.rollDeg(), ROTATE_STEP_DEG));
+            }
+        }
+        guidesOn = false;
+        activeGuides = new ArrayList<>();
+        applyDragPose(next, false);
+    }
+
+    private void applyDragPose(StructureOrient.TowerPose world, boolean end) {
+        boolean first = !dragGestureStarted;
+        StructureCurveMath.Placement local = StructureLayoutMath.toFrame(StructureLayoutMath.screenPose(dragScreen),
+                new StructureCurveMath.Placement(0, world.x(), world.z(), world.yawDeg()));
+        model.setStructureTowerPose(dragScreen, dragTower, local.anchorX(), local.anchorZ(), world.y(), local.yawDeg(),
+                world.pitchDeg(), world.rollDeg(), first, end);
+        dragGestureStarted = true;
+        dragLastPose = world;
     }
 
     /** Радиус кольца вращения экрана группы и допуск захвата, мм. */
@@ -1508,13 +1615,10 @@ public class Structure3DPanel extends JPanel {
         Screen active = model.getCurrentScreen();
         int sel = selectedTower();
         if (layoutMode && dragKind == DragKind.NONE && sel >= 0 && active != null) {
-            double[] g0 = StructureLayoutMath.rayGroundPoint(ray, 0);
-            if (g0 != null) {
-                StructureCurveMath.Setup setup = StructureCurveMath.setupOf(active, model.typeOf(active),
-                        model.getWorkspace());
-                h = StructureGizmoMath.hit(StructureLayoutMath.towerPlacementInGroup(active, setup, sel),
-                        StructureCurveMath.towerSpecOf(active, model.getWorkspace(), sel), g0[0], g0[1]);
-            }
+            StructureCurveMath.Setup setup = StructureCurveMath.setupOf(active, model.typeOf(active),
+                    model.getWorkspace());
+            h = StructureGizmoMath.hit3D(StructureLayoutMath.towerPoseInGroup(active, setup, sel),
+                    StructureCurveMath.towerSpecOf(active, model.getWorkspace(), sel), ray);
         }
         if (h != hoverHandle) {
             hoverHandle = h;
@@ -1556,6 +1660,10 @@ public class Structure3DPanel extends JPanel {
                     if (s == dragScreen && k == dragTower && dragKind == DragKind.TOWER) {
                         continue;
                     }
+                    StructureOrient.TowerPose tp = StructureLayoutMath.towerPoseInGroup(s, setup, k);
+                    if (!tp.upright() || Math.abs(tp.y()) > 1e-6) {
+                        continue;
+                    }
                     lines.addAll(StructureGizmoMath.towerLines(StructureLayoutMath.towerPlacementInGroup(s, setup, k),
                             StructureCurveMath.towerSpecOf(s, model.getWorkspace(), k)));
                 }
@@ -1566,11 +1674,15 @@ public class Structure3DPanel extends JPanel {
 
     /** Конец жеста: последнее положение фиксируется (файл пишется, жест замыкается). */
     void layoutRelease() {
-        if (dragKind != DragKind.NONE && dragGestureStarted && dragLast != null) {
+        if (dragKind != DragKind.NONE && dragGestureStarted && dragLastPose != null) {
+            applyDragPose(dragLastPose, true);
+        } else if (dragKind != DragKind.NONE && dragGestureStarted && dragLast != null) {
             applyDrag(dragLast, true);
         }
         dragKind = DragKind.NONE;
         dragHandle = Handle.NONE;
+        dragPose = null;
+        dragLastPose = null;
         dragLast = null;
         dragGestureStarted = false;
         guidesOn = false;
@@ -1602,6 +1714,10 @@ public class Structure3DPanel extends JPanel {
             for (int k = 0; k < setup.towerCount(); k++) {
                 if (s == dragScreen && k == dragTower) {
                     continue;
+                }
+                StructureOrient.TowerPose tp = StructureLayoutMath.towerPoseInGroup(s, setup, k);
+                if (!tp.upright() || Math.abs(tp.y()) > 1e-6) {
+                    continue; // привязка «встык» и линии — для стоящих на земле башен
                 }
                 targets.add(new StructureLayoutMath.SnapTarget(StructureLayoutMath.towerPlacementInGroup(s, setup, k),
                         StructureCurveMath.towerSpecOf(s, model.getWorkspace(), k)));
@@ -1914,30 +2030,36 @@ public class Structure3DPanel extends JPanel {
             int k = selectedTower();
             if (k >= 0 && active.getMountType() == ScreenMountType.STRUCTURE) {
                 StructureCurveMath.Setup setup = StructureCurveMath.setupOf(active, type, model.getWorkspace());
-                StructureCurveMath.Placement w = StructureLayoutMath.towerPlacementInGroup(active, setup, k);
+                StructureOrient.TowerPose pose = StructureLayoutMath.towerPoseInGroup(active, setup, k);
                 StructureCurveMath.TowerSpec spec = StructureCurveMath.towerSpecOf(active, model.getWorkspace(), k);
                 double hw = spec.outerWidthMm() / 2.0;
                 double depth = spec.depthMm();
-                double height = Math.max(1000, active.getStructureTowerHeightMm());
-                gl.glPushMatrix();
-                gl.glTranslated(w.anchorX(), 0, w.anchorZ());
-                gl.glRotated(w.yawDeg(), 0, 1, 0);
+                double height = StructureCupMath.towerHeightMm(active, model.getWorkspace(), k);
+                // оранжевая рамка по коробке башни (с наклоном и высотой): 12 рёбер
+                double[][] c = new double[8][];
+                int ci = 0;
+                for (double x : new double[]{-hw, hw}) {
+                    for (double y : new double[]{0, height}) {
+                        for (double z : new double[]{0, -depth}) {
+                            c[ci++] = pose.toWorld(x, y, z);
+                        }
+                    }
+                }
                 gl.glColor3f(1f, 0.62f, 0.15f);
+                gl.glLineWidth(2.5f);
                 gl.glBegin(GL2.GL_LINES);
-                double[][] c = {{-hw, 0}, {hw, 0}, {hw, -depth}, {-hw, -depth}};
-                for (int i = 0; i < 4; i++) {
-                    double[] a = c[i];
-                    double[] b = c[(i + 1) % 4];
-                    gl.glVertex3d(a[0], 3, a[1]);
-                    gl.glVertex3d(b[0], 3, b[1]);
-                    gl.glVertex3d(a[0], height, a[1]);
-                    gl.glVertex3d(b[0], height, b[1]);
-                    gl.glVertex3d(a[0], 3, a[1]);
-                    gl.glVertex3d(a[0], height, a[1]);
+                for (int i = 0; i < 8; i++) {
+                    for (int j = i + 1; j < 8; j++) {
+                        // рёбра — пары вершин, отличающиеся одним битом индекса
+                        int diff = i ^ j;
+                        if (diff == 1 || diff == 2 || diff == 4) {
+                            gl.glVertex3d(c[i][0], c[i][1], c[i][2]);
+                            gl.glVertex3d(c[j][0], c[j][1], c[j][2]);
+                        }
+                    }
                 }
                 gl.glEnd();
-                drawGizmo(gl, spec);
-                gl.glPopMatrix();
+                drawGizmo(gl, pose, spec);
             }
             if (guidesOn) {
                 drawGuides(gl);
@@ -1951,82 +2073,109 @@ public class Structure3DPanel extends JPanel {
             gl.glVertex3d(x1, y, z1);
         }
 
-        /** Гизмо выбранной башни в её локальной системе (вызывается внутри матрицы башни): красная ось X,
-         *  синяя ось Z (стрелки на обоих концах), жёлтый центр, оранжевое кольцо с ручкой «вперёд». Ручка под
-         *  курсором или в работе — ярче и толще. */
-        private void drawGizmo(GL2 gl, StructureCurveMath.TowerSpec spec) {
+        /** Гизмо выбранной башни в 3D вокруг центра её основания: красная ось X и синяя ось Z (горизонтальные,
+         *  стрелки на концах — перенос вдоль оси), зелёная ось Y (высота над землёй), оранжевое кольцо рыскания
+         *  (горизонтальное, с ручкой «вперёд»), красное кольцо наклона и синее кольцо крена (вертикальные плоскости).
+         *  Ручка под курсором или в работе — ярче и толще (запрос 2026-10-22: вращать башню по всем осям). */
+        private void drawGizmo(GL2 gl, StructureOrient.TowerPose pose, StructureCurveMath.TowerSpec spec) {
             Handle hot = dragKind == DragKind.TOWER ? dragHandle : hoverHandle;
-            double cz = -spec.depthMm() / 2.0;
+            double[] p = StructureGizmoMath.pivotWorld(pose, spec);
+            double[] ux = StructureGizmoMath.horizontalAxis(pose, true);
+            double[] uz = StructureGizmoMath.horizontalAxis(pose, false);
             double rx = StructureGizmoMath.axisReach(spec, true);
             double rz = StructureGizmoMath.axisReach(spec, false);
             double arrow = 170;
-            double y = 3;
+            double lift = 3;
 
             gl.glLineWidth(hot == Handle.AXIS_X ? 5f : 2.5f);
-            if (hot == Handle.AXIS_X) {
-                gl.glColor3f(1f, 0.7f, 0.7f);
-            } else {
-                gl.glColor3f(0.95f, 0.3f, 0.3f);
-            }
+            gl.glColor3f(hot == Handle.AXIS_X ? 1f : 0.95f, hot == Handle.AXIS_X ? 0.7f : 0.3f,
+                    hot == Handle.AXIS_X ? 0.7f : 0.3f);
             gl.glBegin(GL2.GL_LINES);
-            line3(gl, -rx, cz, rx, cz, y);
-            line3(gl, rx, cz, rx - arrow, cz + 90, y);
-            line3(gl, rx, cz, rx - arrow, cz - 90, y);
-            line3(gl, -rx, cz, -rx + arrow, cz + 90, y);
-            line3(gl, -rx, cz, -rx + arrow, cz - 90, y);
+            axisLine(gl, p, ux, uz, rx, arrow, lift);
             gl.glEnd();
 
             gl.glLineWidth(hot == Handle.AXIS_Z ? 5f : 2.5f);
-            if (hot == Handle.AXIS_Z) {
-                gl.glColor3f(0.7f, 0.8f, 1f);
-            } else {
-                gl.glColor3f(0.35f, 0.55f, 1f);
-            }
+            gl.glColor3f(hot == Handle.AXIS_Z ? 0.7f : 0.35f, hot == Handle.AXIS_Z ? 0.8f : 0.55f, 1f);
             gl.glBegin(GL2.GL_LINES);
-            line3(gl, 0, cz - rz, 0, cz + rz, y);
-            line3(gl, 0, cz + rz, 90, cz + rz - arrow, y);
-            line3(gl, 0, cz + rz, -90, cz + rz - arrow, y);
-            line3(gl, 0, cz - rz, 90, cz - rz + arrow, y);
-            line3(gl, 0, cz - rz, -90, cz - rz + arrow, y);
+            axisLine(gl, p, uz, ux, rz, arrow, lift);
             gl.glEnd();
 
-            // кольцо вращения
+            // ось Y: вертикаль с наконечником вверху — высота над землёй
+            gl.glLineWidth(hot == Handle.AXIS_Y ? 5f : 2.5f);
+            gl.glColor3f(hot == Handle.AXIS_Y ? 0.7f : 0.3f, hot == Handle.AXIS_Y ? 1f : 0.85f,
+                    hot == Handle.AXIS_Y ? 0.7f : 0.3f);
+            gl.glBegin(GL2.GL_LINES);
+            double top = StructureGizmoMath.AXIS_UP_MM;
+            gl.glVertex3d(p[0], p[1] - StructureGizmoMath.AXIS_DOWN_MM, p[2]);
+            gl.glVertex3d(p[0], p[1] + top, p[2]);
+            gl.glVertex3d(p[0], p[1] + top, p[2]);
+            gl.glVertex3d(p[0] + ux[0] * 90, p[1] + top - arrow, p[2] + ux[2] * 90);
+            gl.glVertex3d(p[0], p[1] + top, p[2]);
+            gl.glVertex3d(p[0] - ux[0] * 90, p[1] + top - arrow, p[2] - ux[2] * 90);
+            gl.glVertex3d(p[0], p[1] + top, p[2]);
+            gl.glVertex3d(p[0] + uz[0] * 90, p[1] + top - arrow, p[2] + uz[2] * 90);
+            gl.glVertex3d(p[0], p[1] + top, p[2]);
+            gl.glVertex3d(p[0] - uz[0] * 90, p[1] + top - arrow, p[2] - uz[2] * 90);
+            gl.glEnd();
+
             double radius = StructureGizmoMath.ringRadius(spec);
-            gl.glLineWidth(hot == Handle.RING ? 5f : 2.5f);
-            if (hot == Handle.RING) {
-                gl.glColor3f(1f, 0.85f, 0.5f);
-            } else {
-                gl.glColor3f(1f, 0.62f, 0.15f);
-            }
-            gl.glBegin(GL2.GL_LINES);
-            int seg = 64;
-            for (int i = 0; i < seg; i++) {
-                double a0 = 2 * Math.PI * i / seg;
-                double a1 = 2 * Math.PI * (i + 1) / seg;
-                line3(gl, radius * Math.cos(a0), cz + radius * Math.sin(a0), radius * Math.cos(a1),
-                        cz + radius * Math.sin(a1), y);
-            }
-            gl.glEnd();
-            // ручка кольца «вперёд» (к экрану): квадрат на кольце + короткая стрелка наружу
-            double kz = cz + radius;
-            gl.glBegin(GL2.GL_QUADS);
-            gl.glVertex3d(-90, y, kz - 90);
-            gl.glVertex3d(90, y, kz - 90);
-            gl.glVertex3d(90, y, kz + 90);
-            gl.glVertex3d(-90, y, kz + 90);
-            gl.glEnd();
+            ring(gl, p, StructureGizmoMath.ringAxis(pose, Handle.RING), radius, hot == Handle.RING,
+                    1f, 0.62f, 0.15f, 1f, 0.85f, 0.5f);
+            ring(gl, p, StructureGizmoMath.ringAxis(pose, Handle.RING_PITCH), radius, hot == Handle.RING_PITCH,
+                    0.95f, 0.3f, 0.3f, 1f, 0.75f, 0.75f);
+            ring(gl, p, StructureGizmoMath.ringAxis(pose, Handle.RING_ROLL), radius, hot == Handle.RING_ROLL,
+                    0.35f, 0.55f, 1f, 0.75f, 0.85f, 1f);
 
-            // центр — свободный перенос
+            // ручка кольца рыскания «вперёд» (к экрану) и центр основания
+            gl.glColor3f(1f, 0.62f, 0.15f);
+            quadAt(gl, p[0] + uz[0] * radius, p[1] + lift, p[2] + uz[2] * radius, 90);
             gl.glColor3f(hot == Handle.CENTER ? 1f : 0.95f, hot == Handle.CENTER ? 1f : 0.85f,
                     hot == Handle.CENTER ? 0.7f : 0.25f);
-            gl.glBegin(GL2.GL_QUADS);
-            double h = StructureGizmoMath.CENTER_RADIUS_MM * 0.6;
-            gl.glVertex3d(-h, y + 1, cz - h);
-            gl.glVertex3d(h, y + 1, cz - h);
-            gl.glVertex3d(h, y + 1, cz + h);
-            gl.glVertex3d(-h, y + 1, cz + h);
-            gl.glEnd();
+            quadAt(gl, p[0], p[1] + lift + 1, p[2], StructureGizmoMath.CENTER_RADIUS_MM * 0.6);
             gl.glLineWidth(2.5f);
+        }
+
+        private void quadAt(GL2 gl, double x, double y, double z, double half) {
+            gl.glBegin(GL2.GL_QUADS);
+            gl.glVertex3d(x - half, y, z - half);
+            gl.glVertex3d(x + half, y, z - half);
+            gl.glVertex3d(x + half, y, z + half);
+            gl.glVertex3d(x - half, y, z + half);
+            gl.glEnd();
+        }
+
+        /** Ось гизмо в плоскости земли/привязки: линия {@code ±reach} вдоль {@code u} со стрелками на концах
+         *  (боковые усики — вдоль {@code side}). Вызывается внутри {@code glBegin(GL_LINES)}. */
+        private void axisLine(GL2 gl, double[] p, double[] u, double[] side, double reach, double arrow, double lift) {
+            double[] a = {p[0] - u[0] * reach, p[1] + lift, p[2] - u[2] * reach};
+            double[] b = {p[0] + u[0] * reach, p[1] + lift, p[2] + u[2] * reach};
+            gl.glVertex3d(a[0], a[1], a[2]);
+            gl.glVertex3d(b[0], b[1], b[2]);
+            for (double dir : new double[]{1, -1}) {
+                double[] tip = dir > 0 ? b : a;
+                for (double sgn : new double[]{1, -1}) {
+                    gl.glVertex3d(tip[0], tip[1], tip[2]);
+                    gl.glVertex3d(tip[0] - dir * u[0] * arrow + sgn * side[0] * 90, tip[1],
+                            tip[2] - dir * u[2] * arrow + sgn * side[2] * 90);
+                }
+            }
+        }
+
+        /** Кольцо радиуса {@code r} в плоскости через {@code c} с нормалью {@code n}; {@code hot} — подсветка. */
+        private void ring(GL2 gl, double[] c, double[] n, double r, boolean hot, float cr, float cg, float cb,
+                float hr, float hg, float hb) {
+            gl.glLineWidth(hot ? 5f : 2.5f);
+            gl.glColor3f(hot ? hr : cr, hot ? hg : cg, hot ? hb : cb);
+            gl.glBegin(GL2.GL_LINES);
+            int segs = 96;
+            double[] prev = StructureGizmoMath.ringPoint(c, n, r, 0);
+            for (int i = 1; i <= segs; i++) {
+                double[] cur = StructureGizmoMath.ringPoint(c, n, r, 2 * Math.PI * i / segs);
+                gl.glVertex3d(prev[0], prev[1], prev[2]);
+                gl.glVertex3d(cur[0], cur[1], cur[2]);
+                prev = cur;
+            }
+            gl.glEnd();
         }
 
         /** Линии привязки (с Shift при перетаскивании): все опорные — бледно, сработавшие — ярко. */
@@ -2127,8 +2276,10 @@ public class Structure3DPanel extends JPanel {
                 return false;
             }
             gl.glPushMatrix();
-            gl.glTranslated(xf.anchorX(), 0, xf.anchorZ());
+            gl.glTranslated(xf.anchorX(), xf.anchorY(), xf.anchorZ());
             gl.glRotated(xf.yawDeg(), 0, 1, 0);
+            gl.glRotated(xf.pitchDeg(), 1, 0, 0);
+            gl.glRotated(xf.rollDeg(), 0, 0, 1);
             gl.glTranslated(-xf.localOffsetX(), 0, -xf.localOffsetZ());
             return true;
         }

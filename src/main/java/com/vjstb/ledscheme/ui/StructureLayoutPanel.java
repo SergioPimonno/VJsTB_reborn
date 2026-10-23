@@ -8,7 +8,9 @@ import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.StructureCurveMath;
 import com.vjstb.ledscheme.service.StructureCurveMath.Placement;
 import com.vjstb.ledscheme.service.StructureCurveMath.TowerSpec;
+import com.vjstb.ledscheme.service.StructureGizmoMath;
 import com.vjstb.ledscheme.service.StructureLayoutMath;
+import com.vjstb.ledscheme.service.StructureOrient;
 import com.vjstb.ledscheme.service.StructureLayoutMath.Side;
 import java.awt.BorderLayout;
 import java.awt.Component;
@@ -93,6 +95,9 @@ public class StructureLayoutPanel extends JPanel {
     private final JSpinner towerX = spinner(0, 50);
     private final JSpinner towerZ = spinner(0, 50);
     private final JSpinner towerYaw = spinner(0, 5);
+    private final JSpinner towerPitch = spinner(0, 5);
+    private final JSpinner towerRoll = spinner(0, 5);
+    private final JSpinner towerElev = spinner(0, 100);
     /** Вариант ширины башни: рама горизонтальных элементов ({@code null} — стандартная). */
     private record WidthOption(String frameTypeId, String label) {
         @Override
@@ -154,6 +159,9 @@ public class StructureLayoutPanel extends JPanel {
         towerX.setName("layoutTowerX");
         towerZ.setName("layoutTowerZ");
         towerYaw.setName("layoutTowerYaw");
+        towerPitch.setName("layoutTowerPitch");
+        towerRoll.setName("layoutTowerRoll");
+        towerElev.setName("layoutTowerElev");
         widthCombo.setName("layoutTowerWidth");
         warnings.setName("layoutWarnings");
         framesMode.setToolTipText("Клик по раме прячет её, Ctrl+клик по призраку добавляет (как раньше).");
@@ -406,6 +414,14 @@ public class StructureLayoutPanel extends JPanel {
         towerSection.add(labeled("X, мм", towerX));
         towerSection.add(labeled("Z, мм", towerZ));
         towerSection.add(labeled("Угол, °", towerYaw));
+        towerSection.add(labeled("Наклон, °", towerPitch));
+        towerSection.add(labeled("Крен, °", towerRoll));
+        towerSection.add(labeled("Высота, мм", towerElev));
+        towerPitch.setToolTipText("<html>Наклон башни вокруг её оси X (падает вперёд/назад). 90° — башня лежит вдоль"
+                + " глубины.<br>Центр основания при повороте остаётся на месте.</html>");
+        towerRoll.setToolTipText("<html>Крен башни вокруг её оси Z (падает вбок). 90° — башня лежит на боку вдоль"
+                + " экрана.<br>Центр основания при повороте остаётся на месте.</html>");
+        towerElev.setToolTipText("Высота центра основания башни над землёй (лежащая башня — на опоре, на подвесе).");
         towerX.setToolTipText("Середина передней плоскости башни в системе экрана (вдоль экрана)");
         towerZ.setToolTipText("Середина передней плоскости башни в системе экрана (к зрителю; за экраном — минус)");
         towerYaw.setToolTipText("Поворот башни вокруг вертикали");
@@ -534,6 +550,9 @@ public class StructureLayoutPanel extends JPanel {
         towerX.addChangeListener(e -> writeTower());
         towerZ.addChangeListener(e -> writeTower());
         towerYaw.addChangeListener(e -> writeTower());
+        towerPitch.addChangeListener(e -> writeTower());
+        towerRoll.addChangeListener(e -> writeTower());
+        towerElev.addChangeListener(e -> writeTower());
         addTower.addActionListener(e -> addTowerNearSelected());
         removeTower.addActionListener(e -> removeSelectedTower());
         flushTower.addActionListener(e -> showFlushMenu());
@@ -551,6 +570,9 @@ public class StructureLayoutPanel extends JPanel {
         model.setStructureScreenPose(s, number(poseX), number(poseZ), number(poseYaw), startsNewUndoStep(), true);
     }
 
+    /** Запись полей башни в модель. Менялись только углы (X, Z и высота те же) — башня поворачивается на месте:
+     *  центр основания остаётся неподвижным, X/Z/высота пересчитываются (раньше — вокруг середины передней
+     *  плоскости, башня «уезжала»; теперь то же для наклона и крена). Иначе поля пишутся как есть. */
     private void writeTower() {
         Screen s = model.getCurrentScreen();
         int k = view.selectedTower();
@@ -560,19 +582,21 @@ public class StructureLayoutPanel extends JPanel {
         StructureTowerPlacement p = s.towerPlacementOf(k);
         double x = number(towerX);
         double z = number(towerZ);
+        double elev = number(towerElev);
         double yaw = number(towerYaw);
-        if (p != null && Math.abs(x - p.getAnchorXMm()) < 1e-6 && Math.abs(z - p.getAnchorZMm()) < 1e-6) {
-            // менялся только угол: башня поворачивается НА МЕСТЕ — вокруг центра своего контура (а не
-            // вокруг середины передней плоскости, что выглядело бы как смещение), X/Z пересчитываются
+        double pitch = number(towerPitch);
+        double roll = number(towerRoll);
+        if (p != null && Math.abs(x - p.getAnchorXMm()) < 1e-6 && Math.abs(z - p.getAnchorZMm()) < 1e-6
+                && Math.abs(elev - p.getElevationMm()) < 1e-6) {
             TowerSpec spec = StructureCurveMath.towerSpecOf(s, model.getWorkspace(), k);
-            Placement turned = StructureLayoutMath.rotateAbout(
-                    new Placement(k, p.getAnchorXMm(), p.getAnchorZMm(), p.getYawDeg()), 0, -spec.depthMm() / 2.0,
-                    yaw);
-            model.setStructureTowerPlacement(s, k, turned.anchorX(), turned.anchorZ(), turned.yawDeg(),
-                    startsNewUndoStep(), true);
+            StructureOrient.TowerPose turned = new StructureOrient.TowerPose(p.getAnchorXMm(), p.getElevationMm(),
+                    p.getAnchorZMm(), p.getYawDeg(), p.getPitchDeg(), p.getRollDeg())
+                    .withAnglesKeepingPivot(StructureGizmoMath.pivotLocal(spec), yaw, pitch, roll);
+            model.setStructureTowerPose(s, k, turned.x(), turned.z(), turned.y(), turned.yawDeg(), turned.pitchDeg(),
+                    turned.rollDeg(), startsNewUndoStep(), true);
             return;
         }
-        model.setStructureTowerPlacement(s, k, x, z, yaw, startsNewUndoStep(), true);
+        model.setStructureTowerPose(s, k, x, z, elev, yaw, pitch, roll, startsNewUndoStep(), true);
     }
 
     // ---- действия ----
@@ -805,10 +829,16 @@ public class StructureLayoutPanel extends JPanel {
             towerX.setEnabled(sel != null);
             towerZ.setEnabled(sel != null);
             towerYaw.setEnabled(sel != null);
+            towerPitch.setEnabled(sel != null);
+            towerRoll.setEnabled(sel != null);
+            towerElev.setEnabled(sel != null);
             if (sel != null) {
                 towerX.setValue(sel.getAnchorXMm());
                 towerZ.setValue(sel.getAnchorZMm());
                 towerYaw.setValue(sel.getYawDeg());
+                towerPitch.setValue(sel.getPitchDeg());
+                towerRoll.setValue(sel.getRollDeg());
+                towerElev.setValue(sel.getElevationMm());
             }
             widthCombo.removeAllItems();
             widthCombo.addItem(new WidthOption(null, String.format("Стандартная (%.0f мм)",
@@ -917,6 +947,18 @@ public class StructureLayoutPanel extends JPanel {
 
     JSpinner towerXSpinner() {
         return towerX;
+    }
+
+    JSpinner towerPitchSpinner() {
+        return towerPitch;
+    }
+
+    JSpinner towerRollSpinner() {
+        return towerRoll;
+    }
+
+    JSpinner towerElevSpinner() {
+        return towerElev;
     }
 
     JSpinner towerYawSpinner() {

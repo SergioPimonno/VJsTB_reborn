@@ -23,6 +23,13 @@ public class StructureTowerPlacement {
     private double anchorXMm;
     private double anchorZMm;
     private double yawDeg;
+    /** Наклон башни вокруг её оси X и крен вокруг оси Z, градусы, и высота точки привязки над землёй, мм (запрос
+     *  2026-10-22: «вращать башню по всем осям» — башня на боку, рамы в ряд на высоте). Все нули — прежняя стоячая
+     *  башня на земле (старые проекты не меняются). Порядок поворотов — {@code Ry(yaw)·Rx(pitch)·Rz(roll)}, см.
+     *  {@code service.StructureOrient}. */
+    private double pitchDeg;
+    private double rollDeg;
+    private double elevationMm;
 
     public StructureTowerPlacement() {
     }
@@ -66,8 +73,36 @@ public class StructureTowerPlacement {
         this.yawDeg = yawDeg;
     }
 
+    public double getPitchDeg() {
+        return pitchDeg;
+    }
+
+    public void setPitchDeg(double pitchDeg) {
+        this.pitchDeg = pitchDeg;
+    }
+
+    public double getRollDeg() {
+        return rollDeg;
+    }
+
+    public void setRollDeg(double rollDeg) {
+        this.rollDeg = rollDeg;
+    }
+
+    public double getElevationMm() {
+        return elevationMm;
+    }
+
+    public void setElevationMm(double elevationMm) {
+        this.elevationMm = elevationMm;
+    }
+
     /** Глубокая копия для снимка отмены и черновых копий экрана. */
     public StructureTowerPlacement copy() {
-        return new StructureTowerPlacement(towerIndex, anchorXMm, anchorZMm, yawDeg);
+        StructureTowerPlacement c = new StructureTowerPlacement(towerIndex, anchorXMm, anchorZMm, yawDeg);
+        c.pitchDeg = pitchDeg;
+        c.rollDeg = rollDeg;
+        c.elevationMm = elevationMm;
+        return c;
     }
 }

@@ -171,6 +171,25 @@ public final class StructureCupMath {
         return rungs;
     }
 
+    /** Собранная высота ОДНОЙ башни (столбы {@code 2·tower}/{@code 2·tower+1}): верх самой высокой не спрятанной
+     *  рамы стопки; рам нет — введённая высота башни экрана. */
+    public static double towerHeightMm(Screen screen, Workspace workspace, int tower) {
+        StructureFrameType nominal = workspace != null
+                ? workspace.structureFrameTypeById(screen.getStructureFrameTypeId()) : null;
+        double nominalH = nominal != null && nominal.getHeightMm() != null && nominal.getHeightMm() > 0
+                ? nominal.getHeightMm() : 950;
+        double best = 0;
+        for (StructureFrameCell c : screen.getStructureFrameCells()) {
+            if (c.isHidden() || c.getRow() > 1 || Math.floorDiv(c.getTowerIndex(), 2) != tower) {
+                continue;
+            }
+            best = Math.max(best, frameBottomY(screen, workspace, c.getTowerIndex(), c.getRow(), c.getSegmentIndex(),
+                    nominalH) + frameHeightMm(screen, workspace, c.getTowerIndex(), c.getRow(), c.getSegmentIndex(),
+                    nominalH));
+        }
+        return best > 0 ? best : Math.max(1000, screen.getStructureTowerHeightMm());
+    }
+
     /** Число стыков со стаканом: обе рамы стыка есть (не спрятаны) и стакан не убран. */
     public static int presentJoints(Screen screen) {
         int joints = 0;

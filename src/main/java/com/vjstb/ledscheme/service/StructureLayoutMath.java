@@ -434,77 +434,130 @@ public final class StructureLayoutMath {
         return tieStats(screens, typeOf, workspace)[1];
     }
 
-    /** {@code {стыков, стяжек}}. */
+    /** {@code {стыков, стяжек}}. Стык — коробки башен (3D, с учётом наклона и высоты) пересекаются или ближе
+     *  {@link #TIE_CONTACT_TOLERANCE_MM}. */
     private static int[] tieStats(List<Screen> screens, Function<Screen, CabinetType> typeOf, Workspace workspace) {
         List<Screen> owners = new ArrayList<>();
-        List<List<double[][]>> rects = new ArrayList<>();
+        List<StructureOrient.OrientedBox> boxes = new ArrayList<>();
         for (Screen s : screens) {
             if (s.getMountType() != com.vjstb.ledscheme.model.ScreenMountType.STRUCTURE
                     || !StructureCurveMath.separateTowers(s)) {
                 continue;
             }
-            for (List<double[][]> tower : towerRects(s, typeOf.apply(s), workspace)) {
+            for (StructureOrient.OrientedBox box : towerBoxes(s, typeOf.apply(s), workspace)) {
                 owners.add(s);
-                rects.add(tower);
+                boxes.add(box);
             }
         }
         int contacts = 0;
         int ties = 0;
-        for (int i = 0; i < rects.size(); i++) {
-            for (int j = i + 1; j < rects.size(); j++) {
+        for (int i = 0; i < boxes.size(); i++) {
+            for (int j = i + 1; j < boxes.size(); j++) {
                 Screen a = owners.get(i);
                 Screen b = owners.get(j);
                 if (!a.isStructureCountTies() && !b.isStructureCountTies()) {
                     continue;
                 }
-                if (minGap(rects.get(i), rects.get(j)) <= TIE_CONTACT_TOLERANCE_MM) {
+                if (boxes.get(i).touches(boxes.get(j), TIE_CONTACT_TOLERANCE_MM)) {
                     contacts++;
-                    int perContact = Math.max(a.isStructureCountTies() ? a.getStructureTiesPerContact() : 0,
+                    ties += Math.max(a.isStructureCountTies() ? a.getStructureTiesPerContact() : 0,
                             b.isStructureCountTies() ? b.getStructureTiesPerContact() : 0);
-                    ties += perContact;
                 }
             }
         }
         return new int[]{contacts, ties};
     }
 
-    /** Предупреждения ручной расстановки ОДНОГО экрана: пересечения башен друг с другом и вход
-     *  башни в объём своего экрана. Пусто, если расстановка не ручная (авто-режим проверяет
-     *  {@link StructureCurveMath#analyze}). */
+    /** Поза башни {@code k} в системе ГРУППЫ: положение в плане (поза экрана ∘ положение башни), высота над
+     *  землёй, наклон и крен (у авто-раскладки — нули). */
+    public static StructureOrient.TowerPose towerPoseInGroup(Screen screen, Setup setup, int k) {
+        Placement g = towerPlacementInGroup(screen, setup, k);
+        StructureTowerPlacement p = screen.isStructureManualLayout() ? screen.towerPlacementOf(k) : null;
+        return new StructureOrient.TowerPose(g.anchorX(), p != null ? p.getElevationMm() : 0, g.anchorZ(), g.yawDeg(),
+                p != null ? p.getPitchDeg() : 0, p != null ? p.getRollDeg() : 0);
+    }
+
+    /** 3D-коробки башен экрана (мировая система группы): ширина контура, собранная высота башни, глубина по
+     *  стоящим рамам; поза — {@link #towerPoseInGroup}. */
+    public static List<StructureOrient.OrientedBox> towerBoxes(Screen screen, CabinetType type, Workspace workspace) {
+        Setup setup = StructureCurveMath.setupOf(screen, type, workspace);
+        List<StructureOrient.OrientedBox> out = new ArrayList<>();
+        for (int k = 0; k < setup.towerCount(); k++) {
+            TowerSpec spec = StructureCurveMath.towerSpecOf(screen, workspace, k);
+            out.add(StructureOrient.OrientedBox.ofTower(towerPoseInGroup(screen, setup, k), spec.outerWidthMm(),
+                    StructureCupMath.towerHeightMm(screen, workspace, k), spec.depthMm()));
+        }
+        return out;
+    }
+
+    /** 3D-коробки колонн кабинетов экрана (мировая система группы): высота — от подъёма экрана на высоту экрана. */
+    public static List<StructureOrient.OrientedBox> screenBoxes(Screen screen, CabinetType type) {
+        List<StructureOrient.OrientedBox> out = new ArrayList<>();
+        if (type == null) {
+            return out;
+        }
+        StructureCurveMath.Curve curve = StructureCurveMath.curveOf(screen, type);
+        Placement pose = screenPose(screen);
+        boolean[] visible = visibleColumns(screen, curve.cols());
+        List<Placement> cols = StructureCurveMath.cabinetColumns(curve);
+        double height = screen.getRows() * type.getHeightMm();
+        for (int i = 0; i < cols.size(); i++) {
+            if (!visible[i]) {
+                continue;
+            }
+            Placement w = compose(pose, cols.get(i));
+            out.add(StructureOrient.OrientedBox.ofTower(new StructureOrient.TowerPose(w.anchorX(),
+                    screen.getStructureScreenElevationMm(), w.anchorZ(), w.yawDeg(), 0, 0), curve.cabinetWidthMm(),
+                    height, curve.cabinetDepthMm()));
+        }
+        return out;
+    }
+
+    /** Предупреждения ручной расстановки ОДНОГО экрана: пересечения башен друг с другом и вход башни в объём
+     *  своего экрана — по 3D-коробкам (наклон и высота учитываются: башня, лежащая поверх других, им не мешает).
+     *  Пусто, если расстановка не ручная (авто-режим проверяет {@link StructureCurveMath#analyze}). */
     public static List<String> analyzeManual(Screen screen, CabinetType type, Workspace workspace) {
         List<String> warnings = new ArrayList<>();
         if (screen == null || !screen.isStructureManualLayout()) {
             return warnings;
         }
-        List<List<double[][]>> towers = towerRects(screen, type, workspace);
-        List<double[][]> cabinets = screenRects(screen, type);
+        List<StructureOrient.OrientedBox> towers = towerBoxes(screen, type, workspace);
+        List<StructureOrient.OrientedBox> cabinets = screenBoxes(screen, type);
         for (int i = 0; i < towers.size(); i++) {
             for (int j = i + 1; j < towers.size(); j++) {
-                if (StructureCurveMath.anyIntersect(towers.get(i), towers.get(j))) {
+                if (towers.get(i).overlaps(towers.get(j))) {
                     warnings.add(String.format("Башни %d и %d пересекаются.", i + 1, j + 1));
                 }
             }
-            if (StructureCurveMath.anyIntersect(towers.get(i), cabinets)) {
+            if (anyOverlap(towers.get(i), cabinets)) {
                 warnings.add(String.format("Башня %d заходит в объём экрана.", i + 1));
             }
         }
         return warnings;
     }
 
-    /** Предупреждения конструктива ГРУППЫ экранов: пересечения башен РАЗНЫХ экранов между собой и
-     *  вход башни в объём ДРУГОГО экрана группы (внутри одного экрана — {@link #analyzeManual}).
-     *  Экраны друг с другом не сравниваются: на стыке под углом их корпуса соприкасаются по
-     *  ребру по построению. Только предупреждения. */
+    private static boolean anyOverlap(StructureOrient.OrientedBox box, List<StructureOrient.OrientedBox> others) {
+        for (StructureOrient.OrientedBox o : others) {
+            if (box.overlaps(o)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Предупреждения конструктива ГРУППЫ экранов: пересечения башен РАЗНЫХ экранов между собой и вход башни в
+     *  объём ДРУГОГО экрана группы (внутри одного экрана — {@link #analyzeManual}); 3D-коробки. Экраны друг с
+     *  другом не сравниваются: на стыке под углом их корпуса соприкасаются по построению. Только предупреждения. */
     public static List<String> analyzeGroup(List<Screen> screens, Function<Screen, CabinetType> typeOf,
             Workspace workspace) {
         List<String> warnings = new ArrayList<>();
         int n = screens.size();
-        List<List<List<double[][]>>> towers = new ArrayList<>();
-        List<List<double[][]>> cabinets = new ArrayList<>();
+        List<List<StructureOrient.OrientedBox>> towers = new ArrayList<>();
+        List<List<StructureOrient.OrientedBox>> cabinets = new ArrayList<>();
         for (Screen s : screens) {
             CabinetType type = typeOf.apply(s);
-            towers.add(towerRects(s, type, workspace));
-            cabinets.add(screenRects(s, type));
+            towers.add(towerBoxes(s, type, workspace));
+            cabinets.add(screenBoxes(s, type));
         }
         for (int a = 0; a < n; a++) {
             for (int b = 0; b < n; b++) {
@@ -514,13 +567,13 @@ public final class StructureLayoutMath {
                 String nameA = screens.get(a).getName();
                 String nameB = screens.get(b).getName();
                 for (int i = 0; i < towers.get(a).size(); i++) {
-                    if (StructureCurveMath.anyIntersect(towers.get(a).get(i), cabinets.get(b))) {
+                    if (anyOverlap(towers.get(a).get(i), cabinets.get(b))) {
                         warnings.add(String.format("Башня %d экрана «%s» заходит в объём экрана «%s».", i + 1,
                                 nameA, nameB));
                     }
                     if (b > a) {
                         for (int j = 0; j < towers.get(b).size(); j++) {
-                            if (StructureCurveMath.anyIntersect(towers.get(a).get(i), towers.get(b).get(j))) {
+                            if (towers.get(a).get(i).overlaps(towers.get(b).get(j))) {
                                 warnings.add(String.format(
                                         "Башня %d экрана «%s» пересекается с башней %d экрана «%s».",
                                         i + 1, nameA, j + 1, nameB));
