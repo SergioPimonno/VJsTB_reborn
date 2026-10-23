@@ -208,4 +208,44 @@ public final class RoomLibraryEdit {
     public static void clearPersonalDimensions(AppModel m, RoomLibRef ref) {
         m.setPhysicalOverride(ref, null);
     }
+
+    /**
+     * «Сохранить как позицию»: параметры мебели с плана (с её переопределениями) становятся новой ЛИЧНОЙ
+     * позицией библиотеки, а сам объект на плане переключается на неё и теряет переопределения. Так «подогнанный»
+     * стол или станок можно ставить снова, не правя каждый раз. Если такое название уже есть, добавляется
+     * «(своё)». Возвращает созданную позицию.
+     */
+    public static RoomFurnitureType saveFurnitureAsPreset(AppModel m, com.vjstb.ledscheme.model.RoomFurniture f,
+                                                          RoomItemSpec effective) {
+        RoomFurnitureType t = new RoomFurnitureType();
+        String name = effective.name() == null || effective.name().isBlank() ? "Без названия" : effective.name();
+        java.util.Set<String> taken = new java.util.HashSet<>();
+        for (RoomFurnitureType x : m.getRoomFurnitureTypes()) {
+            taken.add(x.getName().toLowerCase(java.util.Locale.ROOT));
+        }
+        while (taken.contains(name.toLowerCase(java.util.Locale.ROOT))) {
+            name = name + " (своё)";
+        }
+        t.setName(name);
+        t.setKind(switch (effective.type()) {
+            case DECK -> RoomFurnitureType.Kind.DECK;
+            case MONITOR -> RoomFurnitureType.Kind.MONITOR;
+            default -> RoomFurnitureType.Kind.FURNITURE;
+        });
+        t.setRole(switch (effective.role()) {
+            case TABLE -> RoomFurnitureType.Role.TABLE;
+            case CHAIR -> RoomFurnitureType.Role.CHAIR;
+            default -> RoomFurnitureType.Role.OTHER;
+        });
+        t.setWidthMm(effective.widthCm() * 10);
+        t.setDepthMm(effective.depthCm() * 10);
+        t.setHeightMm(effective.heightCm() * 10);
+        t.setWeightKg(effective.weightKg());
+        t.setPowerW(effective.powerW());
+        t.setDiagonalIn(effective.diagonalIn());
+        m.addRoomFurnitureType(t);
+        f.setRef(new RoomLibRef(RoomLibRef.Kind.ROOM_FURNITURE, t.getId()));
+        f.setOverrides(null);
+        return t;
+    }
 }

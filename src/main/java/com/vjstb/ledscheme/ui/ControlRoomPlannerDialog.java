@@ -8,10 +8,10 @@ import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.room.RoomItemSpec;
 import com.vjstb.ledscheme.service.room.RoomLibraryEdit;
 import com.vjstb.ledscheme.service.room.RoomLibraryAdapter;
-import com.vjstb.ledscheme.service.room.RoomPlanCalc;
 import com.vjstb.ledscheme.service.room.RoomUnits;
-import com.vjstb.ledscheme.service.room.RoomWarning;
 import com.vjstb.ledscheme.settings.SettingsManager;
+import com.vjstb.ledscheme.ui.room.PlannerEditorPanel;
+import com.vjstb.ledscheme.ui.room.RoomTheme;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
@@ -36,7 +36,6 @@ import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTable;
-import javax.swing.JTextArea;
 import javax.swing.table.AbstractTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
 
@@ -59,7 +58,6 @@ public class ControlRoomPlannerDialog extends JDialog {
 
     private static ControlRoomPlannerDialog instance;
 
-    private static final Color MISSING_BG = new Color(0xFF, 0xE8, 0xB0);
 
     private final AppModel model;
     private final SettingsManager settings;
@@ -70,7 +68,7 @@ public class ControlRoomPlannerDialog extends JDialog {
     private final JButton renameBtn = new JButton("Переименовать…");
     private final JButton dupBtn = new JButton("Дублировать");
     private final JButton delBtn = new JButton("Удалить");
-    private final JTextArea summary = new JTextArea();
+    private final PlannerEditorPanel editor;
     private final LibraryTableModel libModel = new LibraryTableModel();
     private final JCheckBox onlyMissing = new JCheckBox("Только без габаритов");
     private final JLabel libCount = new JLabel(" ");
@@ -103,6 +101,7 @@ public class ControlRoomPlannerDialog extends JDialog {
         super(owner, "Планнер пультовой", ModalityType.MODELESS);
         this.model = model;
         this.settings = settings;
+        editor = new PlannerEditorPanel(model, ref -> RoomDimensionsDialog.show(this, model, settings, ref));
 
         JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
         bar.add(new JLabel("Раскладка:"));
@@ -117,7 +116,7 @@ public class ControlRoomPlannerDialog extends JDialog {
         });
         layoutBox.addActionListener(e -> {
             if (!updating) {
-                renderSummary();
+                editor.showLayout(selected());
             }
         });
         bar.add(layoutBox);
@@ -132,12 +131,9 @@ public class ControlRoomPlannerDialog extends JDialog {
         delBtn.addActionListener(e -> deleteLayout());
         addBtn.setToolTipText("Новая пустая раскладка у текущей сцены. У каждой сцены свой список раскладок.");
 
-        summary.setEditable(false);
-        summary.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 13));
-        summary.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
         JTabbedPane tabs = new JTabbedPane();
-        tabs.addTab("Раскладка", new JScrollPane(summary));
-        tabs.addTab("Библиотека", buildLibraryTab());
+        tabs.addTab("Редактор", editor);
+        tabs.addTab("Библиотека (габариты)", buildLibraryTab());
 
         JPanel content = new JPanel(new BorderLayout(0, 4));
         content.setBorder(BorderFactory.createEmptyBorder(6, 8, 8, 8));
@@ -145,7 +141,7 @@ public class ControlRoomPlannerDialog extends JDialog {
         content.add(tabs, BorderLayout.CENTER);
         setContentPane(content);
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
-        setSize(980, 640);
+        setSize(1280, 800);
         setLocationRelativeTo(owner);
 
         modelListener = this::refresh;
@@ -177,8 +173,8 @@ public class ControlRoomPlannerDialog extends JDialog {
                 Component c = super.getTableCellRendererComponent(t, value, sel, focus, row, col);
                 RoomItemSpec spec = libModel.at(t.convertRowIndexToModel(row));
                 if (!sel) {
-                    c.setBackground(spec.complete() ? t.getBackground() : MISSING_BG);
-                    c.setForeground(spec.complete() ? t.getForeground() : Color.BLACK);
+                    c.setBackground(spec.complete() ? t.getBackground() : RoomTheme.current().warnBg);
+                    c.setForeground(spec.complete() ? t.getForeground() : RoomTheme.current().ink);
                 }
                 return c;
             }
@@ -258,7 +254,7 @@ public class ControlRoomPlannerDialog extends JDialog {
         renameBtn.setEnabled(any);
         dupBtn.setEnabled(any);
         delBtn.setEnabled(any);
-        renderSummary();
+        editor.showLayout(selected());
         renderLibrary();
     }
 
@@ -309,49 +305,6 @@ public class ControlRoomPlannerDialog extends JDialog {
     }
 
     // ---- содержимое ----
-
-    private void renderSummary() {
-        ControlRoomLayout l = selected();
-        if (l == null) {
-            summary.setText("У этой сцены пока нет раскладок.\n\nНажмите «Новая…», чтобы создать первую. "
-                    + "Раскладок может быть несколько (варианты, разные площадки), у каждой сцены свой список.");
-            summary.setCaretPosition(0);
-            return;
-        }
-        RoomPlanCalc.Result r = RoomPlanCalc.calc(l, RoomLibraryAdapter.of(model));
-        RoomPlanCalc.Totals t = r.totals();
-        StringBuilder sb = new StringBuilder();
-        sb.append("Раскладка «").append(l.getName()).append("»\n");
-        sb.append("Площадка: ").append(RoomUnits.num(l.getRoomWidthCm() / 100, 2)).append(" × ")
-                .append(RoomUnits.num(l.getRoomDepthCm() / 100, 2)).append(" м\n\n");
-        sb.append("Башен: ").append(t.towers()).append(" · юниты занято ").append(t.unitsUsed()).append(" из ")
-                .append(t.unitsTotal()).append("\n");
-        sb.append("Станков: ").append(t.deck().count());
-        if (t.deck().count() > 0) {
-            sb.append(" · пол ").append(RoomUnits.num(t.deck().widthCm() / 100, 1)).append(" × ")
-                    .append(RoomUnits.num(t.deck().depthCm() / 100, 1)).append(" м, ")
-                    .append(RoomUnits.num(t.deck().areaM2(), 1)).append(" м²");
-        }
-        sb.append("\nВес: ").append(RoomUnits.num(t.kg(), 0)).append(" кг · нагрузка ")
-                .append(RoomUnits.num(t.powerW() / 1000, 2)).append(" кВт (")
-                .append(RoomUnits.num(t.powerW() / 230, 1)).append(" А) · кофров к перевозке: ").append(t.cases())
-                .append("\n\nЗамечания\n");
-        if (r.warnings().isEmpty()) {
-            sb.append("  всё в порядке\n");
-        }
-        for (RoomWarning w : r.warnings()) {
-            String tag = switch (w.level()) {
-                case ERROR -> "ОШИБКА";
-                case WARNING -> "предупр.";
-                case INFO -> "к сведению";
-            };
-            sb.append("  [").append(tag).append("] ").append(w.text()).append("\n");
-        }
-        sb.append("\n— Каркас первого этапа: редактор раскладки (башни, план и виды, трассы, станки, мониторы)\n")
-                .append("  появится в следующих этапах, см. docs/control-room-planner/PLAN.md.\n");
-        summary.setText(sb.toString());
-        summary.setCaretPosition(0);
-    }
 
     // ---- вкладка «Библиотека»: габариты и свои позиции ----
 
