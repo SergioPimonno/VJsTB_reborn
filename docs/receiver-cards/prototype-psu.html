@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Блоки питания — прототип v1</title>
+<!-- Прототип вида «Блоки питания» (этап «Питание»), показан пользователю 2026-10-26; см. PLAN.md, решение D14.
+     Карты здесь заданы заранее (их назначают в «Сигнале» → «Приёмные карты»). Числа блоков условные. -->
+<style>
+:root{--border:#d6d4cc;--border-strong:#b4b2a9;--border-accent:#378add;--bg-accent:#e6f1fb;--text-accent:#0c447c;
+--text-secondary:#5f5e5a;--text-warning:#854f0b;--text-success:#3b6d11;--surface-1:#f1efe8;--surface-2:#fff;--radius:8px}
+body{font-family:system-ui,"Segoe UI",sans-serif;margin:16px;background:#f5f4ef;color:#2c2c2a;max-width:980px}
+button,input{font:inherit}
+button{border:0.5px solid var(--border-strong);background:#fff;border-radius:var(--radius);padding:4px 10px;cursor:pointer}
+button[aria-pressed=true]{background:var(--bg-accent);border-color:var(--border-accent)}
+.bar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px;font-size:13px}
+.wrap{display:grid;grid-template-columns:minmax(0,1fr) 250px;gap:12px;font-size:13px}
+.pnl{border:0.5px solid var(--border);border-radius:12px;padding:10px;margin-bottom:8px;background:var(--surface-2)}
+.lbl{font-size:12px;color:var(--text-secondary);margin:0 0 6px}
+.ct{display:flex;justify-content:space-between;padding:4px 6px;border:0.5px solid var(--border);border-radius:var(--radius);margin-bottom:4px;cursor:pointer;font-size:12px}.ct.on{border-color:var(--border-accent);background:var(--bg-accent);color:var(--text-accent)}
+.sep{border:none;border-top:0.5px solid var(--border-strong);margin:10px 0}
+.chk{display:flex;gap:8px;align-items:flex-start;font-size:12px;margin:4px 0}.chk small{display:block;font-size:11px;color:var(--text-secondary);line-height:1.35}
+.cl div{display:flex;justify-content:space-between;padding:2px 0;border-bottom:0.5px solid var(--border);cursor:pointer;font-size:12px}.cl div.sel{color:var(--text-accent)}
+</style>
+</head>
+<body>
+<div class="bar"><span style="color:var(--text-secondary)">Питание · вид</span><button aria-pressed="true">Блоки питания</button><button>Расключение экрана</button><button>Общая схема</button></div>
+<div class="wrap">
+<div>
+<div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap"><button id="allB">Назначить всем картам</button><button id="delB">Снять блоки с карты</button><label style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px"><input type="checkbox" id="cab"> кабели питания</label></div>
+<svg id="sv" width="100%" viewBox="0 0 424 212" style="touch-action:none;user-select:none;border:0.5px solid var(--border);border-radius:var(--radius);background:#fff"></svg>
+<p id="note" style="font-size:12px;margin:6px 0 0;min-height:18px"></p>
+<p style="font-size:12px;color:var(--text-secondary);margin:2px 0 0">Выберите тип блока и протяните по картам — на каждую задетую карту ставятся блоки, прежние блоки этих карт заменяются. Клик по карте — выбор. На модуле — номер выхода его блока, цвет — какой блок его питает; «⚡» на плашке карты — карта питается от выхода 1 блока.</p>
+<div id="tot" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-top:8px"></div>
+</div>
+<div>
+<div class="pnl"><p class="lbl">Тип блока питания</p><div id="lib"></div><hr class="sep">
+<label class="chk"><input type="checkbox" id="resv" checked style="margin-top:2px"><span>Выход под карту<small>выход 1 первого блока питает приёмную карту</small></span></label><hr class="sep">
+<p class="lbl">Если выходов не хватает</p>
+<label class="chk"><input type="radio" name="sh" id="shAdd" checked style="margin-top:2px"><span>Добавить ещё блок<small>того же типа на ту же карту</small></span></label>
+<label class="chk"><input type="radio" name="sh" id="shWarn" style="margin-top:2px"><span>Только предупредить<small>модули без питания — оранжевым</small></span></label></div>
+<div class="pnl"><p class="lbl">Блоки питания экрана</p><div class="cl" id="cl"></div></div>
+</div>
+</div>
+<script>
+const C=12,R=6,S=34,O=4;
+const CAB=new Set();for(let r=0;r<R;r++){CAB.add(r+":10");CAB.add(r+":11")}
+const ptypes=[{n:"Блок A (пример)",out:5,w:200},{n:"Блок B (пример)",out:8,w:300},{n:"Своя: «Блок X»",out:10,w:400}];
+const PC=[["#FAC775","#854F0B"],["#CECBF6","#3C3489"],["#9FE1CB","#085041"],["#F4C0D1","#72243E"]];
+const key=(r,c)=>r+":"+c,rc=k=>k.split(":").map(Number),cellXY=k=>{const[r,c]=rc(k);return[O+c*S+S/2,O+r*S+S/2]};
+const cards=[];function mk(r0,c0,h,w){const cells=[];for(let r=r0;r<r0+h;r++)for(let c=c0;c<c0+w;c++)cells.push(key(r,c));cards.push({cells,r0,c0,r1:r0+h-1,c1:c0+w-1})}
+mk(0,0,3,4);mk(0,4,3,4);mk(0,8,3,2);mk(3,0,3,4);mk(3,4,3,4);mk(3,8,3,2);
+cards.forEach((cd,i)=>{cd.id=i;cd.name="К"+(i+1);cd.host=key(cd.r0+1,cd.c0+Math.floor((cd.c1-cd.c0)/2))});
+let cur=1,assign={},act=null,sel=null,drag=null;
+const sv=document.getElementById("sv"),ns="http://www.w3.org/2000/svg";const el=(t,a)=>{const e=document.createElementNS(ns,t);for(const k in a)e.setAttribute(k,a[k]);return e};
+/* Распределение D14: выход 1 первого блока — карта (если «Выход под карту»), остальные выходы — модулям карты в порядке их
+   номеров; не хватает — ещё блок того же типа (резерв под карту только на первом) или модули без питания. */
+function plan(cd){const a=assign[cd.id];if(!a)return{psus:[],map:{},card:null,unpowered:cd.cells.slice()};const t=ptypes[a.t],resv=document.getElementById("resv").checked,add=document.getElementById("shAdd").checked;
+const need=cd.cells.length+(resv?1:0);const n=add?Math.max(1,Math.ceil(need/t.out)):1;const psus=[];for(let i=0;i<n;i++)psus.push({t:a.t,used:0});
+const map={};let card=null,pi=0;if(resv){psus[0].used=1;card={p:0,o:1}}
+const unpowered=[];cd.cells.forEach(k=>{while(pi<psus.length&&psus[pi].used>=t.out)pi++;if(pi>=psus.length){unpowered.push(k);return}psus[pi].used++;map[k]={p:pi,o:psus[pi].used}});return{psus,map,card,unpowered}}
+function numbering(){const list=[];cards.forEach(cd=>plan(cd).psus.forEach((p,i)=>list.push({cd,i,p})));list.forEach((x,j)=>x.name="БП"+(j+1));return list}
+function draw(){sv.innerHTML="";const showCab=document.getElementById("cab").checked;const nums=numbering();
+const plans={};cards.forEach(cd=>plans[cd.id]=plan(cd));
+for(let r=0;r<R;r++)for(let c=0;c<C;c++){const k=key(r,c);let f="#B4B2A9",st="#888780",sw=0.5;if(CAB.has(k))f="#5F5E5A";else{const cd=cards.find(x=>x.cells.includes(k)),p=plans[cd.id];if(p.map[k])f=PC[p.map[k].p%4][0];else if(assign[cd.id]){f="#F5C4B3";st="#D85A30";sw=1}}
+const inSel=sel&&!CAB.has(k)&&cards.find(x=>x.cells.includes(k)&&x.r0<=sel[2]&&x.r1>=sel[0]&&x.c0<=sel[3]&&x.c1>=sel[1]);if(inSel)f="#B5D4F4";
+sv.appendChild(el("rect",{x:O+c*S+1,y:O+r*S+1,width:S-2,height:S-2,rx:2,fill:f,stroke:st,"stroke-width":sw}))}
+cards.forEach(cd=>{const p=plans[cd.id],a=cd.id===act;sv.appendChild(el("rect",{x:O+cd.c0*S+2,y:O+cd.r0*S+2,width:(cd.c1-cd.c0+1)*S-4,height:(cd.r1-cd.r0+1)*S-4,rx:4,fill:"none",stroke:a?"#27500A":"#3B6D11","stroke-width":a?2.5:1.3,"stroke-dasharray":"5 3"}));
+const[hx,hy]=cellXY(cd.host);
+if(showCab)Object.entries(p.map).forEach(([k,v])=>{if(k===cd.host)return;const[x,y]=cellXY(k);sv.appendChild(el("line",{x1:hx,y1:hy,x2:x,y2:y,stroke:PC[v.p%4][1],"stroke-width":0.8,"stroke-dasharray":"3 2"}))});
+Object.entries(p.map).forEach(([k,v])=>{const[x,y]=cellXY(k);const t=el("text",{x,y:y+(k===cd.host?-3:4),"font-size":11,"text-anchor":"middle",fill:PC[v.p%4][1],"font-weight":500});t.textContent=v.o;sv.appendChild(t)});
+const pw=p.card?32:24;sv.appendChild(el("rect",{x:hx-pw/2,y:hy+4,width:pw,height:11,rx:5.5,fill:"#27500A"}));const ht=el("text",{x:hx,y:hy+12.5,"font-size":8.5,"text-anchor":"middle",fill:"#EAF3DE","font-weight":500});ht.textContent=(p.card?"⚡":"")+cd.name;sv.appendChild(ht)});list(nums,plans)}
+function list(nums,plans){const cl=document.getElementById("cl");cl.innerHTML=nums.length?"":"<span style='color:var(--text-secondary);font-size:12px'>Пока нет блоков</span>";
+nums.forEach(x=>{const t=ptypes[x.p.t],d=document.createElement("div");d.className=x.cd.id===act?"sel":"";d.innerHTML="<span><span style='display:inline-block;width:8px;height:8px;border-radius:2px;background:"+PC[x.i%4][0]+";border:0.5px solid "+PC[x.i%4][1]+";margin-right:5px'></span>"+x.name+" · "+t.n.replace(" (пример)","")+" · "+x.cd.name+"</span><span>"+x.p.used+"/"+t.out+"</span>";d.onclick=()=>{act=x.cd.id;draw()};cl.appendChild(d)});
+let unp=0,cardsNo=0;cards.forEach(cd=>{if(!assign[cd.id])return;unp+=plans[cd.id].unpowered.length;if(assign[cd.id]&&!plans[cd.id].card)cardsNo++});const free=cards.filter(cd=>!assign[cd.id]).reduce((a,cd)=>a+cd.cells.length,0);
+const w=nums.reduce((a,x)=>a+ptypes[x.p.t].w,0);
+document.getElementById("tot").innerHTML="<div style='background:var(--surface-1);border-radius:var(--radius);padding:8px 10px'><p style='margin:0;font-size:12px;color:var(--text-secondary)'>Блоков</p><p style='margin:0;font-weight:500;font-size:18px'>"+nums.length+"</p></div><div style='background:var(--surface-1);border-radius:var(--radius);padding:8px 10px'><p style='margin:0;font-size:12px;color:var(--text-secondary)'>Мощность по блокам</p><p style='margin:0;font-weight:500;font-size:18px'>"+w+" Вт</p></div><div style='background:var(--surface-1);border-radius:var(--radius);padding:8px 10px'><p style='margin:0;font-size:12px;color:var(--text-secondary)'>Модулей без питания</p><p style='margin:0;font-weight:500;font-size:18px;color:"+(unp+free?"var(--text-warning)":"var(--text-success)")+"'>"+(unp+free)+"</p></div>";
+const n=document.getElementById("note");const msgs=[];if(unp)msgs.push("Не хватает выходов: "+unp+" мод. без питания");if(free)msgs.push("Карт без блока: "+cards.filter(cd=>!assign[cd.id]).length);if(cardsNo)msgs.push("Карт без выхода питания: "+cardsNo);n.style.color=msgs.length?"var(--text-warning)":"var(--text-secondary)";n.textContent=msgs.join(" · ")}
+function lib(){const lb=document.getElementById("lib");lb.innerHTML="";ptypes.forEach((t,i)=>{const d=document.createElement("div");d.className="ct"+(i===cur?" on":"");d.innerHTML="<span>"+t.n+"</span><span>"+t.out+" вых. · "+t.w+" Вт</span>";d.onclick=()=>{cur=i;lib()};lb.appendChild(d)})}
+function cellOf(e){const p=sv.createSVGPoint();p.x=e.clientX;p.y=e.clientY;const q=p.matrixTransform(sv.getScreenCTM().inverse());return[Math.max(0,Math.min(R-1,Math.floor((q.y-O)/S))),Math.max(0,Math.min(C-1,Math.floor((q.x-O)/S)))]}
+sv.addEventListener("pointerdown",e=>{const[r,c]=cellOf(e);drag={r,c,moved:false};sel=[r,c,r,c];draw()});
+sv.addEventListener("pointermove",e=>{if(!drag)return;const[r,c]=cellOf(e);if(r!==drag.r||c!==drag.c)drag.moved=true;sel=[Math.min(drag.r,r),Math.min(drag.c,c),Math.max(drag.r,r),Math.max(drag.c,c)];draw()});
+window.addEventListener("pointerup",()=>{if(!drag)return;const d=drag;drag=null;const hit=cards.filter(x=>x.r0<=sel[2]&&x.r1>=sel[0]&&x.c0<=sel[3]&&x.c1>=sel[1]);sel=null;if(!d.moved){act=hit[0]?hit[0].id:null;draw();return}hit.forEach(cd=>assign[cd.id]={t:cur});act=hit[0]?hit[0].id:act;draw()});
+document.getElementById("allB").onclick=()=>{cards.forEach(cd=>assign[cd.id]={t:cur});draw()};
+document.getElementById("delB").onclick=()=>{if(act!==null){delete assign[act];draw()}};
+["resv","shAdd","shWarn","cab"].forEach(id=>document.getElementById(id).onchange=draw);
+cards.forEach(cd=>assign[cd.id]={t:1});delete assign[5];lib();draw();
+</script>
+</body>
+</html>
