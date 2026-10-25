@@ -80,6 +80,12 @@ final class PlanView {
         this.session = session;
     }
 
+    /** Размер картинки, при котором масштаб вида ровно {@code pxPerCm} пикселей на сантиметр (экспорт). */
+    static java.awt.Dimension sizeFor(ControlRoomLayout l, double pxPerCm) {
+        return new java.awt.Dimension((int) Math.ceil((l.getRoomWidthCm() + VIEW_PAD_W) * pxPerCm),
+                (int) Math.ceil((l.getRoomDepthCm() + VIEW_PAD_D) * pxPerCm));
+    }
+
     void refreshTheme() {
         theme = RoomTheme.current();
     }

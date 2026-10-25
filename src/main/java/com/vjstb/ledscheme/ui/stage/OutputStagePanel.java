@@ -484,6 +484,28 @@ public class OutputStagePanel extends JPanel {
         boolean doReport = parts.contains(OutputPart.REPORT);
         boolean doSpec = parts.contains(OutputPart.SPEC);
 
+        // Планер пультовой: раскладки хранятся в сценах; если их в проекте нет, кнопка части говорит об этом, а в пакете
+        // документации часть тихо пропускается (строка в итоговом сообщении)
+        int controlRoomLayouts = 0;
+        for (Scene sc : project.getScenes()) {
+            controlRoomLayouts += sc.getControlRoomLayouts().size();
+        }
+        final boolean doControlRoom = parts.contains(OutputPart.CONTROL_ROOM) && controlRoomLayouts > 0;
+        final boolean controlRoomMissing = parts.contains(OutputPart.CONTROL_ROOM) && controlRoomLayouts == 0;
+        if (controlRoomMissing && single) {
+            JOptionPane.showMessageDialog(this, "В проекте нет раскладок Планера пультовой. Создайте раскладку: "
+                    + "«Инструменты → Планер пультовой…».", "Нечего экспортировать", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        ControlRoomExportOptions controlRoomOptions = null;
+        if (doControlRoom) {
+            controlRoomOptions = single ? ControlRoomExportOptions.ask(this, settings)
+                    : ControlRoomExportOptions.fromProfile(settings);
+            if (controlRoomOptions == null) {
+                return;
+            }
+        }
+
         ScreensExportOptions screensOptions = null;
         if (doScreens) {
             screensOptions = single ? ScreensExportOptions.ask(this, settings)
@@ -511,6 +533,7 @@ public class OutputStagePanel extends JPanel {
         int maskCount = 0;
         int screensTableCount = 0;
         int resolumeCount = 0;
+        int controlRoomCount = 0;
         int afterEffectsCount = 0;
         File reportFile = null;
         List<File> specFiles = new java.util.ArrayList<>();
@@ -535,6 +558,15 @@ public class OutputStagePanel extends JPanel {
                 }
                 if (doScreens && n > 0) {
                     total++;
+                }
+                if (doControlRoom) {
+                    for (com.vjstb.ledscheme.model.ControlRoomLayout l : scene.getControlRoomLayouts()) {
+                        for (com.vjstb.ledscheme.ui.room.ControlRoomExporter.View v
+                                : controlRoomOptions.views()) {
+                            total += v.applicableTo(l) ? 1 : 0;
+                        }
+                        total += controlRoomOptions.spec() ? 1 : 0;
+                    }
                 }
                 if (doResolume && !scene.getCanvases().isEmpty()) {
                     total++;
@@ -735,6 +767,44 @@ public class OutputStagePanel extends JPanel {
                     }
                 }
 
+                // Планер пультовой: каждая раскладка сцены — выбранные виды картинками и спецификация текстом, в подпапку
+                // «Пульт» сцены. Рисуют те же классы, что и окно планера, в оформлении экспорта (экранное/печатное).
+                if (doControlRoom && !scene.getControlRoomLayouts().isEmpty()) {
+                    File crFolder = new File(sceneFolder, "Пульт");
+                    java.util.Set<String> usedNames = new java.util.HashSet<>();
+                    for (com.vjstb.ledscheme.model.ControlRoomLayout layout : scene.getControlRoomLayouts()) {
+                        String layoutName = OutputPaths.sanitize(scene.getName() + " " + layout.getName());
+                        for (int k = 2; !usedNames.add(layoutName); k++) {
+                            layoutName = OutputPaths.sanitize(scene.getName() + " " + layout.getName()) + " (" + k + ")";
+                        }
+                        for (com.vjstb.ledscheme.ui.room.ControlRoomExporter.View view
+                                : controlRoomOptions.views()) {
+                            if (!view.applicableTo(layout)) {
+                                continue; // стоек нет — рисовать нечего
+                            }
+                            progress.step(scene.getName() + " · пульт «" + layout.getName() + "» · "
+                                    + view.fileTag());
+                            BufferedImage crImg = com.vjstb.ledscheme.ui.ExportRendering.run(
+                                    settings.activeProfile(),
+                                    () -> com.vjstb.ledscheme.ui.room.ControlRoomExporter.render(model,
+                                            scene.getName(), layout, view, dpiScale));
+                            crFolder.mkdirs();
+                            writeScheme(crImg, crFolder, OutputPaths.sanitize(layoutName + " " + view.fileTag()),
+                                    docExportDpi);
+                            controlRoomCount++;
+                        }
+                        if (controlRoomOptions.spec()) {
+                            progress.step(scene.getName() + " · пульт «" + layout.getName() + "» · спецификация");
+                            crFolder.mkdirs();
+                            Files.writeString(new File(crFolder, OutputPaths.sanitize(layoutName + " Спецификация")
+                                    + ".txt").toPath(),
+                                    com.vjstb.ledscheme.ui.room.ControlRoomExporter.specText(model, layout),
+                                    StandardCharsets.UTF_8);
+                            controlRoomCount++;
+                        }
+                    }
+                }
+
                 // Таблица экранов сцены (то же, что кнопка «Экспорт экранов» этапа «Настройка»)
                 if (doScreens && !scene.getScreens().isEmpty()) {
                     progress.step(scene.getName() + " · таблица экранов");
@@ -830,6 +900,11 @@ public class OutputStagePanel extends JPanel {
             }
             if (doScreens) {
                 done.append("\nТаблиц экранов: ").append(screensTableCount);
+            }
+            if (doControlRoom) {
+                done.append("\nФайлов Планера пультовой: ").append(controlRoomCount);
+            } else if (controlRoomMissing) {
+                done.append("\nПланер пультовой: раскладок в проекте нет");
             }
             if (doResolume) {
                 done.append("\nФайлов Resolume: ").append(resolumeCount);

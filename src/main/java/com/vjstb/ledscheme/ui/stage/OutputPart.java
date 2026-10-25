@@ -10,7 +10,7 @@ import java.util.Set;
  * отдельная кнопка — одну; код один и тот же ({@code OutputStagePanel#runExport}).
  *
  * <p>{@link #defaultOn} — состав пакета ДО появления галочек: питание, сигнал, маски, транспорт, сводка и
- * спецификация. Таблица экранов и пресеты (Resolume, After Effects) выключены, пока пользователь сам их не
+ * спецификация. Таблица экранов, Планер пультовой и пресеты (Resolume, After Effects) выключены, пока пользователь сам их не
  * отметил, чтобы привычный пакет не разросся неожиданными файлами.
  */
 public enum OutputPart {
@@ -18,6 +18,7 @@ public enum OutputPart {
     SIGNAL("Сигнал — схемы расключения", true),
     MASKS("Маски экранов и канвасов", true),
     TRANSPORT("Транспорт — схемы загрузки машин", true),
+    CONTROL_ROOM("Планер пультовой — раскладки", false),
     SCREENS("Экраны — таблица экранов", false),
     RESOLUME("Пресеты Resolume", false),
     AFTER_EFFECTS("Пресеты After Effects", false),

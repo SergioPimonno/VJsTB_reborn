@@ -63,6 +63,12 @@ final class ElevationView {
         theme = RoomTheme.current();
     }
 
+    /** Размер картинки, при котором масштаб вида ровно {@code pxPerCm} пикселей на сантиметр (экспорт). */
+    static java.awt.Dimension sizeFor(ControlRoomLayout l, double pxPerCm) {
+        return new java.awt.Dimension((int) Math.ceil((l.getRoomWidthCm() + VIEW_PAD_W) * pxPerCm),
+                (int) Math.ceil(VIEW_H * pxPerCm));
+    }
+
     private void fit(int w, int h) {
         ControlRoomLayout l = session.layout();
         double ww = (l != null ? l.getRoomWidthCm() : 700) + VIEW_PAD_W;

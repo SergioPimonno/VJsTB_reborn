@@ -417,6 +417,10 @@ public class UserProfile {
     /** Что печатать в экспорте таблицы экранов (запрос 2026-10-02: «при экспорте экранов надо
      *  спрашивать, печатать ли легенду кабинетов и/или статистику по сцене»): последний выбор в
      *  диалоге, по умолчанию (профиль без полей) — печатать оба блока. */
+    /** Виды Планера пультовой для вывода (имена {@code ControlRoomExporter.View}); {@code null} — выбор не делали. */
+    private List<String> controlRoomExportViews;
+    /** Нужна ли спецификация раскладки текстом в выводе Планера пультовой; {@code null} — да. */
+    private Boolean controlRoomExportSpec;
     private Boolean screensExportLegend;
     private Boolean screensExportStats;
     /** Фермы подвеса в экспорте таблицы экранов и легенда ферм (запрос 2026-10-05): по умолчанию
@@ -1071,6 +1075,22 @@ public class UserProfile {
         this.floorPlanViewMode = mode != null ? mode : FloorPlanViewMode.PLAN_2D;
     }
 
+    public List<String> getControlRoomExportViews() {
+        return controlRoomExportViews;
+    }
+
+    public void setControlRoomExportViews(List<String> controlRoomExportViews) {
+        this.controlRoomExportViews = controlRoomExportViews;
+    }
+
+    public boolean isControlRoomExportSpec() {
+        return controlRoomExportSpec == null || controlRoomExportSpec;
+    }
+
+    public void setControlRoomExportSpec(boolean value) {
+        this.controlRoomExportSpec = value;
+    }
+
     public boolean isScreensExportLegend() {
         return screensExportLegend == null || screensExportLegend;
     }
@@ -1206,6 +1226,8 @@ public class UserProfile {
         p.outputParts = outputParts != null ? new ArrayList<>(outputParts) : null;
         p.screensExportTrusses = screensExportTrusses;
         p.screensExportTrussLegend = screensExportTrussLegend;
+        p.controlRoomExportViews = controlRoomExportViews != null ? new ArrayList<>(controlRoomExportViews) : null;
+        p.controlRoomExportSpec = controlRoomExportSpec;
         p.keyBindings = new LinkedHashMap<>();
         for (Map.Entry<String, KeyCombo> en : keyBindings.entrySet()) {
             p.keyBindings.put(en.getKey(), en.getValue().copy());

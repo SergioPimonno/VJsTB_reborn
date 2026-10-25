@@ -419,6 +419,13 @@ public class SettingsManager {
         persist();
     }
 
+    /** Запоминает выбор диалога экспорта Планера пультовой (имена видов и спецификация текстом). */
+    public void setControlRoomExportOptions(java.util.List<String> viewNames, boolean spec) {
+        activeProfile().setControlRoomExportViews(new java.util.ArrayList<>(viewNames));
+        activeProfile().setControlRoomExportSpec(spec);
+        persist();
+    }
+
     /** Запоминает, какие части входят в общий вывод (имена {@code ui.stage.OutputPart}). */
     public void setOutputParts(java.util.List<String> names) {
         activeProfile().setOutputParts(new java.util.ArrayList<>(names));
