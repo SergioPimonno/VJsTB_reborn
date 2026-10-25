@@ -14,9 +14,10 @@ import java.util.Base64;
 import java.util.List;
 
 /**
- * Анонимное чтение файлов настроек приёмной карты (.rcfgx) — см. {@code CabinetConfigController}
- * на сервере, тот же доверительный уровень, что у {@link LibrarySyncClient} (скачивание
- * не требует входа, загружает только ADMIN через {@code ledscheme-admin}).
+ * Чтение файлов настроек приёмной карты (.rcfgx) — см. {@code CabinetConfigController}
+ * на сервере. Вход необязателен: без токена видны только файлы с отметкой «видно всем»,
+ * с токеном — ещё и файлы команды пользователя (их загружают ADMIN и модераторы команды
+ * через {@code ledscheme-admin}). Просроченный токен сервер молча считает отсутствием входа.
  */
 public class CabinetConfigClient {
 
@@ -30,13 +31,20 @@ public class CabinetConfigClient {
     }
 
     private final String baseUrl;
+    /** null/пусто — аноним. */
+    private final String token;
 
     public CabinetConfigClient() {
         this(LibrarySyncClient.DEFAULT_BASE_URL);
     }
 
     public CabinetConfigClient(String baseUrl) {
+        this(baseUrl, null);
+    }
+
+    public CabinetConfigClient(String baseUrl, String token) {
         this.baseUrl = baseUrl;
+        this.token = token;
     }
 
     public List<SummaryDto> list(String cabinetTypeName) throws IOException, InterruptedException {
@@ -57,11 +65,13 @@ public class CabinetConfigClient {
 
     private HttpResponse<String> send(String path) throws IOException, InterruptedException {
         HttpClient client = TrustedHttp.clientFor(baseUrl);
-        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + path))
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(baseUrl + path))
                 .timeout(Duration.ofSeconds(20))
-                .GET()
-                .build();
-        return client.send(request, HttpResponse.BodyHandlers.ofString());
+                .GET();
+        if (token != null && !token.isBlank()) {
+            builder.header("Authorization", "Bearer " + token);
+        }
+        return client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
 
     private void checkOk(HttpResponse<String> response) throws IOException {

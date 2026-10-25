@@ -59,7 +59,8 @@ public class CabinetConfigPickerDialog extends JDialog {
 
     private CabinetConfigPickerDialog(Window owner, AppModel model, SettingsManager settings, CabinetType preset) {
         super(owner, "Скачать конфиг приёмной карты", ModalityType.APPLICATION_MODAL);
-        this.client = new CabinetConfigClient(LibrarySyncClient.resolveBaseUrl(settings));
+        this.client = new CabinetConfigClient(LibrarySyncClient.resolveBaseUrl(settings),
+                settings.getSettings().getAuthToken());
         this.presetName = preset != null ? preset.getName() : null;
 
         JPanel content = new JPanel(new BorderLayout(8, 8));
