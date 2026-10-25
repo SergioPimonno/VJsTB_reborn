@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Приведение позиций существующих библиотек (пресеты оборудования схемы, сетевые устройства,
- * кофры) к виду Планнера: миллиметры → сантиметры, юниты, доли ширины, пометка «нет габаритов».
+ * кофры) к виду Планера: миллиметры → сантиметры, юниты, доли ширины, пометка «нет габаритов».
  * Запрос пользователя 2026-10-23: оборудование берётся из существующих библиотек, а позиции без
  * габаритов помечаются цветом — для этого адаптер обязан не терять такие позиции, а отдавать их
  * с условными размерами и списком недостающего.
@@ -255,5 +255,37 @@ class RoomLibraryAdapterTest {
         ph.setHeightMm(null);
         assertFalse(new RoomLibraryAdapter(List.of(aoc), List.of(), List.of())
                 .resolve(new RoomLibRef(RoomLibRef.Kind.EQUIPMENT, aoc.getId())).complete(), "без высоты не описан");
+    }
+
+    @Test
+    void blocksOfAStandaloneItemSetItsSizeAndWeightAndMakeItComplete() {
+        PhysicalSpec ph = new PhysicalSpec();
+        ph.setFormFactor(PhysicalSpec.FormFactor.STANDALONE);
+        ph.setParts(List.of(
+                new com.vjstb.ledscheme.model.PhysicalPart("Панель", 1470, 70, 850, 0, 0, 900, 30.0),
+                new com.vjstb.ledscheme.model.PhysicalPart("Колонна", 100, 100, 840, 0, 0, 60, 6.0),
+                new com.vjstb.ledscheme.model.PhysicalPart("Основание", 600, 600, 60, 0, 0, 0, 18.0)));
+        EquipmentPreset tv = preset("Плазма на тележке", ph);
+        RoomItemSpec s = new RoomLibraryAdapter(List.of(tv), List.of(), List.of())
+                .resolve(new RoomLibRef(RoomLibRef.Kind.EQUIPMENT, tv.getId()));
+        assertEquals(RoomItemSpec.Type.DEVICE, s.type());
+        assertEquals(3, s.parts().size());
+        assertEquals(147.0, s.widthCm(), 1e-9, "ширина — самый широкий блок");
+        assertEquals(60.0, s.depthCm(), 1e-9);
+        assertEquals(175.0, s.heightCm(), 1e-9, "высота — верх панели: 90 + 85 см");
+        assertEquals(54.0, s.weightKg(), 1e-9, "вес — сумма весов блоков");
+        assertTrue(s.complete(), "общие размеры из блоков, поля ширины/высоты/глубины не нужны");
+    }
+
+    @Test
+    void rackItemsIgnoreBlocks() {
+        PhysicalSpec ph = rack(2, 372, 4.6, 30, 12);
+        ph.setParts(List.of(new com.vjstb.ledscheme.model.PhysicalPart("лишний", 100, 100, 100, 0, 0, 0, null)));
+        EquipmentPreset p = preset("MCTRL", ph);
+        RoomItemSpec s = new RoomLibraryAdapter(List.of(p), List.of(), List.of())
+                .resolve(new RoomLibRef(RoomLibRef.Kind.EQUIPMENT, p.getId()));
+        assertEquals(RoomItemSpec.Type.RACK, s.type());
+        assertTrue(s.parts().isEmpty(), "в стойке форма не рисуется");
+        assertEquals(2 * RoomUnits.U_CM, s.heightCm(), 1e-9);
     }
 }

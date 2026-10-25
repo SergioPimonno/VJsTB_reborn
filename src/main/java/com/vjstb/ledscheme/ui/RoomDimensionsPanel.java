@@ -8,13 +8,13 @@ import javax.swing.JPanel;
 import javax.swing.JTextField;
 
 /**
- * Поля физического блока ({@link PhysicalSpec}) позиции библиотеки для Планнера пультовой: размеры в
+ * Поля физического блока ({@link PhysicalSpec}) позиции библиотеки для Планера пультовой: размеры в
  * миллиметрах (как в библиотеке), вес — кг, мощность — Вт. Три вида набора полей по тому, что значимо
  * для позиции: прибор ({@link Mode#DEVICE}: в стойку или россыпью), кофр ({@link Mode#CASE}: только
  * юниты и внутренняя глубина — наружные размеры у кофра свои) и мебель/станок/монитор
  * ({@link Mode#FURNITURE}: ширина, глубина, высота, вес, мощность).
  *
- * <p>Пустое поле — «не указано» ({@code null}), а не ноль: для Планнера это разные вещи (ноль весит
+ * <p>Пустое поле — «не указано» ({@code null}), а не ноль: для Планера это разные вещи (ноль весит
  * ноль, «не указано» помечается цветом). Поля, которых нет в выбранном виде набора, сохраняются из
  * исходного блока как есть.
  */
@@ -35,6 +35,9 @@ final class RoomDimensionsPanel extends JPanel {
     private final JTextField weightField = new JTextField(8);
     private final JTextField powerField = new JTextField(8);
     private PhysicalSpec base = new PhysicalSpec();
+    /** Блоки формы («Разбить на блоки»); {@code null} — позиция одной коробкой по размерам в полях. */
+    private java.util.List<com.vjstb.ledscheme.model.PhysicalPart> parts;
+    private final javax.swing.JButton partsButton = new javax.swing.JButton();
 
     RoomDimensionsPanel(Mode mode) {
         super(new GridLayout(0, 2, 8, 6));
@@ -49,6 +52,7 @@ final class RoomDimensionsPanel extends JPanel {
                 row("Глубина, мм", depthField);
                 row("Вес, кг", weightField);
                 row("Мощность, Вт", powerField);
+                row("Форма", partsButton);
                 formFactorBox.addActionListener(e -> syncEnabled());
             }
             case CASE -> {
@@ -61,8 +65,10 @@ final class RoomDimensionsPanel extends JPanel {
                 row("Высота, мм", heightField);
                 row("Вес, кг", weightField);
                 row("Мощность, Вт", powerField);
+                row("Форма", partsButton);
             }
         }
+        partsButton.addActionListener(e -> editParts());
         syncEnabled();
     }
 
@@ -71,19 +77,89 @@ final class RoomDimensionsPanel extends JPanel {
         add(field);
     }
 
+    private boolean hasParts() {
+        return parts != null && !parts.isEmpty();
+    }
+
     private void syncEnabled() {
-        if (mode != Mode.DEVICE) {
+        boolean has = hasParts();
+        if (mode == Mode.DEVICE) {
+            boolean rack = formFactorBox.getSelectedIndex() == 0;
+            unitsField.setEnabled(rack);
+            fractionBox.setEnabled(rack);
+            // из блоков габарит считается сам; у «В стойку» блоки не рисуются, размеры задают юниты и глубина
+            widthField.setEnabled(!rack && !has);
+            heightField.setEnabled(!rack && !has);
+            depthField.setEnabled(rack || !has);
+        } else if (mode == Mode.FURNITURE) {
+            widthField.setEnabled(!has);
+            heightField.setEnabled(!has);
+            depthField.setEnabled(!has);
+        }
+        weightField.setEnabled(!has || com.vjstb.ledscheme.model.PhysicalPart.totalWeightKg(parts) == null);
+        partsButton.setText(has ? "Блоков: " + parts.size() + " — изменить…" : "Разбить на блоки…");
+        partsButton.setToolTipText(has ? "Размеры и вес считаются по блокам; «Одной коробкой» в окне блоков убирает их"
+                : "Позиция по умолчанию — одна коробка. Блоки нужны, если форма сложнее: экран на подставке, стол, пульт");
+    }
+
+    /** Габарит блоков в полях (мм) — они только показываются, редактируются блоки. */
+    private void showBoxOfParts() {
+        if (!hasParts()) {
             return;
         }
-        boolean rack = formFactorBox.getSelectedIndex() == 0;
-        unitsField.setEnabled(rack);
-        fractionBox.setEnabled(rack);
-        widthField.setEnabled(!rack);
-        heightField.setEnabled(!rack);
+        java.util.List<com.vjstb.ledscheme.service.room.RoomPart> shape =
+                com.vjstb.ledscheme.service.room.RoomShape.fromModel(parts);
+        double[] bb = com.vjstb.ledscheme.service.room.RoomShape.bbox(shape);
+        widthField.setText(text(Math.round(bb[0] * 100) / 10.0));
+        depthField.setText(text(Math.round(bb[1] * 100) / 10.0));
+        heightField.setText(text(Math.round(bb[2] * 100) / 10.0));
+        Double kg = com.vjstb.ledscheme.model.PhysicalPart.totalWeightKg(parts);
+        if (kg != null) {
+            weightField.setText(text(kg));
+        }
+    }
+
+    /** Окно блоков: начинается с одной коробки по текущим размерам, если блоков ещё нет. */
+    private void editParts() {
+        com.vjstb.ledscheme.model.PhysicalPart seed;
+        try {
+            seed = seedBox();
+        } catch (IllegalArgumentException ex) {
+            javax.swing.JOptionPane.showMessageDialog(this, ex.getMessage(), "Блоки", javax.swing.JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        boolean rack = mode == Mode.DEVICE && formFactorBox.getSelectedIndex() == 0;
+        java.util.List<com.vjstb.ledscheme.model.PhysicalPart> r =
+                RoomPartsDialog.show(javax.swing.SwingUtilities.getWindowAncestor(this), parts, seed, rack);
+        if (r == null) {
+            return;
+        }
+        parts = r.isEmpty() ? null : r;
+        showBoxOfParts();
+        syncEnabled();
+    }
+
+    /** Текущая коробка позиции как единственный начальный блок. */
+    private com.vjstb.ledscheme.model.PhysicalPart seedBox() {
+        boolean rack = mode == Mode.DEVICE && formFactorBox.getSelectedIndex() == 0;
+        Double w = number(widthField, "Ширина");
+        Double h = number(heightField, "Высота");
+        Double d = number(depthField, "Глубина");
+        Double kg = number(weightField, "Вес");
+        if (rack) {
+            Double u = number(unitsField, "Высота в стойке");
+            int idx = fractionBox.getSelectedIndex();
+            int tw = idx == 1 ? 6 : idx == 2 ? 4 : idx == 3 ? 3 : 12;
+            w = 482.6 * tw / 12.0;
+            h = (u != null ? u : 1.0) * 44.45;
+        }
+        return new com.vjstb.ledscheme.model.PhysicalPart("Корпус", w != null ? w : 400, d != null ? d : 300,
+                h != null ? h : 100, 0, 0, 0, kg);
     }
 
     void load(PhysicalSpec spec) {
         base = spec != null ? spec.copy() : new PhysicalSpec();
+        parts = com.vjstb.ledscheme.model.PhysicalPart.copyOf(base.getParts());
         formFactorBox.setSelectedIndex(base.getFormFactor() == PhysicalSpec.FormFactor.LOOSE ? 1
                 : base.getFormFactor() == PhysicalSpec.FormFactor.STANDALONE ? 2 : 0);
         unitsField.setText(base.getRackUnits() != null ? String.valueOf(base.getRackUnits()) : "");
@@ -94,6 +170,7 @@ final class RoomDimensionsPanel extends JPanel {
         depthField.setText(text(base.getDepthMm()));
         weightField.setText(text(base.getWeightKg()));
         powerField.setText(text(base.getPowerW()));
+        showBoxOfParts();
         syncEnabled();
     }
 
@@ -124,6 +201,7 @@ final class RoomDimensionsPanel extends JPanel {
                 p.setDepthMm(number(depthField, "Глубина"));
                 p.setWeightKg(number(weightField, "Вес"));
                 p.setPowerW(number(powerField, "Мощность"));
+                p.setParts(com.vjstb.ledscheme.model.PhysicalPart.copyOf(parts));
             }
             case CASE -> {
                 Double u = number(unitsField, "Высота рэка");
@@ -137,6 +215,7 @@ final class RoomDimensionsPanel extends JPanel {
                 p.setHeightMm(number(heightField, "Высота"));
                 p.setWeightKg(number(weightField, "Вес"));
                 p.setPowerW(number(powerField, "Мощность"));
+                p.setParts(com.vjstb.ledscheme.model.PhysicalPart.copyOf(parts));
             }
         }
         return p;

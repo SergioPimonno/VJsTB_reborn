@@ -14,15 +14,15 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Каталог Планнера пультовой над библиотеками приложения (PLAN.md, раздел 5): пресеты оборудования
+ * Каталог Планера пультовой над библиотеками приложения (PLAN.md, раздел 5): пресеты оборудования
  * общей схемы ({@link EquipmentPreset}), сетевые устройства ({@link NetworkDeviceType}), кофры
  * ({@link CaseType}), оборудование пультовой ({@link RoomEquipmentType}) и мебель/станки/мониторы
  * ({@link RoomFurnitureType}) — общие и личные списки вместе. Размеры и вес берутся из
- * физического блока позиции ({@link PhysicalSpec}); физика библиотеки в миллиметрах, планнер
+ * физического блока позиции ({@link PhysicalSpec}); физика библиотеки в миллиметрах, планер
  * считает в сантиметрах — пересчёт ровно здесь.
  *
  * <p>Позиция без физического блока (или без нужных полей) не пропадает: она попадает в каталог
- * с условными размерами и пометкой в {@link RoomItemSpec#missing()} — так Планнер выделяет её
+ * с условными размерами и пометкой в {@link RoomItemSpec#missing()} — так Планер выделяет её
  * цветом и предлагает пользователю указать габариты (запрос 2026-10-23). Рэк-кофром считается
  * {@code CaseType} с заполненными юнитами в физическом блоке; для таких кофров принято: ширина на
  * плане = {@code widthMm}, глубина = {@code lengthMm}, высота = {@code heightMm} (размеры кофра
@@ -141,8 +141,17 @@ public class RoomLibraryAdapter implements RoomCatalog {
         double w = ph.getWidthMm() != null ? RoomUnits.mmToCm(ph.getWidthMm()) : standalone ? 40 : 10;
         double h = ph.getHeightMm() != null ? RoomUnits.mmToCm(ph.getHeightMm()) : standalone ? 20 : 5;
         double d = ph.getDepthMm() != null ? RoomUnits.mmToCm(ph.getDepthMm()) : standalone ? 30 : 10;
+        List<RoomPart> parts = RoomShape.fromModel(ph.getParts());
+        if (!parts.isEmpty()) {
+            // из блоков габарит и вес считаются сами
+            double[] bb = RoomShape.bbox(parts);
+            w = bb[0];
+            d = bb[1];
+            h = bb[2];
+            kg = RoomShape.totalKg(parts) > 0 ? RoomShape.totalKg(parts) : kg;
+        }
         return new RoomItemSpec(ref, standalone ? RoomItemSpec.Type.DEVICE : RoomItemSpec.Type.LOOSE, RoomItemSpec.Role.OTHER, name, category, w, h, d, 0, 12, 0,
-                kg, p, null, missing);
+                kg, p, null, missing, parts);
     }
 
     private static RoomItemSpec caseSpec(RoomLibRef ref, CaseType c, PhysicalSpec ph) {
@@ -191,6 +200,14 @@ public class RoomLibraryAdapter implements RoomCatalog {
             pw = own.getPowerW() != null ? own.getPowerW() : pw;
         }
         List<String> missing = new ArrayList<>();
+        List<RoomPart> parts = RoomShape.fromModel(t.getParts());
+        if (!parts.isEmpty()) {
+            double[] bb = RoomShape.bbox(parts);
+            w = bb[0] * 10;
+            d = bb[1] * 10;
+            h = bb[2] * 10;
+            kg = RoomShape.totalKg(parts) > 0 ? Double.valueOf(RoomShape.totalKg(parts)) : kg;
+        }
         if (w == null) {
             missing.add("ширина");
         }
@@ -223,6 +240,6 @@ public class RoomLibraryAdapter implements RoomCatalog {
             default -> "Мебель";
         };
         return new RoomItemSpec(ref, type, role, t.getName(), category, wc, hc, dc, 0, 12, 0,
-                kg != null ? kg : 0, pw != null ? pw : 0, t.getDiagonalIn(), missing);
+                kg != null ? kg : 0, pw != null ? pw : 0, t.getDiagonalIn(), missing, parts);
     }
 }

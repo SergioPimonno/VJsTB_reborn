@@ -13,7 +13,7 @@ import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-/** Дымовой тест каркаса «Планнера пультовой»: окно строится на модели с несколькими раскладками
+/** Дымовой тест каркаса «Планера пультовой»: окно строится на модели с несколькими раскладками
  *  и подхватывает смену сцены (у каждой сцены свой список). Пропускается без дисплея. */
 class ControlRoomPlannerDialogTest {
 

@@ -55,10 +55,10 @@ public class Library {
      *  docs/control-room-planner/PLAN.md. На id ссылаются раскладки пультовой ({@link RoomLibRef}); потерянная
      *  ссылка не ломает раскладку, позиция показывается как «неизвестная». */
     private List<RoomEquipmentType> roomEquipmentTypes = new ArrayList<>();
-    /** Мебель, напольные станки и мониторы Планнера пультовой — см. RoomFurnitureType. */
+    /** Мебель, напольные станки и мониторы Планера пультовой — см. RoomFurnitureType. */
     private List<RoomFurnitureType> roomFurnitureTypes = new ArrayList<>();
     /** Личные габариты позиций библиотеки, у которых общих данных нет (запрос 2026-10-23: пользователь указывает
-     *  габариты сам, не дожидаясь сервера). Ключ — {@link RoomLibRef#key()}; используется Планнером пультовой,
+     *  габариты сам, не дожидаясь сервера). Ключ — {@link RoomLibRef#key()}; используется Планером пультовой,
      *  только пока в самой позиции габаритов не хватает — как только администратор заполнит общие, они главнее. */
     private Map<String, PhysicalSpec> physicalOverrides = new LinkedHashMap<>();
     /** Серии оборудования (H-серия Novastar, VFC Disguise — общий каталог карт на модели, запрос

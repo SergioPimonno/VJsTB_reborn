@@ -10,7 +10,7 @@ import com.vjstb.ledscheme.model.RoomLibRef;
 import com.vjstb.ledscheme.service.AppModel;
 
 /**
- * Что нужно окну Планнера, чтобы пользователь мог указать габариты позиции библиотеки и
+ * Что нужно окну Планера, чтобы пользователь мог указать габариты позиции библиотеки и
  * предложить их на сервер (запрос 2026-10-23: «предлагаем пользователю самому указать, реализуем
  * механизм предложить на сервер»): найти запись по ссылке, понять общая она или личная, достать
  * текущий физический блок и собрать черновик для {@code ProposeDialog}.
@@ -46,7 +46,7 @@ public final class RoomLibraryEdit {
     }
 
         /**
-     * Категории, уже встречающиеся в библиотеке Планнера (группы списка), по алфавиту; «Прочее оборудование»
+     * Категории, уже встречающиеся в библиотеке Планера (группы списка), по алфавиту; «Прочее оборудование»
      * есть всегда — туда попадает оборудование без категории.
      */
     public static java.util.List<String> knownCategories(AppModel model) {
@@ -141,6 +141,7 @@ public final class RoomLibraryEdit {
         s.setHeightMm(f.getHeightMm());
         s.setWeightKg(f.getWeightKg());
         s.setPowerW(f.getPowerW());
+        s.setParts(com.vjstb.ledscheme.model.PhysicalPart.copyOf(f.getParts()));
         return s;
     }
 
@@ -176,6 +177,7 @@ public final class RoomLibraryEdit {
                     d.setHeightMm(phys.getHeightMm());
                     d.setWeightKg(phys.getWeightKg());
                     d.setPowerW(phys.getPowerW());
+                    d.setParts(com.vjstb.ledscheme.model.PhysicalPart.copyOf(phys.getParts()));
                 }
                 return d;
             }
@@ -192,7 +194,8 @@ public final class RoomLibraryEdit {
             return spec.getRackUnits() != null && spec.getDepthMm() != null;
         }
         if (item instanceof RoomFurnitureType) {
-            return spec.getWidthMm() != null && spec.getDepthMm() != null && spec.getHeightMm() != null;
+            return spec.hasParts() || spec.getWidthMm() != null && spec.getDepthMm() != null
+                    && spec.getHeightMm() != null;
         }
         return spec.missingFields().isEmpty();
     }

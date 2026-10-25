@@ -10,6 +10,7 @@ import com.vjstb.ledscheme.service.room.RoomBounds;
 import com.vjstb.ledscheme.service.room.RoomEditor;
 import com.vjstb.ledscheme.service.room.RoomGeometry;
 import com.vjstb.ledscheme.service.room.RoomItemSpec;
+import com.vjstb.ledscheme.service.room.RoomShape;
 import com.vjstb.ledscheme.service.room.RoomRunKind;
 import com.vjstb.ledscheme.service.room.RoomRunMath;
 import com.vjstb.ledscheme.service.room.RoomSelection;
@@ -112,8 +113,9 @@ final class PlanView {
     void paint(Graphics2D g0, int w, int h) {
         Graphics2D g = (Graphics2D) g0.create();
         try {
-            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
-                    session.isLive() ? RenderingHints.VALUE_ANTIALIAS_OFF : RenderingHints.VALUE_ANTIALIAS_ON);
+            // сглаживание включено всегда: его переключение на время жеста перерисовывало всю картинку иначе (≈5% пикселей
+            // меняются на захвате и на отпускании) — глаз видит это как «рябь»; цена сглаживания ≈1,3 мс на кадр
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
             g.setColor(theme.panel);
             g.fillRect(0, 0, w, h);
@@ -276,7 +278,22 @@ final class PlanView {
         return null;
     }
 
+    /** Позиция из блоков («Разбить на блоки»): отпечаток каждого блока вместо одной коробки. */
+    private void paintShape(Graphics2D g, Font base, RoomBounds b) {
+        RoomFurniture f = b.furniture;
+        java.awt.Color fill = b.spec.type() == RoomItemSpec.Type.DEVICE ? theme.categoryColor(b.spec) : theme.furn;
+        RoomPartsPainter.plan(g, RoomShape.fit(b.spec), f.getXCm(), f.getYCm(), f.getRotation(), fill, theme.deckLine,
+                theme.accent, px(1), -1);
+        g.setColor(theme.ink);
+        centered(g, base, b.name, f.getXCm(), f.getYCm(), 10, false);
+        outlineState(g, b, new Rectangle2D.Double(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0));
+    }
+
     private void paintFurniture(Graphics2D g, Font base, RoomBounds b) {
+        if (b.spec != null && b.spec.hasParts()) {
+            paintShape(g, base, b);
+            return;
+        }
         double w = b.x1 - b.x0;
         double d = b.y1 - b.y0;
         boolean chair = b.chair;
@@ -329,6 +346,10 @@ final class PlanView {
         RoomFurniture f = b.furniture;
         double w = b.spec.widthCm();
         double d = b.spec.depthCm();
+        if (b.spec.hasParts()) {
+            paintShape(g, base, b);
+            return;
+        }
         if (b.spec.type() == RoomItemSpec.Type.DEVICE) {
             paintDevice(g, base, b, f, w, d);
             return;
@@ -379,11 +400,16 @@ final class PlanView {
         g.setColor(sel ? theme.accent : theme.muted);
         g.setStroke(new BasicStroke(px(sel ? 2.5 : 1.2)));
         g.draw(new Ellipse2D.Double(p.getX() - RING_R, p.getY() - RING_R, RING_R * 2, RING_R * 2));
-        g.setColor(theme.categoryColor(s));
-        g.fill(new Rectangle2D.Double(p.getX() - w / 2, p.getY() - d / 2, w, d));
-        g.setColor(theme.ink);
-        g.setStroke(new BasicStroke(px(0.8)));
-        g.draw(new Rectangle2D.Double(p.getX() - w / 2, p.getY() - d / 2, w, d));
+        if (s.hasParts()) {
+            RoomPartsPainter.plan(g, RoomShape.fit(s), p.getX(), p.getY(), 0, theme.categoryColor(s), theme.ink,
+                    theme.accent, px(0.8), -1);
+        } else {
+            g.setColor(theme.categoryColor(s));
+            g.fill(new Rectangle2D.Double(p.getX() - w / 2, p.getY() - d / 2, w, d));
+            g.setColor(theme.ink);
+            g.setStroke(new BasicStroke(px(0.8)));
+            g.draw(new Rectangle2D.Double(p.getX() - w / 2, p.getY() - d / 2, w, d));
+        }
         g.setColor(theme.accent);
         g.fill(new Ellipse2D.Double(p.getX() + 12 - 7.5, p.getY() - 12 - 7.5, 15, 15));
         g.setColor(theme.onAccent);

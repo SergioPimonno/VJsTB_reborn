@@ -6,20 +6,29 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Позиция библиотеки, приведённая к тому, что нужно Планнеру пультовой: тип, размеры в
+ * Позиция библиотеки, приведённая к тому, что нужно Планеру пультовой: тип, размеры в
  * САНТИМЕТРАХ, юниты, доля ширины, вес и мощность. Раскладка ({@link
  * com.vjstb.ledscheme.model.ControlRoomLayout}) хранит только ссылки {@link RoomLibRef}, а
  * этот record строится в момент расчёта из библиотеки каталогом ({@link RoomCatalog}) —
  * физика библиотеки хранится в миллиметрах ({@code PhysicalSpec}, {@code CaseType}), а
- * геометрия планнера — в сантиметрах, пересчёт делается ровно один раз, здесь и в адаптере.
+ * геометрия планера — в сантиметрах, пересчёт делается ровно один раз, здесь и в адаптере.
  *
  * <p>{@code missing} — чего не хватает позиции для безопасной постановки (пусто — габариты
- * достаточны). Такие позиции Планнер помечает цветом и предлагает указать габариты
+ * достаточны). Такие позиции Планер помечает цветом и предлагает указать габариты
  * (запрос пользователя 2026-10-23); расчёт при этом идёт с условными размерами.
  */
 public record RoomItemSpec(RoomLibRef ref, Type type, Role role, String name, String category, double widthCm,
                            double heightCm, double depthCm, int rackUnits, int widthTwelfths, double innerDepthCm,
-                           double weightKg, double powerW, Double diagonalIn, List<String> missing) {
+                           double weightKg, double powerW, Double diagonalIn, List<String> missing,
+                           List<RoomPart> parts) {
+
+    /** Позиция одной коробкой (без блоков) — так создаётся почти всё оборудование. */
+    public RoomItemSpec(RoomLibRef ref, Type type, Role role, String name, String category, double widthCm,
+                        double heightCm, double depthCm, int rackUnits, int widthTwelfths, double innerDepthCm,
+                        double weightKg, double powerW, Double diagonalIn, List<String> missing) {
+        this(ref, type, role, name, category, widthCm, heightCm, depthCm, rackUnits, widthTwelfths, innerDepthCm,
+                weightKg, powerW, diagonalIn, missing, List.of());
+    }
 
     /** Как позиция ведёт себя на плане. */
     public enum Type {
@@ -49,6 +58,18 @@ public record RoomItemSpec(RoomLibRef ref, Type type, Role role, String name, St
 
     public RoomItemSpec {
         missing = missing == null ? List.of() : List.copyOf(missing);
+        parts = parts == null ? List.of() : List.copyOf(parts);
+    }
+
+    /** Форма из нескольких блоков («Разбить на блоки»), а не одна коробка. */
+    public boolean hasParts() {
+        return !parts.isEmpty();
+    }
+
+    /** Та же позиция с блоками; размеры позиции остаются как есть. */
+    public RoomItemSpec withParts(List<RoomPart> newParts) {
+        return new RoomItemSpec(ref, type, role, name, category, widthCm, heightCm, depthCm, rackUnits, widthTwelfths,
+                innerDepthCm, weightKg, powerW, diagonalIn, missing, newParts);
     }
 
     public boolean complete() {
@@ -65,7 +86,7 @@ public record RoomItemSpec(RoomLibRef ref, Type type, Role role, String name, St
                 o.getHeightCm() != null ? o.getHeightCm() : heightCm,
                 o.getDepthCm() != null ? o.getDepthCm() : depthCm, rackUnits, widthTwelfths, innerDepthCm,
                 o.getWeightKg() != null ? o.getWeightKg() : weightKg,
-                o.getPowerW() != null ? o.getPowerW() : powerW, diagonalIn, missing);
+                o.getPowerW() != null ? o.getPowerW() : powerW, diagonalIn, missing, parts);
     }
 
     // ---- фабрики (каталоги и тесты) ----

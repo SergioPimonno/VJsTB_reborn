@@ -67,7 +67,7 @@ class RoomHistoryAndSpecTextTest {
     void specTextListsTowersCasesDecksMonitorsAndLooseByRun() {
         ControlRoomLayout l = RoomPlanFixture.sample();
         String txt = RoomSpecText.of(l, CAT, RoomPlanCalc.calc(l, CAT));
-        assertTrue(txt.startsWith("ПЛАННЕР ПУЛЬТОВОЙ · площадка 7 × 4,5 м"), txt);
+        assertTrue(txt.startsWith("ПЛАНЕР ПУЛЬТОВОЙ · площадка 7 × 4,5 м"), txt);
         assertTrue(txt.contains("Башня A — Башня A · LED-процессинг"));
         assertTrue(txt.contains("  Кофр 6U (снаружи"));
         assertTrue(txt.contains("U1  Коммутатор 24×1G  (1U, гл. 30 см)"));

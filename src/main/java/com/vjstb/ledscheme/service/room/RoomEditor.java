@@ -388,6 +388,34 @@ public final class RoomEditor {
         return new RoomPoint(l.getXCm() != null ? l.getXCm() : 0, l.getYCm() != null ? l.getYCm() : 0);
     }
 
+    /**
+     * Мелочь, которая по библиотеке теперь «Отдельно» (монитор, пульт — предмет на плане): переносится в объекты плана на
+     * то же место. Раньше такой предмет ставили мелочью-пином (пока в библиотеке была «Россыпью»), а смена установки
+     * на уже стоящие объекты не действовала — их нельзя было повернуть. Мелочь «в кофре» остаётся как есть.
+     * Возвращает число перенесённых.
+     */
+    public static int promoteStandaloneLoose(ControlRoomLayout layout, RoomCatalog cat) {
+        int moved = 0;
+        for (RoomLooseItem l : new ArrayList<>(layout.getLoose())) {
+            if (l.getMode() == RoomLooseItem.Mode.BOX) {
+                continue;
+            }
+            RoomItemSpec s = cat.resolve(l.getRef());
+            if (s.type() != RoomItemSpec.Type.DEVICE && s.type() != RoomItemSpec.Type.MONITOR) {
+                continue;
+            }
+            RoomPoint p = locationOf(layout, l);
+            RoomFurniture f = new RoomFurniture();
+            f.setRef(l.getRef());
+            f.setXCm(step(p.getX()));
+            f.setYCm(step(p.getY()));
+            layout.getFurniture().add(f);
+            layout.getLoose().remove(l);
+            moved++;
+        }
+        return moved;
+    }
+
     /** Новая мелочь на площадке: ближе 30 см к трассе — встаёт на неё и запоминает расстояние от ввода. */
     public static RoomLooseItem placeLoose(ControlRoomLayout layout, RoomLibRef ref, double x, double y) {
         RoomLooseItem l = new RoomLooseItem();

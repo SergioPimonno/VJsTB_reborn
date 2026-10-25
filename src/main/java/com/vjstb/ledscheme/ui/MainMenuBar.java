@@ -132,7 +132,7 @@ public class MainMenuBar extends JMenuBar {
         vehicleCalc.addActionListener(e -> new VehicleCalculatorDialog(owner, model, settings).setVisible(true));
         menu.add(vehicleCalc);
 
-        JMenuItem planner = new JMenuItem("Планнер пультовой…");
+        JMenuItem planner = new JMenuItem("Планер пультовой…");
         planner.setToolTipText("Планирование пультовой на FOH: башни из кофров и стопки без кофра, станки, мебель,"
                 + " мониторы, трассы кабеля; у каждой сцены свой список раскладок (этап 1: каркас, редактор — далее)");
         planner.addActionListener(e -> ControlRoomPlannerDialog.showWindow(owner, model, settings));

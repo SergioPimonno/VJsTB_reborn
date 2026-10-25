@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Картинки руководства: каждая ссылка {@code guide:файл.png} во встроенном тексте указывает на настоящий файл
- * в ресурсах {@code /guide/}, а после подстановки адрес читается как картинка. Раздел про Планнер обязателен.
+ * в ресурсах {@code /guide/}, а после подстановки адрес читается как картинка. Раздел про Планер обязателен.
  */
 class GuideImagesTest {
 
@@ -35,12 +35,12 @@ class GuideImagesTest {
                 }
             }
         }
-        assertTrue(refs >= 5, "раздел Планнера ссылается на свои иллюстрации, найдено ссылок: " + refs);
+        assertTrue(refs >= 5, "раздел Планера ссылается на свои иллюстрации, найдено ссылок: " + refs);
     }
 
     @Test
     void plannerSectionExists() {
-        assertTrue(GuideDialog.defaultSections().stream().anyMatch(s -> "Планнер пультовой".equals(s.getTitle())));
+        assertTrue(GuideDialog.defaultSections().stream().anyMatch(s -> "Планер пультовой".equals(s.getTitle())));
     }
 
     @Test

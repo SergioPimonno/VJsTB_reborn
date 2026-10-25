@@ -2,6 +2,7 @@ package com.vjstb.ledscheme.ui.room;
 
 import com.vjstb.ledscheme.model.ControlRoomLayout;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.service.room.RoomEditor;
 import com.vjstb.ledscheme.service.room.RoomHistory;
 import com.vjstb.ledscheme.service.room.RoomLibraryAdapter;
 import com.vjstb.ledscheme.service.room.RoomPlanCalc;
@@ -12,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Общее состояние редактора Планнера, которое делят все панели окна: текущая раскладка, каталог,
+ * Общее состояние редактора Планера, которое делят все панели окна: текущая раскладка, каталог,
  * результат расчёта, выбор, история отмены. Панели только читают его и вызывают {@link #edit} /
  * {@link #beginLive} — сами раскладку не пишут, поэтому каждая правка проходит один и тот же путь:
  * снимок для отмены → изменение → сохранение проекта → пересчёт → оповещение панелей.
@@ -119,6 +120,10 @@ public final class PlannerSession {
     /** Библиотека или раскладка изменились извне: пересобрать каталог и расчёт. */
     public void reload() {
         catalog = RoomLibraryAdapter.of(model);
+        if (layout != null && RoomEditor.promoteStandaloneLoose(layout, catalog) > 0) {
+            // предмет, у которого в библиотеке теперь «Отдельно», больше не мелочь-пин: становится объектом плана
+            model.controlRoomLayoutEdited();
+        }
         recalc();
         fire();
     }

@@ -501,8 +501,9 @@ final class RacksPanel extends JPanel implements RoomDnd.Target, PlannerSession.
         Graphics2D g = (Graphics2D) g0.create();
         try {
             // пока тащат блок, углы скруглений можно не сглаживать — кадр быстрее; по отпусканию вернётся полное качество
-            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
-                    dnd.isActive() ? RenderingHints.VALUE_ANTIALIAS_OFF : RenderingHints.VALUE_ANTIALIAS_ON);
+            // сглаживание включено всегда: его переключение на время жеста перерисовывало всю картинку иначе (≈5% пикселей
+            // меняются на захвате и на отпускании) — глаз видит это как «рябь»; цена сглаживания ≈1,3 мс на кадр
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
             g.setColor(theme.panel);
             g.fillRect(0, 0, getWidth(), getHeight());

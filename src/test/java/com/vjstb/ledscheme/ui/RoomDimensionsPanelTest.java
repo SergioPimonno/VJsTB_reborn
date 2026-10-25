@@ -102,4 +102,36 @@ class RoomDimensionsPanelTest {
         assertEquals(120.0, back.getHeightMm());
         assertEquals(500.0, back.getDepthMm());
     }
+
+    @Test
+    void blocksAreKeptAndTheBoxFieldsShowTheirBoundingBox() {
+        RoomDimensionsPanel panel = new RoomDimensionsPanel(RoomDimensionsPanel.Mode.DEVICE);
+        PhysicalSpec p = new PhysicalSpec();
+        p.setFormFactor(PhysicalSpec.FormFactor.STANDALONE);
+        p.setParts(java.util.List.of(
+                new com.vjstb.ledscheme.model.PhysicalPart("Панель", 1470, 70, 850, 0, 0, 900, 30.0),
+                new com.vjstb.ledscheme.model.PhysicalPart("Основание", 600, 600, 60, 0, 0, 0, 18.0)));
+        panel.load(p);
+        // поля по порядку: U, ширина, высота, глубина, вес, мощность
+        assertEquals("1470", field(panel, 1).getText(), "ширина — габарит блоков");
+        assertEquals("1750", field(panel, 2).getText(), "высота: низ панели 900 + её высота 850");
+        assertEquals("600", field(panel, 3).getText());
+        assertEquals("48", field(panel, 4).getText(), "вес — сумма блоков");
+        assertEquals(false, field(panel, 1).isEnabled(), "габарит из блоков не правится руками");
+        PhysicalSpec back = panel.read();
+        assertEquals(2, back.getParts().size());
+        assertEquals(1470.0, back.getWidthMm());
+        assertEquals(PhysicalSpec.FormFactor.STANDALONE, back.getFormFactor());
+    }
+
+    @Test
+    void itemWithoutBlocksStaysOneBoxAndKeepsFieldsEditable() {
+        RoomDimensionsPanel panel = new RoomDimensionsPanel(RoomDimensionsPanel.Mode.DEVICE);
+        PhysicalSpec p = new PhysicalSpec();
+        p.setFormFactor(PhysicalSpec.FormFactor.LOOSE);
+        p.setWidthMm(200.0);
+        panel.load(p);
+        assertEquals(true, field(panel, 1).isEnabled());
+        assertNull(panel.read().getParts(), "блоков нет — поле пустое, а не []");
+    }
 }

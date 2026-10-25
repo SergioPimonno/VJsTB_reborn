@@ -20,7 +20,7 @@ import javax.swing.JPanel;
 import javax.swing.JTextField;
 
 /**
- * Создание и правка ЛИЧНЫХ позиций библиотеки Планнера: «блок» — оборудование пультовой (в стойку или россыпью),
+ * Создание и правка ЛИЧНЫХ позиций библиотеки Планера: «блок» — оборудование пультовой (в стойку или россыпью),
  * рэк-кофр и «мебель / станок / монитор». Запрос 2026-10-23: нужный блок, которого нет в библиотеке, пользователь
  * должен создать сам, сохранить в личную библиотеку и при желании предложить на сервер. Общие позиции здесь не
  * правятся — их ведёт администратор; свои габариты к общей позиции указываются через {@link RoomDimensionsDialog}.
@@ -297,6 +297,7 @@ final class RoomItemDialog extends JDialog {
                 furniture.setHeightMm(p.getHeightMm());
                 furniture.setWeightKg(p.getWeightKg());
                 furniture.setPowerW(p.getPowerW());
+                furniture.setParts(com.vjstb.ledscheme.model.PhysicalPart.copyOf(p.getParts()));
                 String diag = diagonalField.getText().trim().replace(',', '.');
                 furniture.setDiagonalIn(diag.isEmpty() ? null : Double.valueOf(diag));
                 if (creating) {

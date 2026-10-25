@@ -10,6 +10,7 @@ import com.vjstb.ledscheme.service.room.RoomBounds;
 import com.vjstb.ledscheme.service.room.RoomEditor;
 import com.vjstb.ledscheme.service.room.RoomGeometry;
 import com.vjstb.ledscheme.service.room.RoomItemSpec;
+import com.vjstb.ledscheme.service.room.RoomShape;
 import com.vjstb.ledscheme.service.room.RoomSelection;
 import com.vjstb.ledscheme.service.room.RoomUnits;
 import java.awt.BasicStroke;
@@ -35,7 +36,11 @@ import java.util.List;
 final class ElevationView {
 
     /** Что можно схватить на виде: башня или мебель/станок/монитор и высота низа объекта над землёй. */
-    record Pick(boolean tower, String id, double x, double baseHeight, double x0, double x1, double top) {
+    record Pick(boolean tower, String id, double x, double baseHeight, double x0, double x1, double top,
+                double hitBottom) {
+        Pick(boolean tower, String id, double x, double baseHeight, double x0, double x1, double top) {
+            this(tower, id, x, baseHeight, x0, x1, top, baseHeight);
+        }
     }
 
     private static final double VIEW_X0 = -45;
@@ -78,8 +83,9 @@ final class ElevationView {
     void paint(Graphics2D g0, int w, int h) {
         Graphics2D g = (Graphics2D) g0.create();
         try {
-            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
-                    session.isLive() ? RenderingHints.VALUE_ANTIALIAS_OFF : RenderingHints.VALUE_ANTIALIAS_ON);
+            // сглаживание включено всегда: его переключение на время жеста перерисовывало всю картинку иначе (≈5% пикселей
+            // меняются на захвате и на отпускании) — глаз видит это как «рябь»; цена сглаживания ≈1,3 мс на кадр
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
             g.setColor(theme.panel);
             g.fillRect(0, 0, w, h);
@@ -282,6 +288,31 @@ final class ElevationView {
         picks.add(new Pick(true, t.getId(), x, dh, x - fw / 2, x + fw / 2, dh + h0));
     }
 
+    /**
+     * Позиция из блоков: блоки по высоте, выбор мышью — по каждому блоку (пространство между ножками стола сквозное, как у
+     * обычного стола), рамка выбора и «в воздухе» — по общему габариту.
+     */
+    private void paintShape(Graphics2D g, RoomBounds b, double x, double base, java.awt.Color fill) {
+        java.util.List<double[]> rects = RoomPartsPainter.front(g, RoomShape.fit(b.spec), x, base,
+                b.furniture.getRotation(), fill, theme.deckLine, theme.accent, px(1), -1);
+        double w = b.x1 - b.x0;
+        double h = b.height;
+        Rectangle2D box = new Rectangle2D.Double(x - w / 2, -(base + h), w, h);
+        if (isSelected(RoomSelection.Type.FURN, b.id)) {
+            g.setColor(theme.accent);
+            g.setStroke(new BasicStroke(px(3)));
+            g.draw(box);
+        }
+        if (session.calc().air().contains(b.id)) {
+            g.setColor(theme.warn);
+            g.setStroke(new BasicStroke(px(2), BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10, new float[] {px(6), px(4)}, 0));
+            g.draw(box);
+        }
+        for (double[] r : rects) {
+            picks.add(new Pick(false, b.id, x, base, r[0], r[1], r[3], r[2]));
+        }
+    }
+
     private void paintFurniture(Graphics2D g, RoomBounds b, List<RoomBounds> decks) {
         double dh = Math.max(0, RoomGeometry.deckHeightAt(decks, b.furniture.getXCm(), b.furniture.getYCm()));
         double w = b.x1 - b.x0;
@@ -289,6 +320,10 @@ final class ElevationView {
         double h = b.height;
         g.setColor(theme.furn);
         g.setStroke(new BasicStroke(px(1)));
+        if (b.spec != null && b.spec.hasParts()) {
+            paintShape(g, b, x, dh, theme.furn);
+            return;
+        }
         if (b.chair) {
             fill(g, new RoundRectangle2D.Double(x - w / 2, -dh - 95, w, 50, 16, 16));
             fill(g, new RoundRectangle2D.Double(x - w / 2, -dh - 47, w, 8, 6, 6));
@@ -326,6 +361,11 @@ final class ElevationView {
         double fx = b.furniture.getXCm();
         double fy = b.furniture.getYCm();
         double baseH = Math.max(0, RoomGeometry.deckHeightAt(decks, fx, fy)) + RoomGeometry.supportAt(all, fx, fy);
+        if (b.spec.hasParts()) {
+            paintShape(g, b, fx, baseH, b.spec.type() == RoomItemSpec.Type.DEVICE ? theme.categoryColor(b.spec)
+                    : theme.caseBody);
+            return;
+        }
         double w = b.x1 - b.x0;
         double hh = b.height;
         boolean device = b.spec.type() == RoomItemSpec.Type.DEVICE;
@@ -369,6 +409,11 @@ final class ElevationView {
                     && p.getX() >= b.x0 && p.getX() <= b.x1 && p.getY() >= b.y0 && p.getY() <= b.y1) {
                 base = Math.max(0, RoomGeometry.deckHeightAt(decks, b.cx(), b.cy())) + b.height;
             }
+        }
+        if (s.hasParts()) {
+            RoomPartsPainter.front(g, RoomShape.fit(s), p.getX(), base, 0, theme.categoryColor(s), theme.ink, theme.accent,
+                    px(0.8), -1);
+            return;
         }
         double hh = Math.max(s.heightCm(), 3);
         g.setColor(theme.categoryColor(s));
@@ -415,7 +460,7 @@ final class ElevationView {
     Pick pickAt(double x, double height) {
         for (int i = picks.size() - 1; i >= 0; i--) {
             Pick p = picks.get(i);
-            if (x >= p.x0() && x <= p.x1() && height >= p.baseHeight() - 2 && height <= p.top() + 2) {
+            if (x >= p.x0() && x <= p.x1() && height >= p.hitBottom() - 2 && height <= p.top() + 2) {
                 return p;
             }
         }

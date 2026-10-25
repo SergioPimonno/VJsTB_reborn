@@ -361,4 +361,30 @@ class RoomEditorTest {
         RoomBounds b = RoomGeometry.bounds(l, cat).stream().filter(x -> x.id.equals(dev.getId())).findFirst().orElseThrow();
         assertEquals(50.0, b.x1 - b.x0, 1e-9, "после поворота ширина и глубина поменялись местами");
     }
+
+    @Test
+    void looseItemsThatAreNowStandaloneBecomeRotatablePlanObjectsOnTheSameSpot() {
+        ControlRoomLayout l = empty();
+        MapRoomCatalog cat = RoomPlanFixture.catalog();
+        RoomLibRef mon = RoomPlanFixture.eq("aoc");
+        RoomLibRef pin = RoomPlanFixture.eq("pin");
+        cat.add(RoomItemSpec.device(mon, "AOC 24", 54, 23, 38, 4, 30));
+        cat.add(RoomItemSpec.loose(pin, "Конвертер", 11, 3, 7, 0.3, 5));
+        RoomLooseItem free = RoomEditor.placeLoose(l, mon, 203, 121);
+        RoomLooseItem small = RoomEditor.placeLoose(l, pin, 300, 100);
+
+        int moved = RoomEditor.promoteStandaloneLoose(l, cat);
+
+        assertEquals(1, moved);
+        assertEquals(List.of(small), l.getLoose(), "настоящая мелочь остаётся мелочью");
+        assertEquals(1, l.getFurniture().size());
+        RoomFurniture f = l.getFurniture().get(0);
+        assertEquals(mon, f.getRef());
+        assertEquals(205.0, f.getXCm(), 1e-9, "то же место, шаг 5 см");
+        assertEquals(120.0, f.getYCm(), 1e-9);
+        RoomEditor.rotate(l, RoomSelection.furniture(f.getId()));
+        assertEquals(90, f.getRotation(), "теперь поворачивается");
+        assertEquals(0, RoomEditor.promoteStandaloneLoose(l, cat), "повторно ничего не переносится");
+        assertTrue(free != null);
+    }
 }

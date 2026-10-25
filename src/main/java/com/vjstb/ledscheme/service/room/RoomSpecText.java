@@ -27,7 +27,7 @@ public final class RoomSpecText {
     public static String of(ControlRoomLayout layout, RoomCatalog cat, RoomPlanCalc.Result calc) {
         List<String> out = new ArrayList<>();
         RoomPlanCalc.Totals tot = calc.totals();
-        out.add("ПЛАННЕР ПУЛЬТОВОЙ · площадка " + RoomUnits.num(layout.getRoomWidthCm() / 100, 1) + " × "
+        out.add("ПЛАНЕР ПУЛЬТОВОЙ · площадка " + RoomUnits.num(layout.getRoomWidthCm() / 100, 1) + " × "
                 + RoomUnits.num(layout.getRoomDepthCm() / 100, 1) + " м");
         out.add("Итого: " + tot.towers() + " башн., " + tot.unitsUsed() + "/" + tot.unitsTotal() + "U, " + tot.cases()
                 + " кофр., " + RoomUnits.num(tot.kg(), 0) + " кг, " + RoomUnits.num(tot.powerW() / 1000, 2) + " кВт ("

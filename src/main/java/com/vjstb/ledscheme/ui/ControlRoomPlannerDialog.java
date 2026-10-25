@@ -41,7 +41,7 @@ import javax.swing.table.AbstractTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
 
 /**
- * Окно «Планнер пультовой…» (меню «Инструменты», рядом с калькулятором транспорта) — немодальное
+ * Окно «Планер пультовой…» (меню «Инструменты», рядом с калькулятором транспорта) — немодальное
  * окно, как {@link VehicleCalculatorDialog}; решение пользователя 2026-10-23, план —
  * {@code docs/control-room-planner/PLAN.md}. Прототип поведения — {@code planner.html} рядом с планом.
  *
@@ -105,7 +105,7 @@ public class ControlRoomPlannerDialog extends JDialog {
 
     /** {@code settings == null} (тесты) отключает только «Предложить на сервер…». */
     public ControlRoomPlannerDialog(Window owner, AppModel model, SettingsManager settings) {
-        super(owner, "Планнер пультовой", ModalityType.MODELESS);
+        super(owner, "Планер пультовой", ModalityType.MODELESS);
         this.model = model;
         this.settings = settings;
         libraryUi = new RoomLibraryUi(this, model, settings);
@@ -270,7 +270,7 @@ public class ControlRoomPlannerDialog extends JDialog {
         }
         boolean hasScene = model.getCurrentScene() != null;
         sceneLabel.setText(hasScene ? "   Сцена: " + model.getCurrentScene().getName() : "   Сцена не выбрана");
-        setTitle("Планнер пультовой" + (hasScene ? " — " + model.getCurrentScene().getName() : ""));
+        setTitle("Планер пультовой" + (hasScene ? " — " + model.getCurrentScene().getName() : ""));
         addBtn.setEnabled(hasScene);
         boolean any = selected() != null;
         renameBtn.setEnabled(any);
