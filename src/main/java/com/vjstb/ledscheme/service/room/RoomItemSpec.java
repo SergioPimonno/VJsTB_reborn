@@ -34,7 +34,12 @@ public record RoomItemSpec(RoomLibRef ref, Type type, Role role, String name, St
         /** Напольный станок (платформа). */
         DECK,
         /** Монитор. */
-        MONITOR
+        MONITOR,
+        /**
+         * Отдельный предмет («Установка → Отдельно»: пульт, ноутбук, монитор без диагонали): объект на плане, который
+         * поворачивается и стоит на полу, столе или станке — как монитор, но без экрана и подставки на картинке.
+         */
+        DEVICE
     }
 
     /** Роль мебели — стол/тумба держит башни и мониторы, стул нет. */
@@ -92,6 +97,12 @@ public record RoomItemSpec(RoomLibRef ref, Type type, Role role, String name, St
 
     public static RoomItemSpec deck(RoomLibRef ref, String name, double w, double d, double h, double kg) {
         return new RoomItemSpec(ref, Type.DECK, Role.OTHER, name, "", w, h, d, 0, 12, 0, kg, 0, null, List.of());
+    }
+
+    /** Отдельный предмет («Установка → Отдельно»): ширина, глубина и высота в сантиметрах. */
+    public static RoomItemSpec device(RoomLibRef ref, String name, double w, double d, double h, double kg,
+                                      double powerW) {
+        return new RoomItemSpec(ref, Type.DEVICE, Role.OTHER, name, "", w, h, d, 0, 12, 0, kg, powerW, null, List.of());
     }
 
     public static RoomItemSpec monitor(RoomLibRef ref, String name, double diagonalIn, double w, double d, double h,

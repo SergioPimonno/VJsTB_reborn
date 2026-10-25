@@ -235,4 +235,25 @@ class RoomLibraryAdapterTest {
         assertEquals(2, s.rackUnits());
         assertEquals(22.0, s.weightKg(), 1e-9);
     }
+
+    @Test
+    void standaloneEquipmentBecomesADeviceObjectWithItsThreeSizes() {
+        PhysicalSpec ph = new PhysicalSpec();
+        ph.setFormFactor(PhysicalSpec.FormFactor.STANDALONE);
+        ph.setWidthMm(540.0);
+        ph.setHeightMm(380.0);
+        ph.setDepthMm(230.0);
+        ph.setWeightKg(4.0);
+        EquipmentPreset aoc = preset("AOC 24", ph);
+        RoomItemSpec s = new RoomLibraryAdapter(List.of(aoc), List.of(), List.of())
+                .resolve(new RoomLibRef(RoomLibRef.Kind.EQUIPMENT, aoc.getId()));
+        assertEquals(RoomItemSpec.Type.DEVICE, s.type(), "«Отдельно» — объект на плане, а не мелочь на трассе");
+        assertEquals(54.0, s.widthCm(), 1e-9);
+        assertEquals(38.0, s.heightCm(), 1e-9);
+        assertEquals(23.0, s.depthCm(), 1e-9);
+        assertTrue(s.complete());
+        ph.setHeightMm(null);
+        assertFalse(new RoomLibraryAdapter(List.of(aoc), List.of(), List.of())
+                .resolve(new RoomLibRef(RoomLibRef.Kind.EQUIPMENT, aoc.getId())).complete(), "без высоты не описан");
+    }
 }

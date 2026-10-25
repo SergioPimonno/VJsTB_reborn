@@ -242,6 +242,8 @@ final class SpecPanel extends JPanel implements PlannerSession.Listener {
         Map<String, int[]> decks = new LinkedHashMap<>();
         Map<String, String> deckDims = new LinkedHashMap<>();
         int monitors = 0;
+        Map<String, int[]> devices = new LinkedHashMap<>();
+        Map<String, String> deviceDims = new LinkedHashMap<>();
         for (RoomFurniture f : l.getFurniture()) {
             RoomItemSpec s = RoomGeometry.effective(f, session.catalog());
             if (s.type() == RoomItemSpec.Type.DECK) {
@@ -250,6 +252,9 @@ final class SpecPanel extends JPanel implements PlannerSession.Listener {
                 deckDims.put(key, RoomUnits.num(s.widthCm(), 0) + "×" + RoomUnits.num(s.depthCm(), 0));
             } else if (s.type() == RoomItemSpec.Type.MONITOR) {
                 monitors++;
+            } else if (s.type() == RoomItemSpec.Type.DEVICE) {
+                devices.computeIfAbsent(s.name(), x -> new int[1])[0]++;
+                deviceDims.put(s.name(), RoomUnits.num(s.widthCm(), 0) + "×" + RoomUnits.num(s.depthCm(), 0));
             }
         }
         StringBuilder rows = new StringBuilder();
@@ -257,6 +262,8 @@ final class SpecPanel extends JPanel implements PlannerSession.Listener {
                 .append(caseDims.get(k)).append("</td></tr>"));
         decks.forEach((k, v) -> rows.append("<tr><td>").append(v[0]).append(" × ").append(esc(k)).append("</td><td class='m'>")
                 .append(deckDims.get(k)).append("</td></tr>"));
+        devices.forEach((k, v) -> rows.append("<tr><td>").append(v[0]).append(" × ").append(esc(k))
+                .append(" (отдельно, едет в своём кейсе)</td><td class='m'>").append(deviceDims.get(k)).append("</td></tr>"));
         if (monitors > 0) {
             rows.append("<tr><td>").append(monitors).append(" × мониторы (едут в своих кейсах)</td><td>—</td></tr>");
         }

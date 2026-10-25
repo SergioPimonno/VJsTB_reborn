@@ -197,6 +197,24 @@ class PlannerUiTest {
     }
 
     @Test
+    void spaceUnderATableIsClickThroughSoThatWhatStandsThereCanBePicked() {
+        ElevationView v = new ElevationView(session);
+        BufferedImage img = new BufferedImage(900, 400, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        v.paint(g, 900, 400);
+        g.dispose();
+        // стол f1: x 270…450, высота 75 см, на полу
+        ElevationView.Pick top = v.pickAt(360, 73);
+        assertNotNull(top, "столешница хватается");
+        ElevationView.Pick leg = v.pickAt(274, 30);
+        assertNotNull(leg, "ножка хватается");
+        assertEquals(top.id(), leg.id());
+        ElevationView.Pick hole = v.pickAt(360, 30);
+        assertTrue(hole == null || !hole.id().equals(top.id()),
+                "под столешницей между ножками клик проходит сквозь стол");
+    }
+
+    @Test
     void racksGeometryFindsSlotsStacksAndInsertionPositions() {
         RoomRackLayout.addToStack(tower, new RoomLibRef(RoomLibRef.Kind.ROOM_EQUIPMENT, loose.getRef().getId()));
         session.reload();

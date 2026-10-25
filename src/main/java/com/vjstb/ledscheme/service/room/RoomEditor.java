@@ -4,6 +4,7 @@ import com.vjstb.ledscheme.model.ControlRoomLayout;
 import com.vjstb.ledscheme.model.RoomFurniture;
 import com.vjstb.ledscheme.model.RoomLibRef;
 import com.vjstb.ledscheme.model.RoomLooseItem;
+import com.vjstb.ledscheme.model.RoomOverrides;
 import com.vjstb.ledscheme.model.RoomPoint;
 import com.vjstb.ledscheme.model.RoomRackItem;
 import com.vjstb.ledscheme.model.RoomRun;
@@ -86,7 +87,7 @@ public final class RoomEditor {
                 if (spec.type() == RoomItemSpec.Type.DECK) {
                     spot = frontView ? findDeckOnSpot(layout, cat, spec, null) : findDeckSpot(layout, cat, spec);
                     on = spot.length > 2 && spot[2] > 0;
-                } else if (spec.type() == RoomItemSpec.Type.MONITOR) {
+                } else if (spec.type() == RoomItemSpec.Type.MONITOR || spec.type() == RoomItemSpec.Type.DEVICE) {
                     spot = findMonitorSpot(layout, cat, spec);
                 } else {
                     spot = findSpot(layout, cat, spec.widthCm(), spec.depthCm());
@@ -311,6 +312,69 @@ public final class RoomEditor {
                 swap ? s.widthCm() : s.depthCm(), x, y);
         f.setXCm(p[0]);
         f.setYCm(p[1]);
+    }
+
+    /** Края настила, за которые его можно тянуть (маска: можно сочетать два соседних — угол). */
+    public static final int EDGE_LEFT = 1;
+    public static final int EDGE_RIGHT = 2;
+    public static final int EDGE_TOP = 4;
+    public static final int EDGE_BOTTOM = 8;
+
+    /**
+     * Потянуть край (или угол) настила к точке плана (x, y). Край встаёт на сетку 50 см, противоположный остаётся на
+     * месте, меньше одной клетки настил не делается. Размер пишется в переопределения этого настила
+     * ({@link RoomOverrides}): запись в библиотеке не меняется. У повёрнутого на 90° настила ширина и глубина
+     * библиотеки меняются местами, поэтому тянущийся размер по оси плана попадает в «чужое» поле.
+     */
+    public static void resizeDeck(ControlRoomLayout layout, RoomCatalog cat, String id, int edges, double x, double y) {
+        RoomFurniture f = furniture(layout, id);
+        if (f == null) {
+            return;
+        }
+        RoomItemSpec s = RoomGeometry.effective(f, cat);
+        if (s.type() != RoomItemSpec.Type.DECK) {
+            return;
+        }
+        boolean swap = f.getRotation() % 180 != 0;
+        double w = swap ? s.depthCm() : s.widthCm();
+        double d = swap ? s.widthCm() : s.depthCm();
+        double x0 = f.getXCm() - w / 2;
+        double x1 = f.getXCm() + w / 2;
+        double y0 = f.getYCm() - d / 2;
+        double y1 = f.getYCm() + d / 2;
+        double g = RoomUnits.DECK_GRID_CM;
+        double sx = Math.round(x / g) * g;
+        double sy = Math.round(y / g) * g;
+        if ((edges & EDGE_LEFT) != 0) {
+            x0 = Math.min(sx, x1 - g);
+        }
+        if ((edges & EDGE_RIGHT) != 0) {
+            x1 = Math.max(sx, x0 + g);
+        }
+        if ((edges & EDGE_TOP) != 0) {
+            y0 = Math.min(sy, y1 - g);
+        }
+        if ((edges & EDGE_BOTTOM) != 0) {
+            y1 = Math.max(sy, y0 + g);
+        }
+        RoomOverrides o = f.getOverrides() != null ? f.getOverrides() : new RoomOverrides();
+        if ((edges & (EDGE_LEFT | EDGE_RIGHT)) != 0) {
+            if (swap) {
+                o.setDepthCm(x1 - x0);
+            } else {
+                o.setWidthCm(x1 - x0);
+            }
+        }
+        if ((edges & (EDGE_TOP | EDGE_BOTTOM)) != 0) {
+            if (swap) {
+                o.setWidthCm(y1 - y0);
+            } else {
+                o.setDepthCm(y1 - y0);
+            }
+        }
+        f.setOverrides(o);
+        f.setXCm((x0 + x1) / 2);
+        f.setYCm((y0 + y1) / 2);
     }
 
     /** Положение мелочи на плане: на трассе — точка на ней, иначе своё место. */
@@ -898,7 +962,7 @@ public final class RoomEditor {
     public static Added dropOnElevation(ControlRoomLayout layout, RoomCatalog cat, RoomItemSpec spec, double x,
                                         double heightCm) {
         if (spec.type() != RoomItemSpec.Type.FURNITURE && spec.type() != RoomItemSpec.Type.DECK
-                && spec.type() != RoomItemSpec.Type.MONITOR) {
+                && spec.type() != RoomItemSpec.Type.MONITOR && spec.type() != RoomItemSpec.Type.DEVICE) {
             return null;
         }
         RoomFurniture f = new RoomFurniture();

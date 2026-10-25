@@ -66,6 +66,7 @@ public final class RoomSpecText {
         }
         deckLines(layout, cat, calc, out);
         monitorLines(layout, cat, out);
+        deviceLines(layout, cat, out);
         out.add("");
         out.add("Мелочь:");
         for (RoomRun r : layout.getRuns()) {
@@ -114,6 +115,22 @@ public final class RoomSpecText {
             out.add("Пол из станков: " + RoomUnits.num(di.widthCm() / 100, 1) + " × " + RoomUnits.num(di.depthCm() / 100, 1)
                     + " м, " + RoomUnits.num(di.areaM2(), 1) + " м², " + di.count() + " шт.");
             decks.forEach((k, n) -> out.add("  " + n + " × " + k));
+        }
+    }
+
+    /** Отдельно стоящее оборудование («Установка → Отдельно»): пульты, ноутбуки и т. п. */
+    private static void deviceLines(ControlRoomLayout layout, RoomCatalog cat, List<String> out) {
+        Map<String, Integer> dev = new LinkedHashMap<>();
+        for (RoomFurniture f : layout.getFurniture()) {
+            RoomItemSpec s = RoomGeometry.effective(f, cat);
+            if (s.type() == RoomItemSpec.Type.DEVICE) {
+                dev.merge(s.name(), 1, Integer::sum);
+            }
+        }
+        if (!dev.isEmpty()) {
+            out.add("");
+            out.add("Оборудование отдельно:");
+            dev.forEach((k, n) -> out.add("  " + n + " × " + k));
         }
     }
 

@@ -137,10 +137,11 @@ public class RoomLibraryAdapter implements RoomCatalog {
                     RoomUnits.RACK_WIDTH_CM * ph.effectiveWidthTwelfths() / 12.0, u * RoomUnits.U_CM, depth, u,
                     ph.effectiveWidthTwelfths(), 0, kg, p, null, missing);
         }
-        double w = ph.getWidthMm() != null ? RoomUnits.mmToCm(ph.getWidthMm()) : 10;
-        double h = ph.getHeightMm() != null ? RoomUnits.mmToCm(ph.getHeightMm()) : 5;
-        double d = ph.getDepthMm() != null ? RoomUnits.mmToCm(ph.getDepthMm()) : 10;
-        return new RoomItemSpec(ref, RoomItemSpec.Type.LOOSE, RoomItemSpec.Role.OTHER, name, category, w, h, d, 0, 12, 0,
+        boolean standalone = ph.getFormFactor() == PhysicalSpec.FormFactor.STANDALONE;
+        double w = ph.getWidthMm() != null ? RoomUnits.mmToCm(ph.getWidthMm()) : standalone ? 40 : 10;
+        double h = ph.getHeightMm() != null ? RoomUnits.mmToCm(ph.getHeightMm()) : standalone ? 20 : 5;
+        double d = ph.getDepthMm() != null ? RoomUnits.mmToCm(ph.getDepthMm()) : standalone ? 30 : 10;
+        return new RoomItemSpec(ref, standalone ? RoomItemSpec.Type.DEVICE : RoomItemSpec.Type.LOOSE, RoomItemSpec.Role.OTHER, name, category, w, h, d, 0, 12, 0,
                 kg, p, null, missing);
     }
 

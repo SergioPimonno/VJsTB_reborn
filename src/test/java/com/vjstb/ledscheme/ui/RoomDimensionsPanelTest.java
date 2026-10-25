@@ -86,4 +86,20 @@ class RoomDimensionsPanelTest {
         field(panel, 0).setText("");
         assertNull(panel.read().getWidthMm());
     }
+
+    @Test
+    void standaloneModeRoundTripsAndKeepsThreeSizesEnabled() {
+        RoomDimensionsPanel panel = new RoomDimensionsPanel(RoomDimensionsPanel.Mode.DEVICE);
+        PhysicalSpec p = new PhysicalSpec();
+        p.setFormFactor(PhysicalSpec.FormFactor.STANDALONE);
+        p.setWidthMm(600.0);
+        p.setHeightMm(120.0);
+        p.setDepthMm(500.0);
+        panel.load(p);
+        PhysicalSpec back = panel.read();
+        assertEquals(PhysicalSpec.FormFactor.STANDALONE, back.getFormFactor());
+        assertEquals(600.0, back.getWidthMm());
+        assertEquals(120.0, back.getHeightMm());
+        assertEquals(500.0, back.getDepthMm());
+    }
 }

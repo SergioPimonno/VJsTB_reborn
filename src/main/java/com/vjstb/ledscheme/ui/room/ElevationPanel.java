@@ -160,7 +160,7 @@ final class ElevationPanel extends JPanel implements RoomDnd.Target, PlannerSess
 
     private static boolean allowed(RoomItemSpec s) {
         return s.type() == RoomItemSpec.Type.FURNITURE || s.type() == RoomItemSpec.Type.DECK
-                || s.type() == RoomItemSpec.Type.MONITOR;
+                || s.type() == RoomItemSpec.Type.MONITOR || s.type() == RoomItemSpec.Type.DEVICE;
     }
 
     @Override

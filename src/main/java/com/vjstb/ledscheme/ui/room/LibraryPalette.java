@@ -56,7 +56,8 @@ import javax.swing.event.DocumentListener;
 final class LibraryPalette extends JPanel implements RoomDnd.Target, PlannerSession.Listener {
 
     private enum Filter {
-        ALL("Всё"), CASE("Кофры"), RACK("В стойку"), LOOSE("Мелочь"), FURNITURE("Мебель"), DECK("Станки"), MONITOR("Мониторы");
+        ALL("Всё"), CASE("Кофры"), RACK("В стойку"), LOOSE("Мелочь"), FURNITURE("Мебель"), DECK("Станки"), MONITOR("Мониторы"),
+        DEVICE("Отдельно");
 
         final String label;
 
@@ -351,6 +352,7 @@ final class LibraryPalette extends JPanel implements RoomDnd.Target, PlannerSess
             case FURNITURE -> 3;
             case DECK -> 4;
             case MONITOR -> 5;
+            case DEVICE -> 6;
         };
     }
 
@@ -366,6 +368,7 @@ final class LibraryPalette extends JPanel implements RoomDnd.Target, PlannerSess
             case FURNITURE -> "Мебель";
             case DECK -> "Станки";
             case MONITOR -> "Мониторы";
+            case DEVICE -> "Отдельно";
         };
     }
 

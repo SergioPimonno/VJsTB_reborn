@@ -71,7 +71,8 @@ public final class RoomGeometry {
             double d = swap ? s.widthCm() : s.depthCm();
             out.add(new RoomBounds(RoomBounds.Type.FURNITURE, f.getId(), s.name(), f.getXCm() - w / 2,
                     f.getXCm() + w / 2, f.getYCm() - d / 2, f.getYCm() + d / 2, s.heightCm(), s.weightKg(),
-                    s.type() == RoomItemSpec.Type.DECK, s.type() == RoomItemSpec.Type.MONITOR,
+                    s.type() == RoomItemSpec.Type.DECK,
+                    s.type() == RoomItemSpec.Type.MONITOR || s.type() == RoomItemSpec.Type.DEVICE,
                     s.role() == RoomItemSpec.Role.CHAIR, f.isOnTop(), false, null, null, f, s, null));
         }
         List<RoomBounds> floorDecks = new ArrayList<>();

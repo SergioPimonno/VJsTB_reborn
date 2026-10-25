@@ -45,7 +45,22 @@ public final class RoomLibraryEdit {
         }
     }
 
-    /** Имя вида на сервере для вида ссылки раскладки. */
+        /**
+     * Категории, уже встречающиеся в библиотеке Планнера (группы списка), по алфавиту; «Прочее оборудование»
+     * есть всегда — туда попадает оборудование без категории.
+     */
+    public static java.util.List<String> knownCategories(AppModel model) {
+        java.util.TreeSet<String> set = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        set.add("Прочее оборудование");
+        for (RoomItemSpec s : RoomLibraryAdapter.of(model).all()) {
+            if (s.category() != null && !s.category().isBlank()) {
+                set.add(s.category());
+            }
+        }
+        return new java.util.ArrayList<>(set);
+    }
+
+/** Имя вида на сервере для вида ссылки раскладки. */
     public static String serverKind(RoomLibRef.Kind kind) {
         return switch (kind) {
             case CASE -> "CASE";

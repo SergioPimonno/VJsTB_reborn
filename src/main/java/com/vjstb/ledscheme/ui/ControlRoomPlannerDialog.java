@@ -414,6 +414,7 @@ public class ControlRoomPlannerDialog extends JDialog {
             case FURNITURE -> "Мебель";
             case DECK -> "Станок";
             case MONITOR -> "Монитор";
+            case DEVICE -> "Отдельно";
         };
     }
 

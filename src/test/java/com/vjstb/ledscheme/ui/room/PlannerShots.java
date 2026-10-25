@@ -79,6 +79,17 @@ class PlannerShots {
                 click(panel, "План");
                 settle(f);
                 shot(panel, dir.resolve("3-plan-top.png"), 1380, 860);
+                // выбранный настил — с ручками размера по краям и углам
+                for (var bd : panel.session().calc().bounds()) {
+                    if (bd.deck && !bd.onTop) {
+                        panel.session().select(RoomSelection.furniture(bd.id));
+                        break;
+                    }
+                }
+                settle(f);
+                shot(panel, dir.resolve("6-plan-deck-handles.png"), 1380, 860);
+                panel.session().select(null);
+                settle(f);
                 click(panel, "Спереди");
                 settle(f);
                 shot(panel, dir.resolve("4-plan-front.png"), 1380, 860);

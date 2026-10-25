@@ -48,6 +48,21 @@ final class InspectorBar extends JPanel implements PlannerSession.Listener {
         rebuild();
     }
 
+    /**
+     * Высота панели постоянна — по самому высокому содержимому (две строки текста или ряд кнопок), а не по тому, что
+     * выбрано сейчас: иначе при каждом выборе объекта рабочая зона над панелью меняла высоту, и план «подпрыгивал».
+     */
+    @Override
+    public java.awt.Dimension getPreferredSize() {
+        java.awt.Dimension d = super.getPreferredSize();
+        java.awt.Insets in = getInsets();
+        int titleH = getFontMetrics(getFont().deriveFont(Font.BOLD, RoomTheme.fontSize(13f))).getHeight();
+        int metaH = getFontMetrics(getFont().deriveFont(Font.PLAIN, RoomTheme.fontSize(11f))).getHeight();
+        int buttonH = new JButton("Ag").getPreferredSize().height;
+        d.height = Math.max(Math.max(buttonH, titleH + metaH), metaH * 2) + in.top + in.bottom;
+        return d;
+    }
+
     private static String cm(double v) {
         return RoomUnits.num(v, 1);
     }

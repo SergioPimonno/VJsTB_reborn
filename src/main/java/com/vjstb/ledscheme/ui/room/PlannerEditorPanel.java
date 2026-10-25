@@ -50,8 +50,21 @@ public final class PlannerEditorPanel extends JPanel implements PlannerSession.L
     private final SpecPanel spec;
     private final CardLayout cards = new CardLayout();
     private final JPanel center = new JPanel(cards);
-    private final JPanel planTools = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
-    private final javax.swing.JTextArea planHint = RoomText.hint(" ");
+    /**
+     * Панель над планом. Высота всегда как у самой высокой её раскладки (с выпадающим списком типа трассы), а не по
+     * текущему содержимому: иначе при переходе «Объекты» ↔ «Трассы» план менял высоту и пересчитывал масштаб.
+     */
+    private final JPanel planTools = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4)) {
+        @Override
+        public java.awt.Dimension getPreferredSize() {
+            java.awt.Dimension d = super.getPreferredSize();
+            int row = Math.max(new JComboBox<>(RoomRunKind.values()).getPreferredSize().height,
+                    new JButton("Ag").getPreferredSize().height);
+            d.height = row + 8;
+            return d;
+        }
+    };
+    private final javax.swing.JTextArea planHint = RoomText.hint(" ", 2);
     private final JLabel stats = new JLabel(" ");
     private final JLabel toast = new JLabel(" ");
     private final JLabel viewHint = new JLabel(" ");

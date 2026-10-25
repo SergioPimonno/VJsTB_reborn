@@ -223,4 +223,49 @@ class PlannerGestureTest {
             frame.dispose();
         });
     }
+
+    @Test
+    void deckEdgeHandleDraggedOnThePlanStretchesTheDeckAndUndoRestoresIt(@TempDir Path dir) throws Exception {
+        Assumptions.assumeFalse(java.awt.GraphicsEnvironment.isHeadless(), "Нет дисплея — UI-тест пропущен");
+        SwingUtilities.invokeAndWait(() -> {
+            setUp(dir, false);
+            com.vjstb.ledscheme.model.RoomFurnitureType type = new com.vjstb.ledscheme.model.RoomFurnitureType();
+            type.setName("Станок 2×1");
+            type.setKind(com.vjstb.ledscheme.model.RoomFurnitureType.Kind.DECK);
+            type.setWidthMm(2000.0);
+            type.setDepthMm(1000.0);
+            type.setHeightMm(400.0);
+            type.setWeightKg(40.0);
+            model.addRoomFurnitureType(type);
+            com.vjstb.ledscheme.model.RoomFurniture deck = new com.vjstb.ledscheme.model.RoomFurniture();
+            deck.setRef(new RoomLibRef(RoomLibRef.Kind.ROOM_FURNITURE, type.getId()));
+            deck.setXCm(300);
+            deck.setYCm(250);
+            layout.getFurniture().add(deck);
+            click(panel, "План");
+            panel.showLayout(layout);
+            frame.validate();
+            repaint();
+            PlanPanel plan = find(panel, PlanPanel.class);
+            double sc = plan.view().scale();
+            var origin = plan.view().toWorld(0, 0);
+            Point center = new Point((int) Math.round((300 - origin.getX()) * sc), (int) Math.round((250 - origin.getY()) * sc));
+            // первый клик выделяет настил — только после этого появляются ручки
+            send(plan, MouseEvent.MOUSE_PRESSED, center, 1);
+            send(plan, MouseEvent.MOUSE_RELEASED, center, 1);
+            repaint();
+            // правый край настила: x = 300 + 100 = 400 см
+            Point edge = new Point((int) Math.round((400 - origin.getX()) * sc), center.y);
+            Point to = new Point(edge.x + (int) Math.round(100 * sc), edge.y);
+            drag(plan, edge, to);
+            assertNotNull(deck.getOverrides(), "размер записан в переопределения настила");
+            assertEquals(300.0, deck.getOverrides().getWidthCm(), 1e-9, "правый край 500 см, левый 200 → ширина 300");
+            assertEquals(350.0, deck.getXCm(), 1e-9, "левый край остался на месте");
+            panel.session().undo();
+            com.vjstb.ledscheme.model.RoomFurniture back = layout.getFurniture().get(0);
+            assertTrue(back.getOverrides() == null || back.getOverrides().getWidthCm() == null,
+                    "один шаг отмены возвращает размер");
+            frame.dispose();
+        });
+    }
 }

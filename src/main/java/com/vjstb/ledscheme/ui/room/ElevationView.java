@@ -311,7 +311,15 @@ final class ElevationView {
             g.setStroke(new BasicStroke(px(2), BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10, new float[] {px(6), px(4)}, 0));
             g.draw(box);
         }
-        picks.add(new Pick(false, b.id, x, dh, x - w / 2, x + w / 2, dh + (b.chair ? 95 : h)));
+        if (!b.chair && b.spec != null && b.spec.role() == RoomItemSpec.Role.TABLE) {
+            // у стола схватить можно только столешницу (с запасом вниз) и ножки: пространство под ним «сквозное»,
+            // иначе башню или монитор под столом не выбрать — клик всегда попадал в стол
+            picks.add(new Pick(false, b.id, x, dh + h - 10, x - w / 2, x + w / 2, dh + h));
+            picks.add(new Pick(false, b.id, x, dh, x - w / 2 + 1, x - w / 2 + 11, dh + h));
+            picks.add(new Pick(false, b.id, x, dh, x + w / 2 - 11, x + w / 2 - 1, dh + h));
+        } else {
+            picks.add(new Pick(false, b.id, x, dh, x - w / 2, x + w / 2, dh + (b.chair ? 95 : h)));
+        }
     }
 
     private void paintMonitor(Graphics2D g, Font base, RoomBounds b, List<RoomBounds> all, List<RoomBounds> decks) {
@@ -320,12 +328,20 @@ final class ElevationView {
         double baseH = Math.max(0, RoomGeometry.deckHeightAt(decks, fx, fy)) + RoomGeometry.supportAt(all, fx, fy);
         double w = b.x1 - b.x0;
         double hh = b.height;
-        g.setColor(theme.caseBody);
-        g.fill(new RoundRectangle2D.Double(fx - w / 2, -baseH - hh, w, hh * 0.72, 4, 4));
-        g.setColor(theme.furn);
-        g.fill(new Rectangle2D.Double(fx - 3, -baseH - hh * 0.28, 6, hh * 0.28));
-        g.fill(new Rectangle2D.Double(fx - 14, -baseH - 2, 28, 2));
-        if (b.spec.diagonalIn() != null) {
+        boolean device = b.spec.type() == RoomItemSpec.Type.DEVICE;
+        if (device) {
+            g.setColor(theme.categoryColor(b.spec));
+            g.fill(new RoundRectangle2D.Double(fx - w / 2, -baseH - hh, w, hh, 4, 4));
+            g.setColor(theme.ink);
+            centered(g, base, b.name, fx, -baseH - hh / 2, 10);
+        } else {
+            g.setColor(theme.caseBody);
+            g.fill(new RoundRectangle2D.Double(fx - w / 2, -baseH - hh, w, hh * 0.72, 4, 4));
+            g.setColor(theme.furn);
+            g.fill(new Rectangle2D.Double(fx - 3, -baseH - hh * 0.28, 6, hh * 0.28));
+            g.fill(new Rectangle2D.Double(fx - 14, -baseH - 2, 28, 2));
+        }
+        if (!device && b.spec.diagonalIn() != null) {
             g.setColor(theme.caseInk);
             centered(g, base, RoomUnits.num(b.spec.diagonalIn(), 1) + "″", fx, -baseH - hh + hh * 0.36, 11);
         }

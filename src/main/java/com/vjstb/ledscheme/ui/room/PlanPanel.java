@@ -11,6 +11,7 @@ import com.vjstb.ledscheme.service.room.RoomItemSpec;
 import com.vjstb.ledscheme.service.room.RoomRunKind;
 import com.vjstb.ledscheme.service.room.RoomRunMath;
 import com.vjstb.ledscheme.service.room.RoomSelection;
+import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
@@ -76,6 +77,7 @@ final class PlanPanel extends JPanel implements RoomDnd.Target, PlannerSession.L
 
             @Override
             public void mouseMoved(MouseEvent e) {
+                updateCursor(e);
                 if (view.mode == PlanView.Mode.DRAW) {
                     RoomPoint w = view.toWorld(e.getX(), e.getY());
                     ControlRoomLayout l = session.layout();
@@ -93,6 +95,30 @@ final class PlanPanel extends JPanel implements RoomDnd.Target, PlannerSession.L
 
     PlanView view() {
         return view;
+    }
+
+    /** Курсор изменения размера над ручкой настила, обычный в остальных местах. */
+    private void updateCursor(MouseEvent e) {
+        int cursor = Cursor.DEFAULT_CURSOR;
+        if (view.mode == PlanView.Mode.OBJECTS && session.layout() != null && session.calc() != null) {
+            RoomPoint w = view.toWorld(e.getX(), e.getY());
+            PlanView.Hit h = view.hit(w.getX(), w.getY());
+            if (h.kind() == PlanView.Hit.Kind.EDGE) {
+                cursor = cursorFor(h.index());
+            }
+        }
+        setCursor(Cursor.getPredefinedCursor(cursor));
+    }
+
+    private static int cursorFor(int edges) {
+        boolean l = (edges & RoomEditor.EDGE_LEFT) != 0;
+        boolean r = (edges & RoomEditor.EDGE_RIGHT) != 0;
+        boolean t = (edges & RoomEditor.EDGE_TOP) != 0;
+        boolean b = (edges & RoomEditor.EDGE_BOTTOM) != 0;
+        if ((l || r) && (t || b)) {
+            return (l && t) || (r && b) ? Cursor.NW_RESIZE_CURSOR : Cursor.NE_RESIZE_CURSOR;
+        }
+        return l || r ? Cursor.E_RESIZE_CURSOR : Cursor.N_RESIZE_CURSOR;
     }
 
     void setMode(PlanView.Mode mode) {
@@ -169,6 +195,9 @@ final class PlanPanel extends JPanel implements RoomDnd.Target, PlannerSession.L
             }
             case LOOSE -> session.select(RoomSelection.loose(hit.id()));
             case RUN -> session.select(RoomSelection.run(hit.id()));
+            case EDGE -> {
+                // выделение остаётся на настиле; жест тянет край, пока кнопка нажата
+            }
             case VERTEX -> {
                 session.select(RoomSelection.run(hit.id()));
                 if (e.getClickCount() == 2) {
@@ -221,7 +250,8 @@ final class PlanPanel extends JPanel implements RoomDnd.Target, PlannerSession.L
                 return;
             }
             boolean movable = pressed.kind() == PlanView.Hit.Kind.TOWER || pressed.kind() == PlanView.Hit.Kind.FURN
-                    || pressed.kind() == PlanView.Hit.Kind.LOOSE || pressed.kind() == PlanView.Hit.Kind.VERTEX;
+                    || pressed.kind() == PlanView.Hit.Kind.LOOSE || pressed.kind() == PlanView.Hit.Kind.VERTEX
+                    || pressed.kind() == PlanView.Hit.Kind.EDGE;
             if (!movable) {
                 return;
             }
@@ -234,6 +264,8 @@ final class PlanPanel extends JPanel implements RoomDnd.Target, PlannerSession.L
             case FURN -> RoomEditor.moveFurniture(layout, session.catalog(), pressed.id(), w.getX() + grabDx,
                     w.getY() + grabDy);
             case LOOSE -> dragLoose(layout, w);
+            case EDGE -> RoomEditor.resizeDeck(layout, session.catalog(), pressed.id(), pressed.index(), w.getX(),
+                    w.getY());
             case VERTEX -> {
                 RoomRun r = RoomEditor.run(layout, pressed.id());
                 if (r != null) {

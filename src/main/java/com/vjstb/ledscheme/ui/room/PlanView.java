@@ -42,7 +42,8 @@ final class PlanView {
 
     /** Что найдено под указателем. */
     record Hit(Kind kind, String id, int index) {
-        enum Kind { NONE, TOWER, FURN, LOOSE, RUN, VERTEX, MID }
+        /** EDGE: ручка размера выбранного настила, {@code index} — маска краёв {@link RoomEditor#EDGE_LEFT} и т. д. */
+        enum Kind { NONE, TOWER, FURN, LOOSE, RUN, VERTEX, MID, EDGE }
 
         static final Hit NONE = new Hit(Kind.NONE, null, -1);
     }
@@ -58,6 +59,8 @@ final class PlanView {
     private static final double RING_R = 14;
     private static final double RUN_HIT = 9;
     private static final double HANDLE_R = 7;
+    /** Размер ручки изменения размера настила, экранных пикселей (в мире — делится на масштаб). */
+    private static final double DECK_HANDLE_PX = 5;
 
     private final PlannerSession session;
     private RoomTheme theme = RoomTheme.current();
@@ -223,6 +226,54 @@ final class PlanView {
                 + RoomUnits.num(b.height, 0) + (b.onTop ? " ↑" : "");
         centered(g, base, t, b.cx(), b.cy(), 11, false);
         outlineState(g, b, r);
+        if (isSelected(RoomSelection.Type.FURN, b.id)) {
+            paintDeckHandles(g, b);
+        }
+    }
+
+    /** Ручки по краям и углам выбранного настила. */
+    private void paintDeckHandles(Graphics2D g, RoomBounds b) {
+        double hs = DECK_HANDLE_PX / scale;
+        for (double[] h : deckHandles(b)) {
+            Rectangle2D sq = new Rectangle2D.Double(h[0] - hs, h[1] - hs, hs * 2, hs * 2);
+            g.setColor(theme.onAccent);
+            g.fill(sq);
+            g.setColor(theme.accent);
+            g.setStroke(new BasicStroke(px(1.5)));
+            g.draw(sq);
+        }
+    }
+
+    /** Центры ручек настила: {x, y, маска краёв}; четыре угла и четыре середины сторон. */
+    private static double[][] deckHandles(RoomBounds b) {
+        double cx = b.cx();
+        double cy = b.cy();
+        int l = RoomEditor.EDGE_LEFT;
+        int r = RoomEditor.EDGE_RIGHT;
+        int t = RoomEditor.EDGE_TOP;
+        int m = RoomEditor.EDGE_BOTTOM;
+        return new double[][] {
+            {b.x0, b.y0, l | t}, {b.x1, b.y0, r | t}, {b.x0, b.y1, l | m}, {b.x1, b.y1, r | m},
+            {cx, b.y0, t}, {cx, b.y1, m}, {b.x0, cy, l}, {b.x1, cy, r}};
+    }
+
+    /** Ручка размера выбранного настила под точкой мира или {@code null}. */
+    private Hit hitDeckHandle(double x, double y) {
+        RoomSelection sel = session.selection();
+        if (sel == null || sel.type() != RoomSelection.Type.FURN) {
+            return null;
+        }
+        double hs = (DECK_HANDLE_PX + 3) / scale;
+        for (RoomBounds b : session.calc().bounds()) {
+            if (b.deck && b.id.equals(sel.id())) {
+                for (double[] h : deckHandles(b)) {
+                    if (Math.abs(x - h[0]) <= hs && Math.abs(y - h[1]) <= hs) {
+                        return new Hit(Hit.Kind.EDGE, b.id, (int) h[2]);
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     private void paintFurniture(Graphics2D g, Font base, RoomBounds b) {
@@ -278,6 +329,10 @@ final class PlanView {
         RoomFurniture f = b.furniture;
         double w = b.spec.widthCm();
         double d = b.spec.depthCm();
+        if (b.spec.type() == RoomItemSpec.Type.DEVICE) {
+            paintDevice(g, base, b, f, w, d);
+            return;
+        }
         AffineTransform keep = g.getTransform();
         g.translate(f.getXCm(), f.getYCm());
         g.rotate(Math.toRadians(f.getRotation()));
@@ -291,6 +346,25 @@ final class PlanView {
             g.setColor(theme.caseInk);
             centered(g, base, RoomUnits.num(b.spec.diagonalIn(), 1) + "″", f.getXCm(), f.getYCm(), 10, false);
         }
+        outlineState(g, b, new Rectangle2D.Double(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0));
+    }
+
+    /** Отдельно стоящий предмет: прямоугольник по габаритам с названием и синей чертой у лицевой стороны. */
+    private void paintDevice(Graphics2D g, Font base, RoomBounds b, RoomFurniture f, double w, double d) {
+        AffineTransform keep = g.getTransform();
+        g.translate(f.getXCm(), f.getYCm());
+        g.rotate(Math.toRadians(f.getRotation()));
+        g.setColor(theme.categoryColor(b.spec));
+        g.fill(new RoundRectangle2D.Double(-w / 2, -d / 2, w, d, 4, 4));
+        g.setColor(theme.ink);
+        g.setStroke(new BasicStroke(px(1)));
+        g.draw(new RoundRectangle2D.Double(-w / 2, -d / 2, w, d, 4, 4));
+        g.setColor(theme.accent);
+        g.setStroke(new BasicStroke(px(2)));
+        g.draw(new Line2D.Double(-w / 2 + 2, d / 2, w / 2 - 2, d / 2));
+        g.setTransform(keep);
+        g.setColor(theme.ink);
+        centered(g, base, b.name, f.getXCm(), f.getYCm(), 10, false);
         outlineState(g, b, new Rectangle2D.Double(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0));
     }
 
@@ -467,6 +541,10 @@ final class PlanView {
         }
         if (mode == Mode.RUNS) {
             return hitRun(layout, x, y, true);
+        }
+        Hit handle = hitDeckHandle(x, y);
+        if (handle != null) {
+            return handle;
         }
         List<RoomLooseItem> loose = layout.getLoose();
         for (int i = loose.size() - 1; i >= 0; i--) {

@@ -285,4 +285,80 @@ class RoomEditorTest {
         f.setYCm(y);
         return f;
     }
+
+    // ------------------------------------------------------------ размер настила мышью
+
+    @Test
+    void draggingTheRightEdgeOfADeckStretchesItOnTheGridAndKeepsTheLeftEdge() {
+        ControlRoomLayout l = empty();
+        RoomFurniture deck = furnitureAt("d", "dk200x100", 100, 100);
+        l.getFurniture().add(deck);
+
+        RoomEditor.resizeDeck(l, CAT, "d", RoomEditor.EDGE_RIGHT, 333, 70);
+
+        assertEquals(350.0, deck.getOverrides().getWidthCm(), 1e-9, "правый край 333 → на сетку 350, ширина 350");
+        assertNull(deck.getOverrides().getDepthCm(), "глубина осталась из библиотеки");
+        assertEquals(175.0, deck.getXCm(), 1e-9, "левый край на месте (0 см): центр сместился на половину прироста");
+        assertEquals(100.0, deck.getYCm(), 1e-9);
+    }
+
+    @Test
+    void draggingACornerResizesBothAxesAndNeverShrinksBelowOneGridCell() {
+        ControlRoomLayout l = empty();
+        RoomFurniture deck = furnitureAt("d", "dk200x100", 100, 100);
+        l.getFurniture().add(deck);
+
+        // левый верхний угол (0, 50) тянем далеко за правый нижний (200, 150)
+        RoomEditor.resizeDeck(l, CAT, "d", RoomEditor.EDGE_LEFT | RoomEditor.EDGE_TOP, 900, 900);
+
+        assertEquals(50.0, deck.getOverrides().getWidthCm(), 1e-9, "минимум — одна клетка 50 см");
+        assertEquals(50.0, deck.getOverrides().getDepthCm(), 1e-9);
+        assertEquals(175.0, deck.getXCm(), 1e-9, "правый край (200) остался на месте");
+        assertEquals(125.0, deck.getYCm(), 1e-9, "нижний край (150) остался на месте");
+    }
+
+    @Test
+    void resizingARotatedDeckWritesTheOppositeLibraryField() {
+        ControlRoomLayout l = empty();
+        RoomFurniture deck = furnitureAt("d", "dk200x100", 100, 100);
+        deck.setRotation(90);
+        l.getFurniture().add(deck);
+        // на плане 100 (по x) × 200 (по y): x 50..150, y 0..200
+        RoomEditor.resizeDeck(l, CAT, "d", RoomEditor.EDGE_RIGHT, 250, 100);
+
+        assertEquals(200.0, deck.getOverrides().getDepthCm(), 1e-9, "по x у повёрнутого настила — глубина");
+        assertNull(deck.getOverrides().getWidthCm(), "ширина из библиотеки не тронута");
+        assertEquals(150.0, deck.getXCm(), 1e-9);
+    }
+
+    @Test
+    void resizeIgnoresNonDeckFurniture() {
+        ControlRoomLayout l = empty();
+        RoomFurniture table = furnitureAt("t", "tbl180", 300, 150);
+        l.getFurniture().add(table);
+        RoomEditor.resizeDeck(l, CAT, "t", RoomEditor.EDGE_RIGHT, 900, 150);
+        assertNull(table.getOverrides());
+        assertEquals(300.0, table.getXCm(), 1e-9);
+    }
+
+    // ------------------------------------------------------------ «Отдельно» (DEVICE)
+
+    @Test
+    void standaloneDeviceStandsOnATableAndRotates() {
+        ControlRoomLayout l = empty();
+        l.getFurniture().add(furnitureAt("t", "tbl180", 300, 150));
+        MapRoomCatalog cat = RoomPlanFixture.catalog();
+        RoomLibRef ref = RoomPlanFixture.eq("console");
+        cat.add(RoomItemSpec.device(ref, "grandMA3 Light", 60, 50, 12, 8, 90));
+
+        RoomEditor.addFromLibrary(l, cat, cat.resolve(ref), null, false);
+        assertEquals(2, l.getFurniture().size(), "предмет добавлен на план");
+        RoomFurniture dev = l.getFurniture().get(1);
+        assertTrue(dev.getYCm() >= 150 - 30 && dev.getYCm() <= 150 + 30, "встал на стол, а не мимо него");
+
+        RoomEditor.rotate(l, RoomSelection.furniture(dev.getId()));
+        assertEquals(90, dev.getRotation());
+        RoomBounds b = RoomGeometry.bounds(l, cat).stream().filter(x -> x.id.equals(dev.getId())).findFirst().orElseThrow();
+        assertEquals(50.0, b.x1 - b.x0, 1e-9, "после поворота ширина и глубина поменялись местами");
+    }
 }

@@ -22,7 +22,7 @@ final class RoomDimensionsPanel extends JPanel {
 
     enum Mode { DEVICE, CASE, FURNITURE }
 
-    private static final String[] FORM_FACTORS = {"В стойку 19″", "Россыпью"};
+    private static final String[] FORM_FACTORS = {"В стойку 19″", "Россыпью", "Отдельно"};
     private static final String[] FRACTIONS = {"целиком (12/12)", "1/2 (6/12)", "1/3 (4/12)", "1/4 (3/12)"};
 
     private final Mode mode;
@@ -84,7 +84,8 @@ final class RoomDimensionsPanel extends JPanel {
 
     void load(PhysicalSpec spec) {
         base = spec != null ? spec.copy() : new PhysicalSpec();
-        formFactorBox.setSelectedIndex(base.getFormFactor() == PhysicalSpec.FormFactor.LOOSE ? 1 : 0);
+        formFactorBox.setSelectedIndex(base.getFormFactor() == PhysicalSpec.FormFactor.LOOSE ? 1
+                : base.getFormFactor() == PhysicalSpec.FormFactor.STANDALONE ? 2 : 0);
         unitsField.setText(base.getRackUnits() != null ? String.valueOf(base.getRackUnits()) : "");
         int tw = base.effectiveWidthTwelfths();
         fractionBox.setSelectedIndex(tw == 6 ? 1 : tw == 4 ? 2 : tw == 3 ? 3 : 0);
@@ -101,8 +102,10 @@ final class RoomDimensionsPanel extends JPanel {
         PhysicalSpec p = base.copy();
         switch (mode) {
             case DEVICE -> {
-                boolean rack = formFactorBox.getSelectedIndex() == 0;
-                p.setFormFactor(rack ? PhysicalSpec.FormFactor.RACK : PhysicalSpec.FormFactor.LOOSE);
+                int ff = formFactorBox.getSelectedIndex();
+                boolean rack = ff == 0;
+                p.setFormFactor(rack ? PhysicalSpec.FormFactor.RACK
+                        : ff == 2 ? PhysicalSpec.FormFactor.STANDALONE : PhysicalSpec.FormFactor.LOOSE);
                 Double u = number(unitsField, "Высота в стойке");
                 Integer units = u != null ? Integer.valueOf((int) Math.round(u)) : null;
                 p.setRackUnits(rack ? units : p.getRackUnits());

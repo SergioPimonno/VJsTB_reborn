@@ -10,7 +10,25 @@ final class RoomText {
     }
 
     static JTextArea hint(String text) {
-        JTextArea a = new JTextArea(text);
+        return hint(text, 0);
+    }
+
+    /**
+     * Подсказка, у которой высота не меньше {@code minLines} строк: от длины текста высота не прыгает, а значит не
+     * прыгает и рабочая зона над ней (план пересчитывал масштаб при каждой смене подсказки).
+     */
+    static JTextArea hint(String text, int minLines) {
+        JTextArea a = new JTextArea(text) {
+            @Override
+            public java.awt.Dimension getPreferredSize() {
+                java.awt.Dimension d = super.getPreferredSize();
+                if (minLines > 0) {
+                    java.awt.Insets in = getInsets();
+                    d.height = Math.max(d.height, getFontMetrics(getFont()).getHeight() * minLines + in.top + in.bottom);
+                }
+                return d;
+            }
+        };
         a.setEditable(false);
         a.setFocusable(false);
         a.setLineWrap(true);

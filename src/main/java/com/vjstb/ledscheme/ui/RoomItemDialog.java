@@ -37,7 +37,8 @@ final class RoomItemDialog extends JDialog {
     private final JTextField nameField = new JTextField(24);
     // оборудование
     private final JTextField companyField = new JTextField(24);
-    private final JTextField categoryField = new JTextField(24);
+    /** Категория — выпадающий список уже существующих групп; новую можно ввести вручную. */
+    private final javax.swing.JComboBox<String> categoryBox = new javax.swing.JComboBox<>();
     private final RoomDimensionsPanel devicePanel = new RoomDimensionsPanel(RoomDimensionsPanel.Mode.DEVICE);
     // мебель
     private final JComboBox<RoomFurnitureType.Kind> kindBox = new JComboBox<>(RoomFurnitureType.Kind.values());
@@ -132,10 +133,15 @@ final class RoomItemDialog extends JDialog {
             head.add(new JLabel("Производитель"));
             head.add(companyField);
             head.add(new JLabel("Категория (группа в списке)"));
-            head.add(categoryField);
+            head.add(categoryBox);
             nameField.setText(equipment.getName());
             companyField.setText(equipment.getCompany());
-            categoryField.setText(equipment.getCategory());
+            categoryBox.setEditable(true);
+            for (String c : com.vjstb.ledscheme.service.room.RoomLibraryEdit.knownCategories(model)) {
+                categoryBox.addItem(c);
+            }
+            categoryBox.setSelectedItem(equipment.getCategory() != null && !equipment.getCategory().isBlank()
+                    ? equipment.getCategory() : "Прочее оборудование");
             PhysicalSpec p = equipment.getPhysical();
             if (p == null) {
                 p = new PhysicalSpec();
@@ -219,6 +225,11 @@ final class RoomItemDialog extends JDialog {
         return (creating ? "Новая позиция: " : "Позиция: ") + what;
     }
 
+    private String categoryText() {
+        Object v = categoryBox.getEditor().getItem();
+        return v == null ? "" : v.toString().trim();
+    }
+
     private static String trim(double v) {
         return v == Math.rint(v) ? String.valueOf((long) Math.rint(v)) : String.valueOf(v);
     }
@@ -267,7 +278,7 @@ final class RoomItemDialog extends JDialog {
             if (equipment != null) {
                 equipment.setName(name);
                 equipment.setCompany(companyField.getText().trim());
-                equipment.setCategory(categoryField.getText().trim());
+                equipment.setCategory(categoryText());
                 equipment.setPhysical(devicePanel.read());
                 if (creating) {
                     model.addRoomEquipmentType(equipment);
