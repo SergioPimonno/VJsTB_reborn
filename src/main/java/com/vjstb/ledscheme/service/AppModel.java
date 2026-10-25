@@ -311,8 +311,34 @@ public class AppModel {
     }
 
     private void changed() {
+        if (batchDepth > 0) {
+            return; // внутри runBatch: одно сохранение и одно оповещение — на выходе из пакета
+        }
         persist();
         fireChanged();
+    }
+
+    /** Глубина вложенности {@link #runBatch}; пока больше нуля, {@link #pushUndo} и {@link #changed} ничего не делают. */
+    private int batchDepth;
+
+    /** Выполняет {@code body} как ОДНУ правку: одна запись отмены (снимок до начала), одно сохранение проекта и одно
+     *  оповещение слушателей в конце — вместо записи на КАЖДУЮ мелкую операцию внутри. Нужно массовым действиям
+     *  (импорт схемы из файла создаёт десятки узлов и связей; без пакета это десятки снимков сцены и записей
+     *  многомегабайтного проекта на диск). Вложенные вызовы допустимы. Ошибка внутри пакета оставляет сделанное до неё
+     *  (его можно откатить одним Ctrl+Z) и всё равно сохраняет/оповещает. */
+    public <T> T runBatch(String undoLabel, java.util.function.Supplier<T> body) {
+        if (batchDepth == 0) {
+            pushUndo(undoLabel);
+        }
+        batchDepth++;
+        try {
+            return body.get();
+        } finally {
+            batchDepth--;
+            if (batchDepth == 0) {
+                changed();
+            }
+        }
     }
 
     // ---- раскладки пультовой (Планнер пультовой, docs/control-room-planner/PLAN.md) ----
@@ -2680,8 +2706,9 @@ public class AppModel {
      *  {@code StructureFrameCell#getFrameTypeId()}) — "менюшка с выбором текущей рамы для
      *  построения" ({@code ui.Structure3DDialog}), нужна для мест, где номинальная рама физически
      *  не помещается (край экрана) или где нужна конкретно короткая/метровая рама. У УЖЕ
-     *  существующей ячейки (переключение hidden туда-обратно) тип НЕ трогается — параметр имеет
-     *  значение только в момент первого создания записи. */
+     *  существующей ячейки тип НЕ трогается при «выключении», а при ВКЛЮЧЕНИИ спрятанной берётся выбранный в
+     *  селекторе тип (отзыв 2026-10-25: «заменил 2 рамы на короткие» — спрятал обычную и поставил короткую, но
+     *  запись ячейки уже была и возвращалась прежним типом). Селектор «как обычно» ({@code null}) тип не меняет. */
     public void toggleStructureFrameCell(Screen screen, int towerIndex, int row, int segmentIndex,
             String frameTypeIdForNewCell) {
         pushUndo("Правка рамы конструктива");
@@ -2689,7 +2716,11 @@ public class AppModel {
         List<com.vjstb.ledscheme.model.StructureFrameCell> cells = screen.getStructureFrameCells();
         var existing = cells.stream().filter(c -> c.matches(towerIndex, row, segmentIndex)).findFirst();
         if (existing.isPresent()) {
-            existing.get().setHidden(!existing.get().isHidden());
+            boolean showing = existing.get().isHidden();
+            existing.get().setHidden(!showing);
+            if (showing && frameTypeIdForNewCell != null) {
+                existing.get().setFrameTypeId(frameTypeIdForNewCell);
+            }
         } else {
             com.vjstb.ledscheme.model.StructureFrameCell cell =
                     new com.vjstb.ledscheme.model.StructureFrameCell(towerIndex, row, segmentIndex);
@@ -8828,7 +8859,7 @@ public class AppModel {
     }
 
     private void pushUndo(String actionLabel, boolean structural) {
-        if (currentScene == null) {
+        if (currentScene == null || batchDepth > 0) {
             return;
         }
         Screen screenSnap = !structural && currentScreen != null ? ScreenLogic.snapshot(currentScreen) : null;

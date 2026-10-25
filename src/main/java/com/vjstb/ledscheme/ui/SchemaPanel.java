@@ -187,7 +187,13 @@ public class SchemaPanel extends JPanel {
                 model.arrangeSchemaNodes(mode);
             }
         });
+        JButton importBtn = new JButton("Импорт .graphml…");
+        importBtn.setToolTipText("Перенести схему из файла yEd (.graphml) на НОВЫЙ лист: блоки подбираются из библиотеки"
+                + " оборудования по названию, экраны вы сопоставляете с экранами проекта, связи подключаются к гнёздам"
+                + " по типу разъёма. Текущие схемы не меняются; весь импорт отменяется одним Ctrl+Z.");
+        importBtn.addActionListener(e -> SchemaGraphImportDialog.run(this, model, mode, settings));
         JPanel bar = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 4, 2));
+        bar.add(importBtn);
         bar.add(arrangeBtn);
         bar.add(fitBtn);
         bar.add(fontBtn);

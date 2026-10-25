@@ -756,6 +756,7 @@ public class Structure3DPanel extends JPanel {
     private List<Candidate> peremychkaCandidates(Screen screen, StructureGeometry g) {
         FrameEnvelope env = frameEnvelope(screen, g);
         var cells = screen.getStructurePeremychkaCells();
+        var supported = StructureCalc.peremychkaSupport(screen);
         List<Candidate> result = new ArrayList<>();
         for (int gapIdx = env.minTower(); gapIdx < env.maxTower(); gapIdx++) {
             // Раздельные башни (2026-10-01): перемычка только ВНУТРИ башни (2k → 2k+1), в
@@ -784,7 +785,8 @@ public class Structure3DPanel extends JPanel {
                 // реальной башни). Стоящие перемычки рисуются всегда, призраки — по существующим рамам.
                 java.util.TreeSet<Integer> rungs = new java.util.TreeSet<>();
                 for (var c : cells) {
-                    if (c.getTowerIndex() == gapIdx && c.getRow() == row) {
+                    // ячейка без опоры (номер перекладины несуществующей рамы) не рисуется — раньше такая «летала» над башней
+                    if (c.getTowerIndex() == gapIdx && c.getRow() == row && supported.test(c)) {
                         rungs.add(c.getLevelIndex());
                     }
                 }

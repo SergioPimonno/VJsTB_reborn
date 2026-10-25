@@ -327,12 +327,36 @@ public final class StructureCalc {
     private record TowerRow(int tower, int row) {
     }
 
+    /** Есть ли у перемычки опора: рама с номером {@code уровень/3} (перекладина = рама·3 + 0/1/2) стоит и не
+     *  спрятана в ОБОИХ столбах зазора (башня и соседняя) того же ряда — то же правило, по которому 3D-редактор
+     *  предлагает призраки перемычек. Ячейка без опоры физически висит в воздухе (например, уровень 22 при четырёх
+     *  рамах в стопке: это перекладина восьмой рамы, 7 м над землёй) — её не рисуем и не считаем. */
+    public static java.util.function.Predicate<com.vjstb.ledscheme.model.StructurePeremychkaCell> peremychkaSupport(
+            Screen screen) {
+        java.util.Set<String> present = new java.util.HashSet<>();
+        for (com.vjstb.ledscheme.model.StructureFrameCell f : screen.getStructureFrameCells()) {
+            if (!f.isHidden()) {
+                present.add(f.getTowerIndex() + "/" + f.getRow() + "/" + f.getSegmentIndex());
+            }
+        }
+        return c -> {
+            int seg = Math.floorDiv(c.getLevelIndex(), 3);
+            return present.contains(c.getTowerIndex() + "/" + c.getRow() + "/" + seg)
+                    && present.contains((c.getTowerIndex() + 1) + "/" + c.getRow() + "/" + seg);
+        };
+    }
+
     public static Result compute(Screen screen, CabinetType type, Workspace workspace) {
         // Счётчики железа — из РЕАЛЬНО существующих (не hidden, см. class-javadoc про Phase 2)
         // ячеек, а не из номинальных чисел сетки: вручную убранный пользователем сегмент/
         // перемычка/секция базы не должен попадать в закупку.
         int verticalFrameCount = (int) screen.getStructureFrameCells().stream().filter(c -> !c.isHidden()).count();
-        int peremychkaCount = (int) screen.getStructurePeremychkaCells().stream().filter(c -> !c.isHidden()).count();
+        // только перемычки, которым есть к чему крепиться: сохранённые ячейки с номером перекладины несуществующей рамы
+        // («фантомы» после двойной миграции старого формата, см. peremychkaSupport) не считаются в закупку
+        java.util.function.Predicate<com.vjstb.ledscheme.model.StructurePeremychkaCell> supported =
+                peremychkaSupport(screen);
+        int peremychkaCount = (int) screen.getStructurePeremychkaCells().stream()
+                .filter(c -> !c.isHidden() && supported.test(c)).count();
         // Round 4: опорная рама больше не вкл/выкл (прямое указание пользователя — "опорные
         // рамы должны быть всегда"), считаем безусловно.
         int baseFrameCount = (int) screen.getStructureBaseFrameCells().stream().filter(c -> !c.isHidden()).count();
