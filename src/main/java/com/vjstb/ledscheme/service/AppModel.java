@@ -4731,6 +4731,21 @@ public class AppModel {
         store.exportList(workspace.getCableTypes(), file, "CABLE");
     }
 
+    /** Импорт кабинетов, оборудования и кабелей из Excel-таблицы по шаблону (см. {@link LibraryXlsx}) в ЛИЧНУЮ
+     *  библиотеку: записи общей библиотеки не затрагиваются. {@link IllegalArgumentException} с текстом для
+     *  пользователя, если файл не читается или это не шаблон. */
+    public LibraryXlsx.Report importLibraryXlsx(File file) {
+        LibraryXlsx.Parsed parsed = LibraryXlsx.parse(file);
+        LibraryXlsx.Report report = LibraryXlsx.merge(parsed, new LibraryXlsx.Libraries(
+                workspace.getSharedCabinetTypes(), workspace.getCabinetTypes(),
+                workspace.getSharedEquipmentPresets(), workspace.getEquipmentPresets(),
+                workspace.getSharedCableTypes(), workspace.getCableTypes()));
+        if (report.total() > 0) {
+            changed();
+        }
+        return report;
+    }
+
     /** Импорт: существующие по (режим, категория, имя) обновляются, новые добавляются. */
     public int importEquipmentPresetLibrary(File file) {
         List<EquipmentPreset> incoming = store.importList(file, EquipmentPreset.class);
