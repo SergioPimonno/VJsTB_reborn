@@ -22,7 +22,11 @@ RESTART="${2:-}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
-TESTBUILD="$ROOT/testbuild"
+# Единый путь тестового билда — в ГЛАВНОМ чекауте, даже если собираем из worktree
+# (.claude/worktrees/<имя>): раньше брался "$ROOT/testbuild", и сборка из worktree молча
+# ложилась в его собственный testbuild/, а ярлык пользователя запускал старый jar.
+MAIN_ROOT="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)"
+TESTBUILD="$MAIN_ROOT/testbuild"
 JAR="$TESTBUILD/led-scheme-test.jar"
 PREV="$TESTBUILD/previous"
 mkdir -p "$PREV"
