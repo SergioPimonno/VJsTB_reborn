@@ -7,7 +7,9 @@ import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.Workspace;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Лёгкие поиски по id звена цепочки без разбора типов (docs/receiver-cards/PLAN.md, раздел 7, трек D): в
@@ -24,9 +26,96 @@ public final class ChainLinks {
     private ChainLinks() {
     }
 
+    // ------------------------------------------------------------------ индекс на время отрисовки
+
+    private static final ThreadLocal<Scope> SCOPE = new ThreadLocal<>();
+
+    /**
+     * Индексы экрана на время одной отрисовки. Баг-репорт: «Расключение экрана» на экране из ~3000 модулей и ~400
+     * карт тормозило — отрисовка на каждый модуль перебирала все карты ({@link #unitContaining}), а на каждое
+     * звено цепочки линейно искала ячейку ({@code Screen.cabinetById}) и заново строила индекс экрана. Пока открыт
+     * {@code Scope}, эти поиски идут по словарям, собранным один раз; модель за время отрисовки не меняется (она идёт
+     * на потоке Swing), поэтому устареть словарь не может. Вне {@code Scope} всё работает как раньше.
+     */
+    public static final class Scope implements AutoCloseable {
+        private final Screen screen;
+        private final Scope previous;
+        private Map<String, CabinetInstance> index;
+        private Map<String, String> cardOfModule;
+        private Map<String, String> supplyOfModule;
+
+        private Scope(Screen screen, Scope previous) {
+            this.screen = screen;
+            this.previous = previous;
+        }
+
+        Map<String, CabinetInstance> index() {
+            if (index == null) {
+                index = ScreenModules.index(screen);
+            }
+            return index;
+        }
+
+        String unitOf(String cabinetId, ChainUnits.Mode mode) {
+            if (mode == ChainUnits.Mode.SIGNAL) {
+                if (cardOfModule == null) {
+                    cardOfModule = new HashMap<>();
+                    for (ReceiverCardInstance c : screen.getReceiverCards()) {
+                        for (String m : c.getModuleIds()) {
+                            cardOfModule.putIfAbsent(m, c.getId());
+                        }
+                    }
+                }
+                return cardOfModule.get(cabinetId);
+            }
+            if (supplyOfModule == null) {
+                supplyOfModule = new HashMap<>();
+                for (PowerSupplyInstance p : screen.getPowerSupplies()) {
+                    for (String m : p.getModuleIds()) {
+                        supplyOfModule.putIfAbsent(m, p.getId());
+                    }
+                }
+            }
+            return supplyOfModule.get(cabinetId);
+        }
+
+        @Override
+        public void close() {
+            if (previous == null) {
+                SCOPE.remove();
+            } else {
+                SCOPE.set(previous);
+            }
+        }
+    }
+
+    /** Открывает {@link Scope} для экрана; закрывать в {@code finally} / try-with-resources. */
+    public static Scope scope(Screen screen) {
+        Scope s = new Scope(screen, SCOPE.get());
+        SCOPE.set(s);
+        return s;
+    }
+
+    private static Scope scopeOf(Screen screen) {
+        Scope s = SCOPE.get();
+        return s != null && s.screen == screen ? s : null;
+    }
+
+    /** {@code screen.cabinetById(id)}, но по словарю, если открыт {@link Scope} этого экрана. */
+    public static CabinetInstance cabinet(Screen screen, String id) {
+        Scope sc = scopeOf(screen);
+        return sc != null ? sc.index().get(id) : screen.cabinetById(id);
+    }
+
+    /** Индекс «id → ячейка» экрана: общий из {@link Scope}, если он открыт, иначе новый. */
+    public static Map<String, CabinetInstance> indexOf(Screen screen) {
+        Scope sc = scopeOf(screen);
+        return sc != null ? sc.index() : ScreenModules.index(screen);
+    }
+
     /** true — id кабинета, карты или блока этого экрана. */
     public static boolean owns(Screen screen, String id) {
-        return id != null && (screen.cabinetById(id) != null || screen.receiverCardById(id) != null
+        return id != null && (cabinet(screen, id) != null || screen.receiverCardById(id) != null
                 || screen.powerSupplyById(id) != null);
     }
 
@@ -75,7 +164,7 @@ public final class ChainLinks {
         if (id == null) {
             return out;
         }
-        CabinetInstance cab = screen.cabinetById(id);
+        CabinetInstance cab = cabinet(screen, id);
         if (cab != null) {
             out.add(cab);
             return out;
@@ -83,7 +172,7 @@ public final class ChainLinks {
         List<String> moduleIds = moduleIdsOf(screen, id);
         if (moduleIds != null) {
             for (String m : moduleIds) {
-                CabinetInstance c = screen.cabinetById(m);
+                CabinetInstance c = cabinet(screen, m);
                 if (c != null) {
                     out.add(c);
                 }
@@ -114,7 +203,7 @@ public final class ChainLinks {
         if (id == null) {
             return null;
         }
-        CabinetInstance cab = screen.cabinetById(id);
+        CabinetInstance cab = cabinet(screen, id);
         if (cab != null) {
             return cab;
         }
@@ -125,8 +214,8 @@ public final class ChainLinks {
         }
         List<String> moduleIds = card != null ? card.getModuleIds() : supply.getModuleIds();
         String host = card != null ? card.getHostModuleId() : supply.getHostModuleId();
-        String placeId = UnitNames.placeOf(ScreenModules.index(screen), moduleIds, host);
-        CabinetInstance placed = placeId != null ? screen.cabinetById(placeId) : null;
+        String placeId = UnitNames.placeOf(indexOf(screen), moduleIds, host);
+        CabinetInstance placed = placeId != null ? cabinet(screen, placeId) : null;
         if (placed != null) {
             return placed;
         }
@@ -142,6 +231,10 @@ public final class ChainLinks {
 
     /** id карты (сигнал) / блока (питание), в которой состоит ячейка; {@code null} — такой нет. */
     public static String unitContaining(Screen screen, String cabinetId, ChainUnits.Mode mode) {
+        Scope sc = scopeOf(screen);
+        if (sc != null) {
+            return sc.unitOf(cabinetId, mode);
+        }
         if (mode == ChainUnits.Mode.SIGNAL) {
             for (ReceiverCardInstance c : screen.getReceiverCards()) {
                 if (c.getModuleIds().contains(cabinetId)) {

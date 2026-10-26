@@ -61,6 +61,9 @@ public class PowerSuppliesView extends ModularEditorView implements PowerAssignP
 
         canvas.setListener(this);
         UiKit.bindDeleteKey(canvas, this::removeActive);
+        // Баг-репорт: блок выбран кликом по списку справа, фокус остался в списке — Delete не срабатывал (клавиша
+        // была навешена только на холст). Теперь и в списке.
+        UiKit.bindDeleteKey(assign.supplyList(), this::removeActive);
         installCanvas(canvas);
         installSide(assign);
         start();

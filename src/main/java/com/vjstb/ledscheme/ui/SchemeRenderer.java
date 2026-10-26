@@ -617,7 +617,7 @@ public final class SchemeRenderer {
      */
     static java.awt.Point linkAnchor(Screen scr, String id, int offX, int offY, int cellW, int cellH,
                                      CabinetType type, Workspace workspace) {
-        CabinetInstance cab = scr.cabinetById(id);
+        CabinetInstance cab = ChainLinks.cabinet(scr, id);
         if (cab != null) {
             return anchorFor(cab, offX, offY, cellW, cellH, type, workspace);
         }

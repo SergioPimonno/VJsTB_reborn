@@ -181,7 +181,7 @@ public final class ChainUnits {
     /** Точка звена для линии цепочки, мм (система экрана): центр кабинета; центр масс модулей карты; место блока. */
     public double[] anchor(Unit unit) {
         if (unit.kind() == Kind.POWER_SUPPLY && unit.supply() != null) {
-            CabinetInstance place = sm.cabinet(UnitNames.placeOf(ScreenModules.index(screen),
+            CabinetInstance place = sm.cabinet(UnitNames.placeOf(ChainLinks.indexOf(screen),
                     unit.supply().getModuleIds(), unit.supply().getHostModuleId()));
             if (place != null) {
                 return sm.centerMm(place);

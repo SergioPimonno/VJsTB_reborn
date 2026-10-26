@@ -79,6 +79,8 @@ public class ReceiverCardsView extends ModularEditorView implements CardAssignPa
 
         canvas.setListener(this);
         UiKit.bindDeleteKey(canvas, this::removeActive);
+        // та же причина, что у блоков питания: после клика по строке фокус в таблице, а не на холсте
+        UiKit.bindDeleteKey(assign.cardsTable(), this::removeActive);
         installCanvas(canvas);
         installSide(assign);
         installBelow(palette);

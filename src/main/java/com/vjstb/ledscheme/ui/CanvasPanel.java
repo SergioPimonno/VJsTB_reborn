@@ -76,6 +76,11 @@ public class CanvasPanel extends JPanel {
         MouseAdapter mouse = new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent e) {
+                if (SwingUtilities.isMiddleMouseButton(e)) {
+                    // СКМ — перемещение по схеме без полос прокрутки, как на остальных холстах
+                    startPan(e);
+                    return;
+                }
                 requestFocusInWindow();
                 if (quickConnectMode) {
                     if (SwingUtilities.isLeftMouseButton(e)) {
@@ -98,6 +103,12 @@ public class CanvasPanel extends JPanel {
 
             @Override
             public void mouseReleased(MouseEvent e) {
+                if (panStart != null && e.getButton() == MouseEvent.BUTTON2) {
+                    panStart = null;
+                    panStartView = null;
+                    setCursor(java.awt.Cursor.getDefaultCursor());
+                    return;
+                }
                 if (quickConnectMode) {
                     if (marqueeStart != null && marqueeEnd != null) {
                         int[] region = regionFromMarquee();
@@ -117,6 +128,10 @@ public class CanvasPanel extends JPanel {
 
             @Override
             public void mouseDragged(MouseEvent e) {
+                if (panStart != null) {
+                    pan(e);
+                    return;
+                }
                 if (!SwingUtilities.isLeftMouseButton(e)) {
                     return;
                 }
@@ -155,6 +170,34 @@ public class CanvasPanel extends JPanel {
         addMouseListener(mouse);
         addMouseMotionListener(mouse);
         addMouseWheelListener(mouse);
+    }
+
+    /** Начало перемещения средней кнопкой — в координатах вьюпорта (холст едет под рукой, экранные не годятся). */
+    private Point panStart;
+    private Point panStartView;
+
+    private void startPan(MouseEvent e) {
+        javax.swing.JViewport vp = getParent() instanceof javax.swing.JViewport v ? v : null;
+        if (vp == null) {
+            return;
+        }
+        panStart = SwingUtilities.convertPoint(this, e.getPoint(), vp);
+        panStartView = vp.getViewPosition();
+        setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.MOVE_CURSOR));
+    }
+
+    private void pan(MouseEvent e) {
+        javax.swing.JViewport vp = getParent() instanceof javax.swing.JViewport v ? v : null;
+        if (vp == null || panStartView == null) {
+            return;
+        }
+        Point now = SwingUtilities.convertPoint(this, e.getPoint(), vp);
+        Dimension ext = vp.getExtentSize();
+        Dimension view = vp.getViewSize();
+        int x = panStartView.x + (panStart.x - now.x);
+        int y = panStartView.y + (panStart.y - now.y);
+        vp.setViewPosition(new Point(Math.max(0, Math.min(Math.max(0, view.width - ext.width), x)),
+                Math.max(0, Math.min(Math.max(0, view.height - ext.height), y))));
     }
 
     public void resetZoom() {
@@ -383,6 +426,18 @@ public class CanvasPanel extends JPanel {
 
     @Override
     protected void paintComponent(Graphics g) {
+        Screen current = model.getCurrentScreen();
+        if (current == null) {
+            paintScreen(g);
+            return;
+        }
+        // словари экрана на время отрисовки — см. ChainLinks.Scope (на экране из ~400 карт отрисовка тормозила)
+        try (ChainLinks.Scope ignored = ChainLinks.scope(current)) {
+            paintScreen(g);
+        }
+    }
+
+    private void paintScreen(Graphics g) {
         super.paintComponent(g);
         Graphics2D g2 = (Graphics2D) g.create();
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -426,34 +481,10 @@ public class CanvasPanel extends JPanel {
                 scenePowerChains, sceneSignalChains, model.controllersInScene(scene));
         SchemeRenderer.paintOverlapWarnings(g2, scr, screenType, cw, ch, PADDING, PADDING, model.getWorkspace(), false);
 
-        // Кабинеты, уже занятые сигнальной цепочкой, но без видимого локального
-        // отрезка на ЭТОМ экране (например, кабинет — единственный представитель
-        // экрана в цепочке, оба соседа по цепочке физически на другом экране, тогда
-        // отрезка, целиком лежащего на scr, для него не находится) — тускло
-        // закрашиваем, чтобы не выглядело, будто кабинет ещё можно расключить
-        // отдельно. Для питания ячейка и так закрашена цветом фазы через
-        // paintScheme, дополнительный дим не нужен и только испортил бы цвет фазы.
+        // (Раньше здесь тускло закрашивались кабинеты, «занятые цепочкой, но без отрезка на этом экране»: условие
+        // isCabinetWiredForSignal && !ownChain сводится к «занят и не занят» — ячейка принадлежит одному экрану, поэтому
+        // блок ничего не рисовал, а на экране из тысяч модулей перебирал все цепочки на каждую ячейку.)
         CabinetType type = model.typeOf(scr);
-        if (!power) {
-            for (CabinetInstance cab : scr.getCabinets()) {
-                if (cab.isHidden()) {
-                    continue;
-                }
-                // модуль входит в цепочку через свою приёмную карту (трек D)
-                String cardId = ChainLinks.unitContaining(scr, cab.getId(), ChainUnits.Mode.SIGNAL);
-                boolean ownChain = sceneSignalChains.stream()
-                        .anyMatch(sc -> sc.getCabinetInstanceIds().contains(cab.getId())
-                                || (cardId != null && sc.getCabinetInstanceIds().contains(cardId)));
-                if (!ownChain && model.isCabinetWiredForSignal(cab.getId())) {
-                    int x = cabX(cab, type, cw, PADDING);
-                    int y = cabY(cab, type, ch, PADDING);
-                    int ew = effW(cab, type, cw);
-                    int eh = effH(cab, type, ch);
-                    g2.setColor(new Color(0, 0, 0, 140));
-                    g2.fillRect(x + 1, y + 1, ew - 2, eh - 2);
-                }
-            }
-        }
 
         // строящаяся цепочка + подсветка выбранных
         if (controller.isChainBuilding()) {
@@ -482,6 +513,24 @@ public class CanvasPanel extends JPanel {
                 int y = cursorCab != null ? cabY(cursorCab, type, ch, PADDING) : PADDING + cr * ch;
                 int cursorW = cursorCab != null ? effW(cursorCab, type, cw) : cw;
                 int cursorH = cursorCab != null ? effH(cursorCab, type, ch) : ch;
+                // Курсор «Расключения» — на звене, а не на модуле: на модульном экране это вся карта (сигнал) или весь
+                // блок (питание); модули считаются только в видах «Приёмные карты» / «Блоки питания».
+                String cursorUnit = cursorCab != null ? ChainLinks.unitIdFor(scr, model.getWorkspace(),
+                        power ? ChainUnits.Mode.POWER : ChainUnits.Mode.SIGNAL, cursorCab.getId()) : null;
+                if (cursorUnit != null && !cursorUnit.equals(cursorCab.getId())) {
+                    java.awt.Rectangle union = null;
+                    for (CabinetInstance m : ChainLinks.cabinetsOf(scr, cursorUnit)) {
+                        java.awt.Rectangle r = new java.awt.Rectangle(cabX(m, type, cw, PADDING),
+                                cabY(m, type, ch, PADDING), effW(m, type, cw), effH(m, type, ch));
+                        union = union == null ? r : union.union(r);
+                    }
+                    if (union != null) {
+                        x = union.x;
+                        y = union.y;
+                        cursorW = union.width;
+                        cursorH = union.height;
+                    }
+                }
                 g2.setColor(Color.YELLOW);
                 g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, new float[]{4, 3}, 0));
                 g2.drawRect(x + 3, y + 3, cursorW - 6, cursorH - 6);

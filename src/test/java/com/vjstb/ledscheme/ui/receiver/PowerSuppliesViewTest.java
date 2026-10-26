@@ -197,6 +197,36 @@ class PowerSuppliesViewTest {
     }
 
     @Test
+    void blockSelectedInTheListIsRemovedByDeleteInTheListAndByTheButton(@TempDir Path dir) throws Exception {
+        ReceiverViewFixture f = new ReceiverViewFixture(dir, 4, 6);
+        onEdt(() -> {
+            PowerSuppliesView view = new PowerSuppliesView(f.model, f.settings);
+            JFrame frame = f.frameOf(view, view.canvas());
+            try {
+                drag(view.canvas(), 0, 0, 1, 1);
+                drag(view.canvas(), 2, 3, 3, 4);
+                assertEquals(2, f.screen().getPowerSupplies().size());
+
+                // баг-репорт: блок выбран кликом по списку, фокус в списке — Delete там не был навешен
+                javax.swing.JList<?> list = view.assignPanel().supplyList();
+                list.setSelectedIndex(0);
+                assertTrue(view.removeButton().isEnabled(), "выбранный в списке блок можно снять");
+                Object key = list.getInputMap(javax.swing.JComponent.WHEN_FOCUSED)
+                        .get(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_DELETE, 0));
+                assertNotNull(key, "Delete навешен на список блоков");
+                list.getActionMap().get(key).actionPerformed(new ActionEvent(list, 0, ""));
+                assertEquals(1, f.screen().getPowerSupplies().size());
+
+                list.setSelectedIndex(0);
+                view.removeButton().doClick();
+                assertEquals(0, f.screen().getPowerSupplies().size());
+            } finally {
+                frame.dispose();
+            }
+        });
+    }
+
+    @Test
     void warningsAndRowsShowOverloadAndLongCables(@TempDir Path dir) throws Exception {
         ReceiverViewFixture f = new ReceiverViewFixture(dir, 4, 6);
         PowerSupplyType tiny = new PowerSupplyType();
