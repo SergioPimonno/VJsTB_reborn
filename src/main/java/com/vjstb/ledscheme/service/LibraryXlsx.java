@@ -61,6 +61,8 @@ public final class LibraryXlsx {
     public static final String SHEET_CABINETS = "Кабинеты";
     public static final String SHEET_EQUIPMENT = "Оборудование";
     public static final String SHEET_CABLES = "Кабели";
+    /** Скрытый лист шаблона со значениями выпадающих списков (см. {@link Vocabulary}). */
+    public static final String SHEET_LISTS = "Списки";
 
     /** Строка, название которой начинается с этого префикса, — образец из шаблона, не данные. */
     public static final String EXAMPLE_PREFIX = "Пример:";
@@ -113,6 +115,73 @@ public final class LibraryXlsx {
     public record Libraries(List<CabinetType> sharedCabinets, List<CabinetType> cabinets,
                              List<EquipmentPreset> sharedEquipment, List<EquipmentPreset> equipment,
                              List<CableType> sharedCables, List<CableType> cables) {
+    }
+
+    /**
+     * Словарь значений библиотеки для выпадающих списков шаблона и для разбора таблицы: подписи категорий (с учётом
+     * переименования на сервере), подкатегории «Прочего оборудования», уже встречающиеся компании и производители.
+     * Шаблон берёт значения из синхронизированной библиотеки приложения, чтобы пользователь выбирал, а не вспоминал,
+     * как что называется; разбор по тому же словарю понимает выбранные из списка значения без ложных предупреждений.
+     *
+     * @param categoryLabels подписи встроенных категорий: имя {@code SchemaNodeType} → подпись (нет — стандартная)
+     * @param customCategories подкатегории «Прочего оборудования» (подписи)
+     */
+    public record Vocabulary(Map<String, String> categoryLabels, List<String> customCategories,
+                             List<String> companies, List<String> vendors) {
+
+        public Vocabulary {
+            categoryLabels = categoryLabels == null ? Map.of() : Map.copyOf(categoryLabels);
+            customCategories = customCategories == null ? List.of() : List.copyOf(customCategories);
+            companies = companies == null ? List.of() : List.copyOf(companies);
+            vendors = vendors == null ? List.of() : List.copyOf(vendors);
+        }
+
+        /** Пустой словарь: только встроенные подписи, без компаний и производителей. */
+        public static Vocabulary empty() {
+            return new Vocabulary(null, null, null, null);
+        }
+
+        /** Подпись встроенной категории в этой библиотеке. */
+        public String labelOf(SchemaNodeType t) {
+            String s = categoryLabels.get(t.name());
+            return s != null && !s.isBlank() ? s : t.getLabel();
+        }
+
+        /** Значения списка «Категория»: встроенные (с подписями библиотеки), затем подкатегории. */
+        public List<String> categoryChoices() {
+            List<String> out = new ArrayList<>();
+            for (SchemaNodeType t : SchemaNodeType.values()) {
+                out.add(labelOf(t));
+            }
+            for (String c : customCategories) {
+                if (out.stream().noneMatch(x -> x.equalsIgnoreCase(c))) {
+                    out.add(c);
+                }
+            }
+            return out;
+        }
+
+        /** Встроенная категория, подпись которой (в этой библиотеке) совпала с текстом; иначе {@code null}. */
+        SchemaNodeType builtInByLabel(String text) {
+            String t = text.trim();
+            for (SchemaNodeType c : SchemaNodeType.values()) {
+                if (labelOf(c).equalsIgnoreCase(t)) {
+                    return c;
+                }
+            }
+            return null;
+        }
+
+        /** Подкатегория из библиотеки (в написании библиотеки) или {@code null}. */
+        String knownCustom(String text) {
+            String t = text.trim();
+            for (String c : customCategories) {
+                if (c.equalsIgnoreCase(t)) {
+                    return c;
+                }
+            }
+            return null;
+        }
     }
 
     // ------------------------------------------------------------------ столбцы
@@ -195,10 +264,22 @@ public final class LibraryXlsx {
 
     // ------------------------------------------------------------------ шаблон
 
-    /** Записывает пустой шаблон (по одной строке-образцу на листе) в {@code file}. */
+    /** Пустой шаблон без значений из библиотеки (только встроенные списки), см. {@link #writeTemplate(File, Vocabulary)}. */
     public static void writeTemplate(File file) throws IOException {
+        writeTemplate(file, Vocabulary.empty());
+    }
+
+    /**
+     * Записывает пустой шаблон (по одной строке-образцу на листе) в {@code file}. Столбцы с ограниченным набором
+     * значений — выпадающие списки: «закрытые» (режим, Да/Нет, способ установки, разъём) принимают только значения из
+     * списка, «открытые» (категория, компания, производитель) предлагают то, что уже есть в библиотеке, а новое
+     * значение разрешают после подтверждения. Значения лежат на скрытом листе {@value #SHEET_LISTS}: встроенный список
+     * Excel не длиннее 255 символов, а компаний и категорий в библиотеке может быть больше.
+     */
+    public static void writeTemplate(File file, Vocabulary vocab) throws IOException {
         try (Workbook wb = new XSSFWorkbook(); FileOutputStream out = new FileOutputStream(file)) {
             Styles st = new Styles(wb);
+            Lists lists = new Lists();
             writeHelp(wb, st);
 
             Sheet cab = dataSheet(wb, st, SHEET_CABINETS, CABINET_COLS);
@@ -208,7 +289,8 @@ public final class LibraryXlsx {
                     Map.entry("depth", 80), Map.entry("resX", 192), Map.entry("resY", 192),
                     Map.entry("power", 150), Map.entry("weight", 8.5), Map.entry("connector", "PowerCon"),
                     Map.entry("powerLines", 1), Map.entry("signalLines", 1)));
-            list(cab, CABINET_COLS, "connector", CONNECTOR_LIST);
+            closedList(lists, cab, CABINET_COLS, "connector", CONNECTOR_LIST);
+            openList(lists, cab, CABINET_COLS, "company", vocab.companies().toArray(new String[0]));
 
             Sheet eq = dataSheet(wb, st, SHEET_EQUIPMENT, EQUIPMENT_COLS);
             example(eq, st, EQUIPMENT_COLS, Map.ofEntries(
@@ -218,16 +300,19 @@ public final class LibraryXlsx {
                     Map.entry("inputs", 4), Map.entry("outputs", 16), Map.entry("bandwidth", 1000),
                     Map.entry("loop", "Да"), Map.entry("form", "В стойку"), Map.entry("rackU", 2),
                     Map.entry("depth", 300), Map.entry("weight", 4.5), Map.entry("power", 60)));
-            list(eq, EQUIPMENT_COLS, "mode", MODE_LIST);
-            list(eq, EQUIPMENT_COLS, "category", categoryList());
-            list(eq, EQUIPMENT_COLS, "loop", BOOL_LIST);
-            list(eq, EQUIPMENT_COLS, "form", FORM_LIST);
+            closedList(lists, eq, EQUIPMENT_COLS, "mode", MODE_LIST);
+            openList(lists, eq, EQUIPMENT_COLS, "category", vocab.categoryChoices().toArray(new String[0]));
+            closedList(lists, eq, EQUIPMENT_COLS, "loop", BOOL_LIST);
+            closedList(lists, eq, EQUIPMENT_COLS, "form", FORM_LIST);
+            openList(lists, eq, EQUIPMENT_COLS, "company", vocab.companies().toArray(new String[0]));
+            openList(lists, eq, EQUIPMENT_COLS, "vendor", vocab.vendors().toArray(new String[0]));
 
             Sheet cb = dataSheet(wb, st, SHEET_CABLES, CABLE_COLS);
             example(cb, st, CABLE_COLS, Map.of("mode", "Питание", "label", EXAMPLE_PREFIX + " CEE 16A → PowerCon",
                     "length", 5));
-            list(cb, CABLE_COLS, "mode", MODE_LIST);
+            closedList(lists, cb, CABLE_COLS, "mode", MODE_LIST);
 
+            lists.write(wb);
             wb.setActiveSheet(1);
             wb.write(out);
         }
@@ -301,7 +386,50 @@ public final class LibraryXlsx {
         }
     }
 
-    private static void list(Sheet sheet, List<Col> cols, String colId, String[] values) {
+    /**
+     * Значения выпадающих списков шаблона: каждый список — столбец скрытого листа {@value #SHEET_LISTS}, проверка
+     * ячеек ссылается на его диапазон формулой (прямой перечень в проверке Excel ограничен 255 символами).
+     */
+    private static final class Lists {
+        private final List<String[]> columns = new ArrayList<>();
+
+        /** Регистрирует список и возвращает ссылку на его ячейки. */
+        String range(String[] values) {
+            int col = columns.size();
+            columns.add(values);
+            String letter = org.apache.poi.ss.util.CellReference.convertNumToColString(col);
+            return "'" + SHEET_LISTS + "'!$" + letter + "$1:$" + letter + "$" + values.length;
+        }
+
+        void write(Workbook wb) {
+            Sheet sheet = wb.createSheet(SHEET_LISTS);
+            for (int c = 0; c < columns.size(); c++) {
+                String[] values = columns.get(c);
+                for (int r = 0; r < values.length; r++) {
+                    Row row = sheet.getRow(r) != null ? sheet.getRow(r) : sheet.createRow(r);
+                    row.createCell(c).setCellValue(values[r]);
+                }
+                sheet.setColumnWidth(c, 28 * 256);
+            }
+            wb.setSheetVisibility(wb.getSheetIndex(sheet), org.apache.poi.ss.usermodel.SheetVisibility.HIDDEN);
+        }
+    }
+
+    /** Закрытый список: допустимы только значения из списка, остальное Excel не примет. */
+    private static void closedList(Lists lists, Sheet sheet, List<Col> cols, String colId, String[] values) {
+        validation(lists, sheet, cols, colId, values, true);
+    }
+
+    /** Открытый список: предлагает известные значения, новое Excel принимает после подтверждения. */
+    private static void openList(Lists lists, Sheet sheet, List<Col> cols, String colId, String[] values) {
+        validation(lists, sheet, cols, colId, values, false);
+    }
+
+    private static void validation(Lists lists, Sheet sheet, List<Col> cols, String colId, String[] values,
+                                   boolean strict) {
+        if (values.length == 0) {
+            return; // в библиотеке пока нечего предложить (например, ни одной компании) — столбец остаётся свободным
+        }
         int idx = -1;
         for (int i = 0; i < cols.size(); i++) {
             if (cols.get(i).id().equals(colId)) {
@@ -309,9 +437,18 @@ public final class LibraryXlsx {
             }
         }
         DataValidationHelper h = sheet.getDataValidationHelper();
-        DataValidationConstraint constraint = h.createExplicitListConstraint(values);
+        DataValidationConstraint constraint = h.createFormulaListConstraint(lists.range(values));
         DataValidation v = h.createValidation(constraint, new CellRangeAddressList(1, LAST_VALIDATED_ROW, idx, idx));
-        v.setShowErrorBox(false); // свободный текст не запрещаем — парсер сам скажет, что не понял
+        v.setShowErrorBox(true);
+        v.setSuppressDropDownArrow(false);
+        v.setEmptyCellAllowed(true);
+        if (strict) {
+            v.setErrorStyle(DataValidation.ErrorStyle.STOP);
+            v.createErrorBox("Нет в списке", "Выберите значение из выпадающего списка.");
+        } else {
+            v.setErrorStyle(DataValidation.ErrorStyle.WARNING);
+            v.createErrorBox("Новое значение", "Такого значения пока нет в библиотеке. Оставить введённое?");
+        }
         sheet.addValidationData(v);
     }
 
@@ -329,6 +466,9 @@ public final class LibraryXlsx {
                         + "подсвечены жёлтым.",
                 "• Серая курсивная строка «Пример: …» — образец. Её можно удалить; если оставить, она всё равно "
                         + "не попадёт в библиотеку (строки с названием на «Пример:» пропускаются).",
+                "• Столбцы с ограниченным набором значений — выпадающие списки: режим, Да/Нет, способ установки, "
+                        + "разъём — только из списка; «Категория», «Компания» и «Производитель» предлагают то, что уже есть "
+                        + "в вашей библиотеке на момент создания шаблона (можно выбрать существующее или ввести новое).",
                 "• Числа — обычные числа Excel (дробная часть через запятую или точку). Единицы измерения указаны "
                         + "в заголовках, писать их в ячейки не нужно.",
                 "• Если запись с таким названием уже есть в вашей библиотеке, она обновится ТОЛЬКО заполненными "
@@ -381,6 +521,12 @@ public final class LibraryXlsx {
     /** Читает файл; {@link IllegalArgumentException} с текстом для пользователя, если файл не открывается
      *  или в нём нет ни одного листа с данными. */
     public static Parsed parse(File file) {
+        return parse(file, Vocabulary.empty());
+    }
+
+    /** То же, но с известными значениями библиотеки: переименованные категории и существующие подкатегории
+     *  принимаются без предупреждений. */
+    public static Parsed parse(File file, Vocabulary vocab) {
         List<String> warnings = new ArrayList<>();
         List<CabinetRow> cabinets = new ArrayList<>();
         List<EquipmentRow> equipment = new ArrayList<>();
@@ -395,7 +541,7 @@ public final class LibraryXlsx {
                     parseCabinets(sheet, cabinets, warnings);
                 } else if (sheetName.equalsIgnoreCase(SHEET_EQUIPMENT)) {
                     any = true;
-                    parseEquipment(sheet, equipment, warnings);
+                    parseEquipment(sheet, equipment, warnings, vocab);
                 } else if (sheetName.equalsIgnoreCase(SHEET_CABLES)) {
                     any = true;
                     parseCables(sheet, cables, warnings);
@@ -591,7 +737,8 @@ public final class LibraryXlsx {
         }
     }
 
-    private static void parseEquipment(Sheet sheet, List<EquipmentRow> out, List<String> warnings) {
+    private static void parseEquipment(Sheet sheet, List<EquipmentRow> out, List<String> warnings,
+                                       Vocabulary vocab) {
         Map<String, Integer> cols = locateColumns(sheet, EQUIPMENT_COLS, warnings);
         if (cols == null) {
             return;
@@ -626,8 +773,14 @@ public final class LibraryXlsx {
             String categoryText = rd.str("category");
             if (!categoryText.isEmpty()) {
                 SchemaNodeType parsed = parseCategory(categoryText);
+                if (parsed == null) {
+                    parsed = vocab.builtInByLabel(categoryText); // переименована на сервере
+                }
+                String known = parsed == null ? vocab.knownCustom(categoryText) : null;
                 if (parsed != null) {
                     category = parsed;
+                } else if (known != null) {
+                    customLabel = known; // существующая подкатегория: без предупреждения
                 } else {
                     customLabel = categoryText;
                     warnings.add(rd.where("category") + "«" + categoryText + "» не из списка — записано как "

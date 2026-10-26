@@ -331,4 +331,124 @@ class LibraryXlsxTest {
     private static void assertSame(Object expected, Object actual) {
         org.junit.jupiter.api.Assertions.assertSame(expected, actual);
     }
+
+    // ---------------------------------------------------------- выпадающие списки из библиотеки
+
+    private static LibraryXlsx.Vocabulary vocabulary() {
+        List<String> companies = new ArrayList<>();
+        for (int i = 1; i <= 40; i++) {
+            companies.add("Компания с достаточно длинным названием номер " + i); // вместе заметно больше 255 символов
+        }
+        return new LibraryXlsx.Vocabulary(java.util.Map.of("CONTROLLER", "Процессор"), List.of("Звук", "Свет"),
+                companies, List.of("Novastar", "Colorlight"));
+    }
+
+    private static List<? extends org.apache.poi.ss.usermodel.DataValidation> validations(Sheet sheet) {
+        return sheet.getDataValidations();
+    }
+
+    private static org.apache.poi.ss.usermodel.DataValidation validationOf(Sheet sheet, int column) {
+        return validations(sheet).stream().filter(v -> {
+            org.apache.poi.ss.util.CellRangeAddress r = v.getRegions().getCellRangeAddress(0);
+            return r.getFirstColumn() == column;
+        }).findFirst().orElse(null);
+    }
+
+    private static int columnOf(Sheet sheet, String headerStart) {
+        for (org.apache.poi.ss.usermodel.Cell c : sheet.getRow(0)) {
+            if (c.getStringCellValue().startsWith(headerStart)) {
+                return c.getColumnIndex();
+            }
+        }
+        throw new AssertionError("нет столбца " + headerStart);
+    }
+
+    @Test
+    void templateOffersExistingCategoriesCompaniesAndVendorsFromTheLibraryInDropdowns() throws Exception {
+        File template = tmp.resolve("template.xlsx").toFile();
+        LibraryXlsx.writeTemplate(template, vocabulary());
+
+        try (Workbook wb = new XSSFWorkbook(template)) {
+            Sheet lists = wb.getSheet(LibraryXlsx.SHEET_LISTS);
+            assertNotNull(lists, "значения списков лежат на отдельном листе");
+            assertTrue(wb.isSheetHidden(wb.getSheetIndex(lists)), "лист со списками скрыт");
+
+            Sheet eq = wb.getSheet(LibraryXlsx.SHEET_EQUIPMENT);
+            for (String header : new String[] {"Категория", "Компания", "Производитель", "Режим", "Способ установки",
+                "Loop-порт"}) {
+                var v = validationOf(eq, columnOf(eq, header));
+                assertNotNull(v, "у столбца «" + header + "» есть выпадающий список");
+                assertTrue(v.getValidationConstraint().getFormula1().contains(LibraryXlsx.SHEET_LISTS),
+                        "список берётся со скрытого листа: " + v.getValidationConstraint().getFormula1());
+            }
+            // «Категория»: встроенные с подписями библиотеки + существующие подкатегории
+            java.util.Set<String> all = new java.util.HashSet<>();
+            for (Row r : lists) {
+                for (org.apache.poi.ss.usermodel.Cell c : r) {
+                    all.add(c.getStringCellValue());
+                }
+            }
+            assertTrue(all.contains("Процессор"), "переименованная на сервере категория: " + all);
+            assertFalse(all.contains(SchemaNodeType.CONTROLLER.getLabel()), "прежняя подпись заменена");
+            assertTrue(all.containsAll(List.of("Звук", "Свет", "Novastar", "Colorlight",
+                    "Компания с достаточно длинным названием номер 40")), all.toString());
+
+            Sheet cab = wb.getSheet(LibraryXlsx.SHEET_CABINETS);
+            assertNotNull(validationOf(cab, columnOf(cab, "Компания")), "компании предлагаются и у кабинетов");
+        }
+    }
+
+    @Test
+    void fixedChoicesAreStrictAndOpenListsOnlyWarn() throws Exception {
+        File template = tmp.resolve("template.xlsx").toFile();
+        LibraryXlsx.writeTemplate(template, vocabulary());
+        try (Workbook wb = new XSSFWorkbook(template)) {
+            Sheet eq = wb.getSheet(LibraryXlsx.SHEET_EQUIPMENT);
+            assertEquals(org.apache.poi.ss.usermodel.DataValidation.ErrorStyle.STOP,
+                    validationOf(eq, columnOf(eq, "Способ установки")).getErrorStyle(), "способ установки — только из списка");
+            assertEquals(org.apache.poi.ss.usermodel.DataValidation.ErrorStyle.STOP,
+                    validationOf(eq, columnOf(eq, "Режим")).getErrorStyle());
+            assertEquals(org.apache.poi.ss.usermodel.DataValidation.ErrorStyle.WARNING,
+                    validationOf(eq, columnOf(eq, "Категория")).getErrorStyle(), "новую категорию вводить можно");
+            assertEquals(org.apache.poi.ss.usermodel.DataValidation.ErrorStyle.WARNING,
+                    validationOf(eq, columnOf(eq, "Компания")).getErrorStyle());
+            assertTrue(validationOf(eq, columnOf(eq, "Способ установки")).getShowErrorBox());
+        }
+    }
+
+    @Test
+    void emptyLibraryStillGivesTheBuiltInDropdownsButNoCompanyList() throws Exception {
+        File template = tmp.resolve("template.xlsx").toFile();
+        LibraryXlsx.writeTemplate(template);
+        try (Workbook wb = new XSSFWorkbook(template)) {
+            Sheet eq = wb.getSheet(LibraryXlsx.SHEET_EQUIPMENT);
+            assertNotNull(validationOf(eq, columnOf(eq, "Категория")));
+            assertNotNull(validationOf(eq, columnOf(eq, "Способ установки")));
+            assertNull(validationOf(eq, columnOf(eq, "Компания")), "компаний в библиотеке нет — предлагать нечего");
+        }
+    }
+
+    @Test
+    void valuesPickedFromTheDropdownsAreUnderstoodWithoutWarnings() throws Exception {
+        File template = tmp.resolve("template.xlsx").toFile();
+        LibraryXlsx.writeTemplate(template, vocabulary());
+        File filled;
+        try (Workbook wb = new XSSFWorkbook(template)) {
+            Sheet eq = wb.getSheet(LibraryXlsx.SHEET_EQUIPMENT);
+            row(eq, "Контроллер Y", "Сигнал", "Процессор", "Novastar", null, null, 2, 8, 1000, "Да", "В стойку", 1);
+            row(eq, "Микшер", "Сигнал", "звук"); // существующая подкатегория, другой регистр
+            filled = write(wb);
+        }
+
+        LibraryXlsx.Parsed parsed = LibraryXlsx.parse(filled, vocabulary());
+        assertTrue(parsed.warnings().isEmpty(), "подписи и подкатегории из библиотеки не требуют предупреждений: "
+                + parsed.warnings());
+        assertEquals(SchemaNodeType.CONTROLLER, parsed.equipment().get(0).category());
+        assertEquals(SchemaNodeType.CUSTOM, parsed.equipment().get(1).category());
+        assertEquals("Звук", parsed.equipment().get(1).customCategoryLabel(), "пишется в написании библиотеки");
+
+        // без словаря те же значения — «не из списка» (так было до подсказок из библиотеки)
+        LibraryXlsx.Parsed blind = LibraryXlsx.parse(filled);
+        assertFalse(blind.warnings().isEmpty());
+    }
 }

@@ -119,7 +119,7 @@ public class LibraryExportImportPanel extends JPanel {
         xlsxImportBtn.addActionListener(e -> importFromExcel(model));
         JButton templateBtn = new JButton("Шаблон Excel…");
         templateBtn.setToolTipText("Сохранить пустой шаблон таблицы со списком оборудования для заполнения");
-        templateBtn.addActionListener(e -> saveTemplate());
+        templateBtn.addActionListener(e -> saveTemplate(model));
 
         add(new JLabel("Библиотека:"));
         add(kindBox);
@@ -129,7 +129,7 @@ public class LibraryExportImportPanel extends JPanel {
         add(templateBtn);
     }
 
-    private void saveTemplate() {
+    private void saveTemplate(AppModel model) {
         Window owner = SwingUtilities.getWindowAncestor(this);
         JFileChooser fc = new JFileChooser();
         fc.setSelectedFile(new File("led-library-template.xlsx"));
@@ -143,7 +143,8 @@ public class LibraryExportImportPanel extends JPanel {
             return;
         }
         try {
-            LibraryXlsx.writeTemplate(target);
+            // списки категорий, компаний и производителей — из синхронизированной библиотеки приложения
+            LibraryXlsx.writeTemplate(target, model.libraryXlsxVocabulary());
             JOptionPane.showMessageDialog(owner, "Шаблон сохранён: " + target.getAbsolutePath()
                     + "\nЗаполните листы и загрузите файл кнопкой «Импорт из Excel…».", "Шаблон Excel",
                     JOptionPane.INFORMATION_MESSAGE);

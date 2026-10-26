@@ -4731,11 +4731,36 @@ public class AppModel {
         store.exportList(workspace.getCableTypes(), file, "CABLE");
     }
 
+    /**
+     * Значения, которые уже есть в библиотеке, для выпадающих списков шаблона Excel и для разбора таблицы:
+     * подписи категорий (с переименованиями сервера), подкатегории «Прочего оборудования», компании и
+     * производители (см. {@link LibraryXlsx.Vocabulary}).
+     */
+    public LibraryXlsx.Vocabulary libraryXlsxVocabulary() {
+        Map<String, String> labels = new java.util.LinkedHashMap<>();
+        for (SchemaNodeType t : SchemaNodeType.values()) {
+            labels.put(t.name(), categoryLabel(t));
+        }
+        java.util.TreeSet<String> custom = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        for (String c : getCustomEquipmentCategories()) {
+            addIfNotBlank(custom, c);
+        }
+        java.util.TreeSet<String> vendors = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        for (EquipmentPreset p : getEquipmentPresets()) {
+            if (p.getCategory() == SchemaNodeType.CUSTOM) {
+                addIfNotBlank(custom, p.getCustomCategoryLabel());
+            }
+            addIfNotBlank(vendors, p.getVendor());
+        }
+        return new LibraryXlsx.Vocabulary(labels, new ArrayList<>(custom), getKnownCompanies(),
+                new ArrayList<>(vendors));
+    }
+
     /** Импорт кабинетов, оборудования и кабелей из Excel-таблицы по шаблону (см. {@link LibraryXlsx}) в ЛИЧНУЮ
      *  библиотеку: записи общей библиотеки не затрагиваются. {@link IllegalArgumentException} с текстом для
      *  пользователя, если файл не читается или это не шаблон. */
     public LibraryXlsx.Report importLibraryXlsx(File file) {
-        LibraryXlsx.Parsed parsed = LibraryXlsx.parse(file);
+        LibraryXlsx.Parsed parsed = LibraryXlsx.parse(file, libraryXlsxVocabulary());
         LibraryXlsx.Report report = LibraryXlsx.merge(parsed, new LibraryXlsx.Libraries(
                 workspace.getSharedCabinetTypes(), workspace.getCabinetTypes(),
                 workspace.getSharedEquipmentPresets(), workspace.getEquipmentPresets(),
