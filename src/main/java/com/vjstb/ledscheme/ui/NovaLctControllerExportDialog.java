@@ -182,7 +182,10 @@ public final class NovaLctControllerExportDialog {
                 data = NovaLctScrWriter.writeForResolvedScreen(screen, recs, model.getWorkspace(), forceComplex);
             }
             defaultName = screen.getName();
-            exportedCabinetType = model.typeOf(screen);
+            // Модульный экран: .rcfgx типа-модуля не имеет отношения к приёмной карте — не предлагаем (план: .rcfgx
+            // карт не пишем, порядок модулей в карте техник выставляет в NovaLCT по «Карте подключения»).
+            exportedCabinetType = NovaLctScrWriter.isModularScreen(screen, model.getWorkspace())
+                    ? null : model.typeOf(screen);
         } else {
             // Экспорт одного контроллера — ВСЕГДА один .scr (импорт в NovaLCT
             // "Load from File" заменяет всю конфигурацию, второй файл затёр бы
@@ -382,6 +385,12 @@ public final class NovaLctControllerExportDialog {
         int autoY = minRow * cabH;
         int wCabs = maxCol - minCol + 1;
         int hCabs = maxRow - minRow + 1;
+        // Модульный экран: «кабинеты» NovaLCT — карты, положение куска — левый верхний угол его карт в пикселях.
+        int[] modularOrigin = NovaLctScrWriter.modularOriginPx(screen, recs, model.getWorkspace());
+        if (modularOrigin != null) {
+            autoX = modularOrigin[0];
+            autoY = modularOrigin[1];
+        }
 
         javax.swing.JRadioButton separateBtn = new javax.swing.JRadioButton(
                 "Отдельный screen (Coordinate X/Y = 0)", true);
@@ -409,11 +418,14 @@ public final class NovaLctControllerExportDialog {
         c.gridwidth = 2;
         c.anchor = java.awt.GridBagConstraints.WEST;
         c.insets = new java.awt.Insets(3, 3, 3, 3);
-        panel.add(new JLabel("<html><body style='width:380px'>Экран «" + screen.getName()
-                + "» расключён несколькими контроллерами. Этот контроллер держит блок "
+        String held = modularOrigin != null
+                ? "Этот контроллер держит свои приёмные карты (модульный экран; кусок пишется как Complex)."
+                : "Этот контроллер держит блок "
                 + wCabs + "×" + hCabs + " кабинетов (столбцы " + (minCol + 1) + "–" + (maxCol + 1)
                 + ", ряды " + (minRow + 1) + "–" + (maxRow + 1)
-                + "). В шаблон пишется только он, пере-индексированный в собственную сетку."
+                + "). В шаблон пишется только он, пере-индексированный в собственную сетку.";
+        panel.add(new JLabel("<html><body style='width:380px'>Экран «" + screen.getName()
+                + "» расключён несколькими контроллерами. " + held
                 + "</body></html>"), c);
         c.gridy++;
         panel.add(separateBtn, c);
@@ -466,9 +478,18 @@ public final class NovaLctControllerExportDialog {
         Map<Screen, Boolean> auto = new LinkedHashMap<>();
         boolean anyComplex = false;
         for (Screen s : screens) {
-            List<String> reasons = NovaLctScrWriter.complexReasons(s, perPort ? recs : null, model.getWorkspace());
+            List<String> reasons = new ArrayList<>(
+                    NovaLctScrWriter.complexReasons(s, perPort ? recs : null, model.getWorkspace()));
+            // Модульный экран среди нескольких: объединение/раздельные экраны работают с сеткой МОДУЛЕЙ, а в файле
+            // нужна сетка карт — такой экран всегда Complex, «обычный» ему выбрать нельзя.
+            boolean modularAmongMany = screens.size() > 1 && NovaLctScrWriter.isModularScreen(s, model.getWorkspace());
+            if (modularAmongMany) {
+                reasons.add("модульный экран (карты вместо кабинетов) в файле с несколькими экранами всегда"
+                        + " прописывается как Complex — объединение и раздельные экраны модулей не поддержаны");
+            }
             boolean complex = !reasons.isEmpty();
-            boolean hasType = model.getWorkspace().cabinetTypeById(s.getCabinetTypeId()) != null;
+            boolean hasType = model.getWorkspace().cabinetTypeById(s.getCabinetTypeId()) != null
+                    && !modularAmongMany;
             anyComplex |= complex;
             auto.put(s, complex);
             rows.add(new NovaLctScreenKindDialog.Row(s, complex, reasons, hasType));
@@ -489,6 +510,8 @@ public final class NovaLctControllerExportDialog {
             boolean complex = perPort
                     ? NovaLctScrWriter.isComplexExport(s, recs, model.getWorkspace())
                     : NovaLctScrWriter.isComplexExport(s, model.getWorkspace());
+            // Модульный экран среди нескольких — всегда Complex (см. askScreenKinds).
+            complex |= screens.size() > 1 && NovaLctScrWriter.isModularScreen(s, model.getWorkspace());
             (complex ? complexOut : standardOut).add(s);
         }
     }
@@ -570,6 +593,9 @@ public final class NovaLctControllerExportDialog {
             boolean separatePerPort) {
         StringBuilder details = new StringBuilder();
         for (Screen s : screens) {
+            if (NovaLctScrWriter.isModularScreen(s, model.getWorkspace())) {
+                continue; // у карт нет «галочки стандартного кабинета» — причины Complex показывает диалог вида
+            }
             // Размер на порт (разные порты — разные размеры) умеют одноэкранный экспорт целого
             // экрана одним контроллером и раздельные экраны ({@code separatePerPort});
             // Combine и экспорт куска экрана пишут один размер на блок — там строгая проверка

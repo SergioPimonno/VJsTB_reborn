@@ -20,6 +20,7 @@ public enum OutputPart {
     TRANSPORT("Транспорт — схемы загрузки машин", true),
     CONTROL_ROOM("Планер пультовой — раскладки", false),
     SCREENS("Экраны — таблица экранов", false),
+    CONNECTION_MAP("Карта подключения модулей — карты и блоки питания", false),
     RESOLUME("Пресеты Resolume", false),
     AFTER_EFFECTS("Пресеты After Effects", false),
     REPORT("Сводка по проекту", true),

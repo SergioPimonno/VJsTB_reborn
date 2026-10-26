@@ -9,6 +9,7 @@ import com.vjstb.ledscheme.model.SignalChain;
 import com.vjstb.ledscheme.model.Workspace;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.service.CableSpecCalc;
+import com.vjstb.ledscheme.service.ChainLinks;
 import com.vjstb.ledscheme.service.ScreenLogic;
 import com.vjstb.ledscheme.service.ScreenStats;
 import com.vjstb.ledscheme.service.TrussCalc;
@@ -265,6 +266,9 @@ public final class SchemeRenderer {
                                          Workspace workspace, List<PowerChain> powerChains,
                                          List<SignalChain> signalChains,
                                          List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers) {
+        // Модульный экран (трек D, D24/D25): серые модули и карты (сигнал) / области блоков (питание) ПОД линиями
+        // цепочек. На экране без модулей ничего не рисуется — вывод прежний.
+        UnitOverlayPainter.paint(g2, scr, power, cellW, cellH, offX, offY, type, workspace, powerChains, signalChains);
         if (power) {
             for (PowerChain chain : powerChains) {
                 // Метка фазы — только у НАЧАЛА цепочки: питание не закольцовывается
@@ -324,6 +328,18 @@ public final class SchemeRenderer {
      *  (1-based, порядок физического подключения в цепочке). */
     private record ChainMembership(int chainIndex, int seq, Color color, Integer phase, Integer port) { }
 
+    /** Членство звена в цепочке; для карты/блока (трек D) та же запись ставится каждому её модулю — «богатая» схема
+     *  красит ячейки, а звеном модульного экрана является не ячейка, а карта/блок целиком. */
+    private static void putMembership(Map<String, ChainMembership> byCab, Screen scr, String linkId,
+                                      ChainMembership m) {
+        byCab.put(linkId, m);
+        if (ChainLinks.isUnit(scr, linkId)) {
+            for (CabinetInstance c : ChainLinks.cabinetsOf(scr, linkId)) {
+                byCab.put(c.getId(), m);
+            }
+        }
+    }
+
     /** "Богатая" схема расключения экрана в духе профессиональных PDF-схем
      *  (сплошная заливка ячейки цветом её цепочки, кружок-разъём и стрелка между
      *  соседними кабинетами одной цепочки, многострочная подпись на кабинете —
@@ -338,6 +354,13 @@ public final class SchemeRenderer {
                 List.of(), false);
     }
 
+    /** Помещается ли на ячейку многострочная подпись (порт/фаза, номер, разрешение) — тот же порог, по которому
+     *  «богатая» схема решает, писать ли текст; по нему же миниатюра блока модульного экрана решает, рисовать ли
+     *  отдельные модули или только карты/блоки. */
+    public static boolean cellLabelsFit(int cellW, int cellH) {
+        return cellH >= 34 && cellW >= 46;
+    }
+
     /** {@code sceneControllers} — см. javadoc {@link #paintScheme}'s перегрузка с тем же
      *  параметром (нужны, чтобы метка порта на кабинете резолвилась сценовой, а не
      *  только пер-экранной нумерацией контроллеров). {@code powerUnitKw} — см. javadoc
@@ -347,6 +370,18 @@ public final class SchemeRenderer {
                                            List<PowerChain> powerChains, List<SignalChain> signalChains,
                                            List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers,
                                            boolean powerUnitKw) {
+        paintWiringDiagram(g2, scr, type, power, cellW, cellH, offX, offY, workspace, powerChains, signalChains,
+                sceneControllers, powerUnitKw, false);
+    }
+
+    /** {@code unitsOnly} — на модульном экране отдельные модули не рисуются, вместо них — карты (сигнал) / блоки
+     *  питания (питание) целиком: на мелкой миниатюре тысячи модулей — сплошная каша (баг-репорт), а звено цепочки
+     *  всё равно карта/блок. Обычные кабинеты того же экрана рисуются как всегда. */
+    public static void paintWiringDiagram(Graphics2D g2, Screen scr, CabinetType type, boolean power,
+                                           int cellW, int cellH, int offX, int offY, Workspace workspace,
+                                           List<PowerChain> powerChains, List<SignalChain> signalChains,
+                                           List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers,
+                                           boolean powerUnitKw, boolean unitsOnly) {
         Map<String, ChainMembership> byCab = new HashMap<>();
         if (power) {
             for (int ci = 0; ci < powerChains.size(); ci++) {
@@ -354,7 +389,7 @@ public final class SchemeRenderer {
                 Color color = chainColor(chain);
                 List<String> ids = chain.getCabinetInstanceIds();
                 for (int i = 0; i < ids.size(); i++) {
-                    byCab.put(ids.get(i), new ChainMembership(ci, i + 1, color, chain.getPhase(), null));
+                    putMembership(byCab, scr, ids.get(i), new ChainMembership(ci, i + 1, color, chain.getPhase(), null));
                 }
             }
         } else {
@@ -363,7 +398,7 @@ public final class SchemeRenderer {
                 Color color = chainColor(chain, ci);
                 List<String> ids = chain.getCabinetInstanceIds();
                 for (int i = 0; i < ids.size(); i++) {
-                    byCab.put(ids.get(i), new ChainMembership(ci, i + 1, color, null, chain.getPortNumber()));
+                    putMembership(byCab, scr, ids.get(i), new ChainMembership(ci, i + 1, color, null, chain.getPortNumber()));
                 }
             }
         }
@@ -371,12 +406,15 @@ public final class SchemeRenderer {
         // Многострочная подпись физически не помещается в мелкую ячейку (узел схемы
         // маленького размера) — тогда просто закрашиваем цветом цепочки без текста,
         // как обычная миниатюра, вместо нечитаемой мешанины из строк.
-        boolean showLabels = cellH >= 34 && cellW >= 46;
+        boolean showLabels = cellLabelsFit(cellW, cellH);
         Font labelFont = showLabels
                 ? g2.getFont().deriveFont(Font.PLAIN, Math.max(8f, Math.min(cellH, cellW) * 0.13f)) : null;
 
         for (CabinetInstance cab : scr.getCabinets()) {
             if (cab.isHidden()) {
+                continue;
+            }
+            if (unitsOnly && ChainLinks.isModule(scr, workspace, cab.getId())) {
                 continue;
             }
             int x = cabX(cab, type, cellW, offX);
@@ -430,6 +468,19 @@ public final class SchemeRenderer {
             }
         }
 
+        if (unitsOnly) {
+            for (com.vjstb.ledscheme.service.ChainUnits.Unit u : com.vjstb.ledscheme.service.ChainUnits
+                    .of(scr, workspace).units(power ? com.vjstb.ledscheme.service.ChainUnits.Mode.POWER
+                            : com.vjstb.ledscheme.service.ChainUnits.Mode.SIGNAL)) {
+                if (u.kind() == com.vjstb.ledscheme.service.ChainUnits.Kind.CABINET || u.cabinets().isEmpty()) {
+                    continue;
+                }
+                ChainMembership m = byCab.get(u.cabinets().get(0).getId());
+                UnitOverlayPainter.paintArea(g2, u.cabinets(), type, cellW, cellH, offX, offY, workspace,
+                        m != null ? m.color() : Palette.CELL_FILL, Palette.CELL_BORDER, 1.5f);
+            }
+        }
+
         // Подписи начал цепочек группируются ПО ПОЗИЦИИ первого кабинета и рисуются
         // ОДНИМ проходом после всех линий — резервная цепочка сигнала на практике
         // почти всегда физически идёт через ТЕ ЖЕ кабинеты, что и основная (второй
@@ -445,15 +496,20 @@ public final class SchemeRenderer {
         // (см. signalChainEndLabel), только раньше этого не было в этом, "богатом",
         // виде схемы вовсе.
         Map<String, List<LabelLine>> endLabelsByCabinet = new LinkedHashMap<>();
+        // Кружки-разъёмы и стрелки рисуются на каждом звене цепочки, как у обычных кабинетов (по ним пересчитывают
+        // кабинеты и перепроверяются). На модульном экране звено — карта/блок, а не модуль, поэтому и размер знаков
+        // берётся по типичной карте/блоку: от размера мелкого модуля они пропадали (баг-репорт: «воспринимается тяжелее»)
+        int symbolMin = typicalUnitSide(scr, power, type, cellW, cellH, offX, offY, workspace);
         if (power) {
             for (PowerChain chain : powerChains) {
-                drawChainWithDots(g2, scr, chain.getCabinetInstanceIds(), cellW, cellH, offX, offY, type, workspace, false);
+                drawChainWithDots(g2, scr, chain.getCabinetInstanceIds(), cellW, cellH, offX, offY, type, workspace, false,
+                        symbolMin);
                 addStartLabel(startLabelsByCabinet, chain.getCabinetInstanceIds(), new LabelLine("L" + chain.getPhase(), false));
             }
         } else {
             for (SignalChain chain : signalChains) {
                 drawChainWithDots(g2, scr, chain.getCabinetInstanceIds(), cellW, cellH, offX, offY, type, workspace,
-                        chain.isBackup());
+                        chain.isBackup(), symbolMin);
                 if (chain.getPortNumber() != null) {
                     String lbl = portLabel(sceneControllers, workspace, chain.getPortNumber(), false);
                     // Раньше резервная цепочка получала префикс "рез:" — на мелких
@@ -474,13 +530,13 @@ public final class SchemeRenderer {
         int minCellGlobal = Math.min(cellW, cellH);
         if (minCellGlobal >= 10) {
             for (var entry : startLabelsByCabinet.entrySet()) {
-                CabinetInstance cab = scr.cabinetById(entry.getKey());
+                CabinetInstance cab = ChainLinks.place(scr, entry.getKey());
                 if (cab != null) {
                     drawStartLabelBadge(g2, cab, type, cellW, cellH, offX, offY, entry.getValue(), false);
                 }
             }
             for (var entry : endLabelsByCabinet.entrySet()) {
-                CabinetInstance cab = scr.cabinetById(entry.getKey());
+                CabinetInstance cab = ChainLinks.place(scr, entry.getKey());
                 if (cab != null) {
                     drawStartLabelBadge(g2, cab, type, cellW, cellH, offX, offY, entry.getValue(), true);
                 }
@@ -593,6 +649,34 @@ public final class SchemeRenderer {
         return cabinetConnectionAnchor(x, y, ew, eh, shape, rotationDeg);
     }
 
+    /**
+     * Точка звена цепочки на холсте (трек D, docs/receiver-cards/PLAN.md, D24/D25): кабинет — точка привязки его
+     * ячейки ({@link #anchorFor}, как раньше); приёмная карта — центр масс точек привязки её модулей (линия идёт по
+     * центрам карт); блок питания — точка привязки его «места». {@code null} — звена на этом экране нет (цепочка
+     * продолжается на другом): отрезок не рисуется, как и для не найденного кабинета.
+     */
+    static java.awt.Point linkAnchor(Screen scr, String id, int offX, int offY, int cellW, int cellH,
+                                     CabinetType type, Workspace workspace) {
+        CabinetInstance cab = ChainLinks.cabinet(scr, id);
+        if (cab != null) {
+            return anchorFor(cab, offX, offY, cellW, cellH, type, workspace);
+        }
+        if (scr.receiverCardById(id) != null) {
+            long sx = 0;
+            long sy = 0;
+            int n = 0;
+            for (CabinetInstance m : ChainLinks.cabinetsOf(scr, id)) {
+                java.awt.Point p = anchorFor(m, offX, offY, cellW, cellH, type, workspace);
+                sx += p.x;
+                sy += p.y;
+                n++;
+            }
+            return n == 0 ? null : new java.awt.Point((int) Math.round((double) sx / n), (int) Math.round((double) sy / n));
+        }
+        CabinetInstance place = scr.powerSupplyById(id) != null ? ChainLinks.place(scr, id) : null;
+        return place != null ? anchorFor(place, offX, offY, cellW, cellH, type, workspace) : null;
+    }
+
     /** Обрезает строку по ширине (с "…"), чтобы не наезжала на соседние ячейки при
      *  мелком шрифте миниатюры расключения. */
     private static String clipToWidth(Graphics2D g2, String text, int maxWidth) {
@@ -634,10 +718,41 @@ public final class SchemeRenderer {
      *  ТЕ ЖЕ кабинеты, что и основная (см. вызов из paintWiringDiagram) — без
      *  визуального различия основной и резервный путь были бы неотличимы, рисуясь
      *  друг поверх друга в одних и тех же точках. */
+    /** Меньшая сторона ТИПИЧНОЙ (медианной) карты/блока модульного экрана в пикселях; для обычного экрана — меньшая
+     *  сторона ячейки. От неё зависит, рисовать ли стрелки/кружки и какого они размера. */
+    private static int typicalUnitSide(Screen scr, boolean power, CabinetType type, int cellW, int cellH, int offX,
+                                       int offY, Workspace workspace) {
+        int cell = Math.min(cellW, cellH);
+        com.vjstb.ledscheme.service.ChainUnits cu = com.vjstb.ledscheme.service.ChainUnits.of(scr, workspace);
+        if (!cu.isModular()) {
+            return cell;
+        }
+        List<Integer> sides = new ArrayList<>();
+        for (com.vjstb.ledscheme.service.ChainUnits.Unit u : cu.units(power
+                ? com.vjstb.ledscheme.service.ChainUnits.Mode.POWER : com.vjstb.ledscheme.service.ChainUnits.Mode.SIGNAL)) {
+            if (u.kind() == com.vjstb.ledscheme.service.ChainUnits.Kind.CABINET) {
+                continue;
+            }
+            java.awt.Rectangle union = null;
+            for (CabinetInstance c : u.cabinets()) {
+                java.awt.Rectangle r = cabinetScreenRect(c, type, cellW, cellH, offX, offY, workspace);
+                union = union == null ? r : union.union(r);
+            }
+            if (union != null) {
+                sides.add(Math.min(union.width, union.height));
+            }
+        }
+        if (sides.isEmpty()) {
+            return cell;
+        }
+        java.util.Collections.sort(sides);
+        return Math.max(cell, sides.get(sides.size() / 2));
+    }
+
     private static void drawChainWithDots(Graphics2D g2, Screen scr, List<String> ids,
                                            int cellW, int cellH, int offX, int offY,
-                                           CabinetType type, Workspace workspace, boolean dashed) {
-        int minCell = Math.min(cellW, cellH);
+                                           CabinetType type, Workspace workspace, boolean dashed, int symbolMin) {
+        int minCell = symbolMin;
         float strokeWidth = (float) Math.max(0.8, Math.min(2.5, minCell * 0.08));
         g2.setStroke(dashed
                 ? new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 0,
@@ -653,13 +768,11 @@ public final class SchemeRenderer {
         boolean showArrowHeads = minCell >= 12;
         int dotR = Math.max(2, Math.min(minCell / 8, 5));
         for (int i = 0; i < ids.size() - 1; i++) {
-            CabinetInstance a = scr.cabinetById(ids.get(i));
-            CabinetInstance b = scr.cabinetById(ids.get(i + 1));
-            if (a == null || b == null) {
+            java.awt.Point pa = linkAnchor(scr, ids.get(i), offX, offY, cellW, cellH, type, workspace);
+            java.awt.Point pb = linkAnchor(scr, ids.get(i + 1), offX, offY, cellW, cellH, type, workspace);
+            if (pa == null || pb == null) {
                 continue;
             }
-            java.awt.Point pa = anchorFor(a, offX, offY, cellW, cellH, type, workspace);
-            java.awt.Point pb = anchorFor(b, offX, offY, cellW, cellH, type, workspace);
             g2.drawLine(pa.x, pa.y, pb.x, pb.y);
             if (showArrowHeads) {
                 drawArrowHead(g2, pa.x, pa.y, pb.x, pb.y, lineColor, arrowSize);
@@ -668,11 +781,10 @@ public final class SchemeRenderer {
         if (minCell >= 18) {
             g2.setColor(Color.WHITE);
             for (String id : ids) {
-                CabinetInstance c = scr.cabinetById(id);
-                if (c == null) {
+                java.awt.Point pc = linkAnchor(scr, id, offX, offY, cellW, cellH, type, workspace);
+                if (pc == null) {
                     continue;
                 }
-                java.awt.Point pc = anchorFor(c, offX, offY, cellW, cellH, type, workspace);
                 g2.fillOval(pc.x - dotR, pc.y - dotR, dotR * 2, dotR * 2);
                 g2.setColor(Color.BLACK);
                 g2.drawOval(pc.x - dotR, pc.y - dotR, dotR * 2, dotR * 2);
@@ -845,13 +957,11 @@ public final class SchemeRenderer {
         double arrowSize = Math.max(3.0, Math.min(minCell * 0.25, 9.0));
         boolean showArrowHeads = minCell >= 12;
         for (int i = 0; i < ids.size() - 1; i++) {
-            CabinetInstance a = scr.cabinetById(ids.get(i));
-            CabinetInstance b = scr.cabinetById(ids.get(i + 1));
-            if (a == null || b == null) {
+            java.awt.Point pa = linkAnchor(scr, ids.get(i), offX, offY, cellW, cellH, type, workspace);
+            java.awt.Point pb = linkAnchor(scr, ids.get(i + 1), offX, offY, cellW, cellH, type, workspace);
+            if (pa == null || pb == null) {
                 continue;
             }
-            java.awt.Point pa = anchorFor(a, offX, offY, cellW, cellH, type, workspace);
-            java.awt.Point pb = anchorFor(b, offX, offY, cellW, cellH, type, workspace);
             g2.drawLine(pa.x, pa.y, pb.x, pb.y);
             if (showArrowHeads) {
                 drawArrowHead(g2, pa.x, pa.y, pb.x, pb.y, color, arrowSize);
@@ -898,14 +1008,21 @@ public final class SchemeRenderer {
     static void drawChainEndpointLabel(Graphics2D g2, Screen scr, String cabId, Color color, CabinetType type,
                                                 int cellW, int cellH, int offX, int offY, String label) {
         CabinetInstance cab = scr.cabinetById(cabId);
-        if (cab == null) {
-            return;
+        int cx;
+        int cy;
+        if (cab != null) {
+            cx = cabX(cab, type, cellW, offX) + cellW / 2;
+            cy = cabY(cab, type, cellH, offY) + cellH / 2;
+        } else {
+            // звено-карта/блок (трек D): кружок на точке звена, а не на ячейке
+            java.awt.Point p = linkAnchor(scr, cabId, offX, offY, cellW, cellH, type, null);
+            if (p == null) {
+                return;
+            }
+            cx = p.x;
+            cy = p.y;
         }
-        int x = cabX(cab, type, cellW, offX);
-        int y = cabY(cab, type, cellH, offY);
         int d = Math.max(16, (int) Math.round(Math.min(cellW, cellH) * 0.5));
-        int cx = x + cellW / 2;
-        int cy = y + cellH / 2;
         Font f = g2.getFont().deriveFont(Font.BOLD, Math.max(9f, d * 0.24f));
         g2.setFont(f);
         java.awt.FontMetrics fm = g2.getFontMetrics();

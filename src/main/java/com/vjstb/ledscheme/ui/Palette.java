@@ -65,7 +65,12 @@ public final class Palette {
             new Color(0xe3b341), new Color(0x76e3ea), new Color(0xd2a8ff), new Color(0xff7b72)
     };
 
+    /** Заливка приёмных карт поверх серых модулей (вид «Приёмные карты», «Расключение экрана»
+     *  сигнала, «Карта подключения») — docs/receiver-cards/PLAN.md, 6.4. */
+    private static final Color DEFAULT_RECEIVER_CARD = new Color(0x639922);
+
     public static Color ACCENT = DEFAULT_ACCENT;
+    public static Color RECEIVER_CARD = DEFAULT_RECEIVER_CARD;
     public static Color PHASE_NONE = DEFAULT_PHASE_NONE;
     public static Color PHASE1 = DEFAULT_PHASE1;
     public static Color PHASE2 = DEFAULT_PHASE2;
@@ -183,6 +188,8 @@ public final class Palette {
     /** Переносит цвета из профиля (null-поля профиля — оставляют встроенное значение). */
     public static void applyProfile(UserProfile p) {
         ACCENT = p.getAccentColor() != null ? new Color(p.getAccentColor()) : DEFAULT_ACCENT;
+        RECEIVER_CARD = p.getReceiverCardColor() != null ? new Color(p.getReceiverCardColor())
+                : DEFAULT_RECEIVER_CARD;
         PHASE_NONE = p.getPhaseNoneColor() != null ? new Color(p.getPhaseNoneColor()) : DEFAULT_PHASE_NONE;
         PHASE1 = p.getPhase1Color() != null ? new Color(p.getPhase1Color()) : DEFAULT_PHASE1;
         PHASE2 = p.getPhase2Color() != null ? new Color(p.getPhase2Color()) : DEFAULT_PHASE2;

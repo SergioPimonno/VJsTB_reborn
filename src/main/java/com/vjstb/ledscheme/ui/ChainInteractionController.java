@@ -3,6 +3,8 @@ package com.vjstb.ledscheme.ui;
 import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.service.ChainLinks;
+import com.vjstb.ledscheme.service.ChainUnits;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
@@ -30,6 +32,11 @@ public class ChainInteractionController implements CanvasPanel.Controller {
     private final AppModel model;
     private final Runnable onChange;
 
+    /** Режим звеньев (сигнал — приёмные карты, питание — блоки питания), по которому клик по ячейке превращается в
+     *  звено цепочки (D26). {@code null} — перевода нет, id ячейки идёт в цепочку как есть (прежнее поведение). */
+    private ChainUnits.Mode unitMode;
+    /** Реакция на клик по модулю без карты/блока: панель этапа показывает подсказку, ведущую в нужный вид. */
+    private Consumer<ChainUnits.Mode> onModuleWithoutUnit = mode -> { };
     private ChainStarter starter;
     private Predicate<String> occupancyCheck = cabId -> false;
     private Consumer<List<String>> commitHandler;
@@ -43,6 +50,40 @@ public class ChainInteractionController implements CanvasPanel.Controller {
     public ChainInteractionController(AppModel model, Runnable onChange) {
         this.model = model;
         this.onChange = onChange;
+    }
+
+    /**
+     * Включает перевод «клик по ячейке → звено цепочки» (docs/receiver-cards/PLAN.md, D24–D26): на модульном экране
+     * клик по модулю добавляет в цепочку его приёмную карту (сигнал) или блок питания (питание); модуль без карты/блока
+     * в цепочку не попадает — вместо этого вызывается {@code onModuleWithoutUnit}. Обычные кабинеты и все ячейки
+     * немодульного экрана остаются звеньями сами, поэтому на экране без модулей поведение прежнее.
+     */
+    public void setUnitMode(ChainUnits.Mode mode, Consumer<ChainUnits.Mode> onModuleWithoutUnit) {
+        this.unitMode = mode;
+        this.onModuleWithoutUnit = onModuleWithoutUnit != null ? onModuleWithoutUnit : m -> { };
+    }
+
+    /** Звено для клика по ячейке: {@code null} — клик не должен попасть в цепочку (модуль без карты/блока). */
+    private String linkIdFor(Screen owner, String cabId) {
+        if (unitMode == null || owner == null) {
+            return cabId;
+        }
+        return ChainLinks.unitIdFor(owner, model.getWorkspace(), unitMode, cabId);
+    }
+
+    private Screen screenOfCabinet(String cabId) {
+        Screen scr = model.getCurrentScreen();
+        if (scr != null && scr.cabinetById(cabId) != null) {
+            return scr;
+        }
+        if (model.getCurrentScene() != null) {
+            for (Screen other : model.getCurrentScene().getScreens()) {
+                if (other.cabinetById(cabId) != null) {
+                    return other;
+                }
+            }
+        }
+        return scr;
     }
 
     /** Регистрирует, как начинать новую цепочку по клику на непрописанный кабинет —
@@ -102,8 +143,19 @@ public class ChainInteractionController implements CanvasPanel.Controller {
      *  строилась до этого, если такая была. Возвращает текст ошибки, если
      *  построить нельзя (например, для первого кабинета сейчас не выбрана
      *  фаза/порт, либо он уже занят другой цепочкой) — иначе null (успех). */
-    public String buildAndCommit(List<String> cabinetIds) {
-        if (cabinetIds == null || cabinetIds.isEmpty()) {
+    public String buildAndCommit(List<String> cellIds) {
+        // Область «Быстрого подключения» отдаёт ячейки; на модульном экране они превращаются в звенья — каждая
+        // карта/блок один раз, в порядке первого появления (модули без карты/блока выпадают, D26).
+        List<String> cabinetIds = new ArrayList<>();
+        if (cellIds != null) {
+            for (String cell : cellIds) {
+                String link = linkIdFor(screenOfCabinet(cell), cell);
+                if (link != null && !cabinetIds.contains(link)) {
+                    cabinetIds.add(link);
+                }
+            }
+        }
+        if (cabinetIds.isEmpty()) {
             return "В выбранной области нет доступных (не скрытых и ещё не занятых) кабинетов";
         }
         finish();
@@ -194,7 +246,7 @@ public class ChainInteractionController implements CanvasPanel.Controller {
         }
         if (cursorRow < 0 || cursorCol < 0) {
             if (!activeIds.isEmpty()) {
-                CabinetInstance last = scr.cabinetById(activeIds.get(activeIds.size() - 1));
+                CabinetInstance last = ChainLinks.place(scr, activeIds.get(activeIds.size() - 1));
                 cursorRow = last != null ? last.getRowIndex() : 0;
                 cursorCol = last != null ? last.getColIndex() : 0;
             } else {
@@ -206,9 +258,14 @@ public class ChainInteractionController implements CanvasPanel.Controller {
             cursorCol = clamp(cursorCol + dCol, 0, scr.getCols() - 1);
         }
         CabinetInstance cab = scr.cabinetAt(cursorRow, cursorCol);
-        if (cab != null && !cab.isHidden() && !activeIds.contains(cab.getId())
-                && !occupancyCheck.test(cab.getId())) {
-            activeIds.add(cab.getId());
+        if (cab != null && !cab.isHidden()) {
+            String link = linkIdFor(scr, cab.getId());
+            if (link == null) {
+                // стрелка встала на модуль без карты/блока — в цепочку не берём, подсказка ведёт в нужный вид (D26)
+                onModuleWithoutUnit.accept(unitMode);
+            } else if (!activeIds.contains(link) && !occupancyCheck.test(link)) {
+                activeIds.add(link);
+            }
         }
         onChange.run();
     }
@@ -262,6 +319,14 @@ public class ChainInteractionController implements CanvasPanel.Controller {
         if (cab == null || cab.isHidden()) {
             return;
         }
+        // Звено цепочки: на модульном экране клик по модулю = его карта (сигнал) / блок (питание), D26.
+        Screen owner = screenOfCabinet(cabId);
+        String linkId = linkIdFor(owner, cabId);
+        if (linkId == null) {
+            onModuleWithoutUnit.accept(unitMode);
+            return;
+        }
+        cabId = linkId;
         if (!building) {
             // Клик по кабинету, когда ничего ещё не строится — начинаем новую
             // цепочку сразу для текущей выбранной фазы/порта, без отдельного
@@ -288,7 +353,11 @@ public class ChainInteractionController implements CanvasPanel.Controller {
     /** ПКМ по кабинету ПОКА строится цепочка — убирает его из строящейся цепочки
      *  (не из уже сохранённых — для тех разрыв связи делает CanvasPanel отдельно). */
     public void removeFromActive(String cabId) {
-        if (!building || cabId == null || !activeIds.remove(cabId)) {
+        if (!building || cabId == null) {
+            return;
+        }
+        String linkId = linkIdFor(screenOfCabinet(cabId), cabId);
+        if (linkId == null || !activeIds.remove(linkId)) {
             return;
         }
         onChange.run();

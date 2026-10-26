@@ -5,6 +5,8 @@ import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.EquipmentPreset;
 import com.vjstb.ledscheme.model.PhysicalSpec;
 import com.vjstb.ledscheme.model.PowerConnectorType;
+import com.vjstb.ledscheme.model.PowerSupplyType;
+import com.vjstb.ledscheme.model.ReceiverCardType;
 import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.SchemaNodeType;
 import java.io.File;
@@ -38,8 +40,10 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
  * оборудования, загружает его в приложение и сразу получает рабочую библиотеку, не
  * создавая записи руками по одной.
  *
- * <p>Три листа с данными — «Кабинеты», «Оборудование», «Кабели» (лист «Инструкция» при
- * разборе игнорируется). Столбцы ищутся по тексту заголовка (регистр, звёздочка
+ * <p>Пять листов с данными — «Кабинеты», «Оборудование», «Кабели», «Приёмные карты» и «Блоки
+ * питания» (последние два — для модульных экранов, docs/receiver-cards/PLAN.md в VJsTB_reborn; на
+ * листе «Кабинеты» ещё столбец «Приёмная карта отдельно», он делает тип модулем). Лист «Инструкция» при
+ * разборе игнорируется. Столбцы ищутся по тексту заголовка (регистр, звёздочка
  * обязательности и единицы после запятой/скобки не важны — см. {@link #headerKey}), а не
  * по номеру, поэтому пользователь может переставлять и добавлять свои столбцы; лишние
  * столбцы и листы молча игнорируются. Строки, название которых начинается с «Пример:»,
@@ -63,6 +67,9 @@ public final class LibraryXlsx {
     public static final String SHEET_CABLES = "Кабели";
     /** Скрытый лист шаблона со значениями выпадающих списков (см. {@link Vocabulary}). */
     public static final String SHEET_LISTS = "Списки";
+    /** Листы модульных экранов (docs/receiver-cards/PLAN.md в VJsTB_reborn, раздел 8): приёмные карты и блоки питания. */
+    public static final String SHEET_RECEIVER_CARDS = "Приёмные карты";
+    public static final String SHEET_POWER_SUPPLIES = "Блоки питания";
 
     /** Строка, название которой начинается с этого префикса, — образец из шаблона, не данные. */
     public static final String EXAMPLE_PREFIX = "Пример:";
@@ -76,7 +83,7 @@ public final class LibraryXlsx {
     public record CabinetRow(int rowNumber, String name, String company, Double widthMm, Double heightMm,
                               Double depthMm, Integer resolutionWidth, Integer resolutionHeight,
                               Double powerW, Double weightKg, PowerConnectorType connector,
-                              Integer powerLines, Integer signalLines) {
+                              Integer powerLines, Integer signalLines, Boolean receiverCardSeparate) {
     }
 
     /** Строка листа «Оборудование». */
@@ -91,30 +98,63 @@ public final class LibraryXlsx {
     public record CableRow(int rowNumber, SchemaMode mode, String label, Double fixedLengthM) {
     }
 
+    /** Строка листа «Приёмные карты»; {@code null}-поля — ячейка пуста (при обновлении не меняется). */
+    public record ReceiverCardRow(int rowNumber, String name, String vendor, String company, Integer moduleOutputs,
+                                   Double ribbonLengthMm, Integer maxWidthPx, Integer maxHeightPx, Integer maxPixels,
+                                   Double powerW, Double weightKg, Double widthMm, Double heightMm, Double depthMm,
+                                   String notes) {
+    }
+
+    /** Строка листа «Блоки питания»; {@code null}-поля — ячейка пуста (при обновлении не меняется). */
+    public record PowerSupplyRow(int rowNumber, String name, String vendor, String company, Integer outputs,
+                                  Double ratedPowerW, Double cableLengthMm, Boolean cardOutput, String inputVoltage,
+                                  Double weightKg, Double widthMm, Double heightMm, Double depthMm, String notes) {
+    }
+
     /** Разобранное содержимое файла; {@code warnings} — всё, что пропущено или применено не так, как написано. */
     public record Parsed(List<CabinetRow> cabinets, List<EquipmentRow> equipment, List<CableRow> cables,
+                          List<ReceiverCardRow> receiverCards, List<PowerSupplyRow> powerSupplies,
                           List<String> warnings) {
     }
 
     /** Итог слияния с библиотекой пользователя. */
     public record Report(int cabinetsAdded, int cabinetsUpdated, int equipmentAdded, int equipmentUpdated,
-                          int cablesAdded, int cablesUpdated, List<String> warnings) {
+                          int cablesAdded, int cablesUpdated, int receiverCardsAdded, int receiverCardsUpdated,
+                          int powerSuppliesAdded, int powerSuppliesUpdated, List<String> warnings) {
         public int total() {
             return cabinetsAdded + cabinetsUpdated + equipmentAdded + equipmentUpdated + cablesAdded
-                    + cablesUpdated;
+                    + cablesUpdated + receiverCardsAdded + receiverCardsUpdated + powerSuppliesAdded
+                    + powerSuppliesUpdated;
         }
 
+        /** Строки про карты и блоки питания добавляются только если по ним что-то было: большинству таблиц эти листы не нужны. */
         public String summary() {
-            return "Кабинеты: добавлено " + cabinetsAdded + ", обновлено " + cabinetsUpdated
+            String s = "Кабинеты: добавлено " + cabinetsAdded + ", обновлено " + cabinetsUpdated
                     + "\nОборудование: добавлено " + equipmentAdded + ", обновлено " + equipmentUpdated
                     + "\nКабели: добавлено " + cablesAdded + ", обновлено " + cablesUpdated;
+            if (receiverCardsAdded + receiverCardsUpdated > 0) {
+                s += "\nПриёмные карты: добавлено " + receiverCardsAdded + ", обновлено " + receiverCardsUpdated;
+            }
+            if (powerSuppliesAdded + powerSuppliesUpdated > 0) {
+                s += "\nБлоки питания: добавлено " + powerSuppliesAdded + ", обновлено " + powerSuppliesUpdated;
+            }
+            return s;
         }
     }
 
     /** Списки библиотеки, в которые вливается таблица: {@code shared*} только читаются (проверка совпадений). */
     public record Libraries(List<CabinetType> sharedCabinets, List<CabinetType> cabinets,
                              List<EquipmentPreset> sharedEquipment, List<EquipmentPreset> equipment,
-                             List<CableType> sharedCables, List<CableType> cables) {
+                             List<CableType> sharedCables, List<CableType> cables,
+                             List<ReceiverCardType> sharedReceiverCards, List<ReceiverCardType> receiverCards,
+                             List<PowerSupplyType> sharedPowerSupplies, List<PowerSupplyType> powerSupplies) {
+        /** Без карт и блоков питания — для вызовов, которым нужны только три исходных вида. */
+        public Libraries(List<CabinetType> sharedCabinets, List<CabinetType> cabinets,
+                          List<EquipmentPreset> sharedEquipment, List<EquipmentPreset> equipment,
+                          List<CableType> sharedCables, List<CableType> cables) {
+            this(sharedCabinets, cabinets, sharedEquipment, equipment, sharedCables, cables,
+                    new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+        }
     }
 
     /**
@@ -205,7 +245,8 @@ public final class LibraryXlsx {
             new Col("weight", "Вес, кг", false, 12, "weight"),
             new Col("connector", "Разъём питания", false, 18, "тип разъёма питания"),
             new Col("powerLines", "Линий питания на кабинет", false, 16, "линий питания"),
-            new Col("signalLines", "Линий сигнала на кабинет", false, 16, "линий сигнала"));
+            new Col("signalLines", "Линий сигнала на кабинет", false, 16, "линий сигнала"),
+            new Col("receiverCardSeparate", "Приёмная карта отдельно (Да/Нет)", false, 18, "модуль"));
 
     private static final List<Col> EQUIPMENT_COLS = List.of(
             C_NAME,
@@ -230,6 +271,37 @@ public final class LibraryXlsx {
             new Col("mode", "Режим (Сигнал/Питание) *", true, 20, "mode"),
             new Col("label", "Название *", true, 36, "подпись", "label", "наименование"),
             new Col("length", "Длина, м", false, 12, "длина", "length"));
+
+    private static final List<Col> RECEIVER_CARD_COLS = List.of(
+            C_NAME,
+            new Col("vendor", "Производитель", false, 18, "vendor"),
+            C_COMPANY,
+            new Col("outputs", "Выходов на модули (шлейфов)", false, 18, "выходов", "выходы на модули"),
+            new Col("ribbon", "Длина шлейфа, мм", false, 14, "длина шлейфа до модуля"),
+            new Col("maxWidth", "Макс. ширина области, px", false, 16, "макс. ширина"),
+            new Col("maxHeight", "Макс. высота области, px", false, 16, "макс. высота"),
+            new Col("maxPixels", "Макс. пикселей карты", false, 16, "макс. пикселей"),
+            new Col("power", "Мощность, Вт", false, 12, "потребление"),
+            new Col("weight", "Вес, кг", false, 10, "weight"),
+            new Col("width", "Ширина, мм", false, 12, "width"),
+            new Col("height", "Высота, мм", false, 12, "height"),
+            new Col("depth", "Глубина, мм", false, 12, "depth"),
+            new Col("notes", "Заметки", false, 30, "notes", "комментарий", "описание"));
+
+    private static final List<Col> POWER_SUPPLY_COLS = List.of(
+            C_NAME,
+            new Col("vendor", "Производитель", false, 18, "vendor"),
+            C_COMPANY,
+            new Col("outputs", "Шлейфов питания модулей", false, 16, "шлейфов", "выходов"),
+            new Col("ratedPower", "Номинальная мощность, Вт", false, 16, "мощность"),
+            new Col("cableLength", "Длина кабеля до модуля, мм", false, 16, "длина кабеля"),
+            new Col("cardOutput", "Отдельный выход на карту (Да/Нет)", false, 18, "выход на карту"),
+            new Col("inputVoltage", "Входное напряжение", false, 16, "напряжение"),
+            new Col("weight", "Вес, кг", false, 10, "weight"),
+            new Col("width", "Ширина, мм", false, 12, "width"),
+            new Col("height", "Высота, мм", false, 12, "height"),
+            new Col("depth", "Глубина, мм", false, 12, "depth"),
+            new Col("notes", "Заметки", false, 30, "notes", "комментарий", "описание"));
 
     private static final String[] MODE_LIST = {"Сигнал", "Питание"};
     private static final String[] BOOL_LIST = {"Да", "Нет"};
@@ -288,8 +360,10 @@ public final class LibraryXlsx {
                     Map.entry("company", "Моя компания"), Map.entry("width", 500), Map.entry("height", 500),
                     Map.entry("depth", 80), Map.entry("resX", 192), Map.entry("resY", 192),
                     Map.entry("power", 150), Map.entry("weight", 8.5), Map.entry("connector", "PowerCon"),
-                    Map.entry("powerLines", 1), Map.entry("signalLines", 1)));
+                    Map.entry("powerLines", 1), Map.entry("signalLines", 1),
+                    Map.entry("receiverCardSeparate", "Нет")));
             closedList(lists, cab, CABINET_COLS, "connector", CONNECTOR_LIST);
+            closedList(lists, cab, CABINET_COLS, "receiverCardSeparate", BOOL_LIST);
             openList(lists, cab, CABINET_COLS, "company", vocab.companies().toArray(new String[0]));
 
             Sheet eq = dataSheet(wb, st, SHEET_EQUIPMENT, EQUIPMENT_COLS);
@@ -311,6 +385,25 @@ public final class LibraryXlsx {
             example(cb, st, CABLE_COLS, Map.of("mode", "Питание", "label", EXAMPLE_PREFIX + " CEE 16A → PowerCon",
                     "length", 5));
             closedList(lists, cb, CABLE_COLS, "mode", MODE_LIST);
+
+            Sheet rc = dataSheet(wb, st, SHEET_RECEIVER_CARDS, RECEIVER_CARD_COLS);
+            example(rc, st, RECEIVER_CARD_COLS, Map.ofEntries(
+                    Map.entry("name", EXAMPLE_PREFIX + " Приёмная карта 8 выходов"),
+                    Map.entry("vendor", "Производитель"), Map.entry("outputs", 8), Map.entry("ribbon", 600),
+                    Map.entry("maxWidth", 512), Map.entry("maxHeight", 384), Map.entry("maxPixels", 131072),
+                    Map.entry("power", 5), Map.entry("weight", 0.1)));
+
+            Sheet ps = dataSheet(wb, st, SHEET_POWER_SUPPLIES, POWER_SUPPLY_COLS);
+            example(ps, st, POWER_SUPPLY_COLS, Map.ofEntries(
+                    Map.entry("name", EXAMPLE_PREFIX + " Блок питания 5 В, 8 шлейфов"),
+                    Map.entry("vendor", "Производитель"), Map.entry("outputs", 8), Map.entry("ratedPower", 300),
+                    Map.entry("cableLength", 700), Map.entry("cardOutput", "Да"),
+                    Map.entry("inputVoltage", "110–240 В AC"), Map.entry("weight", 1.2)));
+            closedList(lists, ps, POWER_SUPPLY_COLS, "cardOutput", BOOL_LIST);
+            openList(lists, ps, POWER_SUPPLY_COLS, "company", vocab.companies().toArray(new String[0]));
+            openList(lists, ps, POWER_SUPPLY_COLS, "vendor", vocab.vendors().toArray(new String[0]));
+            openList(lists, rc, RECEIVER_CARD_COLS, "company", vocab.companies().toArray(new String[0]));
+            openList(lists, rc, RECEIVER_CARD_COLS, "vendor", vocab.vendors().toArray(new String[0]));
 
             lists.write(wb);
             wb.setActiveSheet(1);
@@ -457,7 +550,7 @@ public final class LibraryXlsx {
         help.setColumnWidth(0, 110 * 256);
         String[] lines = {
                 "#Шаблон библиотеки оборудования",
-                "Заполните листы «Кабинеты», «Оборудование», «Кабели» (нужны не все — пустые листы пропускаются) "
+                "Заполните листы «Кабинеты», «Оборудование», «Кабели», «Приёмные карты», «Блоки питания» (нужны не все — пустые листы пропускаются) "
                         + "и загрузите файл в приложении: Библиотеки → «Импорт из Excel…».",
                 "",
                 "#Общие правила",
@@ -481,7 +574,9 @@ public final class LibraryXlsx {
                 "Обязательно: название, ширина и высота (мм), разрешение по горизонтали и вертикали (px). "
                         + "Мощность по умолчанию 150 Вт, вес 12 кг, если не указаны. Разъём питания — из списка "
                         + "(PowerCon / TRUEcon / Другой). «Линий питания/сигнала» — сколько линий нужно развести "
-                        + "на кабинет (0 — коммутация сквозная).",
+                        + "на кабинет (0 — коммутация сквозная). «Приёмная карта отдельно» (Да/Нет): «Да» делает "
+                        + "тип модулем — у него нет своей приёмной карты, он подключается шлейфом к общей карте "
+                        + "и питается от блока питания.",
                 "",
                 "#Лист «Оборудование»",
                 "Обязательно только название. Режим: Сигнал (по умолчанию) или Питание. Категория — из списка "
@@ -498,6 +593,14 @@ public final class LibraryXlsx {
                 "#Лист «Кабели»",
                 "Это переходники (разные разъёмы на концах). Обязательно: режим (Сигнал/Питание) и название. "
                         + "Длина, м — если переходник фиксированной длины.",
+                "",
+                "#Листы «Приёмные карты» и «Блоки питания»",
+                "Для модульных экранов. Обязательно только название. «Выходов на модули» — сколько модулей можно "
+                        + "включить в карту; «Длина шлейфа» (карта) и «Длина кабеля» (блок питания) — предельное "
+                        + "расстояние до модуля по прямой, мм. Пустая ячейка означает «не указано, не проверять» "
+                        + "(это не ноль). «Отдельный выход на карту» (Да/Нет) — у блока питания есть ещё один выход "
+                        + "сверх шлейфов, предназначенный только для приёмной карты. Ширина, высота и глубина — "
+                        + "габариты россыпью, мм.",
         };
         for (int i = 0; i < lines.length; i++) {
             Row r = help.createRow(i);
@@ -531,6 +634,8 @@ public final class LibraryXlsx {
         List<CabinetRow> cabinets = new ArrayList<>();
         List<EquipmentRow> equipment = new ArrayList<>();
         List<CableRow> cables = new ArrayList<>();
+        List<ReceiverCardRow> receiverCards = new ArrayList<>();
+        List<PowerSupplyRow> powerSupplies = new ArrayList<>();
         boolean any = false;
         try (Workbook wb = WorkbookFactory.create(file, null, true)) {
             for (int i = 0; i < wb.getNumberOfSheets(); i++) {
@@ -545,6 +650,12 @@ public final class LibraryXlsx {
                 } else if (sheetName.equalsIgnoreCase(SHEET_CABLES)) {
                     any = true;
                     parseCables(sheet, cables, warnings);
+                } else if (sheetName.equalsIgnoreCase(SHEET_RECEIVER_CARDS)) {
+                    any = true;
+                    parseReceiverCards(sheet, receiverCards, warnings);
+                } else if (sheetName.equalsIgnoreCase(SHEET_POWER_SUPPLIES)) {
+                    any = true;
+                    parsePowerSupplies(sheet, powerSupplies, warnings);
                 }
             }
         } catch (IOException | RuntimeException ex) {
@@ -552,10 +663,11 @@ public final class LibraryXlsx {
         }
         if (!any) {
             throw new IllegalArgumentException("В файле нет листов «" + SHEET_CABINETS + "», «"
-                    + SHEET_EQUIPMENT + "» или «" + SHEET_CABLES + "» — это не шаблон библиотеки. "
+                    + SHEET_EQUIPMENT + "», «" + SHEET_CABLES + "», «" + SHEET_RECEIVER_CARDS + "» или «"
+                    + SHEET_POWER_SUPPLIES + "» — это не шаблон библиотеки. "
                     + "Скачайте шаблон кнопкой «Шаблон Excel…».");
         }
-        return new Parsed(cabinets, equipment, cables, warnings);
+        return new Parsed(cabinets, equipment, cables, receiverCards, powerSupplies, warnings);
     }
 
     /** Индексы столбцов по id; {@code null}, если на листе нет какого-то обязательного столбца (предупреждение уже добавлено). */
@@ -732,8 +844,17 @@ public final class LibraryXlsx {
                             + "» не из списка (PowerCon / TRUEcon / Другой), значение не применено.");
                 }
             }
+            Boolean module = null;
+            String moduleText = rd.str("receiverCardSeparate");
+            if (!moduleText.isEmpty()) {
+                module = parseBool(moduleText);
+                if (module == null) {
+                    warnings.add(rd.where("receiverCardSeparate") + "«" + moduleText
+                            + "» — ожидалось «Да» или «Нет», значение не применено.");
+                }
+            }
             out.add(new CabinetRow(r + 1, name, blankToNull(rd.str("company")), w, h, depth, rx, ry, power, weight,
-                    connector, powerLines, signalLines));
+                    connector, powerLines, signalLines, module));
         }
     }
 
@@ -837,6 +958,67 @@ public final class LibraryXlsx {
                 continue;
             }
             out.add(new CableRow(r + 1, mode, label, rd.dbl("length")));
+        }
+    }
+
+    private static void parseReceiverCards(Sheet sheet, List<ReceiverCardRow> out, List<String> warnings) {
+        Map<String, Integer> cols = locateColumns(sheet, RECEIVER_CARD_COLS, warnings);
+        if (cols == null) {
+            return;
+        }
+        for (int r = sheet.getFirstRowNum() + 1; r <= sheet.getLastRowNum(); r++) {
+            Row row = sheet.getRow(r);
+            if (isBlank(row)) {
+                continue;
+            }
+            RowReader rd = new RowReader(sheet, row, cols, RECEIVER_CARD_COLS, warnings);
+            String name = rd.str("name");
+            if (isExample(name)) {
+                continue;
+            }
+            if (name.isEmpty()) {
+                warnings.add(rd.where("name") + "не заполнено, строка пропущена.");
+                continue;
+            }
+            out.add(new ReceiverCardRow(r + 1, name, blankToNull(rd.str("vendor")), blankToNull(rd.str("company")),
+                    rd.integer("outputs"), rd.dbl("ribbon"), rd.integer("maxWidth"), rd.integer("maxHeight"),
+                    rd.integer("maxPixels"), rd.dbl("power"), rd.dbl("weight"), rd.dbl("width"), rd.dbl("height"),
+                    rd.dbl("depth"), blankToNull(rd.str("notes"))));
+        }
+    }
+
+    private static void parsePowerSupplies(Sheet sheet, List<PowerSupplyRow> out, List<String> warnings) {
+        Map<String, Integer> cols = locateColumns(sheet, POWER_SUPPLY_COLS, warnings);
+        if (cols == null) {
+            return;
+        }
+        for (int r = sheet.getFirstRowNum() + 1; r <= sheet.getLastRowNum(); r++) {
+            Row row = sheet.getRow(r);
+            if (isBlank(row)) {
+                continue;
+            }
+            RowReader rd = new RowReader(sheet, row, cols, POWER_SUPPLY_COLS, warnings);
+            String name = rd.str("name");
+            if (isExample(name)) {
+                continue;
+            }
+            if (name.isEmpty()) {
+                warnings.add(rd.where("name") + "не заполнено, строка пропущена.");
+                continue;
+            }
+            Boolean cardOutput = null;
+            String cardOutputText = rd.str("cardOutput");
+            if (!cardOutputText.isEmpty()) {
+                cardOutput = parseBool(cardOutputText);
+                if (cardOutput == null) {
+                    warnings.add(rd.where("cardOutput") + "«" + cardOutputText
+                            + "» — ожидалось «Да» или «Нет», значение не применено.");
+                }
+            }
+            out.add(new PowerSupplyRow(r + 1, name, blankToNull(rd.str("vendor")), blankToNull(rd.str("company")),
+                    rd.integer("outputs"), rd.dbl("ratedPower"), rd.dbl("cableLength"), cardOutput,
+                    blankToNull(rd.str("inputVoltage")), rd.dbl("weight"), rd.dbl("width"), rd.dbl("height"),
+                    rd.dbl("depth"), blankToNull(rd.str("notes"))));
         }
     }
 
@@ -999,7 +1181,150 @@ public final class LibraryXlsx {
                 cbAdded++;
             }
         }
-        return new Report(cabAdded, cabUpdated, eqAdded, eqUpdated, cbAdded, cbUpdated, warnings);
+        int rcAdded = 0;
+        int rcUpdated = 0;
+        for (ReceiverCardRow row : parsed.receiverCards()) {
+            if (findReceiverCard(lib.sharedReceiverCards(), row.name()) != null) {
+                warnings.add("Приёмная карта «" + row.name() + "» (строка " + row.rowNumber()
+                        + ") уже есть в общей библиотеке — пропущена.");
+                continue;
+            }
+            ReceiverCardType match = findReceiverCard(lib.receiverCards(), row.name());
+            ReceiverCardType target = match != null ? match : new ReceiverCardType();
+            applyReceiverCard(target, row);
+            if (match != null) {
+                rcUpdated++;
+            } else {
+                lib.receiverCards().add(target);
+                rcAdded++;
+            }
+        }
+        int psAdded = 0;
+        int psUpdated = 0;
+        for (PowerSupplyRow row : parsed.powerSupplies()) {
+            if (findPowerSupply(lib.sharedPowerSupplies(), row.name()) != null) {
+                warnings.add("Блок питания «" + row.name() + "» (строка " + row.rowNumber()
+                        + ") уже есть в общей библиотеке — пропущен.");
+                continue;
+            }
+            PowerSupplyType match = findPowerSupply(lib.powerSupplies(), row.name());
+            PowerSupplyType target = match != null ? match : new PowerSupplyType();
+            applyPowerSupply(target, row);
+            if (match != null) {
+                psUpdated++;
+            } else {
+                lib.powerSupplies().add(target);
+                psAdded++;
+            }
+        }
+        return new Report(cabAdded, cabUpdated, eqAdded, eqUpdated, cbAdded, cbUpdated, rcAdded, rcUpdated,
+                psAdded, psUpdated, warnings);
+    }
+
+    private static ReceiverCardType findReceiverCard(List<ReceiverCardType> list, String name) {
+        for (ReceiverCardType t : list) {
+            if (t.getName().equalsIgnoreCase(name)) {
+                return t;
+            }
+        }
+        return null;
+    }
+
+    private static PowerSupplyType findPowerSupply(List<PowerSupplyType> list, String name) {
+        for (PowerSupplyType t : list) {
+            if (t.getName().equalsIgnoreCase(name)) {
+                return t;
+            }
+        }
+        return null;
+    }
+
+    /** Габариты россыпью из трёх столбцов; пустые ячейки существующий физический блок не затирают. */
+    private static PhysicalSpec withDimensions(PhysicalSpec current, Double w, Double h, Double d) {
+        if (w == null && h == null && d == null) {
+            return current;
+        }
+        PhysicalSpec spec = current != null ? current : new PhysicalSpec();
+        if (w != null) {
+            spec.setWidthMm(w);
+        }
+        if (h != null) {
+            spec.setHeightMm(h);
+        }
+        if (d != null) {
+            spec.setDepthMm(d);
+        }
+        if (spec.getFormFactor() == null) {
+            spec.setFormFactor(PhysicalSpec.FormFactor.LOOSE);
+        }
+        return spec;
+    }
+
+    private static void applyReceiverCard(ReceiverCardType t, ReceiverCardRow r) {
+        t.setName(r.name());
+        if (r.vendor() != null) {
+            t.setVendor(r.vendor());
+        }
+        if (r.company() != null) {
+            t.setCompany(r.company());
+        }
+        if (r.moduleOutputs() != null) {
+            t.setModuleOutputs(r.moduleOutputs());
+        }
+        if (r.ribbonLengthMm() != null) {
+            t.setRibbonLengthMm(r.ribbonLengthMm());
+        }
+        if (r.maxWidthPx() != null) {
+            t.setMaxWidthPx(r.maxWidthPx());
+        }
+        if (r.maxHeightPx() != null) {
+            t.setMaxHeightPx(r.maxHeightPx());
+        }
+        if (r.maxPixels() != null) {
+            t.setMaxPixels(r.maxPixels());
+        }
+        if (r.powerW() != null) {
+            t.setPowerW(r.powerW());
+        }
+        if (r.weightKg() != null) {
+            t.setWeightKg(r.weightKg());
+        }
+        if (r.notes() != null) {
+            t.setNotes(r.notes());
+        }
+        t.setPhysical(withDimensions(t.getPhysical(), r.widthMm(), r.heightMm(), r.depthMm()));
+    }
+
+    private static void applyPowerSupply(PowerSupplyType t, PowerSupplyRow r) {
+        t.setName(r.name());
+        if (r.vendor() != null) {
+            t.setVendor(r.vendor());
+        }
+        if (r.company() != null) {
+            t.setCompany(r.company());
+        }
+        if (r.outputs() != null) {
+            t.setOutputs(r.outputs());
+        }
+        if (r.ratedPowerW() != null) {
+            t.setRatedPowerW(r.ratedPowerW());
+        }
+        if (r.cableLengthMm() != null) {
+            t.setCableLengthMm(r.cableLengthMm());
+        }
+        if (r.cardOutput() != null) {
+            t.setCardOutput(r.cardOutput());
+        }
+        if (r.inputVoltage() != null) {
+            t.setInputVoltage(r.inputVoltage());
+        }
+        if (r.weightKg() != null) {
+            t.setWeightKg(r.weightKg());
+        }
+        if (r.notes() != null) {
+            t.setNotes(r.notes());
+        }
+        t.setPhysical(withDimensions(t.getPhysical(), r.widthMm(), r.heightMm(), r.depthMm()));
     }
 
     private static CabinetType findCabinet(List<CabinetType> list, String name) {
@@ -1056,6 +1381,9 @@ public final class LibraryXlsx {
         }
         if (r.signalLines() != null) {
             t.setSignalConnectorsNeeded(r.signalLines());
+        }
+        if (r.receiverCardSeparate() != null) {
+            t.setReceiverCardSeparate(r.receiverCardSeparate());
         }
     }
 

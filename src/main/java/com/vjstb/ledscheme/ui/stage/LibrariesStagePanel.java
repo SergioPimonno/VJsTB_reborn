@@ -8,6 +8,8 @@ import com.vjstb.ledscheme.model.InterfaceRole;
 import com.vjstb.ledscheme.model.InterfaceType;
 import com.vjstb.ledscheme.model.NetworkDeviceType;
 import com.vjstb.ledscheme.model.PowerConnectorPreset;
+import com.vjstb.ledscheme.model.PowerSupplyType;
+import com.vjstb.ledscheme.model.ReceiverCardType;
 import com.vjstb.ledscheme.model.SchemaCard;
 import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.SchemaNodeType;
@@ -23,7 +25,9 @@ import com.vjstb.ledscheme.ui.ListSizing;
 import com.vjstb.ledscheme.ui.NamedRenderer;
 import com.vjstb.ledscheme.ui.NetworkDeviceTypeDialog;
 import com.vjstb.ledscheme.ui.PowerConnectorsConfigDialog;
+import com.vjstb.ledscheme.ui.PowerSupplyTypeDialog;
 import com.vjstb.ledscheme.ui.ProposeDialog;
+import com.vjstb.ledscheme.ui.ReceiverCardTypeDialog;
 import com.vjstb.ledscheme.ui.UiKit;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
@@ -106,6 +110,14 @@ public class LibrariesStagePanel extends JPanel {
     private final JList<NetworkDeviceType> networkDeviceList = new JList<>(networkDeviceModel);
     private final JScrollPane networkDeviceScroll = new JScrollPane(networkDeviceList);
 
+    private final DefaultListModel<ReceiverCardType> receiverCardModel = new DefaultListModel<>();
+    private final JList<ReceiverCardType> receiverCardList = new JList<>(receiverCardModel);
+    private final JScrollPane receiverCardScroll = new JScrollPane(receiverCardList);
+
+    private final DefaultListModel<PowerSupplyType> powerSupplyModel = new DefaultListModel<>();
+    private final JList<PowerSupplyType> powerSupplyList = new JList<>(powerSupplyModel);
+    private final JScrollPane powerSupplyScroll = new JScrollPane(powerSupplyList);
+
     private final DefaultListModel<PowerConnectorPreset> powerConnectorPresetModel = new DefaultListModel<>();
     private final JList<PowerConnectorPreset> powerConnectorPresetList = new JList<>(powerConnectorPresetModel);
     private final JScrollPane powerConnectorPresetScroll = new JScrollPane(powerConnectorPresetList);
@@ -117,6 +129,8 @@ public class LibrariesStagePanel extends JPanel {
     private NamedRenderer<InterfaceType> interfaceTypeRenderer;
     private NamedRenderer<NetworkDeviceType> networkDeviceRenderer;
     private NamedRenderer<PowerConnectorPreset> powerConnectorPresetRenderer;
+    private NamedRenderer<ReceiverCardType> receiverCardRenderer;
+    private NamedRenderer<PowerSupplyType> powerSupplyRenderer;
 
     private javax.swing.JComponent exportImportSection;
     private javax.swing.JComponent cabinetsSection;
@@ -127,6 +141,8 @@ public class LibrariesStagePanel extends JPanel {
     private javax.swing.JComponent interfaceTypeSection;
     private javax.swing.JComponent networkDeviceSection;
     private javax.swing.JComponent powerConnectorPresetSection;
+    private javax.swing.JComponent receiverCardSection;
+    private javax.swing.JComponent powerSupplySection;
 
     /** Ширина содержимого этапа (окно минус вертикальный скроллбар минус паддинг
      *  body) — пересчитывается живьём при ресайзе (см. конструктор), а не
@@ -162,6 +178,8 @@ public class LibrariesStagePanel extends JPanel {
         cableLengthProfileSection = buildCableLengthProfileLibrary();
         interfaceTypeSection = buildInterfaceTypeSection();
         networkDeviceSection = buildNetworkDeviceLibrary();
+        receiverCardSection = buildReceiverCardLibrary();
+        powerSupplySection = buildPowerSupplyLibrary();
         powerConnectorPresetSection = buildPowerConnectorPresetLibrary();
         body.add(exportImportSection);
         body.add(UiKit.vgap(10));
@@ -179,6 +197,10 @@ public class LibrariesStagePanel extends JPanel {
         body.add(UiKit.vgap(10));
         body.add(networkDeviceSection);
         body.add(UiKit.vgap(10));
+        body.add(receiverCardSection);
+        body.add(UiKit.vgap(10));
+        body.add(powerSupplySection);
+        body.add(UiKit.vgap(10));
         body.add(powerConnectorPresetSection);
         body.add(javax.swing.Box.createVerticalGlue());
 
@@ -188,7 +210,8 @@ public class LibrariesStagePanel extends JPanel {
         add(scroll, BorderLayout.CENTER);
 
         for (JScrollPane sp : new JScrollPane[]{libScroll, powerPresetScroll, cableScroll,
-                cableLengthProfileScroll, interfaceTypeScroll, networkDeviceScroll, powerConnectorPresetScroll}) {
+                cableLengthProfileScroll, interfaceTypeScroll, networkDeviceScroll, receiverCardScroll,
+                powerSupplyScroll, powerConnectorPresetScroll}) {
             sp.setMinimumSize(new Dimension(200, 80));
             // ВСЕГДА показывать вертикальный скроллбар (даже когда все позиции
             // помещаются) — иначе два списка одинаковой ширины секции переносят
@@ -980,6 +1003,178 @@ public class LibrariesStagePanel extends JPanel {
                 listSectionBody(networkDeviceScroll, crud));
     }
 
+    // ---- приёмные карты и блоки питания модульных экранов (docs/receiver-cards/PLAN.md, раздел 8) ----
+    //      Две секции по образцу сетевого оборудования: Добавить/Изменить/Удалить/Предложить/Скопировать и править.
+
+    private static String optionalPart(String label, Number v, String unit) {
+        return v == null ? "" : " · " + (label.isEmpty() ? "" : label + " ") + UiKit.fmt(v.doubleValue()) + unit;
+    }
+
+    private JPanel buildReceiverCardLibrary() {
+        receiverCardList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        receiverCardRenderer = new NamedRenderer<ReceiverCardType>(
+                ReceiverCardType::getName,
+                t -> (t.getVendor() == null || t.getVendor().isEmpty() ? "" : t.getVendor() + " · ")
+                        + (t.getModuleOutputs() == null ? "выходы не указаны" : t.getModuleOutputs() + " вых.")
+                        + optionalPart("шлейф", t.getRibbonLengthMm(), " мм")
+                        + optionalPart("до", t.getMaxPixels(), " px")
+                        + (t.getCompany() == null || t.getCompany().isEmpty() ? "" : " · Компания: " + t.getCompany()),
+                t -> model.isSharedReceiverCardType(t.getId()));
+        receiverCardList.setCellRenderer(receiverCardRenderer);
+
+        JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
+        JButton add = new JButton("Добавить");
+        add.addActionListener(e -> {
+            ReceiverCardType t = new ReceiverCardTypeDialog(topWindow(), null).showDialog();
+            if (t != null) tryRun(() -> model.addReceiverCardType(t));
+        });
+        JButton edit = new JButton("Изменить");
+        edit.addActionListener(e -> {
+            ReceiverCardType sel = receiverCardList.getSelectedValue();
+            if (sel == null) return;
+            ReceiverCardType t = new ReceiverCardTypeDialog(topWindow(), sel).showDialog();
+            if (t != null) tryRun(() -> model.updateReceiverCardType(t));
+        });
+        Runnable deleteSelected = () -> {
+            ReceiverCardType sel = receiverCardList.getSelectedValue();
+            if (sel != null && confirm("Удалить приёмную карту «" + sel.getName() + "» из библиотеки?")) {
+                tryRun(() -> model.deleteReceiverCardType(sel.getId()));
+            }
+        };
+        JButton del = new JButton("Удалить");
+        del.addActionListener(e -> deleteSelected.run());
+        UiKit.bindDeleteKey(receiverCardList, deleteSelected);
+        JButton propose = new JButton("Предложить…");
+        propose.addActionListener(e -> {
+            ReceiverCardType sel = receiverCardList.getSelectedValue();
+            if (sel != null) ProposeDialog.show(topWindow(), settings, "RECEIVER_CARD", sel.getName(), sel);
+        });
+        JButton copyEdit = new JButton("Скопировать и править…");
+        copyEdit.setToolTipText("Создать личную копию общей приёмной карты и сразу открыть её на редактирование —"
+                + " оригинал не меняется; если вы вошли в аккаунт, эти же правки заодно предложатся как патч"
+                + " общего элемента.");
+        copyEdit.addActionListener(e -> {
+            ReceiverCardType sel = receiverCardList.getSelectedValue();
+            if (sel == null || !model.isSharedReceiverCardType(sel.getId())) return;
+            List<String> names = model.getReceiverCardTypes().stream().map(ReceiverCardType::getName).toList();
+            ReceiverCardType result = copySharedAndEdit(sel.getId(), sel.getName(), "RECEIVER_CARD",
+                    () -> {
+                        ReceiverCardType t = sel.copy();
+                        t.setId(java.util.UUID.randomUUID().toString());
+                        t.setName(uniqueCopyName(sel.getName(), names));
+                        return t;
+                    },
+                    model::addReceiverCardType,
+                    seed -> new ReceiverCardTypeDialog(topWindow(), seed).showDialog(),
+                    model::updateReceiverCardType,
+                    ReceiverCardType::getName);
+            receiverCardList.setSelectedValue(result, true);
+        });
+        crud.add(add);
+        crud.add(edit);
+        crud.add(del);
+        crud.add(propose);
+        crud.add(copyEdit);
+        String sharedTip = "Общие элементы редактируются только через админ-консоль";
+        receiverCardList.addListSelectionListener(e -> {
+            ReceiverCardType sel = receiverCardList.getSelectedValue();
+            boolean shared = sel != null && model.isSharedReceiverCardType(sel.getId());
+            edit.setEnabled(sel != null && !shared);
+            del.setEnabled(sel != null && !shared);
+            propose.setEnabled(sel != null && !shared);
+            copyEdit.setEnabled(shared);
+            String tip = shared ? sharedTip : null;
+            edit.setToolTipText(tip);
+            del.setToolTipText(tip);
+            propose.setToolTipText(tip);
+        });
+        return (JPanel) UiKit.dynamicSection("Приёмные карты (модульные экраны)",
+                listSectionBody(receiverCardScroll, crud));
+    }
+
+    private JPanel buildPowerSupplyLibrary() {
+        powerSupplyList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        powerSupplyRenderer = new NamedRenderer<PowerSupplyType>(
+                PowerSupplyType::getName,
+                t -> (t.getVendor() == null || t.getVendor().isEmpty() ? "" : t.getVendor() + " · ")
+                        + (t.getOutputs() == null ? "шлейфы не указаны" : t.getOutputs() + (t.isCardOutput() ? "+К" : "")
+                        + " вых.")
+                        + optionalPart("", t.getRatedPowerW(), " Вт")
+                        + optionalPart("кабель", t.getCableLengthMm(), " мм")
+                        + (t.getCompany() == null || t.getCompany().isEmpty() ? "" : " · Компания: " + t.getCompany()),
+                t -> model.isSharedPowerSupplyType(t.getId()));
+        powerSupplyList.setCellRenderer(powerSupplyRenderer);
+
+        JPanel crud = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
+        JButton add = new JButton("Добавить");
+        add.addActionListener(e -> {
+            PowerSupplyType t = new PowerSupplyTypeDialog(topWindow(), null).showDialog();
+            if (t != null) tryRun(() -> model.addPowerSupplyType(t));
+        });
+        JButton edit = new JButton("Изменить");
+        edit.addActionListener(e -> {
+            PowerSupplyType sel = powerSupplyList.getSelectedValue();
+            if (sel == null) return;
+            PowerSupplyType t = new PowerSupplyTypeDialog(topWindow(), sel).showDialog();
+            if (t != null) tryRun(() -> model.updatePowerSupplyType(t));
+        });
+        Runnable deleteSelected = () -> {
+            PowerSupplyType sel = powerSupplyList.getSelectedValue();
+            if (sel != null && confirm("Удалить блок питания «" + sel.getName() + "» из библиотеки?")) {
+                tryRun(() -> model.deletePowerSupplyType(sel.getId()));
+            }
+        };
+        JButton del = new JButton("Удалить");
+        del.addActionListener(e -> deleteSelected.run());
+        UiKit.bindDeleteKey(powerSupplyList, deleteSelected);
+        JButton propose = new JButton("Предложить…");
+        propose.addActionListener(e -> {
+            PowerSupplyType sel = powerSupplyList.getSelectedValue();
+            if (sel != null) ProposeDialog.show(topWindow(), settings, "POWER_SUPPLY", sel.getName(), sel);
+        });
+        JButton copyEdit = new JButton("Скопировать и править…");
+        copyEdit.setToolTipText("Создать личную копию общего блока питания и сразу открыть её на редактирование —"
+                + " оригинал не меняется; если вы вошли в аккаунт, эти же правки заодно предложатся как патч"
+                + " общего элемента.");
+        copyEdit.addActionListener(e -> {
+            PowerSupplyType sel = powerSupplyList.getSelectedValue();
+            if (sel == null || !model.isSharedPowerSupplyType(sel.getId())) return;
+            List<String> names = model.getPowerSupplyTypes().stream().map(PowerSupplyType::getName).toList();
+            PowerSupplyType result = copySharedAndEdit(sel.getId(), sel.getName(), "POWER_SUPPLY",
+                    () -> {
+                        PowerSupplyType t = sel.copy();
+                        t.setId(java.util.UUID.randomUUID().toString());
+                        t.setName(uniqueCopyName(sel.getName(), names));
+                        return t;
+                    },
+                    model::addPowerSupplyType,
+                    seed -> new PowerSupplyTypeDialog(topWindow(), seed).showDialog(),
+                    model::updatePowerSupplyType,
+                    PowerSupplyType::getName);
+            powerSupplyList.setSelectedValue(result, true);
+        });
+        crud.add(add);
+        crud.add(edit);
+        crud.add(del);
+        crud.add(propose);
+        crud.add(copyEdit);
+        String sharedTip = "Общие элементы редактируются только через админ-консоль";
+        powerSupplyList.addListSelectionListener(e -> {
+            PowerSupplyType sel = powerSupplyList.getSelectedValue();
+            boolean shared = sel != null && model.isSharedPowerSupplyType(sel.getId());
+            edit.setEnabled(sel != null && !shared);
+            del.setEnabled(sel != null && !shared);
+            propose.setEnabled(sel != null && !shared);
+            copyEdit.setEnabled(shared);
+            String tip = shared ? sharedTip : null;
+            edit.setToolTipText(tip);
+            del.setToolTipText(tip);
+            propose.setToolTipText(tip);
+        });
+        return (JPanel) UiKit.dynamicSection("Блоки питания (модульные экраны)",
+                listSectionBody(powerSupplyScroll, crud));
+    }
+
     // ---- каталог "Тип разъёма" в диалоге разъёмов питания распределения
     //      (PowerConnectorsConfigDialog) — баг-репорт 2026-09-30: раньше жёстко
     //      зашитый список без возможности редактирования. Только имя, поэтому без
@@ -1453,6 +1648,16 @@ public class LibrariesStagePanel extends JPanel {
         syncList(networkDeviceModel, model.getNetworkDeviceTypes());
         ListSizing.fit(networkDeviceList, networkDeviceScroll, 2, 6, w);
         recapSection(networkDeviceSection);
+
+        receiverCardRenderer.setFixedWidth(rw);
+        syncList(receiverCardModel, model.getReceiverCardTypes());
+        ListSizing.fit(receiverCardList, receiverCardScroll, 2, 6, w);
+        recapSection(receiverCardSection);
+
+        powerSupplyRenderer.setFixedWidth(rw);
+        syncList(powerSupplyModel, model.getPowerSupplyTypes());
+        ListSizing.fit(powerSupplyList, powerSupplyScroll, 2, 6, w);
+        recapSection(powerSupplySection);
 
         powerConnectorPresetRenderer.setFixedWidth(rw);
         syncList(powerConnectorPresetModel, model.getPowerConnectorPresets());

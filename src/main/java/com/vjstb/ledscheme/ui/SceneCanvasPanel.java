@@ -1182,6 +1182,9 @@ public class SceneCanvasPanel extends JPanel {
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
         Graphics2D g2 = (Graphics2D) g.create();
+        if (settings != null) {
+            UnitOverlayPainter.setNumbering(settings.activeProfile().getReceiverCardNumbering());
+        }
         if (viewTransformActive()) {
             clampViewPan();
             g2.translate(viewPanX, viewPanY);
@@ -1587,8 +1590,8 @@ public class SceneCanvasPanel extends JPanel {
         java.awt.Stroke prevStroke = g2.getStroke();
         Color prevColor = g2.getColor();
         for (String id : active) {
-            CabinetInstance cab = s.cabinetById(id);
-            if (cab != null) {
+            // звено — кабинет либо карта/блок: подсвечиваем все его ячейки (трек D)
+            for (CabinetInstance cab : com.vjstb.ledscheme.service.ChainLinks.cabinetsOf(s, id)) {
                 int x = cabX(cab, type, cellW, offX);
                 int y = cabY(cab, type, cellH, offY);
                 int ew = effW(cab, type, cellW);
@@ -1818,7 +1821,8 @@ public class SceneCanvasPanel extends JPanel {
 
     private CabinetLoc locateCabinet(Scene scene, java.util.Map<String, int[]> screenBoxes, String cabId) {
         for (Screen s : scene.getScreens()) {
-            CabinetInstance cab = s.cabinetById(cabId);
+            // звено моста между экранами — кабинет либо «место» карты/блока (трек D)
+            CabinetInstance cab = com.vjstb.ledscheme.service.ChainLinks.place(s, cabId);
             if (cab == null) {
                 continue;
             }
@@ -1978,6 +1982,17 @@ public class SceneCanvasPanel extends JPanel {
             }
             for (com.vjstb.ledscheme.model.SignalChain sc : scene.getSignalChains()) {
                 wired.addAll(sc.getCabinetInstanceIds());
+            }
+        }
+        // модульный экран (трек D): модуль расключён, если в цепочке его карта или его блок питания
+        for (var card : s.getReceiverCards()) {
+            if (wired.contains(card.getId())) {
+                wired.addAll(card.getModuleIds());
+            }
+        }
+        for (var supply : s.getPowerSupplies()) {
+            if (wired.contains(supply.getId())) {
+                wired.addAll(supply.getModuleIds());
             }
         }
         int wiredCount = 0;

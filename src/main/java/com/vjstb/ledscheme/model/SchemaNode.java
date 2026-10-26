@@ -270,6 +270,19 @@ public class SchemaNode {
         return null;
     }
 
+    /** Для узла-экрана с модулями (типы с флагом «Приёмная карта отдельно»): пока модуль на миниатюре слишком мал для
+     *  подписи, рисовать только карты (в питании — блоки), а отдельные модули — когда блок увеличили настолько, что
+     *  подписи помещаются. По умолчанию включено; на экране без модулей не используется и в меню не показывается. */
+    private boolean unitsWhenSmall = true;
+
+    public boolean isUnitsWhenSmall() {
+        return unitsWhenSmall;
+    }
+
+    public void setUnitsWhenSmall(boolean unitsWhenSmall) {
+        this.unitsWhenSmall = unitsWhenSmall;
+    }
+
     public boolean isOnlyUsedPorts() {
         return onlyUsedPorts;
     }

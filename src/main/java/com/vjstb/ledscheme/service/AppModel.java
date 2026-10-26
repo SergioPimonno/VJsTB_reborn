@@ -7,6 +7,8 @@ import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.CableLengthProfile;
 import com.vjstb.ledscheme.model.CaseType;
+import com.vjstb.ledscheme.model.PowerSupplyType;
+import com.vjstb.ledscheme.model.ReceiverCardType;
 import com.vjstb.ledscheme.model.RoomEquipmentType;
 import com.vjstb.ledscheme.model.RoomFurnitureType;
 import com.vjstb.ledscheme.model.HoistType;
@@ -191,6 +193,7 @@ public class AppModel {
         for (Project project : workspace.getProjects()) {
             seedScreenMaskColorsFromLegacyPlacements(project);
             ensureSchemaSheets(project);
+            pruneUnknownChainUnits(project);
         }
         normalizeStructureCells(workspace.getProjects());
     }
@@ -222,6 +225,19 @@ public class AppModel {
         }
         for (Scene scene : project.getScenes()) {
             SchemaSheetMigration.ensure(scene);
+        }
+    }
+
+    /** Звенья цепочек, которым не соответствует ни кабинет, ни карта, ни блок экранов сцены, молча отбрасываются при
+     *  загрузке (docs/receiver-cards/PLAN.md, 4.2): так проект, пересохранённый старым клиентом (тот карт и блоков не
+     *  знает и теряет, а цепочки с их id остаются), открывается без битых звеньев. Без undo и без сохранения — часть
+     *  загрузки; на диск исправленное попадёт со следующим сохранением. */
+    private static void pruneUnknownChainUnits(Project project) {
+        if (project == null) {
+            return;
+        }
+        for (Scene scene : project.getScenes()) {
+            ChainUnits.pruneUnknown(scene);
         }
     }
 
@@ -620,8 +636,22 @@ public class AppModel {
         if (existing == null) {
             throw new IllegalArgumentException("Кабинет не найден в библиотеке");
         }
+        boolean flagCleared = existing.isReceiverCardSeparate() && !edited.isReceiverCardSeparate();
         existing.applyEditedValues(edited);
+        if (flagCleared) {
+            // Тип перестал быть модулем: его ячейки выпадают из карт и блоков, звенья — из цепочек (подтверждение
+            // «N карт, M блоков будут удалены» — на стороне UI по moduleFlagRemovalImpact до вызова). Правка
+            // библиотеки не отменяется, как и остальные правки типов.
+            ModuleIntegrity.reconcileWorkspace(workspace);
+        }
         changed();
+    }
+
+    /** Что случится с картами и блоками питания во ВСЕХ проектах, если у типа кабинета снять флаг «Приёмная карта
+     *  отдельно» (docs/receiver-cards/PLAN.md, раздел 5): UI показывает «N карт, M блоков и их цепочки будут
+     *  удалены» и просит подтверждения до {@link #updateCabinetType}. */
+    public ModuleIntegrity.Impact moduleFlagRemovalImpact(String cabinetTypeId) {
+        return ModuleIntegrity.impactOfClearingModuleFlag(workspace, cabinetTypeId);
     }
 
     public void deleteCabinetType(String id) {
@@ -1660,6 +1690,7 @@ public class AppModel {
     public Project importProject(Project incoming) {
         incoming.setId(java.util.UUID.randomUUID().toString());
         ensureSchemaSheets(incoming);
+        pruneUnknownChainUnits(incoming);
         normalizeStructureCells(List.of(incoming));
         workspace.getProjects().add(incoming);
         changed();
@@ -1690,6 +1721,7 @@ public class AppModel {
      *  {@code LocalArchiveDialog} удаляет его отдельно через LocalArchiveStore. */
     public Project restoreProjectFromArchive(Project p) {
         ensureSchemaSheets(p);
+        pruneUnknownChainUnits(p);
         normalizeStructureCells(List.of(p));
         workspace.getProjects().add(p);
         changed();
@@ -1833,6 +1865,8 @@ public class AppModel {
         screen.setName(name);
         screen.setCabinetTypeId(cabinetTypeId);
         ScreenLogic.resizeGrid(screen, rows, cols, sceneContaining(screen));
+        // Смена сетки/типа экрана: ячейки за краем и ячейки, переставшие быть модулями, уходят из карт и блоков.
+        reconcileModules(screen);
         undoStack.clear(); // id кабинетов могли измениться — снимки недействительны
         changed();
     }
@@ -3602,6 +3636,18 @@ public class AppModel {
         changed();
     }
 
+    /** «Карты вместо мелких модулей» на блоке(ах) экрана — см. {@link SchemaNode#isUnitsWhenSmall()}. */
+    public void setSchemaNodesUnitsWhenSmall(Collection<SchemaNode> nodes, boolean unitsWhenSmall) {
+        if (nodes.isEmpty()) {
+            return;
+        }
+        pushUndo("Карты вместо мелких модулей");
+        for (SchemaNode n : nodes) {
+            n.setUnitsWhenSmall(unitsWhenSmall);
+        }
+        changed();
+    }
+
     /** Размер шрифта заголовка/подписей блока(ов) — на многовыделение, одна запись
      *  отмены, как {@link #setSchemaNodesOrientation}. {@code fontSize == null}
      *  возвращает блок к размеру ЕГО СХЕМЫ (а если у схемы он не задан — к стандартному,
@@ -4756,7 +4802,8 @@ public class AppModel {
                 new ArrayList<>(vendors));
     }
 
-    /** Импорт кабинетов, оборудования и кабелей из Excel-таблицы по шаблону (см. {@link LibraryXlsx}) в ЛИЧНУЮ
+    /** Импорт кабинетов (в т.ч. флага «Приёмная карта отдельно»), оборудования, кабелей, приёмных карт и блоков
+     *  питания из Excel-таблицы по шаблону (см. {@link LibraryXlsx}) в ЛИЧНУЮ
      *  библиотеку: записи общей библиотеки не затрагиваются. {@link IllegalArgumentException} с текстом для
      *  пользователя, если файл не читается или это не шаблон. */
     public LibraryXlsx.Report importLibraryXlsx(File file) {
@@ -4764,7 +4811,9 @@ public class AppModel {
         LibraryXlsx.Report report = LibraryXlsx.merge(parsed, new LibraryXlsx.Libraries(
                 workspace.getSharedCabinetTypes(), workspace.getCabinetTypes(),
                 workspace.getSharedEquipmentPresets(), workspace.getEquipmentPresets(),
-                workspace.getSharedCableTypes(), workspace.getCableTypes()));
+                workspace.getSharedCableTypes(), workspace.getCableTypes(),
+                workspace.getSharedReceiverCardTypes(), workspace.getReceiverCardTypes(),
+                workspace.getSharedPowerSupplyTypes(), workspace.getPowerSupplyTypes()));
         if (report.total() > 0) {
             changed();
         }
@@ -5211,6 +5260,194 @@ public class AppModel {
         changed();
     }
 
+    // ---- библиотека модульных экранов: приёмные карты и блоки питания (docs/receiver-cards/PLAN.md) ----
+    //      На id этих типов ссылаются экземпляры карт/блоков на экране (трек B плана): удаление типа и
+    //      синк-удаление общего типа защищены от ссылок так же, как у CABINET/HOIST (removeSharedIfUnreferenced),
+    //      продвижение личного типа в общий переносит ссылки (migrateReceiverCardTypeReferences и т.д.).
+
+    /** Общая библиотека ++ личная — см. javadoc {@link #getCabinetTypes()}. */
+    public List<ReceiverCardType> getReceiverCardTypes() {
+        List<ReceiverCardType> union = new ArrayList<>(workspace.getSharedReceiverCardTypes());
+        union.addAll(workspace.getReceiverCardTypes());
+        return union;
+    }
+
+    public boolean isSharedReceiverCardType(String id) {
+        return id != null && workspace.getSharedReceiverCardTypes().stream().anyMatch(t -> t.getId().equals(id));
+    }
+
+    private void requireUniqueReceiverCardName(String name, String ignoreId) {
+        for (ReceiverCardType t : getReceiverCardTypes()) {
+            if (t.getName().equalsIgnoreCase(name) && !t.getId().equals(ignoreId)) {
+                throw new IllegalStateException("Приёмная карта «" + name + "» уже есть в библиотеке");
+            }
+        }
+    }
+
+    public ReceiverCardType addReceiverCardType(ReceiverCardType type) {
+        requireUniqueReceiverCardName(type.getName(), null);
+        workspace.getReceiverCardTypes().add(type);
+        changed();
+        return type;
+    }
+
+    public void updateReceiverCardType(ReceiverCardType edited) {
+        requireUniqueReceiverCardName(edited.getName(), edited.getId());
+        ReceiverCardType existing = workspace.getReceiverCardTypes().stream()
+                .filter(t -> t.getId().equals(edited.getId())).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Приёмная карта не найдена в личной библиотеке (общие позиции правит администратор)"));
+        existing.applyEditedValues(edited);
+        changed();
+    }
+
+    /** Тип карты, на который ссылается хоть одна карта хоть одного экрана, удалить нельзя — как у типа кабинета
+     *  ({@link #deleteCabinetType}): иначе у карт молча пропали бы лимиты выходов и длина шлейфа. */
+    public void deleteReceiverCardType(String id) {
+        if (isReceiverCardTypeReferenced(id)) {
+            throw new IllegalStateException("Приёмная карта используется на экране и не может быть удалена из библиотеки");
+        }
+        workspace.getReceiverCardTypes().removeIf(t -> t.getId().equals(id));
+        changed();
+    }
+
+    public boolean isReceiverCardTypeReferenced(String id) {
+        if (id == null) {
+            return false;
+        }
+        for (Project project : workspace.getProjects()) {
+            for (Scene scene : project.getScenes()) {
+                for (Screen screen : scene.getScreens()) {
+                    for (com.vjstb.ledscheme.model.ReceiverCardInstance card : screen.getReceiverCards()) {
+                        if (id.equals(card.getReceiverCardTypeId())) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private void migrateReceiverCardTypeReferences(String oldId, String newId) {
+        for (Project project : workspace.getProjects()) {
+            for (Scene scene : project.getScenes()) {
+                for (Screen screen : scene.getScreens()) {
+                    for (com.vjstb.ledscheme.model.ReceiverCardInstance card : screen.getReceiverCards()) {
+                        if (oldId.equals(card.getReceiverCardTypeId())) {
+                            card.setReceiverCardTypeId(newId);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** Общая библиотека ++ личная — см. javadoc {@link #getCabinetTypes()}. */
+    public List<PowerSupplyType> getPowerSupplyTypes() {
+        List<PowerSupplyType> union = new ArrayList<>(workspace.getSharedPowerSupplyTypes());
+        union.addAll(workspace.getPowerSupplyTypes());
+        return union;
+    }
+
+    public boolean isSharedPowerSupplyType(String id) {
+        return id != null && workspace.getSharedPowerSupplyTypes().stream().anyMatch(t -> t.getId().equals(id));
+    }
+
+    private void requireUniquePowerSupplyName(String name, String ignoreId) {
+        for (PowerSupplyType t : getPowerSupplyTypes()) {
+            if (t.getName().equalsIgnoreCase(name) && !t.getId().equals(ignoreId)) {
+                throw new IllegalStateException("Блок питания «" + name + "» уже есть в библиотеке");
+            }
+        }
+    }
+
+    public PowerSupplyType addPowerSupplyType(PowerSupplyType type) {
+        requireUniquePowerSupplyName(type.getName(), null);
+        workspace.getPowerSupplyTypes().add(type);
+        changed();
+        return type;
+    }
+
+    public void updatePowerSupplyType(PowerSupplyType edited) {
+        requireUniquePowerSupplyName(edited.getName(), edited.getId());
+        PowerSupplyType existing = workspace.getPowerSupplyTypes().stream()
+                .filter(t -> t.getId().equals(edited.getId())).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Блок питания не найден в личной библиотеке (общие позиции правит администратор)"));
+        boolean cardOutputChanged = existing.isCardOutput() != edited.isCardOutput();
+        existing.applyEditedValues(edited);
+        if (cardOutputChanged) {
+            // D19 плана receiver-cards: «Отдельный выход на карту» меняет, хватает ли блоку шлейфов, —
+            // автоматически разбитые области этого типа разбиваются заново сразу (ручные блоки не трогаются);
+            // пересозданные блоки теряют фазы (D23). Правка библиотеки не отменяется, как и остальные.
+            recalcPowerAutoAreas(edited.getId());
+        }
+        changed();
+    }
+
+    /** Пересчитывает автоматически разбитые области блоков питания типа {@code typeId} на всех экранах всех
+     *  проектов и вычищает из цепочек сцен звенья блоков, которые при этом пересозданы. */
+    private void recalcPowerAutoAreas(String typeId) {
+        for (Project project : workspace.getProjects()) {
+            for (Scene scene : project.getScenes()) {
+                for (Screen screen : scene.getScreens()) {
+                    if (screen.getPowerAutoAreas().isEmpty()) {
+                        continue;
+                    }
+                    EditReport r = PowerSupplyEditor.onTypeChanged(screen, workspace, typeId);
+                    ModuleIntegrity.dropFromChains(scene, r.removedIds());
+                }
+            }
+        }
+    }
+
+    /** Как {@link #deleteReceiverCardType}: тип, на который ссылается блок экрана, удалить нельзя. */
+    public void deletePowerSupplyType(String id) {
+        if (isPowerSupplyTypeReferenced(id)) {
+            throw new IllegalStateException("Блок питания используется на экране и не может быть удалён из библиотеки");
+        }
+        workspace.getPowerSupplyTypes().removeIf(t -> t.getId().equals(id));
+        changed();
+    }
+
+    public boolean isPowerSupplyTypeReferenced(String id) {
+        if (id == null) {
+            return false;
+        }
+        for (Project project : workspace.getProjects()) {
+            for (Scene scene : project.getScenes()) {
+                for (Screen screen : scene.getScreens()) {
+                    for (com.vjstb.ledscheme.model.PowerSupplyInstance s : screen.getPowerSupplies()) {
+                        if (id.equals(s.getPowerSupplyTypeId())) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private void migratePowerSupplyTypeReferences(String oldId, String newId) {
+        for (Project project : workspace.getProjects()) {
+            for (Scene scene : project.getScenes()) {
+                for (Screen screen : scene.getScreens()) {
+                    for (com.vjstb.ledscheme.model.PowerSupplyInstance s : screen.getPowerSupplies()) {
+                        if (oldId.equals(s.getPowerSupplyTypeId())) {
+                            s.setPowerSupplyTypeId(newId);
+                        }
+                    }
+                    for (com.vjstb.ledscheme.model.PowerAutoArea a : screen.getPowerAutoAreas()) {
+                        if (oldId.equals(a.getPowerSupplyTypeId())) {
+                            a.setPowerSupplyTypeId(newId);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /** Общая библиотека ("GTO") ++ личная — см. javadoc {@link #getCabinetTypes()}
      *  про то же разделение. */
     public List<VehicleType> getVehicleTypes() {
@@ -5395,6 +5632,16 @@ public class AppModel {
                             RoomFurnitureType::getId, RoomFurnitureType::setId, RoomFurnitureType::getName,
                             (oldId, newId) -> migrateRoomReferences(
                                     com.vjstb.ledscheme.model.RoomLibRef.Kind.ROOM_FURNITURE, oldId, newId));
+                    // Приёмные карты и блоки питания модульных экранов: на их id ссылаются экземпляры
+                    // карт/блоков экранов (и записи автообластей) — продвижение личного типа в общий переносит ссылки.
+                    case "RECEIVER_CARD" -> applyOne(workspace.getSharedReceiverCardTypes(),
+                            workspace.getReceiverCardTypes(), dto, ReceiverCardType.class,
+                            ReceiverCardType::getId, ReceiverCardType::setId, ReceiverCardType::getName,
+                            this::migrateReceiverCardTypeReferences);
+                    case "POWER_SUPPLY" -> applyOne(workspace.getSharedPowerSupplyTypes(),
+                            workspace.getPowerSupplyTypes(), dto, PowerSupplyType.class,
+                            PowerSupplyType::getId, PowerSupplyType::setId, PowerSupplyType::getName,
+                            this::migratePowerSupplyTypeReferences);
                     case "VEHICLE" -> applyOne(workspace.getSharedVehicleTypes(), workspace.getVehicleTypes(), dto,
                             VehicleType.class, VehicleType::getId, VehicleType::setId, VehicleType::getName,
                             NO_REFERENCE_MIGRATION);
@@ -5428,6 +5675,9 @@ public class AppModel {
             }
         }
         if (added > 0 || updated > 0 || deletedCount > 0) {
+            // Сервер мог снять флаг «Приёмная карта отдельно» у общего типа кабинета: модули, переставшие быть
+            // модулями, уходят из карт и блоков (для проектов без карт — мгновенный выход).
+            ModuleIntegrity.reconcileWorkspace(workspace);
             changed();
         }
         return new LibrarySyncSummary(added, updated, deletedCount, skippedDeleted);
@@ -5461,6 +5711,10 @@ public class AppModel {
             case "CASE" -> workspace.getSharedCaseTypes().removeIf(c -> c.getId().equals(dto.id()));
             case "ROOM_EQUIPMENT" -> workspace.getSharedRoomEquipmentTypes().removeIf(t -> t.getId().equals(dto.id()));
             case "ROOM_FURNITURE" -> workspace.getSharedRoomFurnitureTypes().removeIf(t -> t.getId().equals(dto.id()));
+            case "RECEIVER_CARD" -> removeSharedIfUnreferenced(workspace.getSharedReceiverCardTypes(), dto.id(),
+                    ReceiverCardType::getId, this::isReceiverCardTypeReferenced);
+            case "POWER_SUPPLY" -> removeSharedIfUnreferenced(workspace.getSharedPowerSupplyTypes(), dto.id(),
+                    PowerSupplyType::getId, this::isPowerSupplyTypeReferenced);
             case "VEHICLE" -> workspace.getSharedVehicleTypes().removeIf(v -> v.getId().equals(dto.id()));
             case "NETWORK_DEVICE" -> workspace.getSharedNetworkDeviceTypes().removeIf(t -> t.getId().equals(dto.id()));
             case "EQUIPMENT_SERIES" -> workspace.getSharedEquipmentSeries().removeIf(s -> s.getId().equals(dto.id()));
@@ -6579,6 +6833,9 @@ public class AppModel {
 
     private void removeScreenNoNotify(Screen screen) {
         currentScene.getScreens().remove(screen);
+        // Карты и блоки удалённого экрана пропадают вместе с ним — их звенья уходят из цепочек сцены
+        // (отмена структурной правки вернёт и экран, и цепочки: они в снимке).
+        ModuleIntegrity.onScreenRemoved(currentScene, screen);
         if (currentScreen == screen) {
             currentScreen = null;
             dropScreenBoundUndo();
@@ -6899,10 +7156,164 @@ public class AppModel {
             // считаться так, будто кабинет всё ещё на месте, см. баг-репорт: "удалённый"
             // кабинет оставался доступен в цепочках).
             removeCabinetFromAllChains(cabId);
+            // Скрытый модуль выпадает из своей карты и своего блока питания; опустевшие карта/блок удаляются
+            // вместе со звеньями в цепочках (docs/receiver-cards/PLAN.md, раздел 5).
+            dropModulesFromCardsAndSupplies(currentScreen, List.of(cabId));
             resyncPowerSockets(currentScreen);
             resyncSignalSockets(currentScreen);
         }
         changed();
+    }
+
+    // ---- модульные экраны: приёмные карты и блоки питания (docs/receiver-cards/PLAN.md, треки B–C) ----
+    //      Каждая операция — ОДНА запись отмены (runBatch): снимок текущего экрана вместе с картами, блоками,
+    //      автообластями и шаблоном нумерации + снимок цепочек сцены. Повторная протяжка, ничего не менявшая
+    //      (EditReport.noop), записи отмены не оставляет. Работают с ТЕКУЩИМ экраном (как остальные правки экрана).
+
+    /** Выполняет правку карт/блоков текущего экрана одной записью отмены; id исчезнувших звеньев убираются из цепочек
+     *  сцены. {@code noop}-отчёт и исключение откатывают саму запись отмены (пустое «Отменить» сбивает с толку). */
+    private EditReport runModularEdit(String undoLabel, java.util.function.Function<Screen, EditReport> op) {
+        if (currentScreen == null || currentScene == null) {
+            return EditReport.nothing();
+        }
+        Screen screen = currentScreen;
+        Scene scene = currentScene;
+        int depth = undoStack.size();
+        EditReport report;
+        try {
+            report = runBatch(undoLabel, () -> {
+                EditReport r = op.apply(screen);
+                if (!r.noop() && !r.removedIds().isEmpty()) {
+                    ModuleIntegrity.dropFromChains(scene, r.removedIds());
+                    resyncPowerSockets(screen);
+                    resyncSignalSockets(screen);
+                }
+                return r;
+            });
+        } catch (RuntimeException e) {
+            if (undoStack.size() > depth) {
+                undoStack.pop();
+            }
+            throw e;
+        }
+        if (report.noop() && undoStack.size() > depth) {
+            undoStack.pop();
+        }
+        return report;
+    }
+
+    /** «Вручную»: одна приёмная карта типа {@code typeId} на модули прямоугольника (правило замены D10). */
+    public EditReport assignReceiverCardsManual(com.vjstb.ledscheme.model.GridRect rect, String typeId) {
+        return runModularEdit("Назначение приёмной карты",
+                s -> ReceiverCardEditor.assignManual(s, workspace, rect, typeId));
+    }
+
+    /** «Автоматически»: разбиение прямоугольника на карты {@code w × h} модулей, остаток — меньшими картами. */
+    public EditReport assignReceiverCardsAuto(com.vjstb.ledscheme.model.GridRect rect, String typeId, int w, int h) {
+        return runModularEdit("Автоназначение приёмных карт",
+                s -> ReceiverCardEditor.assignAuto(s, workspace, rect, typeId, w, h));
+    }
+
+    public EditReport removeReceiverCard(String cardId) {
+        return runModularEdit("Снятие приёмной карты", s -> ReceiverCardEditor.remove(s, cardId));
+    }
+
+    /** «Место карты…» (D11). */
+    public void setReceiverCardPlace(String cardId, String moduleId) {
+        runModularEdit("Место приёмной карты", s -> {
+            com.vjstb.ledscheme.model.ReceiverCardInstance card = s.receiverCardById(cardId);
+            if (card != null && java.util.Objects.equals(card.getHostModuleId(), moduleId)) {
+                return EditReport.nothing();
+            }
+            ReceiverCardEditor.setHost(s, cardId, moduleId);
+            return EditReport.done();
+        });
+    }
+
+    /** Полный ручной порядок подключения модулей карты (D8); {@code null} — сбросить к шаблону. */
+    public void setReceiverCardManualOrder(String cardId, List<String> moduleIds) {
+        runModularEdit("Порядок модулей приёмной карты", s -> {
+            ReceiverCardEditor.setManualOrder(s, cardId, moduleIds);
+            return EditReport.done();
+        });
+    }
+
+    /** Один клик режима «Порядок вручную»: модуль получает следующий номер. */
+    public void appendReceiverCardManualOrder(String cardId, String moduleId) {
+        runModularEdit("Порядок модулей приёмной карты", s -> {
+            ReceiverCardEditor.appendManualOrder(s, cardId, moduleId);
+            return EditReport.done();
+        });
+    }
+
+    /** «Сбросить к шаблону». */
+    public void resetReceiverCardOrder(String cardId) {
+        runModularEdit("Сброс порядка модулей приёмной карты", s -> {
+            ReceiverCardEditor.resetOrder(s, cardId);
+            return EditReport.done();
+        });
+    }
+
+    /** Шаблон нумерации модулей экрана (палитра под холстом + «змейка», D7). */
+    public void setModuleNumbering(com.vjstb.ledscheme.model.ModuleNumberingPattern pattern) {
+        runModularEdit("Нумерация модулей экрана", s -> {
+            if (s.getModuleNumbering().equals(pattern)) {
+                return EditReport.nothing();
+            }
+            ReceiverCardEditor.setPattern(s, pattern);
+            return EditReport.done();
+        });
+    }
+
+    /** «Вручную»: один блок питания типа {@code typeId} на модули прямоугольника (правило замены D18). */
+    public EditReport assignPowerSuppliesManual(com.vjstb.ledscheme.model.GridRect rect, String typeId) {
+        return runModularEdit("Назначение блока питания",
+                s -> PowerSupplyEditor.assignManual(s, workspace, rect, typeId));
+    }
+
+    /** «Автоматически»: область дробится на блоки подобранного размера (D18); итог — в {@link EditReport#autoInfo()}. */
+    public EditReport assignPowerSuppliesAuto(com.vjstb.ledscheme.model.GridRect rect, String typeId) {
+        return assignPowerSuppliesAuto(rect, typeId, null, null);
+    }
+
+    /** С ограничениями размера блока (модулей не больше по горизонтали / вертикали); {@code null} — не задано. */
+    public EditReport assignPowerSuppliesAuto(com.vjstb.ledscheme.model.GridRect rect, String typeId,
+                                              Integer maxWidth, Integer maxHeight) {
+        return runModularEdit("Автоназначение блоков питания",
+                s -> PowerSupplyEditor.assignAuto(s, workspace, rect, typeId, maxWidth, maxHeight));
+    }
+
+    public EditReport removePowerSupply(String supplyId) {
+        return runModularEdit("Снятие блока питания", s -> PowerSupplyEditor.remove(s, supplyId));
+    }
+
+    /** «Место блока…» (D20). */
+    public void setPowerSupplyPlace(String supplyId, String moduleId) {
+        runModularEdit("Место блока питания", s -> {
+            com.vjstb.ledscheme.model.PowerSupplyInstance supply = s.powerSupplyById(supplyId);
+            if (supply != null && java.util.Objects.equals(supply.getHostModuleId(), moduleId)) {
+                return EditReport.nothing();
+            }
+            PowerSupplyEditor.setHost(s, supplyId, moduleId);
+            return EditReport.done();
+        });
+    }
+
+    /** Приводит карты и блоки экрана в согласие с реальными модулями ({@link ModuleIntegrity#reconcile}), звенья
+     *  исчезнувших карт/блоков убирает из цепочек сцены. */
+    private void reconcileModules(Screen screen) {
+        ModuleIntegrity.Lost lost = ModuleIntegrity.reconcile(screen, workspace);
+        if (!lost.isEmpty()) {
+            ModuleIntegrity.dropFromChains(sceneContaining(screen), lost.all());
+        }
+    }
+
+    /** Убирает модули из карт и блоков питания экрана, а исчезнувшие при этом звенья — из цепочек сцены. */
+    private void dropModulesFromCardsAndSupplies(Screen screen, java.util.Collection<String> moduleIds) {
+        ModuleIntegrity.Lost lost = ModuleIntegrity.onModulesLost(screen, moduleIds);
+        if (!lost.isEmpty()) {
+            ModuleIntegrity.dropFromChains(sceneContaining(screen), lost.all());
+        }
     }
 
     /** Убирает id кабинета из ЛЮБОЙ силовой/сигнальной цепочки сцены, где он встречается
@@ -6937,6 +7348,8 @@ public class AppModel {
         }
         pushUndo("Смена типа кабинета");
         cab.setCabinetTypeId(cabinetTypeId);
+        // Ячейка могла перестать быть модулем — тогда она уходит из карты и блока питания.
+        reconcileModules(currentScreen);
         // Форма по умолчанию (без ручного переопределения) и так автоматически
         // следует за типом — см. эффективное разрешение формы в ShapeEditorPanel.
         // Но если на этой ячейке РАНЬШЕ вручную выбрали конкретную форму (например
@@ -7046,14 +7459,9 @@ public class AppModel {
         // исключение и застревала (ChainInteractionController.finish() не ожидал
         // ошибки от commitHandler) — пользователь физически не мог завершить
         // построение (см. Task #64).
-        validateCabinetIdsAcrossScene(cabinetIds);
+        validateCabinetIdsAcrossScene(cabinetIds, ChainUnits.Mode.POWER);
         pushUndo("Добавление цепочки питания");
-        for (String cabId : cabinetIds) {
-            CabinetInstance cab = cabinetInScene(cabId);
-            if (cab != null) {
-                cab.setPhase(phase);
-            }
-        }
+        applyPhaseToLinks(cabinetIds, phase);
         // Цепочка хранится на уровне СЦЕНЫ, а не конкретного экрана (см. Task #78,
         // независимый менеджер цепочек) — раньше привязка к "текущему на момент
         // завершения" экрану была источником повторяющихся багов: экран, где
@@ -7064,6 +7472,17 @@ public class AppModel {
         currentScene.getPowerChains().add(new PowerChain(phase, cabinetIds));
         resyncPowerSockets(currentScreen);
         changed();
+    }
+
+    /** Фаза хранится на самих ячейках (статистика экрана по фазам, подписи, экспорт читают {@code
+     *  CabinetInstance#getPhase}), поэтому для звена-блока питания фаза ставится на все его модули — иначе
+     *  «L1: N каб.» в статистике и фазы модулей в экспорте остались бы пустыми (трек D, D22/D25). */
+    private void applyPhaseToLinks(List<String> linkIds, int phase) {
+        for (String id : linkIds) {
+            for (CabinetInstance cab : ChainLinks.cabinetsOf(currentScene, id)) {
+                cab.setPhase(phase);
+            }
+        }
     }
 
     /** Имя авто-карты сигнальных вводов узла-экрана (см. resyncSignalSockets) —
@@ -7188,29 +7607,14 @@ public class AppModel {
         }
     }
 
+    /** Ячейка звена цепочки: сам кабинет либо «место» карты/блока (трек D — звено может быть картой или блоком). */
     private CabinetInstance cabinetInScene(Scene scene, String id) {
-        if (scene == null) {
-            return null;
-        }
-        for (Screen s : scene.getScreens()) {
-            CabinetInstance c = s.cabinetById(id);
-            if (c != null) {
-                return c;
-            }
-        }
-        return null;
+        return ChainLinks.place(scene, id);
     }
 
+    /** Экран, которому принадлежит звено цепочки (кабинет, карта или блок). */
     private Screen screenOfCabinet(Scene scene, String id) {
-        if (scene == null) {
-            return null;
-        }
-        for (Screen s : scene.getScreens()) {
-            if (s.cabinetById(id) != null) {
-                return s;
-            }
-        }
-        return null;
+        return ChainLinks.screenOf(scene, id);
     }
 
     public void addSignalChain(Integer port, boolean backup, List<String> cabinetIds) {
@@ -7232,7 +7636,7 @@ public class AppModel {
         // Сигнальная цепочка (в отличие от питания) физически может продолжаться с
         // одного экрана на другой (общий даунлинк на смежные экраны) — поэтому
         // кабинет ищется по ВСЕЙ сцене, а не только на текущем экране.
-        validateCabinetIdsAcrossScene(cabinetIds);
+        validateCabinetIdsAcrossScene(cabinetIds, ChainUnits.Mode.SIGNAL);
         pushUndo("Добавление сигнальной цепочки");
         // Если для порта уже есть цепочка-заглушка (создана setSignalBackupPortLink
         // только чтобы было куда сохранить резервный порт, кабинетов ещё нет) —
@@ -7494,15 +7898,10 @@ public class AppModel {
         if (chain == null) {
             return;
         }
-        validateCabinetIdsAcrossScene(cabinetIds);
+        validateCabinetIdsAcrossScene(cabinetIds, ChainUnits.Mode.POWER);
         pushUndo("Правка цепочки питания");
         List<String> oldIds = new ArrayList<>(chain.getCabinetInstanceIds());
-        for (String cabId : cabinetIds) {
-            CabinetInstance cab = cabinetInScene(cabId);
-            if (cab != null) {
-                cab.setPhase(chain.getPhase());
-            }
-        }
+        applyPhaseToLinks(cabinetIds, chain.getPhase());
         chain.setCabinetInstanceIds(new ArrayList<>(cabinetIds));
         java.util.LinkedHashSet<String> touched = new java.util.LinkedHashSet<>(oldIds);
         touched.addAll(cabinetIds);
@@ -7521,7 +7920,7 @@ public class AppModel {
         if (chain == null) {
             return;
         }
-        validateCabinetIdsAcrossScene(cabinetIds);
+        validateCabinetIdsAcrossScene(cabinetIds, ChainUnits.Mode.SIGNAL);
         pushUndo("Правка сигнальной цепочки");
         List<String> oldIds = new ArrayList<>(chain.getCabinetInstanceIds());
         chain.setCabinetInstanceIds(new ArrayList<>(cabinetIds));
@@ -7730,10 +8129,7 @@ public class AppModel {
         if (scene == null) {
             return Set.of();
         }
-        Set<String> ownIds = new HashSet<>();
-        for (CabinetInstance ci : screen.getCabinets()) {
-            ownIds.add(ci.getId());
-        }
+        Set<String> ownIds = ownLinkIds(screen);
         Set<String> result = new LinkedHashSet<>();
         if (mode == SchemaMode.POWER) {
             for (PowerChain c : scene.getPowerChains()) {
@@ -7888,12 +8284,24 @@ public class AppModel {
         }
     }
 
+    /** id всех возможных звеньев цепочек экрана: кабинеты, а на модульном экране ещё и карты с блоками питания. */
+    private static Set<String> ownLinkIds(Screen screen) {
+        Set<String> ids = new HashSet<>();
+        for (CabinetInstance ci : screen.getCabinets()) {
+            ids.add(ci.getId());
+        }
+        for (var card : screen.getReceiverCards()) {
+            ids.add(card.getId());
+        }
+        for (var supply : screen.getPowerSupplies()) {
+            ids.add(supply.getId());
+        }
+        return ids;
+    }
+
     /** true — хотя бы один кабинет экрана {@code scr} занят цепочкой режима {@code mode}. */
     private boolean isScreenWiredFor(SchemaMode mode, Screen scr) {
-        Set<String> ownIds = new HashSet<>();
-        for (CabinetInstance ci : scr.getCabinets()) {
-            ownIds.add(ci.getId());
-        }
+        Set<String> ownIds = ownLinkIds(scr);
         if (mode == SchemaMode.POWER) {
             for (PowerChain c : currentScene.getPowerChains()) {
                 for (String id : c.getCabinetInstanceIds()) {
@@ -8201,35 +8609,41 @@ public class AppModel {
         pushUndo("Очистка цепочек");
         if (mode == Mode.POWER) {
             currentScene.getPowerChains().removeIf(c ->
-                    c.getCabinetInstanceIds().stream().anyMatch(id -> currentScreen.cabinetById(id) != null));
+                    ChainLinks.touches(currentScreen, c.getCabinetInstanceIds()));
         } else {
             currentScene.getSignalChains().removeIf(c ->
-                    c.getCabinetInstanceIds().stream().anyMatch(id -> currentScreen.cabinetById(id) != null));
+                    ChainLinks.touches(currentScreen, c.getCabinetInstanceIds()));
         }
         changed();
     }
 
     /** И силовая, и сигнальная цепочка могут физически продолжаться с одного экрана
      *  сцены на другой — кабинет ищется по всей сцене, а не только по текущему экрану. */
-    private void validateCabinetIdsAcrossScene(List<String> ids) {
+    private void validateCabinetIdsAcrossScene(List<String> ids, ChainUnits.Mode linkMode) {
         for (String id : ids) {
             if (cabinetInScene(id) == null) {
                 throw new IllegalArgumentException("Кабинет не найден в сцене");
+            }
+            // Трек D: на модульном экране звено — карта (сигнал) или блок (питание), а не сам модуль (D26);
+            // карта в цепочке питания и блок в цепочке сигнала так же бессмысленны.
+            Screen owner = ChainLinks.screenOf(currentScene, id);
+            if (owner != null && owner.cabinetById(id) != null
+                    && ChainLinks.isModule(owner, workspace, id)) {
+                throw new IllegalArgumentException(linkMode == ChainUnits.Mode.SIGNAL
+                        ? "Модуль в цепочку не добавляется — добавьте его приёмную карту"
+                        : "Модуль в цепочку не добавляется — добавьте его блок питания");
+            }
+            if (owner != null && (linkMode == ChainUnits.Mode.SIGNAL
+                    ? owner.powerSupplyById(id) != null : owner.receiverCardById(id) != null)) {
+                throw new IllegalArgumentException(linkMode == ChainUnits.Mode.SIGNAL
+                        ? "Блок питания нельзя добавить в цепочку сигнала"
+                        : "Приёмную карту нельзя добавить в цепочку питания");
             }
         }
     }
 
     private CabinetInstance cabinetInScene(String id) {
-        if (currentScene == null) {
-            return null;
-        }
-        for (Screen s : currentScene.getScreens()) {
-            CabinetInstance c = s.cabinetById(id);
-            if (c != null) {
-                return c;
-            }
-        }
-        return null;
+        return cabinetInScene(currentScene, id);
     }
 
     /** true, если этот кабинет (на любом экране текущей сцены) уже используется
@@ -8241,21 +8655,38 @@ public class AppModel {
         if (currentScene == null) {
             return false;
         }
+        // Трек D: id может быть и картой, и ячейкой-модулем — модуль занят, если занята его карта.
+        String card = null;
+        for (Screen s : currentScene.getScreens()) {
+            card = ChainLinks.unitContaining(s, cabinetId, ChainUnits.Mode.SIGNAL);
+            if (card != null) {
+                break;
+            }
+        }
         for (SignalChain c : currentScene.getSignalChains()) {
-            if (c.getCabinetInstanceIds().contains(cabinetId)) {
+            if (c.getCabinetInstanceIds().contains(cabinetId)
+                    || (card != null && c.getCabinetInstanceIds().contains(card))) {
                 return true;
             }
         }
         return false;
     }
 
-    /** Как {@link #isCabinetWiredForSignal}, но для силовой цепочки. */
+    /** Как {@link #isCabinetWiredForSignal}, но для силовой цепочки (модуль занят, если занят его блок). */
     public boolean isCabinetWiredForPower(String cabinetId) {
         if (currentScene == null) {
             return false;
         }
+        String supply = null;
+        for (Screen s : currentScene.getScreens()) {
+            supply = ChainLinks.unitContaining(s, cabinetId, ChainUnits.Mode.POWER);
+            if (supply != null) {
+                break;
+            }
+        }
         for (PowerChain c : currentScene.getPowerChains()) {
-            if (c.getCabinetInstanceIds().contains(cabinetId)) {
+            if (c.getCabinetInstanceIds().contains(cabinetId)
+                    || (supply != null && c.getCabinetInstanceIds().contains(supply))) {
                 return true;
             }
         }
@@ -8273,7 +8704,7 @@ public class AppModel {
             return result;
         }
         for (PowerChain c : scene.getPowerChains()) {
-            if (c.getCabinetInstanceIds().stream().anyMatch(id -> screen.cabinetById(id) != null)) {
+            if (ChainLinks.touches(screen, c.getCabinetInstanceIds())) {
                 result.add(c);
             }
         }
@@ -8301,6 +8732,15 @@ public class AppModel {
                     }
                     break;
                 }
+                // Звено-блок питания (трек D, D22): нагрузка фазы — номинальная мощность блока, а не сумма модулей.
+                if (s.powerSupplyById(id) != null || s.receiverCardById(id) != null) {
+                    ChainUnits units = ChainUnits.of(s, workspace);
+                    ChainUnits.Unit u = units.unitOf(id);
+                    if (u != null) {
+                        total += units.watts(u);
+                    }
+                    break;
+                }
             }
         }
         return total;
@@ -8315,7 +8755,8 @@ public class AppModel {
         }
         String firstId = chain.getCabinetInstanceIds().get(0);
         for (Screen s : scene.getScreens()) {
-            CabinetInstance c = s.cabinetById(firstId);
+            // звено-блок: номинал разъёма — по типу модуля на месте блока (кабели питания идут от блока к модулям)
+            CabinetInstance c = ChainLinks.owns(s, firstId) ? ChainLinks.place(s, firstId) : null;
             if (c != null) {
                 CabinetType effective = ScreenLogic.effectiveType(c, typeOf(s), workspace);
                 return PowerCalc.cabinetConnectorAmps(effective);
@@ -8389,6 +8830,15 @@ public class AppModel {
                     }
                     break;
                 }
+                // Звено-карта (трек D, D24): пиксели карты — сумма пикселей её модулей.
+                if (s.receiverCardById(id) != null || s.powerSupplyById(id) != null) {
+                    ChainUnits units = ChainUnits.of(s, workspace);
+                    ChainUnits.Unit u = units.unitOf(id);
+                    if (u != null) {
+                        total += units.pixels(u);
+                    }
+                    break;
+                }
             }
         }
         return total;
@@ -8405,13 +8855,7 @@ public class AppModel {
             return 0;
         }
         String firstId = chain.getCabinetInstanceIds().get(0);
-        Screen homeScreen = null;
-        for (Screen s : scene.getScreens()) {
-            if (s.cabinetById(firstId) != null) {
-                homeScreen = s;
-                break;
-            }
-        }
+        Screen homeScreen = ChainLinks.screenOf(scene, firstId);
         if (homeScreen == null) {
             return 0;
         }
@@ -8465,7 +8909,7 @@ public class AppModel {
             return result;
         }
         for (SignalChain c : scene.getSignalChains()) {
-            if (c.getCabinetInstanceIds().stream().anyMatch(id -> screen.cabinetById(id) != null)) {
+            if (ChainLinks.touches(screen, c.getCabinetInstanceIds())) {
                 result.add(c);
             }
         }

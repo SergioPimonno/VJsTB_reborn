@@ -56,6 +56,7 @@ public class PersonalizationDialog extends javax.swing.JDialog {
     private JButton phase3Swatch;
     private JButton phaseNoneSwatch;
     private JButton accentSwatch;
+    private JButton receiverCardSwatch;
 
     public PersonalizationDialog(Window owner, SettingsManager settings) {
         super(owner, "Персонализация — цвета и профили", ModalityType.MODELESS);
@@ -82,6 +83,7 @@ public class PersonalizationDialog extends javax.swing.JDialog {
         reset.setAlignmentX(Component.LEFT_ALIGNMENT);
         reset.addActionListener(e -> {
             settings.updateActiveProfileColors(null, null, null, null, null, null);
+            settings.setReceiverCardColor(null);
             Palette.applyProfile(settings.activeProfile());
             refreshSwatches();
         });
@@ -409,12 +411,14 @@ public class PersonalizationDialog extends javax.swing.JDialog {
         phase3Swatch = swatch();
         phaseNoneSwatch = swatch();
         accentSwatch = swatch();
+        receiverCardSwatch = swatch();
 
         body.add(colorRow("Фаза L1 (питание)", phase1Swatch));
         body.add(colorRow("Фаза L2 (питание)", phase2Swatch));
         body.add(colorRow("Фаза L3 (питание)", phase3Swatch));
         body.add(colorRow("Кабинет без фазы (цвет блока)", phaseNoneSwatch));
         body.add(colorRow("Акцент (выделение, активные элементы)", accentSwatch));
+        body.add(colorRow("Приёмные карты (модульные экраны)", receiverCardSwatch));
 
         JPanel signalRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
         for (int i = 0; i < Palette.defaultSignalColors().length; i++) {
@@ -486,6 +490,7 @@ public class PersonalizationDialog extends javax.swing.JDialog {
         phase3Swatch.setBackground(Palette.PHASE3);
         phaseNoneSwatch.setBackground(Palette.PHASE_NONE);
         accentSwatch.setBackground(Palette.ACCENT);
+        receiverCardSwatch.setBackground(Palette.RECEIVER_CARD);
         for (int i = 0; i < signalSwatches.size(); i++) {
             signalSwatches.get(i).setBackground(Palette.signalColor(i));
         }
@@ -509,6 +514,10 @@ public class PersonalizationDialog extends javax.swing.JDialog {
         accentSwatch.removeActionListener(accentListener);
         accentListener = e -> applyAccent();
         accentSwatch.addActionListener(accentListener);
+
+        receiverCardSwatch.removeActionListener(receiverCardListener);
+        receiverCardListener = e -> applyReceiverCardColor();
+        receiverCardSwatch.addActionListener(receiverCardListener);
     }
 
     private java.awt.event.ActionListener phase1Listener;
@@ -516,6 +525,7 @@ public class PersonalizationDialog extends javax.swing.JDialog {
     private java.awt.event.ActionListener phase3Listener;
     private java.awt.event.ActionListener phaseNoneListener;
     private java.awt.event.ActionListener accentListener;
+    private java.awt.event.ActionListener receiverCardListener;
 
     private void applySingle(int phase) {
         Color current = Palette.phaseColor(phase);
@@ -542,6 +552,18 @@ public class PersonalizationDialog extends javax.swing.JDialog {
         UserProfile p = settings.activeProfile();
         settings.updateActiveProfileColors(p.getPhase1Color(), p.getPhase2Color(), p.getPhase3Color(),
                 p.getPhaseNoneColor(), rgb(picked), p.getSignalColors());
+        Palette.applyProfile(settings.activeProfile());
+        refreshSwatches();
+    }
+
+    /** Цвет карт на виде «Приёмные карты» (docs/receiver-cards/PLAN.md, 6.4): отдельный от цветов фаз и портов, чтобы
+     *  карта читалась на экране рядом с цепочками. Хранится в профиле, применяется сразу. */
+    private void applyReceiverCardColor() {
+        Color picked = JColorChooser.showDialog(this, "Цвет приёмных карт", Palette.RECEIVER_CARD);
+        if (picked == null) {
+            return;
+        }
+        settings.setReceiverCardColor(rgb(picked));
         Palette.applyProfile(settings.activeProfile());
         refreshSwatches();
     }

@@ -192,7 +192,18 @@ public final class NovaLctScrWriter {
         }
         for (Map.Entry<Screen, java.util.Set<CellKey>> entry : byScreen.entrySet()) {
             Screen screen = entry.getKey();
-            java.util.Set<CellKey> wired = entry.getValue();
+            java.util.Set<CellKey> wired = new java.util.HashSet<>(entry.getValue());
+            // Модульный экран (трек D): карта представлена в сетке NovaLCT первым модулем, остальные её модули
+            // расключены вместе с ней — не «потеряны».
+            for (var card : screen.getReceiverCards()) {
+                List<CabinetInstance> mods = ChainLinks.cabinetsOf(screen, card.getId());
+                if (!mods.isEmpty()
+                        && wired.contains(new CellKey(mods.get(0).getColIndex(), mods.get(0).getRowIndex()))) {
+                    for (CabinetInstance m : mods) {
+                        wired.add(new CellKey(m.getColIndex(), m.getRowIndex()));
+                    }
+                }
+            }
             for (CabinetInstance cab : screen.getCabinets()) {
                 if (!cab.isHidden() && !wired.contains(new CellKey(cab.getColIndex(), cab.getRowIndex()))) {
                     return true;
@@ -207,8 +218,19 @@ public final class NovaLctScrWriter {
      *  вызывающий код должен явно предупредить пользователя перед экспортом. */
     public static boolean hasUnwiredCabinets(Screen screen, Scene scene, Workspace workspace) {
         Map<String, Rec> byId = resolve(screen, scene, workspace);
+        java.util.Set<String> covered = new java.util.HashSet<>(byId.keySet());
+        // Модульный экран (трек D): в цепочке порта стоит карта, а в сетке NovaLCT она представлена одной ячейкой
+        // (первый модуль) — остальные модули карты расключены вместе с ней, а не «потеряны».
+        for (var card : screen.getReceiverCards()) {
+            List<CabinetInstance> mods = ChainLinks.cabinetsOf(screen, card.getId());
+            if (!mods.isEmpty() && byId.containsKey(mods.get(0).getId())) {
+                for (CabinetInstance m : mods) {
+                    covered.add(m.getId());
+                }
+            }
+        }
         for (CabinetInstance cab : screen.getCabinets()) {
-            if (!cab.isHidden() && !byId.containsKey(cab.getId())) {
+            if (!cab.isHidden() && !covered.contains(cab.getId())) {
                 return true;
             }
         }
@@ -229,7 +251,7 @@ public final class NovaLctScrWriter {
             }
             List<String> ids = chain.getCabinetInstanceIds();
             for (int seq = 0; seq < ids.size(); seq++) {
-                CabinetInstance cab = screen.cabinetById(ids.get(seq));
+                CabinetInstance cab = ChainLinks.anchorCabinet(screen, ids.get(seq));
                 if (cab == null || cab.isHidden()) {
                     continue;
                 }
@@ -244,6 +266,10 @@ public final class NovaLctScrWriter {
      *  ли сетка кабинетов у экрана (см. {@link ScreenLogic#isUniformRectangularGrid}) —
      *  вызывающему коду (диалогу экспорта) не нужно знать про формат заранее. */
     public static byte[] write(Screen screen, Scene scene, Workspace workspace) {
+        NovaLctModularGrid modular = NovaLctModularGrid.of(screen, workspace);
+        if (modular != null) {
+            return writeModular(modular, modular.wire(resolve(screen, scene, workspace), screen), null);
+        }
         CabinetType defaultType = workspace != null ? workspace.cabinetTypeById(screen.getCabinetTypeId()) : null;
         if (defaultType != null && !ScreenLogic.isUniformRectangularGrid(screen, defaultType, workspace,
                 portKeysOf(resolve(screen, scene, workspace)))) {
@@ -301,6 +327,10 @@ public final class NovaLctScrWriter {
      *  вызывающий UI должен явно предупредить пользователя, что этот путь разобран
      *  всего по одному образцу и рискованнее обычного (см. class-javadoc). */
     public static boolean isComplexExport(Screen screen, Workspace workspace) {
+        NovaLctModularGrid modular = NovaLctModularGrid.of(screen, workspace);
+        if (modular != null) {
+            return !modular.complexReasons(null).isEmpty();
+        }
         CabinetType defaultType = workspace != null ? workspace.cabinetTypeById(screen.getCabinetTypeId()) : null;
         return defaultType == null || !ScreenLogic.isUniformRectangularGrid(screen, defaultType, workspace);
     }
@@ -315,6 +345,10 @@ public final class NovaLctScrWriter {
      *  (см. {@link ScreenLogic#complexReasons}). */
     public static List<String> complexReasons(Screen screen, List<NovaLctControllerResolver.CabinetRec> recs,
                                                Workspace workspace) {
+        NovaLctModularGrid modular = NovaLctModularGrid.of(screen, workspace);
+        if (modular != null) {
+            return modular.complexReasons(recs != null ? modular.wire(screen, recs) : null);
+        }
         CabinetType defaultType = workspace != null ? workspace.cabinetTypeById(screen.getCabinetTypeId()) : null;
         if (defaultType == null) {
             return List.of("у экрана не задан тип кабинета");
@@ -325,6 +359,10 @@ public final class NovaLctScrWriter {
 
     public static boolean isComplexExport(Screen screen, List<NovaLctControllerResolver.CabinetRec> recs,
                                            Workspace workspace) {
+        NovaLctModularGrid modular = NovaLctModularGrid.of(screen, workspace);
+        if (modular != null) {
+            return !modular.complexReasons(modular.wire(screen, recs)).isEmpty();
+        }
         CabinetType defaultType = workspace != null ? workspace.cabinetTypeById(screen.getCabinetTypeId()) : null;
         return defaultType == null
                 || !ScreenLogic.isUniformRectangularGrid(screen, defaultType, workspace, portKeysOf(screen, recs));
@@ -362,6 +400,10 @@ public final class NovaLctScrWriter {
      *  кабинета Complex записать нельзя, поэтому выбор игнорируется. */
     public static byte[] writeForResolvedScreen(Screen screen, List<NovaLctControllerResolver.CabinetRec> recs,
                                                  Workspace workspace, Boolean forceComplex) {
+        NovaLctModularGrid modular = NovaLctModularGrid.of(screen, workspace);
+        if (modular != null) {
+            return writeModular(modular, modular.wire(screen, recs), forceComplex);
+        }
         CabinetType defaultType = workspace != null ? workspace.cabinetTypeById(screen.getCabinetTypeId()) : null;
         if (defaultType != null && (forceComplex != null ? forceComplex
                 : !ScreenLogic.isUniformRectangularGrid(screen, defaultType, workspace,
@@ -414,6 +456,44 @@ public final class NovaLctScrWriter {
         return cards;
     }
 
+    /** Модульный экран (docs/receiver-cards, трек E): «кабинеты» NovaLCT — приёмные карты (и обычные кабинеты смешанного
+     *  экрана), каждый размером с прямоугольник своих модулей в px. {@code forceComplex}: {@code null} — вид по
+     *  критериям ({@link NovaLctModularGrid#complexReasons}), иначе выбор пользователя. Принудительный Standard при
+     *  неровной укладке пишется по индексам сетки карт — положения и размеры в NovaLCT тогда не реальные, о чём
+     *  предупреждает диалог выбора вида. Для немодульных экранов не вызывается — их байты не меняются. */
+    private static byte[] writeModular(NovaLctModularGrid modular, List<NovaLctModularGrid.Wired> wired,
+                                       Boolean forceComplex) {
+        boolean complex = forceComplex != null ? forceComplex : !modular.complexReasons(wired).isEmpty();
+        if (complex) {
+            return writeComplexCore(complexCardsOfWired(wired));
+        }
+        return writeStandardCore(modular.cols(), modular.rows(), modular.cabW(), modular.cabH(), 0,
+                modular.cells(wired), modular.cellSizes());
+    }
+
+    /** Complex-записи карт: пиксельный прямоугольник карты, порт и номер в цепочке; порядок — как у резолвера. */
+    private static List<ComplexCard> complexCardsOfWired(List<NovaLctModularGrid.Wired> wired) {
+        List<ComplexCard> cards = new ArrayList<>();
+        for (NovaLctModularGrid.Wired w : wired) {
+            NovaLctModularGrid.UnitRect u = w.unit();
+            cards.add(new ComplexCard(u.x(), u.y(), u.w(), u.h(), w.card(), w.port(), w.seq()));
+        }
+        return cards;
+    }
+
+    /** Левый верхний угол (px) расключённых {@code recs} модульного экрана — подстановка по умолчанию для положения
+     *  куска экрана на канвасе NovaLCT; {@code null}, если экран немодульный (тогда считает вызывающий по сетке). */
+    public static int[] modularOriginPx(Screen screen, List<NovaLctControllerResolver.CabinetRec> recs,
+                                        Workspace workspace) {
+        NovaLctModularGrid modular = NovaLctModularGrid.of(screen, workspace);
+        return modular != null ? NovaLctModularGrid.originOf(modular.wire(screen, recs)) : null;
+    }
+
+    /** true — экран модульный (хоть одна видимая ячейка с типом-модулем): NovaLCT получит карты, а не модули. */
+    public static boolean isModularScreen(Screen screen, Workspace workspace) {
+        return screen != null && workspace != null && ScreenModules.of(screen, workspace).isModular();
+    }
+
     /** Контроллер-центричный экспорт ЧАСТИ экрана, расключённого НЕСКОЛЬКИМИ
      *  контроллерами сцены (см. {@link NovaLctControllerResolver#controllersWiringScreen}).
      *  В отличие от {@link #writeForResolvedScreen} (пишет полную сетку экрана и
@@ -445,6 +525,21 @@ public final class NovaLctScrWriter {
         }
         if (mine.isEmpty()) {
             return writeForResolvedScreen(screen, recs, workspace);
+        }
+
+        // Модульный экран: «кабинеты» NovaLCT — карты. Кусок всегда пишется как Complex с пиксельными прямоугольниками
+        // карт относительно левого верхнего угла куска (Standard-укладка куска из карт не проверена загрузкой).
+        NovaLctModularGrid modular = NovaLctModularGrid.of(screen, workspace);
+        if (modular != null) {
+            List<NovaLctModularGrid.Wired> wired = modular.wire(screen, mine);
+            int[] origin = NovaLctModularGrid.originOf(wired);
+            List<ComplexCard> cards = new ArrayList<>();
+            for (NovaLctModularGrid.Wired w : wired) {
+                NovaLctModularGrid.UnitRect u = w.unit();
+                cards.add(new ComplexCard(u.x() - origin[0] + offsetXPx, u.y() - origin[1] + offsetYPx, u.w(), u.h(),
+                        w.card(), w.port(), w.seq()));
+            }
+            return writeComplexCore(cards);
         }
 
         int minCol = Integer.MAX_VALUE;
@@ -1210,6 +1305,12 @@ public final class NovaLctScrWriter {
      *  {@link #writeMixedMultiScreen}. */
     public static ScreenBlock resolvedStandardScreen(Screen screen,
             List<NovaLctControllerResolver.CabinetRec> recs, Workspace workspace) {
+        NovaLctModularGrid modular = NovaLctModularGrid.of(screen, workspace);
+        if (modular != null) {
+            return new ScreenBlock(modular.cols(), modular.rows(), modular.cabW(), modular.cabH(), 0,
+                    modular.cells(modular.wire(screen, recs)),
+                    nonUniformSizesOrNull(modular.cellSizes(), modular.cabW(), modular.cabH()));
+        }
         Map<CellKey, Rec> byCell = new HashMap<>();
         for (NovaLctControllerResolver.CabinetRec r : recs) {
             if (r.sourceScreen() != screen) {
@@ -1238,6 +1339,14 @@ public final class NovaLctScrWriter {
      *  {@link #complexCardsFromRecs}/{@link #writeComplex}. */
     public static ComplexScreenBlock resolvedComplexScreen(Screen screen,
             List<NovaLctControllerResolver.CabinetRec> recs, Workspace workspace) {
+        NovaLctModularGrid modular = NovaLctModularGrid.of(screen, workspace);
+        if (modular != null) {
+            List<ComplexRec> cards = new ArrayList<>();
+            for (ComplexCard c : complexCardsOfWired(modular.wire(screen, recs))) {
+                cards.add(new ComplexRec(c.card(), c.port(), c.seq(), c.x(), c.y(), c.w(), c.h()));
+            }
+            return new ComplexScreenBlock(modular.cabW(), modular.cabH(), cards);
+        }
         CabinetType defaultType = workspace != null ? workspace.cabinetTypeById(screen.getCabinetTypeId()) : null;
         int cabW = defaultType != null ? defaultType.getResolutionWidth() : 128;
         int cabH = defaultType != null ? defaultType.getResolutionHeight() : 128;
@@ -1514,7 +1623,7 @@ public final class NovaLctScrWriter {
             }
             int seq = 0;
             for (String id : chain.getCabinetInstanceIds()) {
-                CabinetInstance cab = screen.cabinetById(id);
+                CabinetInstance cab = ChainLinks.anchorCabinet(screen, id);
                 if (cab == null || cab.isHidden()) {
                     continue; // не на этом экране, либо деактивирован -- нет физической карты
                 }

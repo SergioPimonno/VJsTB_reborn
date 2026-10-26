@@ -5,6 +5,8 @@ import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.SchemaMode;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.service.ChainLinks;
+import com.vjstb.ledscheme.service.ChainUnits;
 import com.vjstb.ledscheme.service.ScreenLogic;
 import com.vjstb.ledscheme.service.ScreenStats;
 import com.vjstb.ledscheme.ui.CanvasPanel;
@@ -17,6 +19,7 @@ import com.vjstb.ledscheme.ui.CornerPreviewHost;
 import com.vjstb.ledscheme.ui.SceneCanvasPanel;
 import com.vjstb.ledscheme.ui.SchemaPanel;
 import com.vjstb.ledscheme.ui.UiKit;
+import com.vjstb.ledscheme.ui.receiver.PowerSuppliesView;
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
 import java.awt.Dimension;
@@ -40,6 +43,7 @@ import javax.swing.JToggleButton;
  *  либо (по переключателю) общая yEd-подобная схема питания площадки. */
 public class PowerStagePanel extends JPanel {
 
+    private static final String VIEW_SUPPLIES = "supplies";
     private static final String VIEW_CHAIN = "chain";
     private static final String VIEW_SCHEMA = "schema";
 
@@ -49,6 +53,13 @@ public class PowerStagePanel extends JPanel {
     private final CardLayout viewCards = new CardLayout();
     private final JPanel viewContainer = new JPanel(viewCards);
     private final SchemaPanel schemaPanel;
+    /** Вид «Блоки питания» (docs/receiver-cards/PLAN.md, D2): кнопка видна, только если в сцене есть модульный
+     *  экран; стоит ПЕРЕД «Расключением экрана». Содержимое вида — {@link PowerSuppliesView} (трек C). */
+    private final JToggleButton suppliesViewBtn = new JToggleButton("Блоки питания");
+    private final PowerSuppliesView suppliesView;
+    /** Подсказка D26: клик по модулю без блока — в цепочку не идёт, ведёт в вид «Блоки питания». */
+    private final JPanel moduleHintBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
+    private javax.swing.Timer moduleHintTimer;
     private final JToggleButton chainViewBtn = new JToggleButton("Расключение экрана", true);
     private final JToggleButton schemaViewBtn = new JToggleButton("Общая схема питания");
     /** Верхняя строка «Проект / Сцена / Экран|Схема» — в виде общей схемы показывает
@@ -117,6 +128,9 @@ public class PowerStagePanel extends JPanel {
         this.chainCtrl.setOnCommitError(msg ->
                 JOptionPane.showMessageDialog(this, msg, "Не удалось завершить цепочку",
                         JOptionPane.ERROR_MESSAGE));
+        // Модульный экран: клик по модулю = его блок питания; модуль без блока в цепочку не попадает (D26).
+        this.chainCtrl.setUnitMode(ChainUnits.Mode.POWER, mode -> showModuleHint());
+        this.suppliesView = new PowerSuppliesView(model, settings);
         this.canvas = new CanvasPanel(model, settings, chainCtrl);
         // «Быстрое подключение» (как в NovaLCT) — протяжка выделяет прямоугольную
         // область кабинетов, радиальное меню выбирает шаблон серпантина, скрытые и
@@ -181,15 +195,22 @@ public class PowerStagePanel extends JPanel {
             viewCards.show(viewContainer, VIEW_CHAIN);
         });
 
+        viewContainer.add(suppliesView, VIEW_SUPPLIES);
         viewContainer.add(perScreen, VIEW_CHAIN);
         viewContainer.add(schemaPanel, VIEW_SCHEMA);
+        // CardLayout показывает ПЕРВУЮ добавленную карточку — это «Блоки питания», а выбрана кнопка «Расключение
+        // экрана»: на старте этап открывался на чужом виде (и в проектах без модулей тоже).
+        viewCards.show(viewContainer, VIEW_CHAIN);
 
         ButtonGroup viewGroup = new ButtonGroup();
+        viewGroup.add(suppliesViewBtn);
         viewGroup.add(chainViewBtn);
         viewGroup.add(schemaViewBtn);
+        suppliesViewBtn.addActionListener(e -> showSuppliesView());
         chainViewBtn.addActionListener(e -> {
             contextBar.setSchemaMode(null);
             viewCards.show(viewContainer, VIEW_CHAIN);
+            updateSuppliesViewControls();
         });
         schemaViewBtn.addActionListener(e -> {
             if (settings.activeProfile().isPowerSchemaAutoPopulateEnabled()) {
@@ -202,6 +223,7 @@ public class PowerStagePanel extends JPanel {
             }
             contextBar.setSchemaMode(SchemaMode.POWER);
             viewCards.show(viewContainer, VIEW_SCHEMA);
+            updateSuppliesViewControls();
         });
         quickConnectBtn.setToolTipText("Протяжка ЛКМ по холсту выделяет область — радиальное меню предложит"
                 + " шаблон серпантина для быстрой прописки (как в NovaLCT)");
@@ -211,15 +233,33 @@ public class PowerStagePanel extends JPanel {
                 + " стартовая папка и качество берутся из настроек пакета документации (этап «Вывод»)");
         exportSchemeBtn.addActionListener(e -> exportCurrentScheme());
         JPanel toggleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
+        toggleRow.add(suppliesViewBtn);
         toggleRow.add(chainViewBtn);
         toggleRow.add(schemaViewBtn);
         toggleRow.add(showAllScreens);
         toggleRow.add(quickConnectBtn);
         toggleRow.add(exportSchemeBtn);
+        suppliesViewBtn.setVisible(false);
+        suppliesViewBtn.setToolTipText("Назначить модулям экрана блоки питания");
 
+        JLabel hintText = new JLabel("Этот модуль без блока питания — в цепочку идут блоки, а не модули.");
+        hintText.setForeground(Palette.WARN);
+        JButton hintOpen = new JButton("Открыть «Блоки питания»");
+        hintOpen.addActionListener(e -> {
+            moduleHintBar.setVisible(false);
+            suppliesViewBtn.setSelected(true);
+            showSuppliesView();
+        });
+        moduleHintBar.add(hintText);
+        moduleHintBar.add(hintOpen);
+        moduleHintBar.setVisible(false);
+
+        JPanel south = new JPanel(new BorderLayout());
+        south.add(toggleRow, BorderLayout.NORTH);
+        south.add(moduleHintBar, BorderLayout.SOUTH);
         JPanel top = new JPanel(new BorderLayout());
         top.add(contextBar, BorderLayout.NORTH);
-        top.add(toggleRow, BorderLayout.SOUTH);
+        top.add(south, BorderLayout.SOUTH);
 
         setLayout(new BorderLayout());
         add(top, BorderLayout.NORTH);
@@ -228,6 +268,56 @@ public class PowerStagePanel extends JPanel {
         model.addListener(this::refresh);
         refresh();
         updateCornerPreviewVisibility();
+    }
+
+    /** В виде «Блоки питания» (содержимое — трек C) нет ни «Показать все экраны», ни быстрого подключения, ни
+     *  экспорта схемы расключения; во всех остальных видах всё как было. */
+    private void updateSuppliesViewControls() {
+        boolean supplies = suppliesViewBtn.isSelected();
+        showAllScreens.setVisible(!supplies);
+        quickConnectBtn.setVisible(!supplies);
+        exportSchemeBtn.setVisible(!supplies);
+        if (supplies || !chainViewBtn.isSelected()) {
+            moduleHintBar.setVisible(false);
+        }
+    }
+
+    /** Показывает вид «Блоки питания» и просит его перечитать модель (контракт с треком C). */
+    private void showSuppliesView() {
+        contextBar.setSchemaMode(null);
+        viewCards.show(viewContainer, VIEW_SUPPLIES);
+        suppliesView.refresh();
+        updateSuppliesViewControls();
+    }
+
+    /** D26: модуль без блока в цепочку не попадает — подсказка с переходом в «Блоки питания», сама гаснет. */
+    private void showModuleHint() {
+        moduleHintBar.setVisible(true);
+        if (moduleHintTimer != null) {
+            moduleHintTimer.stop();
+        }
+        moduleHintTimer = new javax.swing.Timer(8000, e -> moduleHintBar.setVisible(false));
+        moduleHintTimer.setRepeats(false);
+        moduleHintTimer.start();
+    }
+
+    /** Кнопка «Блоки питания» видна, только если ВЫБРАННЫЙ экран модульный (D2); пропала — возврат в
+     *  «Расключение экрана», чтобы не остаться на скрытом виде. */
+    private void updateSuppliesViewAvailability() {
+        // Кнопка нужна только на модульном ЭКРАНЕ: на обычном экране той же сцены вид пуст («Экран не
+        // модульный»), и показывать лишнюю кнопку незачем.
+        boolean modular = model.getCurrentScreen() != null
+                && com.vjstb.ledscheme.service.ScreenModules.of(model.getCurrentScreen(), model.getWorkspace())
+                .isModular();
+        suppliesViewBtn.setVisible(modular);
+        if (!modular && suppliesViewBtn.isSelected()) {
+            chainViewBtn.setSelected(true);
+            contextBar.setSchemaMode(null);
+            viewCards.show(viewContainer, VIEW_CHAIN);
+            updateSuppliesViewControls();
+        } else if (modular && suppliesViewBtn.isSelected()) {
+            suppliesView.refresh();
+        }
     }
 
     /** Общая схема питания, если она сейчас показана (переключатель «Общая схема
@@ -413,6 +503,7 @@ public class PowerStagePanel extends JPanel {
     private void refresh() {
         Screen scr = model.getCurrentScreen();
         boolean has = scr != null;
+        updateSuppliesViewAvailability();
         phase1.setEnabled(has);
         phase2.setEnabled(has);
         phase3.setEnabled(has);
@@ -435,7 +526,7 @@ public class PowerStagePanel extends JPanel {
             boolean trackLoad = settings.activeProfile().isLoadTrackingEnabled();
             Scene scene = model.getCurrentScene();
             for (PowerChain c : chains) {
-                boolean crossScreen = c.getCabinetInstanceIds().stream().anyMatch(id -> scr.cabinetById(id) == null);
+                boolean crossScreen = ChainLinks.leaves(scr, c.getCabinetInstanceIds());
                 String suffix = crossScreen ? " (продолжается на другом экране)" : "";
                 // Текущая нагрузка цепочки показывается ВСЕГДА (это и есть итоговое число,
                 // с которым сравнивается ёмкость разъёма) — независимо от того, известен ли
@@ -444,7 +535,8 @@ public class PowerStagePanel extends JPanel {
                 // настройки «Контроль электрической нагрузки».
                 AppModel.ChainLoadStatus status = model.powerChainLoadStatus(scene, c);
                 boolean kw = settings.activeProfile().isPowerUnitKw();
-                String label = "L" + c.getPhase() + " · " + c.getCabinetInstanceIds().size() + " каб." + suffix
+                // D4: состав словами, как на экране — «4 блока, 1 каб.»; без блоков это прежнее «N каб.»
+                String label = "L" + c.getPhase() + " · " + ChainLinks.countsText(scene, c.getCabinetInstanceIds()) + suffix
                         + " · " + UiKit.fmtPower(status.loadWatts(), kw);
                 AppModel.ChainLoadStatus warnStatus = trackLoad ? status : null;
                 chainListPanel.add(chainRow(label, com.vjstb.ledscheme.ui.SchemeRenderer.chainColor(c), warnStatus,

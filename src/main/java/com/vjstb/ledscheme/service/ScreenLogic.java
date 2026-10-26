@@ -1288,6 +1288,13 @@ public final class ScreenLogic {
                 phasePower[c.getPhase()] += p;
             }
         }
+        // Модульный экран: приёмные карты и блоки питания тоже весят и (карты) потребляют — трек E плана
+        // receiver-cards. Без карт и блоков добавка нулевая, прежние экраны считаются как раньше. На нагрузку по
+        // фазам карты не раскладываются: фаза считается по блокам (D22), а не по сумме потребителей.
+        if (workspace != null) {
+            totalPower += ModularLoad.powerW(screen, workspace);
+            totalWeight += ModularLoad.weightKg(screen, workspace);
+        }
 
         return new ScreenStats(
                 screen.getCols() * w,
@@ -1442,6 +1449,15 @@ public final class ScreenLogic {
             cabs.add(c.copy());
         }
         live.setCabinets(cabs);
+
+        // Приёмные карты, блоки питания, автообласти и шаблон нумерации модульного экрана
+        // (docs/receiver-cards/PLAN.md): отмена одной операции возвращает ВСЁ вместе — карты без модулей
+        // или блоки с чужими id были бы битым состоянием. Копии: снимок может быть восстановлен повторно.
+        Screen modular = snapshot.copy();
+        live.setReceiverCards(modular.getReceiverCards());
+        live.setModuleNumbering(modular.getModuleNumbering());
+        live.setPowerSupplies(modular.getPowerSupplies());
+        live.setPowerAutoAreas(modular.getPowerAutoAreas());
 
         List<com.vjstb.ledscheme.model.ControllerInstance> ctrls = new ArrayList<>();
         for (com.vjstb.ledscheme.model.ControllerInstance c : snapshot.getControllers()) {

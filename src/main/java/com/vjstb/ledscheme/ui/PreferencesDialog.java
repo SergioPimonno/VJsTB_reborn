@@ -22,6 +22,7 @@ import javax.swing.JComponent;
 import javax.swing.JDialog;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JSpinner;
 import javax.swing.JTextField;
@@ -109,6 +110,12 @@ public class PreferencesDialog extends JDialog {
     private JComboBox<com.vjstb.ledscheme.model.NodeOrientation> powerOrientationCombo;
     private JComboBox<com.vjstb.ledscheme.settings.GroupDisplayMode> signalGroupDisplayCombo;
     private JComboBox<com.vjstb.ledscheme.settings.GroupDisplayMode> powerGroupDisplayCombo;
+
+    // Модульные экраны (docs/receiver-cards/PLAN.md, 6.4, D14/D15): шаблон обозначения номера модуля и порядок
+    // нумерации приёмных карт (им же нумеруются блоки питания). Только «Сигнал»: вид «Приёмные карты» живёт там.
+    private JComboBox<String> moduleNumberFormatCombo;
+    private JComboBox<com.vjstb.ledscheme.model.ReceiverCardNumbering> receiverCardNumberingCombo;
+    private boolean refreshingReceiverPrefs;
 
     // Строки-панели (кнопки/спиннеры/поле/дропдаун) — тоже общие для обеих раскладок.
     private JPanel snapRow;
@@ -423,6 +430,8 @@ public class PreferencesDialog extends JDialog {
                         + " экспортные документы) — на внутренний расчёт нагрузки не влияет.",
                 settings::setPowerUnitKw);
 
+        buildReceiverCardPrefs();
+
         logoRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         logoRow.setAlignmentX(Component.LEFT_ALIGNMENT);
         logoRow.setToolTipText("Свой логотип для «Генерация масок»: настраивается один раз здесь и дальше"
@@ -477,6 +486,73 @@ public class PreferencesDialog extends JDialog {
                 powerSchemaAutoPopulateCheck, powerSceneStatsCheck, loadTrackingCheck, exportLoadRingsCheck,
                 powerUnitKwCheck,
         };
+    }
+
+    /**
+     * Настройки вида «Приёмные карты». «Обозначение номера модуля» — редактируемый список шаблонов: {@code {n}} —
+     * номер выхода карты, {@code {card}} — её имя («К3»); в списке показан пример результата, а свой текст можно
+     * вписать вручную («J{n}», «Вых. {n}»). Шаблон без {@code {n}} дал бы всем модулям одну и ту же подпись, поэтому
+     * такой не сохраняется. «Нумерация приёмных карт» — порядок имён К1…КN (тем же порядком нумеруются БП1…БПn).
+     */
+    private void buildReceiverCardPrefs() {
+        moduleNumberFormatCombo = new JComboBox<>(new String[]{"{n}", "J{n}", "P{n}", "{card}.{n}"});
+        moduleNumberFormatCombo.setEditable(true);
+        moduleNumberFormatCombo.setSelectedItem(settings.activeProfile().getModuleNumberFormat());
+        moduleNumberFormatCombo.setToolTipText("Как подписан номер модуля на виде «Приёмные карты» и в «Карте подключения»."
+                + " {n} — номер выхода карты, {card} — имя карты (К3). Примеры: {n} → 1; J{n} → J1; {card}.{n} → К3.1."
+                + " Можно вписать свой текст.");
+        moduleNumberFormatCombo.setAlignmentX(Component.LEFT_ALIGNMENT);
+        moduleNumberFormatCombo.setRenderer(new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public Component getListCellRendererComponent(javax.swing.JList<?> list, Object value, int index,
+                                                          boolean sel, boolean focus) {
+                String f = String.valueOf(value);
+                String shown = f + "   →   " + com.vjstb.ledscheme.service.ModuleNumbering.label(f, "К3", 1) + ", "
+                        + com.vjstb.ledscheme.service.ModuleNumbering.label(f, "К3", 2) + ", …";
+                return super.getListCellRendererComponent(list, shown, index, sel, focus);
+            }
+        });
+        Runnable commit = () -> {
+            if (refreshingReceiverPrefs) {
+                return;
+            }
+            Object item = moduleNumberFormatCombo.getEditor().getItem();
+            String text = item == null ? "" : item.toString().trim();
+            if (text.isEmpty()) {
+                text = com.vjstb.ledscheme.settings.UserProfile.DEFAULT_MODULE_NUMBER_FORMAT;
+            }
+            if (!text.contains("{n}")) {
+                JOptionPane.showMessageDialog(this, "В шаблоне должен быть {n} — номер выхода карты.\n"
+                        + "Например: {n}, J{n}, {card}.{n}.", "Обозначение номера модуля", JOptionPane.WARNING_MESSAGE);
+                refreshingReceiverPrefs = true;
+                moduleNumberFormatCombo.setSelectedItem(settings.activeProfile().getModuleNumberFormat());
+                refreshingReceiverPrefs = false;
+                return;
+            }
+            if (!text.equals(settings.activeProfile().getModuleNumberFormat())) {
+                settings.setModuleNumberFormat(text);
+            }
+        };
+        moduleNumberFormatCombo.addActionListener(e -> commit.run());
+        moduleNumberFormatCombo.getEditor().getEditorComponent().addFocusListener(new java.awt.event.FocusAdapter() {
+            @Override
+            public void focusLost(java.awt.event.FocusEvent e) {
+                commit.run();
+            }
+        });
+
+        receiverCardNumberingCombo = new JComboBox<>(com.vjstb.ledscheme.model.ReceiverCardNumbering.values());
+        receiverCardNumberingCombo.setSelectedItem(settings.activeProfile().getReceiverCardNumbering());
+        receiverCardNumberingCombo.setToolTipText("Порядок имён приёмных карт К1…КN на экране: из какого угла и в какую"
+                + " сторону считать (по положению первого модуля карты). Тем же порядком нумеруются блоки питания"
+                + " БП1…БПn. «Как нумерация модулей экрана» берёт шаблон из палитры под холстом «Приёмных карт».");
+        receiverCardNumberingCombo.setAlignmentX(Component.LEFT_ALIGNMENT);
+        receiverCardNumberingCombo.addActionListener(e -> {
+            if (!refreshingReceiverPrefs) {
+                settings.setReceiverCardNumbering(
+                        (com.vjstb.ledscheme.model.ReceiverCardNumbering) receiverCardNumberingCombo.getSelectedItem());
+            }
+        });
     }
 
     /** Общий конструктор чекбокса: подпись хранится в client-property, чтобы матрица
@@ -611,7 +687,9 @@ public class PreferencesDialog extends JDialog {
                 comboRow("Незанятые группы гнёзд:", signalGroupDisplayCombo),
                 comboRow("Вход связей в блоки экранов:", signalScreenEntryCombo),
                 signalChainEndpointSocketsCheck, signalSchemaAutoPopulateCheck,
-                signalSceneStatsCheck)));
+                signalSceneStatsCheck,
+                comboRow("Обозначение номера модуля:", moduleNumberFormatCombo),
+                comboRow("Нумерация приёмных карт:", receiverCardNumberingCombo))));
         content.add(Box.createVerticalStrut(8));
         content.add(UiKit.section("Питание", stack(powerSocketWiringCheck,
                 comboRow("Ориентация блоков по умолчанию:", powerOrientationCombo),
@@ -685,6 +763,12 @@ public class PreferencesDialog extends JDialog {
                 DASH, signalSchemaAutoPopulateCheck, powerSchemaAutoPopulateCheck);
         triple(g, row, "Блок «Статистика сцены» под статистикой экрана", null,
                 DASH, signalSceneStatsCheck, powerSceneStatsCheck);
+
+        category(g, row, "Модульные экраны (приёмные карты) — только сигнал");
+        triple(g, row, "Обозначение номера модуля", "{n}, {card}: 1, J1, К3.1",
+                DASH, moduleNumberFormatCombo, DASH);
+        triple(g, row, "Нумерация приёмных карт", "К1…КN; так же нумеруются блоки питания",
+                DASH, receiverCardNumberingCombo, DASH);
 
         category(g, row, "Нагрузка и единицы — только питание");
         triple(g, row, "Контроль электрической нагрузки (перегрузка цепочек/щитов)", null,
@@ -879,6 +963,12 @@ public class PreferencesDialog extends JDialog {
         signalGroupDisplayCombo.setSelectedItem(settings.activeProfile().getSignalGroupDisplay());
         powerGroupDisplayCombo.setSelectedItem(settings.activeProfile().getPowerGroupDisplay());
         refreshingSchemaLayoutCombos = false;
+        refreshingReceiverPrefs = true;
+        if (!settings.activeProfile().getModuleNumberFormat().equals(moduleNumberFormatCombo.getEditor().getItem())) {
+            moduleNumberFormatCombo.setSelectedItem(settings.activeProfile().getModuleNumberFormat());
+        }
+        receiverCardNumberingCombo.setSelectedItem(settings.activeProfile().getReceiverCardNumbering());
+        refreshingReceiverPrefs = false;
         signalSceneStatsCheck.setSelected(settings.activeProfile().isSignalSceneStatsEnabled());
         powerSceneStatsCheck.setSelected(settings.activeProfile().isPowerSceneStatsEnabled());
         loadTrackingCheck.setSelected(settings.activeProfile().isLoadTrackingEnabled());
