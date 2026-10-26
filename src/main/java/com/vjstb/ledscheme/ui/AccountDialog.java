@@ -30,16 +30,30 @@ import javax.swing.SwingWorker;
 public class AccountDialog extends JDialog {
 
     private final SettingsManager settings;
+    /** Вызывается после входа и выхода: от того, кто вошёл, зависит, какие записи библиотеки видит клиент
+     *  (см. sync.LibrarySync) — главное окно сразу запускает синхронизацию. Может быть {@code null}. */
+    private final Runnable onSessionChanged;
 
     public static void show(Window owner, SettingsManager settings) {
-        new AccountDialog(owner, settings).setVisible(true);
+        show(owner, settings, null);
     }
 
-    private AccountDialog(Window owner, SettingsManager settings) {
+    public static void show(Window owner, SettingsManager settings, Runnable onSessionChanged) {
+        new AccountDialog(owner, settings, onSessionChanged).setVisible(true);
+    }
+
+    private AccountDialog(Window owner, SettingsManager settings, Runnable onSessionChanged) {
         super(owner, "Аккаунт", ModalityType.APPLICATION_MODAL);
         this.settings = settings;
+        this.onSessionChanged = onSessionChanged;
         rebuild();
         setLocationRelativeTo(owner);
+    }
+
+    private void sessionChanged() {
+        if (onSessionChanged != null) {
+            onSessionChanged.run();
+        }
     }
 
     private void rebuild() {
@@ -70,6 +84,7 @@ public class AccountDialog extends JDialog {
         JButton logout = new JButton("Выйти");
         logout.addActionListener(e -> {
             settings.clearAuthSession();
+            sessionChanged();
             rebuild();
         });
         JButton close = new JButton("Закрыть");
@@ -167,6 +182,7 @@ public class AccountDialog extends JDialog {
                 try {
                     AuthClient.AuthResult result = get();
                     settings.setAuthSession(result.token(), username, result.role(), result.teamName());
+                    sessionChanged();
                     if (onSuccess != null) {
                         onSuccess.run();
                     }

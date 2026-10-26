@@ -26,27 +26,29 @@ public class AppSettings {
      *  sync.LibrarySyncClient/AppModel.applyLibrarySyncItems) — 0 означает "ещё ни
      *  разу не синхронизировались", тогда сервер отдаёт всю библиотеку целиком. */
     private long librarySyncGlobalSeq = 0;
+    /** Чьими глазами собрана локальная копия общей библиотеки ({@code anon}, {@code team:<id>}, {@code admin}) —
+     *  см. {@link com.vjstb.ledscheme.sync.LibrarySync}; {@code null} — ещё не знаем (старые настройки). */
+    private String librarySyncScope;
     /** Сессия входа на сервер (см. sync.AuthClient/ui.AccountDialog) — все null,
      *  если пользователь не входил в аккаунт; нужна только для отправки предложений
      *  в общую библиотеку, чтение библиотеки анонимно и токена не требует.
      *
-     *  <p>{@link JsonIgnore} — по запросу пользователя (2026-09-25) сессия живёт только
-     *  в памяти: после перезапуска приложения нужно войти заново (форма входа
-     *  предзаполнена, если включено «Запомнить логин и пароль» — см.
-     *  {@link #rememberedUsername}). Токен, оставшийся в settings.json от старых версий,
-     *  при чтении игнорируется и при следующем сохранении из файла пропадает. */
+     *  <p>С 2026-10-27 сессия переживает перезапуск (до этого, по запросу 2026-09-25, жила только в
+     *  памяти): от того, кто вошёл, зависит, какие записи библиотеки видит клиент (см. sync.LibrarySync), и без
+     *  входа при каждом запуске записи команды пропадали бы до ручного входа. Токен в файл попадает ТОЛЬКО
+     *  зашифрованным ({@link #authTokenEnc}, ключ — {@link CredentialCipher}); открытый {@code authToken}
+     *  — {@link JsonIgnore}, SettingsManager восстанавливает его при создании. Токен живёт 12 часов
+     *  (см. sync.SessionKeeper — после истечения тихий повторный вход по запомненным учётным данным). */
     @JsonIgnore
     private String authToken;
-    @JsonIgnore
+    private String authTokenEnc;
     private String authUsername;
-    @JsonIgnore
     private String authRole;
     /** Команда пользователя — только для отображения (см. AccountDialog), реальный
      *  контроль доступа к облачным проектам смотрит в БД на сервере при каждом
      *  запросе, не в это поле. {@code null} — команда не назначена администратором
      *  (в т.ч. у всех сессий, залогиненных ДО появления этого поля — обновится при
      *  следующем входе). */
-    @JsonIgnore
     private String authTeamName;
     /** «Запомнить логин и пароль» в форме входа (ui.AccountDialog): логин открытым
      *  текстом, пароль — зашифрованным (см. {@link CredentialCipher}). Оба null — не
@@ -127,12 +129,28 @@ public class AppSettings {
         this.librarySyncGlobalSeq = librarySyncGlobalSeq;
     }
 
+    public String getLibrarySyncScope() {
+        return librarySyncScope;
+    }
+
+    public void setLibrarySyncScope(String librarySyncScope) {
+        this.librarySyncScope = librarySyncScope;
+    }
+
     public String getAuthToken() {
         return authToken;
     }
 
     public void setAuthToken(String authToken) {
         this.authToken = authToken;
+    }
+
+    public String getAuthTokenEnc() {
+        return authTokenEnc;
+    }
+
+    public void setAuthTokenEnc(String authTokenEnc) {
+        this.authTokenEnc = authTokenEnc;
     }
 
     public String getAuthUsername() {

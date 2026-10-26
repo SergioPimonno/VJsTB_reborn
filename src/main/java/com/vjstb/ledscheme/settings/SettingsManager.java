@@ -20,6 +20,23 @@ public class SettingsManager {
         this.store = store;
         this.settings = store.load();
         this.credentialCipher = new CredentialCipher(new File(store.directory(), "credential.key"));
+        restoreSession();
+    }
+
+    /** Сессия входа, сохранённая прошлым запуском (токен лежит зашифрованным, см. {@link AppSettings#getAuthTokenEnc}). */
+    private void restoreSession() {
+        String enc = settings.getAuthTokenEnc();
+        String token = enc == null ? null : credentialCipher.decrypt(enc);
+        if (token == null) {
+            // сессии нет (не входили, ключ потерян/файл повреждён, настройки от старой версии с одним именем без
+            // токена) — оставшиеся поля не должны показывать «вошедшего»
+            settings.setAuthTokenEnc(null);
+            settings.setAuthUsername(null);
+            settings.setAuthRole(null);
+            settings.setAuthTeamName(null);
+            return;
+        }
+        settings.setAuthToken(token);
     }
 
     public void addListener(Runnable r) {
@@ -60,8 +77,16 @@ public class SettingsManager {
         persist();
     }
 
+    /** Курсор и scope последней успешной синхронизации библиотеки (см. sync.LibrarySync). */
+    public void setLibrarySyncState(long seq, String scope) {
+        settings.setLibrarySyncGlobalSeq(seq);
+        settings.setLibrarySyncScope(scope);
+        persist();
+    }
+
     public void setAuthSession(String token, String username, String role, String teamName) {
         settings.setAuthToken(token);
+        settings.setAuthTokenEnc(token == null ? null : credentialCipher.encrypt(token));
         settings.setAuthUsername(username);
         settings.setAuthRole(role);
         settings.setAuthTeamName(teamName);
@@ -70,6 +95,7 @@ public class SettingsManager {
 
     public void clearAuthSession() {
         settings.setAuthToken(null);
+        settings.setAuthTokenEnc(null);
         settings.setAuthUsername(null);
         settings.setAuthRole(null);
         settings.setAuthTeamName(null);

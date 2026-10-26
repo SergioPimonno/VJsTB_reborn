@@ -13,8 +13,8 @@ import java.util.List;
 
 /**
  * Тянет дельту общей библиотеки с сервера ({@code ledscheme-server}, задеплоен на
- * dxv) — единственный анонимный (без токена) эндпоинт сервера, авторизация тут не
- * нужна (см. LibraryController на сервере). Стиль — как {@code update.UpdateManager}
+ * dxv). Токен необязателен: без входа сервер отдаёт только записи без команды, с токеном — ещё и записи
+ * команды пользователя (см. LibraryController на сервере, {@link LibrarySync}). Стиль — как {@code update.UpdateManager}
  * (голый {@link HttpClient}, доп. библиотека не нужна), это первый и пока
  * единственный сетевой вызов к СВОЕМУ серверу (в отличие от UpdateManager, который
  * ходит на GitHub).
@@ -65,7 +65,7 @@ public class LibrarySyncClient {
     }
 
     /** Зеркалит {@code LibraryController.ChangesResponse}. */
-    public record ChangesResult(List<LibraryItemDto> items, long latestGlobalSeq) {
+    public record ChangesResult(List<LibraryItemDto> items, long latestGlobalSeq, String scope) {
     }
 
     private final String baseUrl;
@@ -79,11 +79,19 @@ public class LibrarySyncClient {
     }
 
     public ChangesResult fetchChanges(long since) throws IOException, InterruptedException {
+        return fetchChanges(since, null);
+    }
+
+    /** {@code token} — токен входа или {@code null}/пусто (анонимно: только записи без команды). */
+    public ChangesResult fetchChanges(long since, String token) throws IOException, InterruptedException {
         HttpClient client = TrustedHttp.clientFor(baseUrl);
-        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/api/library/changes?since=" + since))
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(baseUrl + "/api/library/changes?since=" + since))
                 .timeout(Duration.ofSeconds(15))
-                .GET()
-                .build();
+                .GET();
+        if (token != null && !token.isBlank()) {
+            builder.header("Authorization", "Bearer " + token);
+        }
+        HttpRequest request = builder.build();
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() != 200) {
             throw new IOException("Сервер вернул код " + response.statusCode());

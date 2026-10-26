@@ -91,9 +91,10 @@ public class MainMenuBar extends JMenuBar {
 
         menu.addSeparator();
         JMenuItem account = new JMenuItem("Аккаунт…");
-        account.setToolTipText("Вход/регистрация — нужны только для отправки предложений в общую библиотеку,"
-                + " чтение библиотеки анонимно");
-        account.addActionListener(e -> AccountDialog.show(owner, settings));
+        account.setToolTipText("Вход/регистрация — предложения в библиотеку, облачные проекты и записи библиотеки"
+                + " вашей команды; без входа видны только записи без команды");
+        account.addActionListener(e -> AccountDialog.show(owner, settings,
+                () -> com.vjstb.ledscheme.sync.LibrarySync.runInBackground(model, settings, null)));
         menu.add(account);
 
         return menu;

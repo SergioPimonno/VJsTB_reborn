@@ -7,6 +7,7 @@ import com.vjstb.ledscheme.settings.SettingsStore;
 import com.vjstb.ledscheme.settings.UserProfile;
 import com.vjstb.ledscheme.store.WorkspaceStore;
 import com.vjstb.ledscheme.sync.ClientBackupSync;
+import com.vjstb.ledscheme.sync.LibrarySync;
 import com.vjstb.ledscheme.sync.LibrarySyncClient;
 import com.vjstb.ledscheme.ui.ControllerLibraryMigrationDialog;
 import com.vjstb.ledscheme.ui.LafStyle;
@@ -153,27 +154,8 @@ public class App {
      *  (или явную ошибку, если сервер недоступен — этот тихий автозапуск такую
      *  обратную связь сознательно не даёт). */
     private static void syncLibraryInBackground(AppModel model, SettingsManager settings) {
-        long since = settings.getSettings().getLibrarySyncGlobalSeq();
-        new SwingWorker<LibrarySyncClient.ChangesResult, Void>() {
-            @Override
-            protected LibrarySyncClient.ChangesResult doInBackground() throws Exception {
-                return new LibrarySyncClient(LibrarySyncClient.resolveBaseUrl(settings)).fetchChanges(since);
-            }
-
-            @Override
-            protected void done() {
-                try {
-                    LibrarySyncClient.ChangesResult result = get();
-                    model.applyLibrarySyncItems(result.items());
-                    if (result.latestGlobalSeq() > since) {
-                        settings.setLibrarySyncGlobalSeq(result.latestGlobalSeq());
-                    }
-                } catch (Exception ignored) {
-                    // сервер недоступен/сеть -- не мешаем работе приложения; ручная
-                    // синхронизация (меню) остаётся доступна и покажет ошибку явно
-                }
-                ClientBackupSync.runInBackground(model, settings);
-            }
-        }.execute();
+        // сервер недоступен/сеть -- тихо; ручная синхронизация (меню) остаётся и покажет ошибку явно.
+        // Что именно приходит (без входа / с командой пользователя) — см. sync.LibrarySync.
+        LibrarySync.runInBackground(model, settings, () -> ClientBackupSync.runInBackground(model, settings));
     }
 }

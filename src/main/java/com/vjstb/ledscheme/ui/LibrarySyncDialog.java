@@ -3,6 +3,7 @@ package com.vjstb.ledscheme.ui;
 import com.vjstb.ledscheme.service.AppModel;
 import com.vjstb.ledscheme.settings.SettingsManager;
 import com.vjstb.ledscheme.sync.ClientBackupSync;
+import com.vjstb.ledscheme.sync.LibrarySync;
 import com.vjstb.ledscheme.sync.LibrarySyncClient;
 import java.awt.FlowLayout;
 import java.awt.Window;
@@ -72,11 +73,10 @@ public class LibrarySyncDialog extends JDialog {
     }
 
     private void runSync(AppModel model, SettingsManager settings) {
-        long since = settings.getSettings().getLibrarySyncGlobalSeq();
         new SwingWorker<LibrarySyncClient.ChangesResult, Void>() {
             @Override
             protected LibrarySyncClient.ChangesResult doInBackground() throws Exception {
-                return new LibrarySyncClient(LibrarySyncClient.resolveBaseUrl(settings)).fetchChanges(since);
+                return LibrarySync.fetch(settings);
             }
 
             @Override
@@ -86,9 +86,7 @@ public class LibrarySyncDialog extends JDialog {
                 try {
                     LibrarySyncClient.ChangesResult result = get();
                     AppModel.LibrarySyncSummary summary = model.applyLibrarySyncItems(result.items());
-                    if (result.latestGlobalSeq() > since) {
-                        settings.setLibrarySyncGlobalSeq(result.latestGlobalSeq());
-                    }
+                    LibrarySync.remember(settings, result);
                     if (summary.added() == 0 && summary.updated() == 0 && summary.deleted() == 0) {
                         status.setText("Библиотека уже актуальна.");
                     } else {

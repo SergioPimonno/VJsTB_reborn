@@ -10,9 +10,8 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-/** Запрос пользователя (2026-09-25): после перезапуска приложения нужно входить заново —
- *  сессия (токен) не пишется в settings.json, — но запомненные логин и пароль переживают
- *  перезапуск, а пароль не лежит в settings.json открытым текстом. */
+/** Сессия входа и запомненные учётные данные переживают перезапуск (запрос 2026-10-27 отменил прежнее решение
+ *  2026-09-25 «входить заново»), но ни токен, ни пароль не лежат в settings.json открытым текстом. */
 class AuthSessionPersistenceTest {
 
     private static SettingsManager open(Path dir) {
@@ -20,17 +19,30 @@ class AuthSessionPersistenceTest {
     }
 
     @Test
-    void sessionIsNotRestoredAfterRestart(@TempDir Path dir) throws Exception {
+    void sessionIsRestoredAfterRestartButTheTokenIsEncryptedOnDisk(@TempDir Path dir) throws Exception {
         SettingsManager first = open(dir);
         first.setAuthSession("jwt-token", "alice", "USER", "Team");
         assertEquals("jwt-token", first.getSettings().getAuthToken(), "в текущем запуске сессия есть");
 
         String json = Files.readString(dir.resolve("settings.json"));
-        assertFalse(json.contains("jwt-token"), "токен не пишется на диск");
+        assertFalse(json.contains("jwt-token"), "токен лежит только зашифрованным");
 
         SettingsManager second = open(dir);
-        assertNull(second.getSettings().getAuthToken());
-        assertNull(second.getSettings().getAuthUsername());
+        assertEquals("jwt-token", second.getSettings().getAuthToken());
+        assertEquals("alice", second.getSettings().getAuthUsername());
+        assertEquals("Team", second.getSettings().getAuthTeamName());
+
+        second.clearAuthSession();
+        assertNull(open(dir).getSettings().getAuthToken(), "после выхода сессии нет и после перезапуска");
+    }
+
+    @Test
+    void sessionIsDroppedWhenTheKeyFileIsLost(@TempDir Path dir) throws Exception {
+        open(dir).setAuthSession("jwt-token", "alice", "USER", "Team");
+        Files.delete(dir.resolve("credential.key"));
+        SettingsManager s = open(dir);
+        assertNull(s.getSettings().getAuthToken());
+        assertNull(s.getSettings().getAuthUsername(), "без токена «вошедшего» не показываем");
     }
 
     @Test
