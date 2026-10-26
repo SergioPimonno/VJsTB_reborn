@@ -14,6 +14,7 @@ import com.vjstb.ledscheme.model.VehicleLoadPlan;
 import com.vjstb.ledscheme.model.VehicleLoadSection;
 import com.vjstb.ledscheme.model.VehicleType;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.service.ChainLinks;
 import com.vjstb.ledscheme.service.SceneStats;
 import com.vjstb.ledscheme.service.ScreenLogic;
 import com.vjstb.ledscheme.service.ScreenStats;
@@ -227,7 +228,7 @@ public class OutputStagePanel extends JPanel {
                 AppModel.ChainLoadStatus st = model.powerChainLoadStatus(scene, chain);
                 if (st.blocksExport()) {
                     result.add(chainPlace(scene, chain.getCabinetInstanceIds()) + " · питание L" + chain.getPhase()
-                            + ", " + chain.getCabinetInstanceIds().size() + " каб. · "
+                            + ", " + ChainLinks.countsText(scene, chain.getCabinetInstanceIds()) + " · "
                             + UiKit.fmt(st.loadWatts()) + " Вт при допустимых " + UiKit.fmt(st.capacityWatts()) + " Вт");
                 }
             }
@@ -238,7 +239,7 @@ public class OutputStagePanel extends JPanel {
                 if (st.blocksExport()) {
                     result.add(chainPlace(scene, chain.getCabinetInstanceIds()) + " · сигнал, порт "
                             + chain.getPortNumber() + (chain.isBackup() ? " (бэкап)" : "") + ", "
-                            + chain.getCabinetInstanceIds().size() + " каб. · "
+                            + ChainLinks.countsText(scene, chain.getCabinetInstanceIds()) + " · "
                             + UiKit.fmt(st.loadPixels()) + " px при допустимых " + UiKit.fmt(st.capacityPixels()) + " px");
                 }
             }
@@ -252,7 +253,7 @@ public class OutputStagePanel extends JPanel {
         String screenName = "?";
         if (!cabinetIds.isEmpty()) {
             for (Screen s : scene.getScreens()) {
-                if (s.cabinetById(cabinetIds.get(0)) != null) {
+                if (ChainLinks.owns(s, cabinetIds.get(0))) {
                     screenName = s.getName();
                     break;
                 }

@@ -7,6 +7,8 @@ import com.vjstb.ledscheme.model.Scene;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SignalChain;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.service.ChainLinks;
+import com.vjstb.ledscheme.service.ChainUnits;
 import com.vjstb.ledscheme.service.ScreenLogic;
 import java.awt.BasicStroke;
 import java.awt.Color;
@@ -268,20 +270,28 @@ public class CanvasPanel extends JPanel {
     private int linkIndexAt(Screen scr, List<String> ids, Point p, int cw, int ch) {
         CabinetType type = model.typeOf(scr);
         for (int i = 0; i < ids.size() - 1; i++) {
-            CabinetInstance a = scr.cabinetById(ids.get(i));
-            CabinetInstance b = scr.cabinetById(ids.get(i + 1));
+            double[] a = linkCenter(scr, ids.get(i), type, cw, ch);
+            double[] b = linkCenter(scr, ids.get(i + 1), type, cw, ch);
             if (a == null || b == null) {
                 continue;
             }
-            double ax = cabX(a, type, cw, PADDING) + cw / 2.0;
-            double ay = cabY(a, type, ch, PADDING) + ch / 2.0;
-            double bx = cabX(b, type, cw, PADDING) + cw / 2.0;
-            double by = cabY(b, type, ch, PADDING) + ch / 2.0;
-            if (distanceToSegment(p.x, p.y, ax, ay, bx, by) < 8) {
+            if (distanceToSegment(p.x, p.y, a[0], a[1], b[0], b[1]) < 8) {
                 return i;
             }
         }
         return -1;
+    }
+
+    /** Центр звена цепочки для хит-теста: кабинет — центр его ячейки (как раньше); приёмная карта/блок питания
+     *  (трек D) — та же точка, через которую {@link SchemeRenderer} ведёт линию цепочки. {@code null} — звена на
+     *  этом экране нет. */
+    private double[] linkCenter(Screen scr, String id, CabinetType type, int cw, int ch) {
+        CabinetInstance cab = scr.cabinetById(id);
+        if (cab != null) {
+            return new double[]{cabX(cab, type, cw, PADDING) + cw / 2.0, cabY(cab, type, ch, PADDING) + ch / 2.0};
+        }
+        java.awt.Point p = SchemeRenderer.linkAnchor(scr, id, PADDING, PADDING, cw, ch, type, model.getWorkspace());
+        return p != null ? new double[]{p.x, p.y} : null;
     }
 
     /** Экранная позиция ячейки — сеточная позиция плюс свободное мм-смещение (см.
@@ -407,6 +417,9 @@ public class CanvasPanel extends JPanel {
         // «Сетапе» кабинет, наползающий на соседей, нельзя пропустить и при расключении
         // (SchemeRenderer.paintOverlapWarnings — заливка под цепочкой, контур поверх).
         CabinetType screenType = model.typeOf(scr);
+        if (settings != null) {
+            UnitOverlayPainter.setNumbering(settings.activeProfile().getReceiverCardNumbering());
+        }
         SchemeRenderer.paintSchemeGrid(g2, scr, screenType, cw, ch, PADDING, PADDING, model.getWorkspace());
         SchemeRenderer.paintOverlapWarnings(g2, scr, screenType, cw, ch, PADDING, PADDING, model.getWorkspace(), true);
         SchemeRenderer.paintSchemeChains(g2, scr, power, cw, ch, PADDING, PADDING, screenType, model.getWorkspace(),
@@ -426,8 +439,11 @@ public class CanvasPanel extends JPanel {
                 if (cab.isHidden()) {
                     continue;
                 }
+                // модуль входит в цепочку через свою приёмную карту (трек D)
+                String cardId = ChainLinks.unitContaining(scr, cab.getId(), ChainUnits.Mode.SIGNAL);
                 boolean ownChain = sceneSignalChains.stream()
-                        .anyMatch(sc -> sc.getCabinetInstanceIds().contains(cab.getId()));
+                        .anyMatch(sc -> sc.getCabinetInstanceIds().contains(cab.getId())
+                                || (cardId != null && sc.getCabinetInstanceIds().contains(cardId)));
                 if (!ownChain && model.isCabinetWiredForSignal(cab.getId())) {
                     int x = cabX(cab, type, cw, PADDING);
                     int y = cabY(cab, type, ch, PADDING);
@@ -444,8 +460,8 @@ public class CanvasPanel extends JPanel {
             List<String> active = controller.activeChainCabIds();
             Color c = power ? Palette.phaseColor(model.getActivePhase()) : Color.WHITE;
             for (String id : active) {
-                CabinetInstance cab = scr.cabinetById(id);
-                if (cab != null) {
+                // звено — кабинет либо карта/блок: подсвечиваем все его ячейки (трек D)
+                for (CabinetInstance cab : ChainLinks.cabinetsOf(scr, id)) {
                     int x = cabX(cab, type, cw, PADDING);
                     int y = cabY(cab, type, ch, PADDING);
                     int ew = effW(cab, type, cw);

@@ -4291,7 +4291,7 @@ public class SchemaCanvasPanel extends JPanel {
         Graphics2D g3 = (Graphics2D) g2.create();
         g3.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         for (String cabId : socketIds) {
-            CabinetInstance cab = g.screen().cabinetById(cabId);
+            CabinetInstance cab = com.vjstb.ledscheme.service.ChainLinks.place(g.screen(), cabId);
             if (cab == null) {
                 continue;
             }
@@ -4334,7 +4334,7 @@ public class SchemaCanvasPanel extends JPanel {
             }
             Set<String> socketIds = model.chainEndpointSocketCabinetIds(mode, g.screen());
             for (String cabId : socketIds) {
-                CabinetInstance cab = g.screen().cabinetById(cabId);
+                CabinetInstance cab = com.vjstb.ledscheme.service.ChainLinks.place(g.screen(), cabId);
                 if (cab == null) {
                     continue;
                 }
@@ -4360,7 +4360,7 @@ public class SchemaCanvasPanel extends JPanel {
         if (g == null) {
             return null;
         }
-        CabinetInstance cab = g.screen().cabinetById(cabinetInstanceId);
+        CabinetInstance cab = com.vjstb.ledscheme.service.ChainLinks.place(g.screen(), cabinetInstanceId);
         if (cab == null) {
             return null;
         }
