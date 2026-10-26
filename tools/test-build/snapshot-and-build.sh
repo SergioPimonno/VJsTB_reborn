@@ -27,7 +27,9 @@ cd "$ROOT"
 # ложилась в его собственный testbuild/, а ярлык пользователя запускал старый jar.
 MAIN_ROOT="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)"
 TESTBUILD="$MAIN_ROOT/testbuild"
-JAR="$TESTBUILD/led-scheme-test.jar"
+# TESTBUILD_JAR — свой файл для параллельной ветки: общий led-scheme-test.jar затирает любая другая сессия,
+# собирающая из своего worktree (так затёрли сборку sc-dev сборкой Планера, 2026-10-26).
+JAR="${TESTBUILD_JAR:-$TESTBUILD/led-scheme-test.jar}"
 PREV="$TESTBUILD/previous"
 mkdir -p "$PREV"
 
