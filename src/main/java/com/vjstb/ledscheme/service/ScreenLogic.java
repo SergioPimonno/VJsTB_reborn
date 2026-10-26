@@ -1443,6 +1443,15 @@ public final class ScreenLogic {
         }
         live.setCabinets(cabs);
 
+        // Приёмные карты, блоки питания, автообласти и шаблон нумерации модульного экрана
+        // (docs/receiver-cards/PLAN.md): отмена одной операции возвращает ВСЁ вместе — карты без модулей
+        // или блоки с чужими id были бы битым состоянием. Копии: снимок может быть восстановлен повторно.
+        Screen modular = snapshot.copy();
+        live.setReceiverCards(modular.getReceiverCards());
+        live.setModuleNumbering(modular.getModuleNumbering());
+        live.setPowerSupplies(modular.getPowerSupplies());
+        live.setPowerAutoAreas(modular.getPowerAutoAreas());
+
         List<com.vjstb.ledscheme.model.ControllerInstance> ctrls = new ArrayList<>();
         for (com.vjstb.ledscheme.model.ControllerInstance c : snapshot.getControllers()) {
             ctrls.add(c.copy());

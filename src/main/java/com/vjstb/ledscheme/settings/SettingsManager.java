@@ -409,6 +409,20 @@ public class SettingsManager {
         persist();
     }
 
+    /** Обозначение номера модуля в приёмной карте (шаблон с {@code {n}}/{@code {card}}, D14) — см. {@link
+     *  UserProfile#getModuleNumberFormat()}. UI «Предпочтений» — трек C плана receiver-cards. */
+    public void setModuleNumberFormat(String format) {
+        activeProfile().setModuleNumberFormat(format);
+        persist();
+    }
+
+    /** Порядок нумерации приёмных карт и блоков питания (D15/D21) — см. {@link
+     *  UserProfile#getReceiverCardNumbering()}. */
+    public void setReceiverCardNumbering(com.vjstb.ledscheme.model.ReceiverCardNumbering numbering) {
+        activeProfile().setReceiverCardNumbering(numbering);
+        persist();
+    }
+
     /** Запоминает выбор диалога экспорта таблицы экранов (легенда кабинетов / статистика сцены /
      *  фермы / легенда ферм). */
     public void setScreensExportOptions(boolean legend, boolean stats, boolean trusses, boolean trussLegend) {

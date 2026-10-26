@@ -300,6 +300,18 @@ public class Screen {
     private List<PowerChain> powerChains = new ArrayList<>();
     private List<SignalChain> signalChains = new ArrayList<>();
 
+    /** Модульный экран (docs/receiver-cards/PLAN.md, 4.2). «Модуль» — ячейка, чей эффективный тип кабинета имеет
+     *  флаг {@code receiverCardSeparate}; сам набор модулей в данных не хранится (вычисляется из типов ячеек), хранятся
+     *  только назначения. Приёмные карты экрана: каждый модуль — максимум в одной карте. Старые проекты (поля нет в
+     *  JSON) открываются с пустым списком — Jackson оставляет значение инициализатора. */
+    private List<ReceiverCardInstance> receiverCards = new ArrayList<>();
+    /** Шаблон нумерации модулей в картах — один на весь экран (решение D7). */
+    private ModuleNumberingPattern moduleNumbering = new ModuleNumberingPattern();
+    /** Блоки питания экрана: каждый модуль — максимум в одном блоке. */
+    private List<PowerSupplyInstance> powerSupplies = new ArrayList<>();
+    /** Области, разбитые на блоки питания автоматически (нужны для пересчёта при смене типа блока, D19). */
+    private List<PowerAutoArea> powerAutoAreas = new ArrayList<>();
+
     public Screen() {
     }
 
@@ -933,7 +945,59 @@ public class Screen {
         this.signalChains = signalChains;
     }
 
+    public List<ReceiverCardInstance> getReceiverCards() {
+        return receiverCards;
+    }
+
+    public void setReceiverCards(List<ReceiverCardInstance> receiverCards) {
+        this.receiverCards = receiverCards != null ? receiverCards : new ArrayList<>();
+    }
+
+    public ModuleNumberingPattern getModuleNumbering() {
+        return moduleNumbering != null ? moduleNumbering : new ModuleNumberingPattern();
+    }
+
+    public void setModuleNumbering(ModuleNumberingPattern moduleNumbering) {
+        this.moduleNumbering = moduleNumbering != null ? moduleNumbering : new ModuleNumberingPattern();
+    }
+
+    public List<PowerSupplyInstance> getPowerSupplies() {
+        return powerSupplies;
+    }
+
+    public void setPowerSupplies(List<PowerSupplyInstance> powerSupplies) {
+        this.powerSupplies = powerSupplies != null ? powerSupplies : new ArrayList<>();
+    }
+
+    public List<PowerAutoArea> getPowerAutoAreas() {
+        return powerAutoAreas;
+    }
+
+    public void setPowerAutoAreas(List<PowerAutoArea> powerAutoAreas) {
+        this.powerAutoAreas = powerAutoAreas != null ? powerAutoAreas : new ArrayList<>();
+    }
+
     // ---- вспомогательное ----
+
+    @JsonIgnore
+    public ReceiverCardInstance receiverCardById(String cardId) {
+        for (ReceiverCardInstance c : receiverCards) {
+            if (c.getId().equals(cardId)) {
+                return c;
+            }
+        }
+        return null;
+    }
+
+    @JsonIgnore
+    public PowerSupplyInstance powerSupplyById(String supplyId) {
+        for (PowerSupplyInstance p : powerSupplies) {
+            if (p.getId().equals(supplyId)) {
+                return p;
+            }
+        }
+        return null;
+    }
 
     @JsonIgnore
     public CabinetInstance cabinetById(String cabId) {
@@ -1065,6 +1129,20 @@ public class Screen {
         s.cabinets = new ArrayList<>();
         for (CabinetInstance c : cabinets) {
             s.cabinets.add(c.copy());
+        }
+        // Карты и блоки модульного экрана — глубокие копии: снимок отмены не должен делить записи с живым экраном.
+        s.receiverCards = new ArrayList<>();
+        for (ReceiverCardInstance c : receiverCards) {
+            s.receiverCards.add(c.copy());
+        }
+        s.moduleNumbering = getModuleNumbering().copy();
+        s.powerSupplies = new ArrayList<>();
+        for (PowerSupplyInstance p : powerSupplies) {
+            s.powerSupplies.add(p.copy());
+        }
+        s.powerAutoAreas = new ArrayList<>();
+        for (PowerAutoArea a : powerAutoAreas) {
+            s.powerAutoAreas.add(a.copy());
         }
         // powerChains/signalChains НЕ копируются здесь — цепочки хранятся на уровне
         // сцены, а не экрана (см. Task #78); эти поля на Screen остаются только для

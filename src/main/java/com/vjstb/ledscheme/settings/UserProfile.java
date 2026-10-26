@@ -13,6 +13,9 @@ import java.util.UUID;
  */
 public class UserProfile {
 
+    /** Обозначение номера модуля по умолчанию — просто число (D14). */
+    public static final String DEFAULT_MODULE_NUMBER_FORMAT = "{n}";
+
     private String id = UUID.randomUUID().toString();
     private String name = "По умолчанию";
 
@@ -21,6 +24,8 @@ public class UserProfile {
     private Integer phase3Color;
     private Integer phaseNoneColor;
     private Integer accentColor;
+    /** Цвет «Приёмные карты» (null — встроенный, см. {@code Palette.RECEIVER_CARD}). */
+    private Integer receiverCardColor;
     private List<Integer> signalColors;
     /** «Недавние» цвета линии (см. {@code RecentColorsChooserPanel}) — ОБЩИЙ список
      *  для всех мест, что красят "линии" (цепочки питания/сигнала, связи общей
@@ -414,6 +419,13 @@ public class UserProfile {
      *  {@code null} (профиль сохранён до этой настройки) трактуется как {@link
      *  FloorPlanViewMode#PLAN_2D} — прежнее поведение окна. */
     private FloorPlanViewMode floorPlanViewMode;
+    /** Обозначение номера модуля в приёмной карте (решение D14 плана docs/receiver-cards/PLAN.md): шаблон с
+     *  подстановками {@code {n}} — номер выхода карты — и {@code {card}} — имя карты («К3»); «{n}» → «1», «J{n}» → «J1»,
+     *  «{card}.{n}» → «К3.1». {@code null}/пусто (профиль без поля) = «{n}», просто число. */
+    private String moduleNumberFormat = DEFAULT_MODULE_NUMBER_FORMAT;
+    /** Порядок нумерации приёмных карт К1…КN и блоков питания БП1…БПn (решения D15/D21). {@code null} (профиль без
+     *  поля) = {@link com.vjstb.ledscheme.model.ReceiverCardNumbering#DEFAULT}. */
+    private com.vjstb.ledscheme.model.ReceiverCardNumbering receiverCardNumbering;
     /** Что печатать в экспорте таблицы экранов (запрос 2026-10-02: «при экспорте экранов надо
      *  спрашивать, печатать ли легенду кабинетов и/или статистику по сцене»): последний выбор в
      *  диалоге, по умолчанию (профиль без полей) — печатать оба блока. */
@@ -489,6 +501,14 @@ public class UserProfile {
 
     public void setAccentColor(Integer accentColor) {
         this.accentColor = accentColor;
+    }
+
+    public Integer getReceiverCardColor() {
+        return receiverCardColor;
+    }
+
+    public void setReceiverCardColor(Integer receiverCardColor) {
+        this.receiverCardColor = receiverCardColor;
     }
 
     public List<Integer> getSignalColors() {
@@ -1075,6 +1095,25 @@ public class UserProfile {
         this.floorPlanViewMode = mode != null ? mode : FloorPlanViewMode.PLAN_2D;
     }
 
+    public String getModuleNumberFormat() {
+        return moduleNumberFormat != null && !moduleNumberFormat.isBlank()
+                ? moduleNumberFormat : DEFAULT_MODULE_NUMBER_FORMAT;
+    }
+
+    public void setModuleNumberFormat(String format) {
+        this.moduleNumberFormat = format != null && !format.isBlank() ? format : DEFAULT_MODULE_NUMBER_FORMAT;
+    }
+
+    public com.vjstb.ledscheme.model.ReceiverCardNumbering getReceiverCardNumbering() {
+        return receiverCardNumbering != null
+                ? receiverCardNumbering : com.vjstb.ledscheme.model.ReceiverCardNumbering.DEFAULT;
+    }
+
+    public void setReceiverCardNumbering(com.vjstb.ledscheme.model.ReceiverCardNumbering numbering) {
+        this.receiverCardNumbering = numbering != null
+                ? numbering : com.vjstb.ledscheme.model.ReceiverCardNumbering.DEFAULT;
+    }
+
     public List<String> getControlRoomExportViews() {
         return controlRoomExportViews;
     }
@@ -1221,6 +1260,8 @@ public class UserProfile {
         p.docExportQuality = docExportQuality;
         p.uiScalePercent = uiScalePercent;
         p.floorPlanViewMode = floorPlanViewMode;
+        p.moduleNumberFormat = moduleNumberFormat;
+        p.receiverCardNumbering = receiverCardNumbering;
         p.screensExportLegend = screensExportLegend;
         p.screensExportStats = screensExportStats;
         p.outputParts = outputParts != null ? new ArrayList<>(outputParts) : null;
