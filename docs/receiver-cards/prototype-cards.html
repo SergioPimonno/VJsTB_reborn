@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Приёмные карты — прототип v7</title>
+<!-- Прототип вида «Приёмные карты» (этап «Сигнал»), согласован с пользователем 2026-10-26.
+     Референс поведения для трека C, см. PLAN.md. Числа карт условные («пример»). -->
+<style>
+:root{--border:#d6d4cc;--border-strong:#b4b2a9;--border-accent:#378add;--bg-accent:#e6f1fb;--text-accent:#0c447c;
+--text-secondary:#5f5e5a;--text-muted:#888780;--text-warning:#854f0b;--text-danger:#a32d2d;--surface-2:#fff;--radius:8px}
+body{font-family:system-ui,"Segoe UI",sans-serif;margin:16px;background:#f5f4ef;color:#2c2c2a;max-width:980px}
+button,select,input{font:inherit}
+button{border:0.5px solid var(--border-strong);background:#fff;border-radius:var(--radius);padding:4px 10px;cursor:pointer}
+button[aria-pressed=true]{background:var(--bg-accent);border-color:var(--border-accent)}
+.wrap{display:grid;grid-template-columns:minmax(0,1fr) 250px;gap:12px;font-size:13px}
+.pnl{border:0.5px solid var(--border);border-radius:12px;padding:10px;margin-bottom:8px;background:var(--surface-2)}
+.lbl{font-size:12px;color:var(--text-secondary);margin:0 0 6px}
+.prow{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:4px}
+.tile{padding:3px;min-width:0}.tile.on{border:2px solid var(--border-accent);background:var(--bg-accent)}
+.ct{display:flex;justify-content:space-between;padding:4px 6px;border:0.5px solid var(--border);border-radius:var(--radius);margin-bottom:4px;cursor:pointer;font-size:12px}.ct.on{border-color:var(--border-accent);background:var(--bg-accent);color:var(--text-accent)}
+.sep{border:none;border-top:0.5px solid var(--border-strong);margin:10px 0}
+.opt{display:flex;gap:8px;align-items:flex-start;padding:6px;border-radius:var(--radius);cursor:pointer}.opt.on{background:var(--bg-accent)}
+.opt b{font-weight:500;font-size:13px}.opt.on b{color:var(--text-accent)}.opt small{display:block;font-size:11px;color:var(--text-secondary);line-height:1.35}
+.inl{display:flex;gap:6px;align-items:center;font-size:12px;margin:6px 0 0 26px;color:var(--text-secondary)}.inl input{width:44px;height:26px}
+.cl div{display:flex;justify-content:space-between;padding:2px 0;border-bottom:0.5px solid var(--border);cursor:pointer;font-size:12px}.cl div.sel{color:var(--text-accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div>
+<div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap"><button id="del">Снять карту</button><button id="ordB">Порядок вручную…</button><button id="hostB">Место карты…</button><label style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px"><input type="checkbox" id="rib"> шлейфы</label></div>
+<svg id="sv" width="100%" viewBox="0 0 424 212" tabindex="0" style="touch-action:none;user-select:none;border:0.5px solid var(--border);border-radius:var(--radius);outline:none;background:#fff"></svg>
+<p id="note" style="font-size:12px;margin:6px 0 0;min-height:18px"></p>
+<p id="hint" style="font-size:12px;color:var(--text-secondary);margin:2px 0 8px"></p>
+<div class="pnl" style="margin:0">
+<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap"><p class="lbl" style="margin:0">Нумерация модулей в карте — весь экран</p><label style="font-size:12px;color:var(--text-secondary);display:flex;gap:4px;align-items:center"><input type="checkbox" id="snk"> змейка</label></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:11px;color:var(--text-secondary);margin:6px 0 2px"><span>По строкам</span><span>По столбцам</span></div>
+<div class="prow" id="pal"></div>
+<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px"><span id="patTxt" style="font-size:12px"></span><label style="font-size:12px;color:var(--text-secondary);display:flex;gap:6px;align-items:center">Обозначение <select id="fmt"><option value="{n}">1, 2, 3</option><option value="J{n}">J1, J2, J3</option><option value="P{n}">P1, P2, P3</option><option value="{card}.{n}">К3.1, К3.2</option></select></label></div>
+<div style="display:flex;justify-content:flex-end;margin-top:6px"><label style="font-size:12px;color:var(--text-secondary);display:flex;gap:6px;align-items:center">Нумерация карт <select id="cpat"><option value="0">слева направо, сверху вниз</option><option value="1">справа налево, сверху вниз</option><option value="2">слева направо, снизу вверх</option><option value="3">справа налево, снизу вверх</option><option value="4">сверху вниз, слева направо</option><option value="5">сверху вниз, справа налево</option><option value="6">снизу вверх, слева направо</option><option value="7">снизу вверх, справа налево</option><option value="-1">как нумерация модулей</option></select></label></div>
+<p style="font-size:11px;color:var(--text-muted);margin:2px 0 0">Обозначение и нумерация карт — в приложении это Предпочтения, здесь для примера.</p>
+</div>
+</div>
+<div id="side"></div>
+</div>
+<script>
+const C=12,R=6,S=34,O=4,MOD=250;
+const CAB=new Set();for(let r=0;r<R;r++){CAB.add(r+":10");CAB.add(r+":11")}
+const types=[{n:"Карта A (пример)",out:12,rib:600},{n:"Карта B (пример)",out:8,rib:500},{n:"Своя: «Карта X»",out:null,rib:null}];
+const pats=[["tl","h"],["tr","h"],["bl","h"],["br","h"],["tl","v"],["tr","v"],["bl","v"],["br","v"]];
+const corner={tl:"слева сверху",tr:"справа сверху",bl:"слева снизу",br:"справа снизу"};
+let amode="man",cur=0,pat=0,snake=false,qh=4,qv=3,cards=[],nid=1,sel=null,drag=null,tool="sel",act=null,orphaned=new Set(),replaced=0,fmt="{n}";
+const sv=document.getElementById("sv"),ns="http://www.w3.org/2000/svg";
+const el=(t,a)=>{const e=document.createElementNS(ns,t);for(const k in a)e.setAttribute(k,a[k]);return e};
+const key=(r,c)=>r+":"+c,rc=k=>k.split(":").map(Number),cellXY=k=>{const[r,c]=rc(k);return[O+c*S+S/2,O+r*S+S/2]};
+function seq(w,h,q,sn){const[cor,ax]=q,top=cor[0]=="t",left=cor[1]=="l",outer=ax=="h"?h:w,inner=ax=="h"?w:h,out=[];for(let g=0;g<outer;g++){let fwd=ax=="h"?left:top;if(sn&&g%2)fwd=!fwd;for(let i=0;i<inner;i++){const k=fwd?i:inner-1-i,o=ax=="h"?(top?g:h-1-g):(left?g:w-1-g);out.push(ax=="h"?[o,k]:[k,o])}}return out}
+const bbox=cells=>{const rr=cells.map(k=>rc(k)[0]),cc=cells.map(k=>rc(k)[1]);return[Math.min(...rr),Math.min(...cc),Math.max(...rr),Math.max(...cc)]};
+function ports(cd){if(cd.manual)return cd.manual.filter(k=>cd.cells.includes(k));const[r0,c0,r1,c1]=bbox(cd.cells);return seq(c1-c0+1,r1-r0+1,pats[pat],snake).map(([r,c])=>key(r0+r,c0+c)).filter(k=>cd.cells.includes(k))}
+function host(cd){if(cd.host&&cd.cells.includes(cd.host))return cd.host;const[r0,c0,r1,c1]=bbox(cd.cells),mr=(r0+r1)/2,mc=(c0+c1)/2;return cd.cells.slice().sort((a,b)=>{const[ar,ac]=rc(a),[br,bc]=rc(b);return Math.hypot(ar-mr,ac-mc)-Math.hypot(br-mr,bc-mc)})[0]}
+const ribLen=(cd,k)=>{const[hr,hc]=rc(host(cd)),[r,c]=rc(k);return Math.round(Math.hypot(r-hr,c-hc)*MOD)};
+const cardOf=k=>cards.find(cd=>cd.cells.includes(k));
+/* Сквозная нумерация карт экрана: К1…КN без пропусков, по положению (сверху вниз, слева направо по левому верхнему
+   модулю карты); пересчитывается после любой замены/снятия — внутренний id карты при этом не меняется. */
+/* Порядок нумерации карт — Предпочтения: один из 8 вариантов (угол × по строкам/столбцам) или «как нумерация модулей»;
+   по умолчанию 0 — слева направо, сверху вниз. Якорь карты — её модуль в стартовом углу варианта. */
+let cardPat=0;
+function ordered(){const q=pats[cardPat<0?pat:cardPat],top=q[0][0]=="t",left=q[0][1]=="l";
+const anc=cd=>{const[r0,c0,r1,c1]=bbox(cd.cells);return[top?r0:-r1,left?c0:-c1]};
+return cards.slice().sort((a,b)=>{const[ar,ac]=anc(a),[br,bc]=anc(b);return q[1]=="h"?(ar-br||ac-bc):(ac-bc||ar-br)})}
+const cardName=cd=>"К"+(ordered().indexOf(cd)+1);
+const label=(cd,n)=>fmt.replace("{n}",n).replace("{card}",cardName(cd));
+function cellsIn(r0,c0,r1,c1){const o=[];for(let r=r0;r<=r1;r++)for(let c=c0;c<=c1;c++){const k=key(r,c);if(!CAB.has(k))o.push(k)}return o}
+function take(cells){const hit=[...new Set(cells.map(cardOf).filter(Boolean))];hit.forEach(cd=>{cd.cells.forEach(k=>{if(!cells.includes(k))orphaned.add(k)});replaced++});cards=cards.filter(cd=>!hit.includes(cd));cells.forEach(k=>orphaned.delete(k))}
+function place(cells,t){if(!cells.length)return null;const cd={id:nid++,t,cells,manual:null,host:null};cards.push(cd);return cd}
+function applySel(){if(!sel)return;replaced=0;const all=cellsIn(...sel),one=[...new Set(all.map(cardOf).filter(Boolean))];
+if(amode=="man"&&one.length===1&&one[0].t===cur&&one[0].cells.length===all.length&&all.every(k=>one[0].cells.includes(k))){sel=null;return}
+take(all);if(amode=="man"){const cd=place(all,cur);if(cd)act=cd.id}else for(let r=sel[0];r<=sel[2];r+=qv)for(let c=sel[1];c<=sel[3];c+=qh)place(cellsIn(r,c,Math.min(r+qv-1,sel[2]),Math.min(c+qh-1,sel[3])),cur);
+const n=document.getElementById("note");n.style.color=orphaned.size?"var(--text-warning)":"var(--text-secondary)";n.textContent=replaced?"Заменено карт: "+replaced+(orphaned.size?", модулей без карты: "+orphaned.size:""):"";sel=null}
+function removeCard(){const cd=cards.find(x=>x.id===act);if(!cd)return;cd.cells.forEach(k=>orphaned.add(k));cards=cards.filter(x=>x!==cd);act=null;const n=document.getElementById("note");n.style.color="var(--text-warning)";n.textContent="Карта снята, модулей без карты: "+orphaned.size;render()}
+function tileSvg(q){const s=el("svg",{viewBox:"0 0 60 60",width:"100%"});const cell=19,ox=1.5,oy=1.5;seq(3,3,q,snake).forEach(([r,c],i)=>{s.appendChild(el("rect",{x:ox+c*cell+1,y:oy+r*cell+1,width:cell-2,height:cell-2,rx:2,fill:"#B4B2A9"}));if(i===0)s.appendChild(el("circle",{cx:ox+c*cell+cell/2,cy:oy+r*cell+cell/2,r:7,fill:"#185FA5"}));const t=el("text",{x:ox+c*cell+cell/2,y:oy+r*cell+cell/2+4,"font-size":10,"text-anchor":"middle",fill:i===0?"#fff":"#2C2C2A","font-weight":500});t.textContent=i+1;s.appendChild(t)});return s}
+function palette(){const p=document.getElementById("pal");p.innerHTML="";pats.forEach((q,i)=>{const b=document.createElement("button");b.className="tile"+(i===pat?" on":"");const w=(q[1]=="h"?"по строкам":"по столбцам")+", первый — "+corner[q[0]];b.title=w;b.setAttribute("aria-label",w);b.appendChild(tileSvg(q));b.onclick=()=>{pat=i;render()};p.appendChild(b)});const q=pats[pat];document.getElementById("patTxt").textContent="Первый модуль — "+corner[q[0]]+", дальше "+(q[1]=="h"?(q[0][1]=="l"?"вправо":"влево")+" по строке":(q[0][0]=="t"?"вниз":"вверх")+" по столбцу")+(snake?", змейкой":"")}
+function side(){const s=document.getElementById("side");
+let h="<div class='pnl'><p class='lbl'>Тип карты</p><div id='lib'></div><hr class='sep'><p class='lbl'>Как назначать</p>";
+h+="<div class='opt"+(amode=="man"?" on":"")+"' id='oMan'><input type='radio' name='am' "+(amode=="man"?"checked":"")+" style='margin-top:3px'><span><b>Вручную</b><small>одна карта на выделенную область</small></span></div><hr class='sep'>";
+h+="<div class='opt"+(amode=="auto"?" on":"")+"' id='oAuto'><input type='radio' name='am' "+(amode=="auto"?"checked":"")+" style='margin-top:3px'><span><b>Автоматически</b><small>область разбивается на карты по числу модулей</small></span></div>";
+h+="<div class='inl'>Г <input id='qh' type='number' min='1' max='10' value='"+qh+"'> × В <input id='qv' type='number' min='1' max='6' value='"+qv+"'> мод.</div><p id='qerr' style='font-size:12px;color:var(--text-danger);margin:4px 0 0 26px'></p></div>";
+h+="<div class='pnl'><p class='lbl'>Карты экрана</p><div class='cl' id='cl'></div></div>";s.innerHTML=h;
+const lb=document.getElementById("lib");types.forEach((t,i)=>{const d=document.createElement("div");d.className="ct"+(i===cur?" on":"");d.innerHTML="<span>"+t.n+"</span><span>"+(t.out?t.out+" вых. · "+t.rib+" мм":"не указано")+"</span>";d.onclick=()=>{cur=i;side()};lb.appendChild(d)});
+document.getElementById("oMan").onclick=()=>{amode="man";render()};document.getElementById("oAuto").onclick=()=>{amode="auto";render()};
+["qh","qv"].forEach(id=>{const inp=document.getElementById(id);inp.onfocus=()=>{if(amode!="auto"){amode="auto";document.getElementById("oAuto").classList.add("on");document.getElementById("oMan").classList.remove("on");document.querySelectorAll("input[name=am]")[1].checked=true;hint()}};inp.oninput=e=>{const v=+e.target.value,er=document.getElementById("qerr");if(!(v>=1&&Number.isInteger(v))){er.textContent="Укажите целое число от 1";return}er.textContent="";if(id=="qh")qh=v;else qv=v}});
+const cl=document.getElementById("cl");cl.innerHTML=cards.length?"":"<span style='color:var(--text-secondary);font-size:12px'>Пока нет карт</span>";ordered().forEach(cd=>{const t=types[cd.t],over=t.out&&cd.cells.length>t.out,long=t.rib?cd.cells.filter(k=>ribLen(cd,k)>t.rib).length:0;const d=document.createElement("div");d.className=cd.id===act?"sel":"";d.innerHTML="<span>"+cardName(cd)+" · "+t.n.replace(" (пример)","")+(cd.manual?" · вручную":"")+"</span><span style='color:"+(over||long?"var(--text-warning)":"inherit")+"'>"+cd.cells.length+(t.out?"/"+t.out:"")+(long?" · ⚠"+long:"")+"</span>";d.title=(over?"Модулей больше, чем выходов карты. ":"")+(long?long+" шлейф(а) длиннее "+t.rib+" мм":"");d.onclick=()=>{act=cd.id;render()};cl.appendChild(d)})}
+function draw(){sv.innerHTML="";const showRib=document.getElementById("rib").checked;
+for(let r=0;r<R;r++)for(let c=0;c<C;c++){const k=key(r,c),cab=CAB.has(k),inSel=sel&&r>=sel[0]&&r<=sel[2]&&c>=sel[1]&&c<=sel[3]&&!cab;sv.appendChild(el("rect",{x:O+c*S+1,y:O+r*S+1,width:S-2,height:S-2,rx:2,fill:cab?"#5F5E5A":inSel?"#B5D4F4":orphaned.has(k)?"#F5C4B3":"#B4B2A9",stroke:orphaned.has(k)?"#D85A30":"#888780","stroke-width":orphaned.has(k)?1:0.5}))}
+if(sel&&amode=="auto")for(let r=sel[0];r<=sel[2];r+=qv)for(let c=sel[1];c<=sel[3];c+=qh){const r1=Math.min(r+qv-1,sel[2]),c1=Math.min(c+qh-1,sel[3]);sv.appendChild(el("rect",{x:O+c*S+3,y:O+r*S+3,width:(c1-c+1)*S-6,height:(r1-r+1)*S-6,rx:3,fill:"none",stroke:"#185FA5","stroke-width":1.4,"stroke-dasharray":"4 3"}))}
+cards.forEach(cd=>{const t=types[cd.t],[r0,c0,r1,c1]=bbox(cd.cells),x=O+c0*S,y=O+r0*S,w=(c1-c0+1)*S,h=(r1-r0+1)*S,a=cd.id===act;sv.appendChild(el("rect",{x:x+2,y:y+2,width:w-4,height:h-4,rx:4,fill:"#639922","fill-opacity":a?0.36:0.22,stroke:a?"#27500A":"#3B6D11","stroke-width":a?2.5:1.5}));
+const hk=host(cd),[hx,hy]=cellXY(hk),pl=ports(cd);
+cd.cells.forEach(k=>{const bad=t.rib&&ribLen(cd,k)>t.rib,[px,py]=cellXY(k);if((showRib||bad)&&k!==hk)sv.appendChild(el("line",{x1:hx,y1:hy,x2:px,y2:py,stroke:bad?"#E24B4A":"#5F5E5A","stroke-width":bad?1.6:0.8,"stroke-dasharray":bad?"":"3 2"}));if(bad)sv.appendChild(el("rect",{x:px-S/2+2,y:py-S/2+2,width:S-4,height:S-4,rx:2,fill:"none",stroke:"#E24B4A","stroke-width":1.6}))});
+cd.cells.forEach(k=>{const i=pl.indexOf(k),[px,py]=cellXY(k),isH=k===hk;const tt=el("text",{x:px,y:py+(isH?-2:4),"font-size":fmt=="{card}.{n}"?9:12,"text-anchor":"middle",fill:i<0||(t.out&&i>=t.out)?"#A32D2D":"#2C2C2A","font-weight":500});tt.textContent=i<0?"?":label(cd,i+1);sv.appendChild(tt)});
+const pw=24;sv.appendChild(el("rect",{x:hx-pw/2,y:hy+4,width:pw,height:11,rx:5.5,fill:"#27500A"}));const ht=el("text",{x:hx,y:hy+12.5,"font-size":8.5,"text-anchor":"middle",fill:"#EAF3DE","font-weight":500});ht.textContent=cardName(cd);sv.appendChild(ht)})}
+function hint(){const t={sel:amode=="man"?"Вручную: протяните по модулям — карта выбранного типа ставится при отпускании, задетые карты заменяются.":"Автоматически: протяните по области — пунктир покажет разбиение Г×В, при отпускании карты встанут.",ord:"Порядок вручную: кликайте модули выбранной карты по порядку подключения. «Готово» — выйти; без номера — «?».",host:"Место карты: клик по модулю, на котором стоит карта, — от него по прямой считается длина шлейфов."}[tool];document.getElementById("hint").textContent=t+" Плашка «К3» — модуль, где стоит карта."}
+function render(){side();palette();draw();hint();document.getElementById("ordB").textContent=tool=="ord"?"Готово":"Порядок вручную…";document.getElementById("hostB").textContent=tool=="host"?"Готово":"Место карты…"}
+function cellOf(e){const p=sv.createSVGPoint();p.x=e.clientX;p.y=e.clientY;const q=p.matrixTransform(sv.getScreenCTM().inverse());return[Math.max(0,Math.min(R-1,Math.floor((q.y-O)/S))),Math.max(0,Math.min(C-1,Math.floor((q.x-O)/S)))]}
+sv.addEventListener("pointerdown",e=>{sv.focus();const[r,c]=cellOf(e),k=key(r,c),hit=cardOf(k);
+if(tool=="ord"){if(!hit)return;if(hit.id!==act){act=hit.id;hit.manual=[];render();return}if(!hit.manual)hit.manual=[];if(!hit.manual.includes(k))hit.manual.push(k);render();return}
+if(tool=="host"){if(hit){act=hit.id;hit.host=k;render()}return}
+drag={r,c,moved:false};sel=[r,c,r,c];draw()});
+sv.addEventListener("pointermove",e=>{if(!drag)return;const[r,c]=cellOf(e);if(r!==drag.r||c!==drag.c)drag.moved=true;sel=[Math.min(drag.r,r),Math.min(drag.c,c),Math.max(drag.r,r),Math.max(drag.c,c)];draw()});
+window.addEventListener("pointerup",()=>{if(!drag)return;const d=drag;drag=null;if(!d.moved){const hit=cardOf(key(d.r,d.c));if(hit){act=hit.id;sel=null;render();return}}applySel();render()});
+sv.addEventListener("keydown",e=>{if(e.key==="Delete"||e.key==="Backspace"){e.preventDefault();removeCard()}});
+document.getElementById("del").onclick=removeCard;document.getElementById("rib").onchange=draw;
+document.getElementById("snk").onchange=e=>{snake=e.target.checked;render()};document.getElementById("fmt").onchange=e=>{fmt=e.target.value;draw()};document.getElementById("cpat").onchange=e=>{cardPat=+e.target.value;render()};
+document.getElementById("ordB").onclick=()=>{tool=tool=="ord"?"sel":"ord";if(tool=="ord"){const cd=cards.find(x=>x.id===act)||cards[0];if(cd){act=cd.id;cd.manual=[]}}render()};
+document.getElementById("hostB").onclick=()=>{tool=tool=="host"?"sel":"host";render()};
+amode="auto";cur=0;qh=4;qv=3;sel=[0,0,5,7];applySel();amode="auto";cur=1;qh=2;qv=3;sel=[0,8,5,9];applySel();amode="man";cur=0;qh=4;qv=3;document.getElementById("note").textContent="";
+render();
+</script>
+</body>
+</html>
