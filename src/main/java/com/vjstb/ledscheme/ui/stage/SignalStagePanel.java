@@ -379,6 +379,9 @@ public class SignalStagePanel extends JPanel {
         viewContainer.add(perScreen, VIEW_CHAIN);
         viewContainer.add(schemaPanel, VIEW_SCHEMA);
         viewContainer.add(networkManagerPanel, VIEW_NETWORK);
+        // CardLayout показывает ПЕРВУЮ добавленную карточку — это «Приёмные карты», а выбрана кнопка «Расключение
+        // экрана»: на старте этап открывался на чужом виде (и в проектах без модулей тоже).
+        viewCards.show(viewContainer, VIEW_CHAIN);
 
         ButtonGroup viewGroup = new ButtonGroup();
         viewGroup.add(cardsViewBtn);

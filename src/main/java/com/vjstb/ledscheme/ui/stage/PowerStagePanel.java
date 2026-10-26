@@ -198,6 +198,9 @@ public class PowerStagePanel extends JPanel {
         viewContainer.add(suppliesView, VIEW_SUPPLIES);
         viewContainer.add(perScreen, VIEW_CHAIN);
         viewContainer.add(schemaPanel, VIEW_SCHEMA);
+        // CardLayout показывает ПЕРВУЮ добавленную карточку — это «Блоки питания», а выбрана кнопка «Расключение
+        // экрана»: на старте этап открывался на чужом виде (и в проектах без модулей тоже).
+        viewCards.show(viewContainer, VIEW_CHAIN);
 
         ButtonGroup viewGroup = new ButtonGroup();
         viewGroup.add(suppliesViewBtn);
