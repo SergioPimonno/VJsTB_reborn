@@ -292,6 +292,167 @@ class LibraryXlsxTest {
         }
     }
 
+    /** Модульные экраны (docs/receiver-cards, раздел 8): шаблон содержит листы карт и блоков питания и
+     *  столбец флага модуля, заголовки — ровно те, что описаны в плане и в админке (формат файла один). */
+    @Test
+    void templateHasReceiverCardAndPowerSupplySheetsAndTheModuleColumn() throws Exception {
+        File template = tmp.resolve("template5.xlsx").toFile();
+        LibraryXlsx.writeTemplate(template);
+        try (Workbook wb = new XSSFWorkbook(template)) {
+            assertEquals(6, wb.getNumberOfSheets(), "инструкция + пять листов данных");
+            assertEquals("Приёмная карта отдельно (Да/Нет)",
+                    wb.getSheet(LibraryXlsx.SHEET_CABINETS).getRow(0).getCell(12).getStringCellValue());
+            Sheet rc = wb.getSheet(LibraryXlsx.SHEET_RECEIVER_CARDS);
+            assertEquals("Приёмные карты", rc.getSheetName());
+            assertEquals("Выходов на модули (шлейфов)", rc.getRow(0).getCell(3).getStringCellValue());
+            Sheet ps = wb.getSheet(LibraryXlsx.SHEET_POWER_SUPPLIES);
+            assertEquals("Блоки питания", ps.getSheetName());
+            assertEquals("Отдельный выход на карту (Да/Нет)", ps.getRow(0).getCell(6).getStringCellValue());
+            assertFalse(ps.getDataValidations().isEmpty());
+        }
+        LibraryXlsx.Parsed parsed = LibraryXlsx.parse(template);
+        assertTrue(parsed.receiverCards().isEmpty() && parsed.powerSupplies().isEmpty());
+        assertTrue(parsed.warnings().isEmpty(), parsed.warnings().toString());
+    }
+
+    @Test
+    void receiverCardsPowerSuppliesAndModuleFlagRoundTripIntoLibrary() throws Exception {
+        File template = tmp.resolve("t5.xlsx").toFile();
+        LibraryXlsx.writeTemplate(template);
+        File filled;
+        try (Workbook wb = new XSSFWorkbook(template)) {
+            row(wb.getSheet(LibraryXlsx.SHEET_CABINETS), "Модуль P2.5", null, 320, 160, null, 128, 64, null, null,
+                    null, null, null, "Да");
+            row(wb.getSheet(LibraryXlsx.SHEET_RECEIVER_CARDS), "A8s", "NovaStar", "Моя", 8, "600,5", 512, 384, 131072,
+                    5, 0.1, 80, 20, 100, "заметка");
+            row(wb.getSheet(LibraryXlsx.SHEET_RECEIVER_CARDS), "Пустая карта");
+            row(wb.getSheet(LibraryXlsx.SHEET_POWER_SUPPLIES), "БП 8", "Mean Well", null, 8, 300, 700, "да",
+                    "110–240 В", 1.2);
+            filled = write(wb);
+        }
+
+        LibraryXlsx.Parsed parsed = LibraryXlsx.parse(filled);
+        assertTrue(parsed.warnings().isEmpty(), parsed.warnings().toString());
+        LibraryXlsx.Libraries lib = emptyLibraries();
+        LibraryXlsx.Report report = LibraryXlsx.merge(parsed, lib);
+
+        assertEquals(1, report.cabinetsAdded());
+        assertEquals(2, report.receiverCardsAdded());
+        assertEquals(1, report.powerSuppliesAdded());
+        assertEquals(4, report.total());
+        assertTrue(report.summary().contains("Приёмные карты: добавлено 2"));
+        assertTrue(report.summary().contains("Блоки питания: добавлено 1"));
+        assertTrue(lib.cabinets().get(0).isReceiverCardSeparate());
+
+        com.vjstb.ledscheme.model.ReceiverCardType card = lib.receiverCards().get(0);
+        assertEquals("A8s", card.getName());
+        assertEquals("NovaStar", card.getVendor());
+        assertEquals("Моя", card.getCompany());
+        assertEquals(8, card.getModuleOutputs());
+        assertEquals(600.5, card.getRibbonLengthMm(), 1e-9);
+        assertEquals(512, card.getMaxWidthPx());
+        assertEquals(384, card.getMaxHeightPx());
+        assertEquals(131072, card.getMaxPixels());
+        assertEquals(5.0, card.getPowerW(), 1e-9);
+        assertEquals(0.1, card.getWeightKg(), 1e-9);
+        assertEquals("заметка", card.getNotes());
+        assertEquals(80.0, card.getPhysical().getWidthMm(), 1e-9);
+        assertEquals(PhysicalSpec.FormFactor.LOOSE, card.getPhysical().getFormFactor());
+
+        com.vjstb.ledscheme.model.ReceiverCardType bare = lib.receiverCards().get(1);
+        assertNull(bare.getModuleOutputs(), "пустая ячейка — «не указано», а не 0");
+        assertNull(bare.getRibbonLengthMm());
+        assertNull(bare.getMaxPixels());
+        assertNull(bare.getPhysical());
+
+        com.vjstb.ledscheme.model.PowerSupplyType psu = lib.powerSupplies().get(0);
+        assertEquals(8, psu.getOutputs());
+        assertEquals(300.0, psu.getRatedPowerW(), 1e-9);
+        assertEquals(700.0, psu.getCableLengthMm(), 1e-9);
+        assertTrue(psu.isCardOutput());
+        assertEquals("110–240 В", psu.getInputVoltage());
+        assertEquals(1.2, psu.getWeightKg(), 1e-9);
+    }
+
+    @Test
+    void cardMergeUpdatesOnlyFilledCellsAndSkipsSharedOnes() throws Exception {
+        com.vjstb.ledscheme.model.ReceiverCardType mine = new com.vjstb.ledscheme.model.ReceiverCardType();
+        mine.setName("A8s");
+        mine.setModuleOutputs(8);
+        mine.setMaxPixels(131072);
+        mine.setNotes("моя заметка");
+        com.vjstb.ledscheme.model.PowerSupplyType sharedPsu = new com.vjstb.ledscheme.model.PowerSupplyType();
+        sharedPsu.setName("Общий БП");
+        sharedPsu.setOutputs(4);
+        LibraryXlsx.Libraries lib = new LibraryXlsx.Libraries(new ArrayList<>(), new ArrayList<>(),
+                new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(),
+                new ArrayList<>(), new ArrayList<>(List.of(mine)),
+                new ArrayList<>(List.of(sharedPsu)), new ArrayList<>());
+        File template = tmp.resolve("t6.xlsx").toFile();
+        LibraryXlsx.writeTemplate(template);
+        File filled;
+        try (Workbook wb = new XSSFWorkbook(template)) {
+            row(wb.getSheet(LibraryXlsx.SHEET_RECEIVER_CARDS), "a8S", null, null, null, 450);
+            row(wb.getSheet(LibraryXlsx.SHEET_POWER_SUPPLIES), "общий бп", null, null, 16);
+            filled = write(wb);
+        }
+
+        LibraryXlsx.Report report = LibraryXlsx.merge(LibraryXlsx.parse(filled), lib);
+
+        assertEquals(1, report.receiverCardsUpdated());
+        assertEquals(0, report.receiverCardsAdded());
+        assertEquals(0, report.powerSuppliesAdded() + report.powerSuppliesUpdated());
+        assertEquals(1, lib.receiverCards().size());
+        assertEquals(450.0, mine.getRibbonLengthMm(), 1e-9);
+        assertEquals(8, mine.getModuleOutputs(), "пустая ячейка не затирает число выходов");
+        assertEquals(131072, mine.getMaxPixels());
+        assertEquals("моя заметка", mine.getNotes());
+        assertTrue(lib.powerSupplies().isEmpty());
+        assertEquals(4, sharedPsu.getOutputs(), "общая запись не меняется");
+        assertTrue(report.warnings().stream().anyMatch(w -> w.contains("общей библиотеке")));
+    }
+
+    @Test
+    void badFlagCellsAreReportedAndNotApplied() throws Exception {
+        File template = tmp.resolve("t7.xlsx").toFile();
+        LibraryXlsx.writeTemplate(template);
+        File filled;
+        try (Workbook wb = new XSSFWorkbook(template)) {
+            row(wb.getSheet(LibraryXlsx.SHEET_CABINETS), "Куб", null, 500, 500, null, 128, 128, null, null, null,
+                    null, null, "возможно");
+            row(wb.getSheet(LibraryXlsx.SHEET_POWER_SUPPLIES), "БП", null, null, 4, null, null, "не знаю");
+            filled = write(wb);
+        }
+        LibraryXlsx.Parsed parsed = LibraryXlsx.parse(filled);
+        assertNull(parsed.cabinets().get(0).receiverCardSeparate());
+        assertNull(parsed.powerSupplies().get(0).cardOutput());
+        assertEquals(2, parsed.warnings().size(), parsed.warnings().toString());
+    }
+
+    @Test
+    void importThroughAppModelFillsPersonalLibrary(@TempDir Path dir) throws Exception {
+        File template = tmp.resolve("t8.xlsx").toFile();
+        LibraryXlsx.writeTemplate(template);
+        File filled;
+        try (Workbook wb = new XSSFWorkbook(template)) {
+            row(wb.getSheet(LibraryXlsx.SHEET_CABINETS), "Модуль", null, 320, 160, null, 128, 64, null, null, null,
+                    null, null, "Да");
+            row(wb.getSheet(LibraryXlsx.SHEET_RECEIVER_CARDS), "A8s", null, null, 8);
+            row(wb.getSheet(LibraryXlsx.SHEET_POWER_SUPPLIES), "БП", null, null, 8, 300);
+            filled = write(wb);
+        }
+        AppModel model = new AppModel(new com.vjstb.ledscheme.store.WorkspaceStore(new File(dir.toFile(), "w.json")));
+
+        LibraryXlsx.Report report = model.importLibraryXlsx(filled);
+
+        assertEquals(3, report.total());
+        assertEquals(1, model.getReceiverCardTypes().size());
+        assertEquals(8, model.getReceiverCardTypes().get(0).getModuleOutputs());
+        assertEquals(300.0, model.getPowerSupplyTypes().get(0).getRatedPowerW(), 1e-9);
+        assertTrue(model.getCabinetTypes().stream().anyMatch(c -> c.getName().equals("Модуль")
+                && c.isReceiverCardSeparate()));
+    }
+
     @Test
     void fileWithoutKnownSheetsOrNotExcelGivesReadableError() throws IOException {
         try (Workbook wb = new XSSFWorkbook()) {

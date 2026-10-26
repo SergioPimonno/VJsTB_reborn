@@ -57,6 +57,11 @@ public class Library {
     private List<RoomEquipmentType> roomEquipmentTypes = new ArrayList<>();
     /** Мебель, напольные станки и мониторы Планера пультовой — см. RoomFurnitureType. */
     private List<RoomFurnitureType> roomFurnitureTypes = new ArrayList<>();
+    /** Приёмные карты модульных экранов (кабинеты с флагом {@code CabinetType#receiverCardSeparate}) — см.
+     *  ReceiverCardType и docs/receiver-cards/PLAN.md. Старые library.json без поля читаются с пустым списком. */
+    private List<ReceiverCardType> receiverCardTypes = new ArrayList<>();
+    /** Блоки питания модульных экранов — см. PowerSupplyType и docs/receiver-cards/PLAN.md. */
+    private List<PowerSupplyType> powerSupplyTypes = new ArrayList<>();
     /** Личные габариты позиций библиотеки, у которых общих данных нет (запрос 2026-10-23: пользователь указывает
      *  габариты сам, не дожидаясь сервера). Ключ — {@link RoomLibRef#key()}; используется Планером пультовой,
      *  только пока в самой позиции габаритов не хватает — как только администратор заполнит общие, они главнее. */
@@ -134,6 +139,8 @@ public class Library {
     private List<NetworkDeviceType> sharedNetworkDeviceTypes = new ArrayList<>();
     private List<RoomEquipmentType> sharedRoomEquipmentTypes = new ArrayList<>();
     private List<RoomFurnitureType> sharedRoomFurnitureTypes = new ArrayList<>();
+    private List<ReceiverCardType> sharedReceiverCardTypes = new ArrayList<>();
+    private List<PowerSupplyType> sharedPowerSupplyTypes = new ArrayList<>();
     private List<EquipmentSeries> sharedEquipmentSeries = new ArrayList<>();
 
     public List<CabinetType> getCabinetTypes() {
@@ -537,6 +544,74 @@ public class Library {
 
     public void setSharedRoomFurnitureTypes(List<RoomFurnitureType> sharedRoomFurnitureTypes) {
         this.sharedRoomFurnitureTypes = sharedRoomFurnitureTypes;
+    }
+
+    public List<ReceiverCardType> getReceiverCardTypes() {
+        return receiverCardTypes;
+    }
+
+    public void setReceiverCardTypes(List<ReceiverCardType> receiverCardTypes) {
+        this.receiverCardTypes = receiverCardTypes == null ? new ArrayList<>() : receiverCardTypes;
+    }
+
+    public List<ReceiverCardType> getSharedReceiverCardTypes() {
+        return sharedReceiverCardTypes;
+    }
+
+    public void setSharedReceiverCardTypes(List<ReceiverCardType> sharedReceiverCardTypes) {
+        this.sharedReceiverCardTypes = sharedReceiverCardTypes == null ? new ArrayList<>() : sharedReceiverCardTypes;
+    }
+
+    public List<PowerSupplyType> getPowerSupplyTypes() {
+        return powerSupplyTypes;
+    }
+
+    public void setPowerSupplyTypes(List<PowerSupplyType> powerSupplyTypes) {
+        this.powerSupplyTypes = powerSupplyTypes == null ? new ArrayList<>() : powerSupplyTypes;
+    }
+
+    public List<PowerSupplyType> getSharedPowerSupplyTypes() {
+        return sharedPowerSupplyTypes;
+    }
+
+    public void setSharedPowerSupplyTypes(List<PowerSupplyType> sharedPowerSupplyTypes) {
+        this.sharedPowerSupplyTypes = sharedPowerSupplyTypes == null ? new ArrayList<>() : sharedPowerSupplyTypes;
+    }
+
+    /** Общее, затем личное — см. class-javadoc про общую/личную библиотеку. */
+    public ReceiverCardType receiverCardTypeById(String id) {
+        if (id == null) {
+            return null;
+        }
+        for (ReceiverCardType t : sharedReceiverCardTypes) {
+            if (t.getId().equals(id)) {
+                return t;
+            }
+        }
+        for (ReceiverCardType t : receiverCardTypes) {
+            if (t.getId().equals(id)) {
+                return t;
+            }
+        }
+        return null;
+    }
+
+    /** Общее, затем личное — см. class-javadoc про общую/личную библиотеку. */
+    public PowerSupplyType powerSupplyTypeById(String id) {
+        if (id == null) {
+            return null;
+        }
+        for (PowerSupplyType t : sharedPowerSupplyTypes) {
+            if (t.getId().equals(id)) {
+                return t;
+            }
+        }
+        for (PowerSupplyType t : powerSupplyTypes) {
+            if (t.getId().equals(id)) {
+                return t;
+            }
+        }
+        return null;
     }
 
     /** Общее, затем личное — см. class-javadoc про общую/личную библиотеку. */

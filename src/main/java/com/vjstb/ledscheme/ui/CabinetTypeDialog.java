@@ -81,6 +81,11 @@ public class CabinetTypeDialog extends JDialog {
     private final JCheckBox exportAsStandardCheck = new JCheckBox("Прописывать как стандартный кабинет "
             + "(прямоугольный, по габаритам) при экспорте в NovaLCT");
 
+    /** См. {@code CabinetType#isReceiverCardSeparate()}: тип — модуль без своей приёмной карты (шлейф в общую
+     *  карту, питание от блока питания; docs/receiver-cards/PLAN.md, D1). */
+    private final JCheckBox receiverCardSeparateCheck = new JCheckBox("Приёмная карта отдельно "
+            + "(модуль: общая карта, питание от блока)");
+
     private CabinetType result;
 
     public CabinetTypeDialog(Window owner, AppModel model, CabinetType existing) {
@@ -154,6 +159,8 @@ public class CabinetTypeDialog extends JDialog {
         formBottom.add(visibleInPaletteCheck);
         formBottom.add(new JLabel("Экспорт в NovaLCT"));
         formBottom.add(exportAsStandardCheck);
+        formBottom.add(new JLabel("Модульный экран"));
+        formBottom.add(receiverCardSeparateCheck);
 
         CabinetType src = existing != null ? existing : new CabinetType();
         nameField.setText(src.getName());
@@ -184,6 +191,7 @@ public class CabinetTypeDialog extends JDialog {
         signalConnectorsField.setText(String.valueOf(src.getSignalConnectorsNeeded()));
         visibleInPaletteCheck.setSelected(src.isVisibleInPalette());
         exportAsStandardCheck.setSelected(src.isExportAsStandardCabinet());
+        receiverCardSeparateCheck.setSelected(src.isReceiverCardSeparate());
         refreshRotationVisibility();
 
         JButton ok = new JButton("Сохранить");
@@ -316,6 +324,7 @@ public class CabinetTypeDialog extends JDialog {
             ct.setSignalConnectorsNeeded((int) parseNonNeg(signalConnectorsField.getText(), "Линий сигнала"));
             ct.setVisibleInPalette(visibleInPaletteCheck.isSelected());
             ct.setExportAsStandardCabinet(exportAsStandardCheck.isSelected());
+            ct.setReceiverCardSeparate(receiverCardSeparateCheck.isSelected());
             result = ct;
             dispose();
         } catch (IllegalArgumentException ex) {

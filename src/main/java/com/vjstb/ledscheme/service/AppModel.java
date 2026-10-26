@@ -7,6 +7,8 @@ import com.vjstb.ledscheme.model.CabinetInstance;
 import com.vjstb.ledscheme.model.CabinetType;
 import com.vjstb.ledscheme.model.CableLengthProfile;
 import com.vjstb.ledscheme.model.CaseType;
+import com.vjstb.ledscheme.model.PowerSupplyType;
+import com.vjstb.ledscheme.model.ReceiverCardType;
 import com.vjstb.ledscheme.model.RoomEquipmentType;
 import com.vjstb.ledscheme.model.RoomFurnitureType;
 import com.vjstb.ledscheme.model.HoistType;
@@ -4731,7 +4733,8 @@ public class AppModel {
         store.exportList(workspace.getCableTypes(), file, "CABLE");
     }
 
-    /** Импорт кабинетов, оборудования и кабелей из Excel-таблицы по шаблону (см. {@link LibraryXlsx}) в ЛИЧНУЮ
+    /** Импорт кабинетов (в т.ч. флага «Приёмная карта отдельно»), оборудования, кабелей, приёмных карт и блоков
+     *  питания из Excel-таблицы по шаблону (см. {@link LibraryXlsx}) в ЛИЧНУЮ
      *  библиотеку: записи общей библиотеки не затрагиваются. {@link IllegalArgumentException} с текстом для
      *  пользователя, если файл не читается или это не шаблон. */
     public LibraryXlsx.Report importLibraryXlsx(File file) {
@@ -4739,7 +4742,9 @@ public class AppModel {
         LibraryXlsx.Report report = LibraryXlsx.merge(parsed, new LibraryXlsx.Libraries(
                 workspace.getSharedCabinetTypes(), workspace.getCabinetTypes(),
                 workspace.getSharedEquipmentPresets(), workspace.getEquipmentPresets(),
-                workspace.getSharedCableTypes(), workspace.getCableTypes()));
+                workspace.getSharedCableTypes(), workspace.getCableTypes(),
+                workspace.getSharedReceiverCardTypes(), workspace.getReceiverCardTypes(),
+                workspace.getSharedPowerSupplyTypes(), workspace.getPowerSupplyTypes()));
         if (report.total() > 0) {
             changed();
         }
@@ -5186,6 +5191,93 @@ public class AppModel {
         changed();
     }
 
+    // ---- библиотека модульных экранов: приёмные карты и блоки питания (docs/receiver-cards/PLAN.md) ----
+    //      На id этих типов будут ссылаться экземпляры карт/блоков на экране (трек B плана) — когда они
+    //      появятся, удаление типа и синк-удаление общего типа нужно защитить так же, как у CABINET/HOIST
+    //      (removeSharedIfUnreferenced), а продвижение личного типа в общий — мигрировать ссылки.
+
+    /** Общая библиотека ++ личная — см. javadoc {@link #getCabinetTypes()}. */
+    public List<ReceiverCardType> getReceiverCardTypes() {
+        List<ReceiverCardType> union = new ArrayList<>(workspace.getSharedReceiverCardTypes());
+        union.addAll(workspace.getReceiverCardTypes());
+        return union;
+    }
+
+    public boolean isSharedReceiverCardType(String id) {
+        return id != null && workspace.getSharedReceiverCardTypes().stream().anyMatch(t -> t.getId().equals(id));
+    }
+
+    private void requireUniqueReceiverCardName(String name, String ignoreId) {
+        for (ReceiverCardType t : getReceiverCardTypes()) {
+            if (t.getName().equalsIgnoreCase(name) && !t.getId().equals(ignoreId)) {
+                throw new IllegalStateException("Приёмная карта «" + name + "» уже есть в библиотеке");
+            }
+        }
+    }
+
+    public ReceiverCardType addReceiverCardType(ReceiverCardType type) {
+        requireUniqueReceiverCardName(type.getName(), null);
+        workspace.getReceiverCardTypes().add(type);
+        changed();
+        return type;
+    }
+
+    public void updateReceiverCardType(ReceiverCardType edited) {
+        requireUniqueReceiverCardName(edited.getName(), edited.getId());
+        ReceiverCardType existing = workspace.getReceiverCardTypes().stream()
+                .filter(t -> t.getId().equals(edited.getId())).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Приёмная карта не найдена в личной библиотеке (общие позиции правит администратор)"));
+        existing.applyEditedValues(edited);
+        changed();
+    }
+
+    public void deleteReceiverCardType(String id) {
+        workspace.getReceiverCardTypes().removeIf(t -> t.getId().equals(id));
+        changed();
+    }
+
+    /** Общая библиотека ++ личная — см. javadoc {@link #getCabinetTypes()}. */
+    public List<PowerSupplyType> getPowerSupplyTypes() {
+        List<PowerSupplyType> union = new ArrayList<>(workspace.getSharedPowerSupplyTypes());
+        union.addAll(workspace.getPowerSupplyTypes());
+        return union;
+    }
+
+    public boolean isSharedPowerSupplyType(String id) {
+        return id != null && workspace.getSharedPowerSupplyTypes().stream().anyMatch(t -> t.getId().equals(id));
+    }
+
+    private void requireUniquePowerSupplyName(String name, String ignoreId) {
+        for (PowerSupplyType t : getPowerSupplyTypes()) {
+            if (t.getName().equalsIgnoreCase(name) && !t.getId().equals(ignoreId)) {
+                throw new IllegalStateException("Блок питания «" + name + "» уже есть в библиотеке");
+            }
+        }
+    }
+
+    public PowerSupplyType addPowerSupplyType(PowerSupplyType type) {
+        requireUniquePowerSupplyName(type.getName(), null);
+        workspace.getPowerSupplyTypes().add(type);
+        changed();
+        return type;
+    }
+
+    public void updatePowerSupplyType(PowerSupplyType edited) {
+        requireUniquePowerSupplyName(edited.getName(), edited.getId());
+        PowerSupplyType existing = workspace.getPowerSupplyTypes().stream()
+                .filter(t -> t.getId().equals(edited.getId())).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Блок питания не найден в личной библиотеке (общие позиции правит администратор)"));
+        existing.applyEditedValues(edited);
+        changed();
+    }
+
+    public void deletePowerSupplyType(String id) {
+        workspace.getPowerSupplyTypes().removeIf(t -> t.getId().equals(id));
+        changed();
+    }
+
     /** Общая библиотека ("GTO") ++ личная — см. javadoc {@link #getCabinetTypes()}
      *  про то же разделение. */
     public List<VehicleType> getVehicleTypes() {
@@ -5370,6 +5462,17 @@ public class AppModel {
                             RoomFurnitureType::getId, RoomFurnitureType::setId, RoomFurnitureType::getName,
                             (oldId, newId) -> migrateRoomReferences(
                                     com.vjstb.ledscheme.model.RoomLibRef.Kind.ROOM_FURNITURE, oldId, newId));
+                    // Приёмные карты и блоки питания модульных экранов: пока на их id не ссылается ничего в
+                    // проектных данных (экземпляры карт/блоков на экране — трек B плана receiver-cards),
+                    // поэтому и миграции ссылок нет; она понадобится вместе с этими ссылками.
+                    case "RECEIVER_CARD" -> applyOne(workspace.getSharedReceiverCardTypes(),
+                            workspace.getReceiverCardTypes(), dto, ReceiverCardType.class,
+                            ReceiverCardType::getId, ReceiverCardType::setId, ReceiverCardType::getName,
+                            NO_REFERENCE_MIGRATION);
+                    case "POWER_SUPPLY" -> applyOne(workspace.getSharedPowerSupplyTypes(),
+                            workspace.getPowerSupplyTypes(), dto, PowerSupplyType.class,
+                            PowerSupplyType::getId, PowerSupplyType::setId, PowerSupplyType::getName,
+                            NO_REFERENCE_MIGRATION);
                     case "VEHICLE" -> applyOne(workspace.getSharedVehicleTypes(), workspace.getVehicleTypes(), dto,
                             VehicleType.class, VehicleType::getId, VehicleType::setId, VehicleType::getName,
                             NO_REFERENCE_MIGRATION);
@@ -5436,6 +5539,8 @@ public class AppModel {
             case "CASE" -> workspace.getSharedCaseTypes().removeIf(c -> c.getId().equals(dto.id()));
             case "ROOM_EQUIPMENT" -> workspace.getSharedRoomEquipmentTypes().removeIf(t -> t.getId().equals(dto.id()));
             case "ROOM_FURNITURE" -> workspace.getSharedRoomFurnitureTypes().removeIf(t -> t.getId().equals(dto.id()));
+            case "RECEIVER_CARD" -> workspace.getSharedReceiverCardTypes().removeIf(t -> t.getId().equals(dto.id()));
+            case "POWER_SUPPLY" -> workspace.getSharedPowerSupplyTypes().removeIf(t -> t.getId().equals(dto.id()));
             case "VEHICLE" -> workspace.getSharedVehicleTypes().removeIf(v -> v.getId().equals(dto.id()));
             case "NETWORK_DEVICE" -> workspace.getSharedNetworkDeviceTypes().removeIf(t -> t.getId().equals(dto.id()));
             case "EQUIPMENT_SERIES" -> workspace.getSharedEquipmentSeries().removeIf(s -> s.getId().equals(dto.id()));

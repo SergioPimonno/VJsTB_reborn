@@ -31,6 +31,7 @@ import java.util.Map;
         "sharedStructureFrameTypes",
         "sharedCaseTypes", "sharedVehicleTypes", "sharedNetworkDeviceTypes",
         "roomEquipmentTypes", "roomFurnitureTypes", "sharedRoomEquipmentTypes", "sharedRoomFurnitureTypes",
+        "receiverCardTypes", "powerSupplyTypes", "sharedReceiverCardTypes", "sharedPowerSupplyTypes",
         "physicalOverrides",
         "customEquipmentCategories", "equipmentCategoryLabelOverrides"})
 public class Workspace {
@@ -337,6 +338,46 @@ public class Workspace {
 
     public void setSharedRoomFurnitureTypes(List<RoomFurnitureType> list) {
         library.setSharedRoomFurnitureTypes(list);
+    }
+
+    public List<ReceiverCardType> getReceiverCardTypes() {
+        return library.getReceiverCardTypes();
+    }
+
+    public void setReceiverCardTypes(List<ReceiverCardType> list) {
+        library.setReceiverCardTypes(list);
+    }
+
+    public List<ReceiverCardType> getSharedReceiverCardTypes() {
+        return library.getSharedReceiverCardTypes();
+    }
+
+    public void setSharedReceiverCardTypes(List<ReceiverCardType> list) {
+        library.setSharedReceiverCardTypes(list);
+    }
+
+    public List<PowerSupplyType> getPowerSupplyTypes() {
+        return library.getPowerSupplyTypes();
+    }
+
+    public void setPowerSupplyTypes(List<PowerSupplyType> list) {
+        library.setPowerSupplyTypes(list);
+    }
+
+    public List<PowerSupplyType> getSharedPowerSupplyTypes() {
+        return library.getSharedPowerSupplyTypes();
+    }
+
+    public void setSharedPowerSupplyTypes(List<PowerSupplyType> list) {
+        library.setSharedPowerSupplyTypes(list);
+    }
+
+    public ReceiverCardType receiverCardTypeById(String id) {
+        return library.receiverCardTypeById(id);
+    }
+
+    public PowerSupplyType powerSupplyTypeById(String id) {
+        return library.powerSupplyTypeById(id);
     }
 
     public RoomEquipmentType roomEquipmentTypeById(String id) {
