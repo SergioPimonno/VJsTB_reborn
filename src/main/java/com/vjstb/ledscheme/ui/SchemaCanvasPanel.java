@@ -2905,6 +2905,23 @@ public class SchemaCanvasPanel extends JPanel {
         });
         menu.add(onlyUsed);
 
+        // Только для блока экрана, в котором есть модули, — иначе пункт ничего не значит
+        Screen unitsScreen = single != null && single.getType() == SchemaNodeType.SCREEN
+                ? screenById(single.getScreenRefId()) : null;
+        if (unitsScreen != null
+                && com.vjstb.ledscheme.service.ScreenModules.of(unitsScreen, model.getWorkspace()).isModular()) {
+            javax.swing.JCheckBoxMenuItem unitsWhenSmall = new javax.swing.JCheckBoxMenuItem(
+                    "Мелкие модули — рисовать картами / блоками", single.isUnitsWhenSmall());
+            unitsWhenSmall.setToolTipText("Пока подписи на модулях не помещаются, на блоке рисуются только приёмные "
+                    + "карты (в питании — блоки питания); при увеличении блока появляются отдельные модули");
+            unitsWhenSmall.addActionListener(ev -> {
+                model.setSchemaNodesUnitsWhenSmall(targets, unitsWhenSmall.isSelected());
+                onChanged.run();
+                repaint();
+            });
+            menu.add(unitsWhenSmall);
+        }
+
         boolean anyPlacements = targets.stream().anyMatch(n -> !n.getPortPlacements().isEmpty());
         javax.swing.JMenuItem resetLayout = new javax.swing.JMenuItem("Вернуть раскладку гнёзд по умолчанию");
         resetLayout.setEnabled(anyPlacements);
@@ -4143,10 +4160,17 @@ public class SchemaCanvasPanel extends JPanel {
         List<SignalChain> signalChains = scene != null ? scene.getSignalChains() : List.of();
         Graphics2D clipped = (Graphics2D) g2.create();
         clipped.clipRect((int) n.getX(), (int) n.getY(), nw, nh);
-        SchemeRenderer.paintWiringDiagram(clipped, g.screen(), g.type(), mode == SchemaMode.POWER,
-                g.cellW(), g.cellH(), g.left(), g.top(), model.getWorkspace(), powerChains, signalChains,
-                model.controllersInScene(scene), settings.activeProfile().isPowerUnitKw());
-        drawChainEndpointSockets(clipped, n, g);
+        // Пока подписи на модулях не помещаются — рисуем карты/блоки, а не тысячи мелких модулей; когда блок
+        // увеличили настолько, что подписи помещаются, — отдельные модули (отключается в меню блока).
+        boolean unitsOnly = n.isUnitsWhenSmall() && !SchemeRenderer.cellLabelsFit(g.cellW(), g.cellH())
+                && com.vjstb.ledscheme.service.ScreenModules.of(g.screen(), model.getWorkspace()).isModular();
+        try (com.vjstb.ledscheme.service.ChainLinks.Scope ignored =
+                     com.vjstb.ledscheme.service.ChainLinks.scope(g.screen())) {
+            SchemeRenderer.paintWiringDiagram(clipped, g.screen(), g.type(), mode == SchemaMode.POWER,
+                    g.cellW(), g.cellH(), g.left(), g.top(), model.getWorkspace(), powerChains, signalChains,
+                    model.controllersInScene(scene), settings.activeProfile().isPowerUnitKw(), unitsOnly);
+            drawChainEndpointSockets(clipped, n, g);
+        }
         clipped.dispose();
     }
 

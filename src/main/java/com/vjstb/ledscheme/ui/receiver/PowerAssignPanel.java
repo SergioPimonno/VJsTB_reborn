@@ -9,6 +9,9 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
 import java.util.ArrayList;
 import java.util.List;
 import javax.swing.BorderFactory;
@@ -20,6 +23,9 @@ import javax.swing.JPanel;
 import javax.swing.JRadioButton;
 import javax.swing.JScrollPane;
 import javax.swing.JSeparator;
+import javax.swing.JTextField;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import javax.swing.ListCellRenderer;
 import javax.swing.ListSelectionModel;
 
@@ -47,6 +53,10 @@ final class PowerAssignPanel extends JPanel {
     private final JRadioButton manual = new JRadioButton();
     private final JRadioButton auto = new JRadioButton();
     private final JLabel autoInfo = new JLabel(" ");
+    /** Необязательные ограничения размера блока (модулей не больше): пусто — подбор полностью автоматический. */
+    private final JTextField maxWField = new JTextField(3);
+    private final JTextField maxHField = new JTextField(3);
+    private final JLabel limitError = new JLabel(" ");
     private final JLabel emptyTypes = new JLabel();
     private final DefaultListModel<SupplyRow> supplyModel = new DefaultListModel<>();
     private final JList<SupplyRow> supplyList = new JList<>(supplyModel);
@@ -89,6 +99,55 @@ final class PowerAssignPanel extends JPanel {
         how.add(AssignParts.optionRow(manual, "Вручную", "один блок на выделенные модули"));
         how.add(new JSeparator());
         how.add(AssignParts.optionRow(auto, "Автоматически", "область разбивается на блоки по числу модулей"));
+        maxWField.setToolTipText("Блок не шире стольких модулей. Пусто — не ограничивать (подбор сам)");
+        maxHField.setToolTipText("Блок не выше стольких модулей. Пусто — не ограничивать (подбор сам)");
+        JPanel limits = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        limits.setOpaque(false);
+        limits.setBorder(BorderFactory.createEmptyBorder(2, 20, 0, 0));
+        limits.add(new JLabel("не больше: Г"));
+        limits.add(maxWField);
+        limits.add(new JLabel("× В"));
+        limits.add(maxHField);
+        limits.add(new JLabel("мод."));
+        limits.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel limitHint = new JLabel("пусто — размер подбирается полностью автоматически");
+        limitHint.setForeground(Palette.MUTED);
+        limitHint.setFont(limitHint.getFont().deriveFont(limitHint.getFont().getSize2D() - 1f));
+        limitHint.setBorder(BorderFactory.createEmptyBorder(2, 24, 0, 0));
+        limitHint.setAlignmentX(Component.LEFT_ALIGNMENT);
+        limitError.setForeground(new Color(0xe24b4a));
+        limitError.setBorder(BorderFactory.createEmptyBorder(2, 24, 0, 0));
+        limitError.setAlignmentX(Component.LEFT_ALIGNMENT);
+        for (JTextField f : new JTextField[]{maxWField, maxHField}) {
+            f.addFocusListener(new FocusAdapter() {
+                @Override
+                public void focusGained(FocusEvent e) {
+                    if (!auto.isSelected()) {
+                        auto.setSelected(true);
+                        host.assignSettingsChanged();
+                    }
+                }
+            });
+            f.getDocument().addDocumentListener(new DocumentListener() {
+                @Override
+                public void insertUpdate(DocumentEvent e) {
+                    limitsEdited();
+                }
+
+                @Override
+                public void removeUpdate(DocumentEvent e) {
+                    limitsEdited();
+                }
+
+                @Override
+                public void changedUpdate(DocumentEvent e) {
+                    limitsEdited();
+                }
+            });
+        }
+        how.add(limits);
+        how.add(limitHint);
+        how.add(limitError);
         autoHelp.setAlignmentX(Component.LEFT_ALIGNMENT);
         autoInfo.setAlignmentX(Component.LEFT_ALIGNMENT);
         how.add(autoHelp);
@@ -165,6 +224,43 @@ final class PowerAssignPanel extends JPanel {
 
     boolean autoMode() {
         return auto.isSelected();
+    }
+
+    /** Ограничение ширины блока (модулей) или {@code null} — не задано (или введено не число: тогда жест не применяет
+     *  ограничение молча, а под полем стоит замечание). */
+    Integer maxWidth() {
+        return parsePositive(maxWField.getText());
+    }
+
+    Integer maxHeight() {
+        return parsePositive(maxHField.getText());
+    }
+
+    private static Integer parsePositive(String s) {
+        try {
+            int v = Integer.parseInt(s.trim());
+            return v >= 1 ? v : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private void limitsEdited() {
+        if (updating) {
+            return;
+        }
+        boolean bad = (!maxWField.getText().isBlank() && maxWidth() == null)
+                || (!maxHField.getText().isBlank() && maxHeight() == null);
+        limitError.setText(bad ? "Укажите целое число от 1 или оставьте пусто" : " ");
+        host.assignSettingsChanged();
+    }
+
+    JTextField maxWidthField() {
+        return maxWField;
+    }
+
+    JTextField maxHeightField() {
+        return maxHField;
     }
 
     /** Строка «Подобрано: …» под переключателем; пустая — скрывается. */

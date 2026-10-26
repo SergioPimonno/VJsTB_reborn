@@ -132,7 +132,7 @@ public final class UnitOverlayPainter {
     }
 
     /** Заливка ячеек области и контур по её внешней границе (стороны ячеек, чей сосед не из этой области). */
-    private static void paintArea(Graphics2D g2, List<CabinetInstance> cells, CabinetType type, int cellW, int cellH,
+    static void paintArea(Graphics2D g2, List<CabinetInstance> cells, CabinetType type, int cellW, int cellH,
                                   int offX, int offY, Workspace workspace, Color fill, Color edge, float edgeWidth) {
         Set<Long> keys = new HashSet<>();
         for (CabinetInstance c : cells) {

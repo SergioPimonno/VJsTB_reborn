@@ -11,13 +11,40 @@ public class PowerAutoArea {
 
     private GridRect rect = new GridRect();
     private String powerSupplyTypeId;
+    /** Ограничения размера блока, заданные инженером (модулей по горизонтали / вертикали, не больше); {@code null} —
+     *  не задано, размер подбирается полностью автоматически. Помнятся вместе с областью, чтобы пересчёт при смене
+     *  типа ({@code PowerSupplyEditor#onTypeChanged}) подбирал размер при тех же ограничениях. */
+    private Integer maxWidth;
+    private Integer maxHeight;
 
     public PowerAutoArea() {
     }
 
     public PowerAutoArea(GridRect rect, String powerSupplyTypeId) {
+        this(rect, powerSupplyTypeId, null, null);
+    }
+
+    public PowerAutoArea(GridRect rect, String powerSupplyTypeId, Integer maxWidth, Integer maxHeight) {
         this.rect = rect;
         this.powerSupplyTypeId = powerSupplyTypeId;
+        this.maxWidth = maxWidth;
+        this.maxHeight = maxHeight;
+    }
+
+    public Integer getMaxWidth() {
+        return maxWidth;
+    }
+
+    public void setMaxWidth(Integer maxWidth) {
+        this.maxWidth = maxWidth;
+    }
+
+    public Integer getMaxHeight() {
+        return maxHeight;
+    }
+
+    public void setMaxHeight(Integer maxHeight) {
+        this.maxHeight = maxHeight;
     }
 
     public GridRect getRect() {
@@ -37,6 +64,6 @@ public class PowerAutoArea {
     }
 
     public PowerAutoArea copy() {
-        return new PowerAutoArea(rect.copy(), powerSupplyTypeId);
+        return new PowerAutoArea(rect.copy(), powerSupplyTypeId, maxWidth, maxHeight);
     }
 }

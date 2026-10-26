@@ -3636,6 +3636,18 @@ public class AppModel {
         changed();
     }
 
+    /** «Карты вместо мелких модулей» на блоке(ах) экрана — см. {@link SchemaNode#isUnitsWhenSmall()}. */
+    public void setSchemaNodesUnitsWhenSmall(Collection<SchemaNode> nodes, boolean unitsWhenSmall) {
+        if (nodes.isEmpty()) {
+            return;
+        }
+        pushUndo("Карты вместо мелких модулей");
+        for (SchemaNode n : nodes) {
+            n.setUnitsWhenSmall(unitsWhenSmall);
+        }
+        changed();
+    }
+
     /** Размер шрифта заголовка/подписей блока(ов) — на многовыделение, одна запись
      *  отмены, как {@link #setSchemaNodesOrientation}. {@code fontSize == null}
      *  возвращает блок к размеру ЕГО СХЕМЫ (а если у схемы он не задан — к стандартному,
@@ -7236,8 +7248,14 @@ public class AppModel {
 
     /** «Автоматически»: область дробится на блоки подобранного размера (D18); итог — в {@link EditReport#autoInfo()}. */
     public EditReport assignPowerSuppliesAuto(com.vjstb.ledscheme.model.GridRect rect, String typeId) {
+        return assignPowerSuppliesAuto(rect, typeId, null, null);
+    }
+
+    /** С ограничениями размера блока (модулей не больше по горизонтали / вертикали); {@code null} — не задано. */
+    public EditReport assignPowerSuppliesAuto(com.vjstb.ledscheme.model.GridRect rect, String typeId,
+                                              Integer maxWidth, Integer maxHeight) {
         return runModularEdit("Автоназначение блоков питания",
-                s -> PowerSupplyEditor.assignAuto(s, workspace, rect, typeId));
+                s -> PowerSupplyEditor.assignAuto(s, workspace, rect, typeId, maxWidth, maxHeight));
     }
 
     public EditReport removePowerSupply(String supplyId) {

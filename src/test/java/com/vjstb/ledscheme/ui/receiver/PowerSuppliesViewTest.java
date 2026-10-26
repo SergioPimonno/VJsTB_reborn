@@ -227,6 +227,38 @@ class PowerSuppliesViewTest {
     }
 
     @Test
+    void autoDragHonoursTheEngineerLimitsAndEmptyFieldsMeanFullyAutomatic(@TempDir Path dir) throws Exception {
+        ReceiverViewFixture f = new ReceiverViewFixture(dir, 4, 8);
+        f.psuType.setOutputs(8);
+        onEdt(() -> {
+            PowerSuppliesView view = new PowerSuppliesView(f.model, f.settings);
+            JFrame frame = f.frameOf(view, view.canvas());
+            try {
+                view.assignPanel().typeList().setSelectedIndex(0);
+                view.assignPanel().typeList().getSelectedValue();
+                view.assignPanel().autoRadio().doClick();
+                assertEquals(null, view.assignPanel().maxWidth(), "поля пусты — ограничений нет");
+
+                drag(view.canvas(), 0, 0, 3, 7);
+                int automatic = f.screen().getPowerSupplies().size();
+
+                view.assignPanel().maxWidthField().setText("1");
+                assertEquals(1, view.assignPanel().maxWidth());
+                drag(view.canvas(), 0, 0, 3, 7);
+                assertTrue(f.screen().getPowerSupplies().size() > automatic, "ширина ≤ 1 — блоков больше, чем без ограничений");
+                for (var supply : f.screen().getPowerSupplies()) {
+                    assertTrue(supply.getModuleIds().size() <= 4, "блок 1×N, N ≤ 4 строк");
+                }
+
+                view.assignPanel().maxWidthField().setText("abc");
+                assertEquals(null, view.assignPanel().maxWidth(), "не число — не применяется");
+            } finally {
+                frame.dispose();
+            }
+        });
+    }
+
+    @Test
     void warningsAndRowsShowOverloadAndLongCables(@TempDir Path dir) throws Exception {
         ReceiverViewFixture f = new ReceiverViewFixture(dir, 4, 6);
         PowerSupplyType tiny = new PowerSupplyType();

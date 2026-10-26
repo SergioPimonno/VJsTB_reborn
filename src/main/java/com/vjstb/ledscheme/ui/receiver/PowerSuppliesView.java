@@ -229,7 +229,7 @@ public class PowerSuppliesView extends ModularEditorView implements PowerAssignP
             return;
         }
         boolean auto = assign.autoMode();
-        EditReport r = auto ? model.assignPowerSuppliesAuto(rect, typeId)
+        EditReport r = auto ? model.assignPowerSuppliesAuto(rect, typeId, assign.maxWidth(), assign.maxHeight())
                 : model.assignPowerSuppliesManual(rect, typeId);
         setNote(r.message(), r.orphaned() > 0 || (r.noop() && !r.message().isEmpty()));
         if (auto && !r.noop()) {

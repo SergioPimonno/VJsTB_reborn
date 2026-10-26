@@ -354,6 +354,13 @@ public final class SchemeRenderer {
                 List.of(), false);
     }
 
+    /** Помещается ли на ячейку многострочная подпись (порт/фаза, номер, разрешение) — тот же порог, по которому
+     *  «богатая» схема решает, писать ли текст; по нему же миниатюра блока модульного экрана решает, рисовать ли
+     *  отдельные модули или только карты/блоки. */
+    public static boolean cellLabelsFit(int cellW, int cellH) {
+        return cellH >= 34 && cellW >= 46;
+    }
+
     /** {@code sceneControllers} — см. javadoc {@link #paintScheme}'s перегрузка с тем же
      *  параметром (нужны, чтобы метка порта на кабинете резолвилась сценовой, а не
      *  только пер-экранной нумерацией контроллеров). {@code powerUnitKw} — см. javadoc
@@ -363,6 +370,18 @@ public final class SchemeRenderer {
                                            List<PowerChain> powerChains, List<SignalChain> signalChains,
                                            List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers,
                                            boolean powerUnitKw) {
+        paintWiringDiagram(g2, scr, type, power, cellW, cellH, offX, offY, workspace, powerChains, signalChains,
+                sceneControllers, powerUnitKw, false);
+    }
+
+    /** {@code unitsOnly} — на модульном экране отдельные модули не рисуются, вместо них — карты (сигнал) / блоки
+     *  питания (питание) целиком: на мелкой миниатюре тысячи модулей — сплошная каша (баг-репорт), а звено цепочки
+     *  всё равно карта/блок. Обычные кабинеты того же экрана рисуются как всегда. */
+    public static void paintWiringDiagram(Graphics2D g2, Screen scr, CabinetType type, boolean power,
+                                           int cellW, int cellH, int offX, int offY, Workspace workspace,
+                                           List<PowerChain> powerChains, List<SignalChain> signalChains,
+                                           List<com.vjstb.ledscheme.model.ControllerInstance> sceneControllers,
+                                           boolean powerUnitKw, boolean unitsOnly) {
         Map<String, ChainMembership> byCab = new HashMap<>();
         if (power) {
             for (int ci = 0; ci < powerChains.size(); ci++) {
@@ -387,12 +406,15 @@ public final class SchemeRenderer {
         // Многострочная подпись физически не помещается в мелкую ячейку (узел схемы
         // маленького размера) — тогда просто закрашиваем цветом цепочки без текста,
         // как обычная миниатюра, вместо нечитаемой мешанины из строк.
-        boolean showLabels = cellH >= 34 && cellW >= 46;
+        boolean showLabels = cellLabelsFit(cellW, cellH);
         Font labelFont = showLabels
                 ? g2.getFont().deriveFont(Font.PLAIN, Math.max(8f, Math.min(cellH, cellW) * 0.13f)) : null;
 
         for (CabinetInstance cab : scr.getCabinets()) {
             if (cab.isHidden()) {
+                continue;
+            }
+            if (unitsOnly && ChainLinks.isModule(scr, workspace, cab.getId())) {
                 continue;
             }
             int x = cabX(cab, type, cellW, offX);
@@ -443,6 +465,19 @@ public final class SchemeRenderer {
                     ty += lineH;
                 }
                 gc.dispose();
+            }
+        }
+
+        if (unitsOnly) {
+            for (com.vjstb.ledscheme.service.ChainUnits.Unit u : com.vjstb.ledscheme.service.ChainUnits
+                    .of(scr, workspace).units(power ? com.vjstb.ledscheme.service.ChainUnits.Mode.POWER
+                            : com.vjstb.ledscheme.service.ChainUnits.Mode.SIGNAL)) {
+                if (u.kind() == com.vjstb.ledscheme.service.ChainUnits.Kind.CABINET || u.cabinets().isEmpty()) {
+                    continue;
+                }
+                ChainMembership m = byCab.get(u.cabinets().get(0).getId());
+                UnitOverlayPainter.paintArea(g2, u.cabinets(), type, cellW, cellH, offX, offY, workspace,
+                        m != null ? m.color() : Palette.CELL_FILL, Palette.CELL_BORDER, 1.5f);
             }
         }
 

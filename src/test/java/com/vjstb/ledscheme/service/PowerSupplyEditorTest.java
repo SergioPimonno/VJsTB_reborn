@@ -179,6 +179,46 @@ class PowerSupplyEditorTest {
     }
 
     @Test
+    void engineerLimitsCapTheAutoBlockSizeAndEmptyLimitsKeepItFullyAutomatic() {
+        // запрос пользователя: как «Г × В» у карт — инженер может ограничить размер блока, пусто — расчёт автоматический
+        ModularFixture f = new ModularFixture(4, 8);
+        String t = f.psuType("БП8", 8, null, false).getId();
+
+        PowerSupplyEditor.assignAuto(f.screen, f.ws, rect(0, 0, 3, 7), t);
+        int automatic = f.screen.getPowerSupplies().size();
+        assertEquals(4, automatic, "без ограничений — блоки по 8 модулей (2×4 / 4×2)");
+
+        EditReport r = PowerSupplyEditor.assignAuto(f.screen, f.ws, rect(0, 0, 3, 7), t, 2, null);
+        assertTrue(r.autoWidth() <= 2, "ширина блока не больше заданной: " + r.autoWidth());
+        assertEquals(2, r.autoWidth());
+        assertEquals(4, r.autoHeight());
+
+        EditReport narrow = PowerSupplyEditor.assignAuto(f.screen, f.ws, rect(0, 0, 3, 7), t, 1, 3);
+        assertEquals(1, narrow.autoWidth());
+        assertEquals(3, narrow.autoHeight(), "потолок по высоте 3 — блок 1×3, а не 1×4");
+        for (var supply : f.screen.getPowerSupplies()) {
+            assertTrue(supply.getModuleIds().size() <= 3);
+        }
+    }
+
+    @Test
+    void autoAreaRemembersItsLimitsAndTheSameDragWithOtherLimitsIsNotANoop() {
+        ModularFixture f = new ModularFixture(4, 8);
+        String t = f.psuType("БП8", 8, null, false).getId();
+
+        PowerSupplyEditor.assignAuto(f.screen, f.ws, rect(0, 0, 3, 7), t, 2, 2);
+        var area = f.screen.getPowerAutoAreas().get(0);
+        assertEquals(2, area.getMaxWidth());
+        assertEquals(2, area.getMaxHeight());
+
+        assertTrue(PowerSupplyEditor.assignAuto(f.screen, f.ws, rect(0, 0, 3, 7), t, 2, 2).noop(),
+                "те же область, тип и ограничения — ничего не меняется");
+        assertFalse(PowerSupplyEditor.assignAuto(f.screen, f.ws, rect(0, 0, 3, 7), t, null, null).noop(),
+                "ограничения сняли — область перебирается заново");
+        assertNull(f.screen.getPowerAutoAreas().get(0).getMaxWidth());
+    }
+
+    @Test
     void manualBlockCoversTheSelectionAndRemovesAnAutoAreaItLandsOn() {
         ModularFixture f = new ModularFixture(2, 4);
         String t = f.psuType("БП8", 8, null, false).getId();

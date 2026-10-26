@@ -60,12 +60,27 @@ public final class PowerSupplyEditor {
     /** «Автоматически»: область дробится на блоки подобранного размера (см. class-javadoc), запоминается как
      *  {@link PowerAutoArea} — чтобы пересчитать при смене типа ({@link #onTypeChanged}). */
     public static EditReport assignAuto(Screen screen, Workspace workspace, GridRect rect, String typeId) {
+        return assignAuto(screen, workspace, rect, typeId, null, null);
+    }
+
+    /**
+     * То же с ограничениями размера блока, заданными инженером (по аналогии с «Г × В» приёмных карт): блок не шире
+     * {@code maxWidth} и не выше {@code maxHeight} модулей. {@code null} — не задано; оба {@code null} — подбор
+     * полностью автоматический, как раньше. Ограничение — потолок, а не точный размер: внутри него по-прежнему выбирается
+     * вариант с наименьшим числом блоков, прошедший проверки (шлейфы, кабель, выход карты).
+     */
+    public static EditReport assignAuto(Screen screen, Workspace workspace, GridRect rect, String typeId,
+                                        Integer maxWidth, Integer maxHeight) {
         requireType(typeId);
         PowerSupplyType type = workspace.powerSupplyTypeById(typeId);
         if (type == null) {
             throw new IllegalArgumentException("Тип блока питания не найден в библиотеке");
         }
-        return autoAssign(screen, workspace, rect, typeId, type);
+        return autoAssign(screen, workspace, rect, typeId, type, positiveOrNull(maxWidth), positiveOrNull(maxHeight));
+    }
+
+    private static Integer positiveOrNull(Integer v) {
+        return v != null && v >= 1 ? v : null;
     }
 
     /**
@@ -88,7 +103,8 @@ public final class PowerSupplyEditor {
             if (!typeId.equals(area.getPowerSupplyTypeId())) {
                 continue;
             }
-            EditReport r = autoAssign(screen, workspace, area.getRect().copy(), typeId, type);
+            EditReport r = autoAssign(screen, workspace, area.getRect().copy(), typeId, type, area.getMaxWidth(),
+                    area.getMaxHeight());
             if (!r.noop()) {
                 changed = true;
                 removed.addAll(r.removedIds());
@@ -134,7 +150,7 @@ public final class PowerSupplyEditor {
     // ------------------------------------------------------------------ автоподбор
 
     private static EditReport autoAssign(Screen screen, Workspace workspace, GridRect rect, String typeId,
-                                         PowerSupplyType type) {
+                                         PowerSupplyType type, Integer maxWidth, Integer maxHeight) {
         ScreenModules sm = ScreenModules.of(screen, workspace);
         List<ScreenModules.Module> all = sm.modulesIn(rect);
         if (all.isEmpty()) {
@@ -152,9 +168,9 @@ public final class PowerSupplyEditor {
         List<PowerSupplyInstance> base = new ArrayList<>(screen.getPowerSupplies());
         base.removeAll(hit);
 
-        Choice chosen = choose(sm, base, rect, typeId, type, allIds);
+        Choice chosen = choose(sm, base, rect, typeId, type, allIds, maxWidth, maxHeight);
 
-        if (hit.size() == chosen.tiles().size() && hasAreaEqual(screen, rect, typeId)) {
+        if (hit.size() == chosen.tiles().size() && hasAreaEqual(screen, rect, typeId, maxWidth, maxHeight)) {
             Set<Set<String>> tileSets = new HashSet<>();
             for (PowerSupplyInstance t : chosen.tiles()) {
                 tileSets.add(new HashSet<>(t.getModuleIds()));
@@ -173,7 +189,7 @@ public final class PowerSupplyEditor {
 
         Take taken = take(screen, allIds, hit);
         screen.getPowerAutoAreas().removeIf(a -> a.getRect().intersects(rect));
-        screen.getPowerAutoAreas().add(new PowerAutoArea(rect.copy(), typeId));
+        screen.getPowerAutoAreas().add(new PowerAutoArea(rect.copy(), typeId, maxWidth, maxHeight));
         List<String> created = new ArrayList<>();
         for (PowerSupplyInstance t : chosen.tiles()) {
             screen.getPowerSupplies().add(t);
@@ -182,9 +198,12 @@ public final class PowerSupplyEditor {
         return report(taken, created, chosen.w(), chosen.h(), chosen.ok());
     }
 
-    private static boolean hasAreaEqual(Screen screen, GridRect rect, String typeId) {
+    private static boolean hasAreaEqual(Screen screen, GridRect rect, String typeId, Integer maxWidth,
+                                        Integer maxHeight) {
         for (PowerAutoArea a : screen.getPowerAutoAreas()) {
-            if (a.getRect().equals(rect) && typeId.equals(a.getPowerSupplyTypeId())) {
+            if (a.getRect().equals(rect) && typeId.equals(a.getPowerSupplyTypeId())
+                    && java.util.Objects.equals(a.getMaxWidth(), maxWidth)
+                    && java.util.Objects.equals(a.getMaxHeight(), maxHeight)) {
                 return true;
             }
         }
@@ -195,11 +214,13 @@ public final class PowerSupplyEditor {
     }
 
     private static Choice choose(ScreenModules sm, List<PowerSupplyInstance> base, GridRect rect, String typeId,
-                                 PowerSupplyType type, List<String> allIds) {
+                                 PowerSupplyType type, List<String> allIds, Integer maxWidth, Integer maxHeight) {
         Integer outputs = type.getOutputs();
         List<int[]> cands = new ArrayList<>();
-        for (int w = 1; w <= rect.colCount(); w++) {
-            for (int h = 1; h <= rect.rowCount(); h++) {
+        int wLimit = maxWidth != null ? Math.min(rect.colCount(), maxWidth) : rect.colCount();
+        int hLimit = maxHeight != null ? Math.min(rect.rowCount(), maxHeight) : rect.rowCount();
+        for (int w = 1; w <= wLimit; w++) {
+            for (int h = 1; h <= hLimit; h++) {
                 if (outputs == null || w * h <= outputs) {
                     cands.add(new int[]{w, h});
                 }
