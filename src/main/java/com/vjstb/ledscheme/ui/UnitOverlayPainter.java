@@ -36,7 +36,7 @@ import java.util.Set;
  * зависят от параметра Предпочтений «Нумерация приёмных карт»; статический рендер не знает настроек, поэтому
  * холст перед отрисовкой сообщает его через {@link #setNumbering}.
  */
-final class UnitOverlayPainter {
+public final class UnitOverlayPainter {
 
     private static final Color MODULE_GRAY = new Color(0x6E7681);
     private static final Color CARD_EDGE = new Color(0x3B6D11);
@@ -49,8 +49,9 @@ final class UnitOverlayPainter {
     private UnitOverlayPainter() {
     }
 
-    /** Порядок нумерации К1…КN / БП1…БПn из Предпочтений (холст зовёт перед отрисовкой). */
-    static void setNumbering(ReceiverCardNumbering n) {
+    /** Порядок нумерации К1…КN / БП1…БПn из Предпочтений (холст зовёт перед отрисовкой; экспорт схем из «Вывода» —
+     *  перед выгрузкой: без этого имена в файлах шли бы по нумерации по умолчанию, а не по Предпочтениям). */
+    public static void setNumbering(ReceiverCardNumbering n) {
         numbering = n != null ? n : ReceiverCardNumbering.DEFAULT;
     }
 

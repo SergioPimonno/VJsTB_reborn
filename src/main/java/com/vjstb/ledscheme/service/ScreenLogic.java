@@ -1288,6 +1288,13 @@ public final class ScreenLogic {
                 phasePower[c.getPhase()] += p;
             }
         }
+        // Модульный экран: приёмные карты и блоки питания тоже весят и (карты) потребляют — трек E плана
+        // receiver-cards. Без карт и блоков добавка нулевая, прежние экраны считаются как раньше. На нагрузку по
+        // фазам карты не раскладываются: фаза считается по блокам (D22), а не по сумме потребителей.
+        if (workspace != null) {
+            totalPower += ModularLoad.powerW(screen, workspace);
+            totalWeight += ModularLoad.weightKg(screen, workspace);
+        }
 
         return new ScreenStats(
                 screen.getCols() * w,

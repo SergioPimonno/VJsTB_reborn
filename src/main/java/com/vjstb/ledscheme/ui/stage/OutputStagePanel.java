@@ -65,6 +65,9 @@ public class OutputStagePanel extends JPanel {
     /** Галочки «В общий вывод» таблицы «Состав вывода» — по одной на часть {@link OutputPart}. */
     private final java.util.Map<OutputPart, javax.swing.JCheckBox> partChecks =
             new java.util.EnumMap<>(OutputPart.class);
+    /** Элементы строки «Карта подключения модулей» таблицы вывода: видны, только если в проекте есть модульный экран
+     *  (docs/receiver-cards/PLAN.md, раздел 7) — для немодульных проектов таблица остаётся прежней. */
+    private final java.util.List<java.awt.Component> connectionMapRow = new java.util.ArrayList<>();
     private File chosenFolder;
 
     public OutputStagePanel(AppModel model, com.vjstb.ledscheme.settings.SettingsManager settings) {
@@ -74,7 +77,18 @@ public class OutputStagePanel extends JPanel {
         add(new ContextBar(model, false), BorderLayout.NORTH);
         add(buildBody(), BorderLayout.CENTER);
         model.addListener(this::refreshFolderField);
+        model.addListener(this::refreshConnectionMapRow);
         refreshFolderField();
+        refreshConnectionMapRow();
+    }
+
+    /** Показывает строку «Карта подключения модулей», пока в проекте есть модульный экран. */
+    private void refreshConnectionMapRow() {
+        boolean visible = com.vjstb.ledscheme.ui.receiver.ConnectionMapExport.projectHasModularScreen(
+                model.getCurrentProject(), model.getWorkspace());
+        for (java.awt.Component c : connectionMapRow) {
+            c.setVisible(visible);
+        }
     }
 
     /** Папка вывода: явно выбранная пользователем — если её ещё не выбирали,
@@ -172,7 +186,8 @@ public class OutputStagePanel extends JPanel {
             c.weightx = 1;
             c.anchor = java.awt.GridBagConstraints.WEST;
             c.fill = java.awt.GridBagConstraints.HORIZONTAL;
-            table.add(new JLabel(part.label()), c);
+            JLabel partLabel = new JLabel(part.label());
+            table.add(partLabel, c);
 
             javax.swing.JCheckBox check = new javax.swing.JCheckBox();
             check.setSelected(selected.contains(part));
@@ -190,6 +205,11 @@ public class OutputStagePanel extends JPanel {
             c.gridx = 2;
             c.fill = java.awt.GridBagConstraints.HORIZONTAL;
             table.add(export, c);
+            if (part == OutputPart.CONNECTION_MAP) {
+                connectionMapRow.add(partLabel);
+                connectionMapRow.add(check);
+                connectionMapRow.add(export);
+            }
         }
         return table;
     }
@@ -373,6 +393,10 @@ public class OutputStagePanel extends JPanel {
                         totalWeight += effective.getWeightKg();
                     }
                 }
+                // Модульный экран: вес и потребление приёмных карт и блоков питания (без них итоги проекта расходились
+                // бы с итогами по экрану ниже)
+                totalPower += com.vjstb.ledscheme.service.ModularLoad.powerW(scr, model.getWorkspace());
+                totalWeight += com.vjstb.ledscheme.service.ModularLoad.weightKg(scr, model.getWorkspace());
             }
         }
 
@@ -484,6 +508,17 @@ public class OutputStagePanel extends JPanel {
         boolean doAfterEffects = parts.contains(OutputPart.AFTER_EFFECTS);
         boolean doReport = parts.contains(OutputPart.REPORT);
         boolean doSpec = parts.contains(OutputPart.SPEC);
+        boolean doConnectionMap = parts.contains(OutputPart.CONNECTION_MAP);
+        // Имена К1…КN / БП1…БПn на схемах расключения и в «Карте подключения» — по Предпочтениям («Нумерация приёмных
+        // карт»); статический рендер схем сам настроек не знает, а холст «Вывода» его не выставляет.
+        com.vjstb.ledscheme.ui.UnitOverlayPainter.setNumbering(settings.activeProfile().getReceiverCardNumbering());
+        if (doConnectionMap && single && !com.vjstb.ledscheme.ui.receiver.ConnectionMapExport
+                .projectHasModularScreen(project, model.getWorkspace())) {
+            JOptionPane.showMessageDialog(this, "В проекте нет модульных экранов (тип кабинета с флагом «Приёмная"
+                    + " карта отдельно»), карты подключения строить не из чего.", "Нечего экспортировать",
+                    JOptionPane.WARNING_MESSAGE);
+            return;
+        }
 
         // Планер пультовой: раскладки хранятся в сценах; если их в проекте нет, кнопка части говорит об этом, а в пакете
         // документации часть тихо пропускается (строка в итоговом сообщении)
@@ -533,6 +568,7 @@ public class OutputStagePanel extends JPanel {
         int jpegCount = 0;
         int maskCount = 0;
         int screensTableCount = 0;
+        int connectionMapCount = 0;
         int resolumeCount = 0;
         int controlRoomCount = 0;
         int afterEffectsCount = 0;
@@ -559,6 +595,9 @@ public class OutputStagePanel extends JPanel {
                 }
                 if (doScreens && n > 0) {
                     total++;
+                }
+                if (doConnectionMap) {
+                    total += com.vjstb.ledscheme.ui.receiver.ConnectionMapExport.stepsFor(scene, model.getWorkspace());
                 }
                 if (doControlRoom) {
                     for (com.vjstb.ledscheme.model.ControlRoomLayout l : scene.getControlRoomLayouts()) {
@@ -768,6 +807,17 @@ public class OutputStagePanel extends JPanel {
                     }
                 }
 
+                // Карта подключения модулей: на каждый модульный экран картинки «Приёмные карты» и «Блоки питания»
+                // (формат — как у схем расключения) и одна таблица .xlsx на сцену; сцена без модульных экранов
+                // ничего не даёт
+                if (doConnectionMap) {
+                    connectionMapCount +=com.vjstb.ledscheme.ui.receiver.ConnectionMapExport.export(scene,
+                            model.getWorkspace(), settings.activeProfile().getReceiverCardNumbering(),
+                            settings.activeProfile().getModuleNumberFormat(), sceneFolder, dpiScale,
+                            (img, dir, baseName) -> writeScheme(img, dir, baseName, docExportDpi),
+                            progress::step);
+                }
+
                 // Планер пультовой: каждая раскладка сцены — выбранные виды картинками и спецификация текстом, в подпапку
                 // «Пульт» сцены. Рисуют те же классы, что и окно планера, в оформлении экспорта (экранное/печатное).
                 if (doControlRoom && !scene.getControlRoomLayouts().isEmpty()) {
@@ -901,6 +951,9 @@ public class OutputStagePanel extends JPanel {
             }
             if (doScreens) {
                 done.append("\nТаблиц экранов: ").append(screensTableCount);
+            }
+            if (doConnectionMap) {
+                done.append("\nФайлов карты подключения модулей: ").append(connectionMapCount);
             }
             if (doControlRoom) {
                 done.append("\nФайлов Планера пультовой: ").append(controlRoomCount);
@@ -1042,13 +1095,31 @@ public class OutputStagePanel extends JPanel {
         // отдельная колонка (запрос 2026-09-30, решение D1, см. SceneSpecCalc#equipment).
         List<com.vjstb.ledscheme.service.SceneSpecCalc.EquipmentRow> equipment =
                 com.vjstb.ledscheme.service.SceneSpecCalc.equipment(sheets, model::categoryLabel);
+        // Модульные экраны (docs/receiver-cards/PLAN.md, раздел 7): приёмные карты, блоки питания, шлейфы и кабели
+        // питания по моделям. Они стоят на ЭКРАНЕ, а не в схеме, поэтому для них отдельный последний столбец
+        // «Экраны сцены»; в сцене без модульных экранов столбца нет и лист прежний.
+        List<com.vjstb.ledscheme.service.ModularSpecCalc.Row> modularRows =
+                com.vjstb.ledscheme.service.ModularSpecCalc.rows(scene, model.getWorkspace());
+        String[] equipmentHeaders = schemaColumnHeaders(columns, "Схема", "Тип узла", "Подпись");
+        if (!modularRows.isEmpty()) {
+            equipmentHeaders = java.util.Arrays.copyOf(equipmentHeaders, equipmentHeaders.length + 1);
+            equipmentHeaders[equipmentHeaders.length - 1] = "Экраны сцены";
+        }
         Sheet equipmentSheet = com.vjstb.ledscheme.service.SpecXlsxWriter.addSheet(wb, "Оборудование",
-                schemaColumnHeaders(columns, "Схема", "Тип узла", "Подпись"));
+                equipmentHeaders);
         for (var row : equipment) {
             com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(equipmentSheet,
                     specRow(new Object[]{row.modeLabel(), row.typeLabel(), row.label()}, row.counts()));
         }
-        com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(equipmentSheet, 3 + columns.size());
+        for (var m : modularRows) {
+            Object[] cells = new Object[equipmentHeaders.length];
+            cells[0] = m.modeLabel();
+            cells[1] = m.category();
+            cells[2] = m.label();
+            cells[equipmentHeaders.length - 1] = m.count();
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(equipmentSheet, cells);
+        }
+        com.vjstb.ledscheme.service.SpecXlsxWriter.autoSizeColumns(equipmentSheet, equipmentHeaders.length);
 
         java.util.function.BiFunction<com.vjstb.ledscheme.service.SceneSpecCalc.SheetData,
                 com.vjstb.ledscheme.model.SchemaEdge, Integer> edgeColor = unlabeledEdgeColorResolver();
@@ -1284,6 +1355,11 @@ public class OutputStagePanel extends JPanel {
             com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, specRow(
                     new Object[]{"Оборудование", row.typeLabel() + ": " + row.label() + " (" + row.modeLabel() + ")",
                             null, "шт"}, row.counts()));
+        }
+
+        // Модульные экраны: карты, блоки питания, шлейфы и кабели питания (см. лист «Оборудование»)
+        for (var m : com.vjstb.ledscheme.service.ModularSpecCalc.rows(scene, model.getWorkspace())) {
+            com.vjstb.ledscheme.service.SpecXlsxWriter.addRow(sheet, m.category(), m.label(), m.count(), "шт");
         }
 
         java.util.LinkedHashMap<String, Integer> hoists = new java.util.LinkedHashMap<>();

@@ -93,9 +93,10 @@ public final class ChainLinks {
         return out;
     }
 
-    /** Ячейка, которой звено представлено в сетке NovaLCT: кабинет — он сам; карта/блок — её первый модуль в порядке
-     *  чтения (левый верхний угол). {@code null} — id экрану не принадлежит. Карта-«кабинет» NovaLCT размером с её
-     *  модули — доработка трека E; здесь важно только, что порядок на порту — порядок звеньев цепочки. */
+    /** Ячейка-«якорь» звена: кабинет — он сам; карта/блок — её первый модуль в порядке чтения (левый верхний угол).
+     *  {@code null} — id экрану не принадлежит. Резолвер NovaLCT ({@code NovaLctControllerResolver}) помечает запись
+     *  порта этой ячейкой, а размер «кабинета» NovaLCT (прямоугольник всех модулей карты в px) и положение на полотне
+     *  писатель берёт у {@code NovaLctModularGrid} по тому же якорю; порядок на порту — порядок звеньев цепочки. */
     public static CabinetInstance anchorCabinet(Screen screen, String id) {
         List<CabinetInstance> all = cabinetsOf(screen, id);
         return all.isEmpty() ? null : all.get(0);

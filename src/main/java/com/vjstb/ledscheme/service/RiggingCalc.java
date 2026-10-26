@@ -323,6 +323,19 @@ public final class RiggingCalc {
             byCenter.merge(Math.round(xCenter * 1000.0), new double[]{xCenter, w},
                     (a, b) -> new double[]{a[0], a[1] + b[1]});
         }
+        // Модульный экран: приёмные карты и блоки питания висят вместе с экраном — их вес ложится на колонку модуля,
+        // где они стоят (место карты/блока), иначе нагрузка на точки подвеса была бы занижена (план receiver-cards,
+        // трек E). Экран без карт и блоков не получает ни одной добавки — прежний расчёт без изменений.
+        for (ModularLoad.Item item : ModularLoad.items(screen, workspace)) {
+            if (item.weightKg() <= 0) {
+                continue;
+            }
+            CabinetType eff = ScreenLogic.effectiveType(item.place(), defaultType, workspace);
+            double ew = eff != null ? eff.getWidthMm() : cellW;
+            double xCenter = item.place().getColIndex() * cellW + item.place().getOffsetXMm() + ew / 2.0;
+            byCenter.merge(Math.round(xCenter * 1000.0), new double[]{xCenter, item.weightKg()},
+                    (a, b) -> new double[]{a[0], a[1] + b[1]});
+        }
         List<ColumnWeight> result = new ArrayList<>();
         for (double[] e : byCenter.values()) {
             result.add(new ColumnWeight(e[0], e[1]));
