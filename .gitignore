@@ -27,8 +27,7 @@ dependency-reduced-pom.xml
 dist-input/
 dist/
 
-# Единый адрес живого тестового билда для computer-use/агентов (см. CLAUDE.md,
-# секция "Единый адрес тестового билда") — НЕ релизный jpackage-вывод (тот — dist/
+# Единый адрес живого тестового билда для computer-use/агентов (локальные заметки) — НЕ релизный jpackage-вывод (тот — dist/
 # выше), просто shaded jar для быстрой ручной проверки, живёт в главном чекауте вне
 # зависимости от того, какой worktree его собрал.
 testbuild/
@@ -47,3 +46,13 @@ data/
 # OS
 .DS_Store
 Thumbs.db
+
+# Служебные файлы для агентов и внутренние заметки — только локально, в репозиторий не входят
+.claude/
+CLAUDE.md
+ARCHITECTURE.md
+TESTS.md
+VERSIONING.md
+NOVALCT_EXPORT.md
+*_NOTES.md
+AVE_ToolBox-*.zip

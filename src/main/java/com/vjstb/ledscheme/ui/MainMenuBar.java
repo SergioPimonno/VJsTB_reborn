@@ -112,7 +112,7 @@ public class MainMenuBar extends JMenuBar {
         // покрывает (если контроллер трогает ровно один экран, идёт тем же прямым
         // путём NovaLctScrWriter.write, см. class-javadoc диалога), плюс умеет
         // несколько экранов сразу (LCTPresetMaster). И Standard, и Complex Screen
-        // полностью … (… + побайтовое совпадение с
+        // полностью подтверждены (побайтовое совпадение с
         // реальными файлами NovaLCT).
         JMenuItem novaLctControllerExport = new JMenuItem("Экспорт NovaLCT для контроллера…");
         novaLctControllerExport.addActionListener(e ->
