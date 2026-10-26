@@ -28,13 +28,16 @@ class ReceiverTextsTest {
         t.setCardOutput(true);
         t.setRatedPowerW(300.0);
         t.setCableLengthMm(700.0);
-        assertEquals("8+К вых. · 300 Вт · 700 мм", PowerAssignPanel.typeParams(t));
+        assertEquals("8+К шл. · 300 Вт · 700 мм", PowerAssignPanel.typeParams(t));
         t.setCardOutput(false);
         t.setCableLengthMm(null);
-        assertEquals("8 вых. · 300 Вт", PowerAssignPanel.typeParams(t));
+        assertEquals("8 шл. · 300 Вт", PowerAssignPanel.typeParams(t));
         t.setOutputs(null);
         t.setRatedPowerW(null);
-        assertEquals("не указано", PowerAssignPanel.typeParams(t), "ничего не указано — не угадываем");
+        assertEquals("шлейфов: ?", PowerAssignPanel.typeParams(t),
+                "число шлейфов не указано — строка прямо говорит об этом, а не молчит (баг-репорт: были видны только ватты)");
+        t.setRatedPowerW(300.0);
+        assertEquals("шлейфов: ? · 300 Вт", PowerAssignPanel.typeParams(t));
     }
 
     @Test

@@ -26,6 +26,11 @@ public record EditReport(boolean noop, int replaced, int orphaned, List<String> 
         return new EditReport(true, 0, 0, List.of(), List.of(), 0, 0, true, "");
     }
 
+    /** Правка не выполнена, и пользователю надо сказать почему (например, у типа не указано число шлейфов). */
+    static EditReport refused(String message) {
+        return new EditReport(true, 0, 0, List.of(), List.of(), 0, 0, false, message);
+    }
+
     /** Правка выполнена, но звеньев не создавала и не удаляла (смена места, порядка, шаблона). */
     static EditReport done() {
         return new EditReport(false, 0, 0, List.of(), List.of(), 0, 0, true, "");

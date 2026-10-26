@@ -96,9 +96,9 @@ class ModuleViewRenderTest {
         ReceiverCardEditor.assignManual(screen, ws, new GridRect(0, 0, 1, 2), cardType.getId());
         BufferedImage img = renderCards(ReceiverCardsCanvas.Options.NONE);
 
-        assertEquals(st.orphanFill.getRGB(), cornerOf(img, 3, 5).getRGB(), "модуль без карты — оранжевый");
+        assertOrphan(st, cornerOf(img, 3, 5), "модуль без карты — оранжевая подсветка");
         Color inCard = cornerOf(img, 0, 0);
-        assertNotEquals(st.orphanFill.getRGB(), inCard.getRGB());
+        assertNotEquals(overBackground(st.orphanFill, st).getRGB(), inCard.getRGB());
         assertNotEquals(st.moduleFill.getRGB(), inCard.getRGB(), "карта подкрашивает модули");
         assertTrue(inCard.getGreen() > inCard.getRed() && inCard.getGreen() > inCard.getBlue(),
                 "заливка карты зелёная (цвет «Приёмных карт»): " + inCard);
@@ -111,7 +111,7 @@ class ModuleViewRenderTest {
         BufferedImage img = renderCards(new ReceiverCardsCanvas.Options(false, null, new GridRect(3, 3, 3, 4), java.util.List.of()));
         assertEquals(st.selectionFill.getRGB(), cornerOf(img, 3, 3).getRGB(), "протягиваемая область — голубая");
         assertEquals(st.selectionFill.getRGB(), cornerOf(img, 3, 4).getRGB());
-        assertEquals(st.orphanFill.getRGB(), cornerOf(img, 3, 5).getRGB());
+        assertOrphan(st, cornerOf(img, 3, 5), "модуль без карты");
 
         // шлейф 300 мм: место карты — (0,1) или (1,1), модули (1,0)/(1,2) или (0,0)/(0,2) на 353 мм — красная линия
         var card = screen.getReceiverCards().get(0);
@@ -156,7 +156,7 @@ class ModuleViewRenderTest {
         g.dispose();
 
         assertEquals(st.areaFill(0).getRGB(), cornerOf(img, 1, 1).getRGB(), "модуль блока — цвет области БП1");
-        assertEquals(st.orphanFill.getRGB(), cornerOf(img, 3, 5).getRGB(), "без блока — оранжевый");
+        assertOrphan(st, cornerOf(img, 3, 5), "без блока — оранжевая подсветка");
     }
 
     @Test
@@ -169,5 +169,21 @@ class ModuleViewRenderTest {
             double lt = (0.299 * text.getRed() + 0.587 * text.getGreen() + 0.114 * text.getBlue()) / 255;
             assertTrue(Math.abs(lf - lt) > 0.3, "подпись читается на заливке области " + i);
         }
+    }
+
+    /** Подсветка «без карты/блока» полупрозрачная (иначе экран, где ничего не назначено, — сплошное оранжевое пятно),
+     *  поэтому на картинке её цвет — смесь с фоном, а не сам {@code orphanFill}. */
+    private static Color overBackground(Color fill, ModuleViewStyle st) {
+        float a = fill.getAlpha() / 255f;
+        Color bg = st.background;
+        return new Color(Math.round(fill.getRed() * a + bg.getRed() * (1 - a)),
+                Math.round(fill.getGreen() * a + bg.getGreen() * (1 - a)),
+                Math.round(fill.getBlue() * a + bg.getBlue() * (1 - a)));
+    }
+
+    private static void assertOrphan(ModuleViewStyle st, Color actual, String message) {
+        Color want = overBackground(st.orphanFill, st);
+        assertTrue(Math.abs(want.getRed() - actual.getRed()) <= 2 && Math.abs(want.getGreen() - actual.getGreen()) <= 2
+                && Math.abs(want.getBlue() - actual.getBlue()) <= 2, message + ": ожидали " + want + ", получили " + actual);
     }
 }

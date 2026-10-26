@@ -162,15 +162,20 @@ class PowerSupplyEditorTest {
     }
 
     @Test
-    void autoWithUnknownOutputsStillFindsALayoutByCableOnly() {
+    void autoWithUnknownOutputsIsRefusedInsteadOfMergingTheWholeAreaIntoOneBlock() {
+        // баг-репорт: у блоков базовой библиотеки число шлейфов не указано, «не указано» читалось как «без лимита», и экран
+        // из 3072 модулей слился в один блок
         ModularFixture f = new ModularFixture(2, 4);
         PowerSupplyType t = f.psuType("БП", null, null, false);
 
         EditReport r = PowerSupplyEditor.assignAuto(f.screen, f.ws, rect(0, 0, 1, 3), t.getId());
 
-        assertEquals(1, f.screen.getPowerSupplies().size(), "лимитов нет — вся область одним блоком");
-        assertEquals(4, r.autoWidth());
-        assertEquals(2, r.autoHeight());
+        assertTrue(r.noop());
+        assertEquals(0, f.screen.getPowerSupplies().size(), "блоков нет — подбирать размер не по чему");
+        assertTrue(r.message().contains("не указано число шлейфов"), r.message());
+
+        PowerSupplyEditor.assignManual(f.screen, f.ws, rect(0, 0, 1, 3), t.getId());
+        assertEquals(1, f.screen.getPowerSupplies().size(), "вручную блок на выделение поставить можно");
     }
 
     @Test

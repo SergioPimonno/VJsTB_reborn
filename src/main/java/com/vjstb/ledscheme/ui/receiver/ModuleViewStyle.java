@@ -45,8 +45,10 @@ public final class ModuleViewStyle {
         this.moduleStroke = dark ? new Color(0x6e7681) : new Color(0x888780);
         this.ordinaryFill = new Color(0x5f5e5a);
         this.ordinaryStroke = new Color(0x444441);
-        this.orphanFill = dark ? new Color(0x8a4a22) : new Color(0xf5c4b3);
-        this.orphanStroke = dark ? new Color(0xf0883e) : new Color(0xd85a30);
+        // Модули без карты/блока — лёгкая оранжевая подсветка, а не сплошная заливка: пока ничего не назначено, без
+        // питания весь экран, и плотный оранжевый превращал вид в сплошное пятно (баг-репорт: «тяжело воспринимается»)
+        this.orphanFill = dark ? new Color(240, 136, 62, 38) : new Color(216, 90, 48, 34);
+        this.orphanStroke = dark ? new Color(240, 136, 62, 150) : new Color(216, 90, 48, 150);
         this.selectionFill = dark ? new Color(0x2f5d8f) : new Color(0xb5d4f4);
         this.selectionStroke = dark ? new Color(0x58a6ff) : new Color(0x185fa5);
         this.problem = new Color(0xe24b4a);

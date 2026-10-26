@@ -116,13 +116,15 @@ final class PowerAssignPanel extends JPanel {
         add(column, BorderLayout.NORTH);
     }
 
-    /** «8+К вых. · 300 Вт · 700 мм» (D17): шлейфы (+К — есть отдельный выход на карту), мощность, длина кабеля. */
+    /** «8+К шл. · 300 Вт · 700 мм» (D17): шлейфы (+К — есть отдельный выход на карту), мощность, длина кабеля. */
     static String typeParams(PowerSupplyType t) {
         List<String> parts = new ArrayList<>();
+        // Число шлейфов — главное, по чему выбирают блок (баг-репорт: в списке были видны только ватты), поэтому
+        // оно есть в строке всегда: не указано в библиотеке — «шлейфов: ?», чтобы было видно, что поле надо заполнить.
         if (t.getOutputs() != null) {
-            parts.add(t.getOutputs() + (t.isCardOutput() ? "+К" : "") + " вых.");
-        } else if (t.isCardOutput()) {
-            parts.add("+К вых.");
+            parts.add(t.getOutputs() + (t.isCardOutput() ? "+К" : "") + " шл.");
+        } else {
+            parts.add(t.isCardOutput() ? "шлейфов: ? +К" : "шлейфов: ?");
         }
         if (t.getRatedPowerW() != null) {
             parts.add(Math.round(t.getRatedPowerW()) + " Вт");

@@ -140,6 +140,13 @@ public final class PowerSupplyEditor {
         if (all.isEmpty()) {
             return EditReport.nothing();
         }
+        // Баг-репорт: у блоков базовой библиотеки число шлейфов не указано (в паспортах клеммники), и «не указано»
+        // читалось как «без ограничения» — весь экран из 3072 модулей слился в ОДИН блок. Размер блока подбирается
+        // именно по числу шлейфов, поэтому без него автоподбор не работает; вручную блок на выделение поставить можно.
+        if (type.getOutputs() == null) {
+            return EditReport.refused("У типа «" + type.getName() + "» не указано число шлейфов — укажите его в «Библиотеки → "
+                    + "Блоки питания»: автоподбор размера блока без него невозможен. Вручную блок поставить можно.");
+        }
         List<String> allIds = idsOf(all);
         Set<PowerSupplyInstance> hit = suppliesTouching(screen, allIds);
         List<PowerSupplyInstance> base = new ArrayList<>(screen.getPowerSupplies());

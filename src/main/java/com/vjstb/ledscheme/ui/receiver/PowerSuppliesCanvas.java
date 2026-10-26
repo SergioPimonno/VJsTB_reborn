@@ -186,8 +186,15 @@ public final class PowerSuppliesCanvas extends ModuleGridCanvas {
                 }
             }
 
-            // 4. кабели, номера шлейфов, плашки
+            // 4. кабели, номера шлейфов, плашки. Флажок «кабели питания» рисует кабели выбранного блока, а если блок не
+            // выбран — всех блоков, но не больше 400 линий: от одного блока на весь экран тысячи линий закрывали вид.
+            int totalFed = 0;
             for (PowerSupplyLayout.Supply sup : layout.supplies()) {
+                totalFed += sup.modules().size();
+            }
+            for (PowerSupplyLayout.Supply sup : layout.supplies()) {
+                boolean cablesHere = o.showCables() && (o.activeSupplyId() != null
+                        ? o.activeSupplyId().equals(sup.instance().getId()) : totalFed <= 400);
                 int ci = indexOfSupply.get(sup.instance().getId());
                 ScreenModules.Module host = sm.module(sup.placeModuleId());
                 Set<String> longSet = new HashSet<>(sup.longModuleIds());
@@ -201,7 +208,7 @@ public final class PowerSuppliesCanvas extends ModuleGridCanvas {
                             continue;
                         }
                         boolean bad = longSet.contains(mf.moduleId());
-                        if (!bad && !o.showCables()) {
+                        if (!bad && !cablesHere) {
                             continue;
                         }
                         double px = geo.centerX(m.col());
@@ -218,7 +225,7 @@ public final class PowerSuppliesCanvas extends ModuleGridCanvas {
                             g.draw(new Line2D.Double(hx, hy, px, py));
                         }
                     }
-                    if (o.showCables()) {
+                    if (cablesHere) {
                         g.setColor(st.cardStroke);
                         g.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f,
                                 new float[]{2f, 2f}, 0f));
