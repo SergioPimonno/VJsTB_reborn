@@ -141,9 +141,20 @@ class ModularStageViewsTest {
             assertEquals(row, chain.getParent());
             assertTrue(row.getComponentZOrder(cards) < row.getComponentZOrder(chain), "перед «Расключением экрана»");
 
+            // баг-репорт: на ОБЫЧНОМ экране той же сцены кнопка не нужна — нужен именно выбранный модульный экран
+            model.selectScreen(screen);
+            assertFalse(cards.isVisible(), "выбран обычный экран сцены с модульным — кнопки нет");
+            model.selectScreen(modular);
+            assertTrue(cards.isVisible());
+
             // выбрана и пропала — возврат на «Расключение»
             cards.doClick();
             assertTrue(cards.isSelected());
+            model.selectScreen(screen);
+            assertFalse(cards.isVisible());
+            assertTrue(chain.isSelected(), "выбран обычный экран — возврат на «Расключение экрана»");
+            model.selectScreen(modular);
+            cards.doClick();
             model.deleteScreen(modular);
             assertFalse(cards.isVisible());
             assertTrue(chain.isSelected(), "возврат на «Расключение экрана»");
@@ -169,6 +180,16 @@ class ModularStageViewsTest {
             Container row = supplies.getParent();
             assertTrue(row.getComponentZOrder(supplies) < row.getComponentZOrder(chain));
 
+            model.selectScreen(screen);
+            assertFalse(supplies.isVisible(), "выбран обычный экран сцены с модульным — кнопки нет");
+            model.selectScreen(modular);
+            assertTrue(supplies.isVisible());
+
+            supplies.doClick();
+            model.selectScreen(screen);
+            assertFalse(supplies.isVisible());
+            assertTrue(chain.isSelected());
+            model.selectScreen(modular);
             supplies.doClick();
             model.deleteScreen(modular);
             assertFalse(supplies.isVisible());

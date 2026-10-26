@@ -498,10 +498,14 @@ public class SignalStagePanel extends JPanel {
 
     private javax.swing.Timer moduleHintTimer;
 
-    /** Кнопка «Приёмные карты» видна, только если в сцене есть модульный экран (D2); пропала (модуль убрали, сцену
+    /** Кнопка «Приёмные карты» видна, только если ВЫБРАННЫЙ экран модульный (D2); пропала (модуль убрали, сцену
      *  сменили) — возврат в «Расключение экрана», чтобы не остаться на скрытом виде. */
     private void updateCardsViewAvailability() {
-        boolean modular = ChainLinks.sceneHasModularScreen(model.getCurrentScene(), model.getWorkspace());
+        // Кнопка нужна только на модульном ЭКРАНЕ: на обычном экране той же сцены вид пуст («Экран не
+        // модульный»), и показывать лишнюю кнопку незачем.
+        boolean modular = model.getCurrentScreen() != null
+                && com.vjstb.ledscheme.service.ScreenModules.of(model.getCurrentScreen(), model.getWorkspace())
+                .isModular();
         cardsViewBtn.setVisible(modular);
         if (!modular && cardsViewBtn.isSelected()) {
             chainViewBtn.setSelected(true);

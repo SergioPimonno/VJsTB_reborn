@@ -301,10 +301,14 @@ public class PowerStagePanel extends JPanel {
         moduleHintTimer.start();
     }
 
-    /** Кнопка «Блоки питания» видна, только если в сцене есть модульный экран (D2); пропала — возврат в
+    /** Кнопка «Блоки питания» видна, только если ВЫБРАННЫЙ экран модульный (D2); пропала — возврат в
      *  «Расключение экрана», чтобы не остаться на скрытом виде. */
     private void updateSuppliesViewAvailability() {
-        boolean modular = ChainLinks.sceneHasModularScreen(model.getCurrentScene(), model.getWorkspace());
+        // Кнопка нужна только на модульном ЭКРАНЕ: на обычном экране той же сцены вид пуст («Экран не
+        // модульный»), и показывать лишнюю кнопку незачем.
+        boolean modular = model.getCurrentScreen() != null
+                && com.vjstb.ledscheme.service.ScreenModules.of(model.getCurrentScreen(), model.getWorkspace())
+                .isModular();
         suppliesViewBtn.setVisible(modular);
         if (!modular && suppliesViewBtn.isSelected()) {
             chainViewBtn.setSelected(true);
