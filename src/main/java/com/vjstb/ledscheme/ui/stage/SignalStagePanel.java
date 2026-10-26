@@ -8,6 +8,8 @@ import com.vjstb.ledscheme.model.SchemaNodeType;
 import com.vjstb.ledscheme.model.Screen;
 import com.vjstb.ledscheme.model.SignalChain;
 import com.vjstb.ledscheme.service.AppModel;
+import com.vjstb.ledscheme.service.ChainLinks;
+import com.vjstb.ledscheme.service.ChainUnits;
 import com.vjstb.ledscheme.service.ScreenLogic;
 import com.vjstb.ledscheme.service.ScreenStats;
 import com.vjstb.ledscheme.ui.CanvasPanel;
@@ -23,6 +25,7 @@ import com.vjstb.ledscheme.ui.RadialMenu;
 import com.vjstb.ledscheme.ui.SceneCanvasPanel;
 import com.vjstb.ledscheme.ui.SchemaPanel;
 import com.vjstb.ledscheme.ui.UiKit;
+import com.vjstb.ledscheme.ui.receiver.ReceiverCardsView;
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
 import java.awt.Color;
@@ -54,6 +57,7 @@ import javax.swing.SpinnerNumberModel;
  */
 public class SignalStagePanel extends JPanel {
 
+    private static final String VIEW_CARDS = "cards";
     private static final String VIEW_CHAIN = "chain";
     private static final String VIEW_SCHEMA = "schema";
     private static final String VIEW_NETWORK = "network";
@@ -66,6 +70,12 @@ public class SignalStagePanel extends JPanel {
     private final JPanel viewContainer = new JPanel(viewCards);
     private final SchemaPanel schemaPanel;
     private final NetworkManagerPanel networkManagerPanel;
+    /** Вид «Приёмные карты» (docs/receiver-cards/PLAN.md, D2): кнопка видна, только если в сцене есть модульный
+     *  экран; стоит ПЕРЕД «Расключением экрана». Содержимое вида — {@link ReceiverCardsView} (трек C). */
+    private final JToggleButton cardsViewBtn = new JToggleButton("Приёмные карты");
+    private final ReceiverCardsView cardsView;
+    /** Подсказка D26: клик по модулю без карты — в цепочку не идёт, ведёт в вид «Приёмные карты». */
+    private final JPanel moduleHintBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
     private final JToggleButton chainViewBtn = new JToggleButton("Расключение экрана", true);
     private final JToggleButton schemaViewBtn = new JToggleButton("Общая схема сигнала");
     private final JToggleButton networkViewBtn = new JToggleButton("Сетевой менеджер");
@@ -179,6 +189,9 @@ public class SignalStagePanel extends JPanel {
         this.chainCtrl.setOnCommitError(msg ->
                 JOptionPane.showMessageDialog(this, msg, "Не удалось завершить цепочку",
                         JOptionPane.ERROR_MESSAGE));
+        // Модульный экран: клик по модулю = его приёмная карта; модуль без карты в цепочку не попадает (D26).
+        this.chainCtrl.setUnitMode(ChainUnits.Mode.SIGNAL, mode -> showModuleHint());
+        this.cardsView = new ReceiverCardsView(model, settings);
         this.canvas = new CanvasPanel(model, settings, chainCtrl);
         // «Быстрое подключение» (как в NovaLCT) — протяжка выделяет прямоугольную
         // область кабинетов, радиальное меню выбирает шаблон серпантина, скрытые и
@@ -362,14 +375,17 @@ public class SignalStagePanel extends JPanel {
 
         networkManagerPanel = new NetworkManagerPanel(model, settings);
 
+        viewContainer.add(cardsView, VIEW_CARDS);
         viewContainer.add(perScreen, VIEW_CHAIN);
         viewContainer.add(schemaPanel, VIEW_SCHEMA);
         viewContainer.add(networkManagerPanel, VIEW_NETWORK);
 
         ButtonGroup viewGroup = new ButtonGroup();
+        viewGroup.add(cardsViewBtn);
         viewGroup.add(chainViewBtn);
         viewGroup.add(schemaViewBtn);
         viewGroup.add(networkViewBtn);
+        cardsViewBtn.addActionListener(e -> showCardsView());
         chainViewBtn.addActionListener(e -> {
             contextBar.setSchemaMode(null);
             viewCards.show(viewContainer, VIEW_CHAIN);
@@ -398,16 +414,34 @@ public class SignalStagePanel extends JPanel {
                 + " стартовая папка и качество берутся из настроек пакета документации (этап «Вывод»)");
         exportSchemeBtn.addActionListener(e -> exportCurrentScheme());
         JPanel toggleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
+        toggleRow.add(cardsViewBtn);
         toggleRow.add(chainViewBtn);
         toggleRow.add(schemaViewBtn);
         toggleRow.add(networkViewBtn);
         toggleRow.add(showAllScreens);
         toggleRow.add(quickConnectBtn);
         toggleRow.add(exportSchemeBtn);
+        cardsViewBtn.setVisible(false);
+        cardsViewBtn.setToolTipText("Назначить модулям экрана приёмные карты и порядок подключения");
 
+        JLabel hintText = new JLabel("Этот модуль без приёмной карты — в цепочку идут карты, а не модули.");
+        hintText.setForeground(Palette.WARN);
+        JButton hintOpen = new JButton("Открыть «Приёмные карты»");
+        hintOpen.addActionListener(e -> {
+            moduleHintBar.setVisible(false);
+            cardsViewBtn.setSelected(true);
+            showCardsView();
+        });
+        moduleHintBar.add(hintText);
+        moduleHintBar.add(hintOpen);
+        moduleHintBar.setVisible(false);
+
+        JPanel south = new JPanel(new BorderLayout());
+        south.add(toggleRow, BorderLayout.NORTH);
+        south.add(moduleHintBar, BorderLayout.SOUTH);
         JPanel top = new JPanel(new BorderLayout());
         top.add(contextBar, BorderLayout.NORTH);
-        top.add(toggleRow, BorderLayout.SOUTH);
+        top.add(south, BorderLayout.SOUTH);
 
         setLayout(new BorderLayout());
         add(top, BorderLayout.NORTH);
@@ -432,8 +466,48 @@ public class SignalStagePanel extends JPanel {
         quickConnectBtn.setVisible(chainView);
         // «Сетевой менеджер» — не схема (список устройств/скан сети), рисовать и
         // сохранять нечего; в двух других видах («Расключение экрана», «Общая схема
-        // сигнала») экспорт осмыслен.
-        exportSchemeBtn.setVisible(!networkViewBtn.isSelected());
+        // сигнала») экспорт осмыслен. Вид «Приёмные карты» (трек C) — рабочий вид
+        // назначения, «Экспорт схемы…» экспортирует расключение, поэтому там скрыт.
+        exportSchemeBtn.setVisible(!networkViewBtn.isSelected() && !cardsViewBtn.isSelected());
+        if (!chainView) {
+            moduleHintBar.setVisible(false);
+        }
+    }
+
+    /** Показывает вид «Приёмные карты» и просит его перечитать модель (контракт с треком C). */
+    private void showCardsView() {
+        contextBar.setSchemaMode(null);
+        viewCards.show(viewContainer, VIEW_CARDS);
+        cardsView.refresh();
+        updateChainOnlyControlsVisibility();
+    }
+
+    /** D26: модуль без карты в цепочку не попадает — подсказка с переходом в «Приёмные карты», сама гаснет. */
+    private void showModuleHint() {
+        moduleHintBar.setVisible(true);
+        if (moduleHintTimer != null) {
+            moduleHintTimer.stop();
+        }
+        moduleHintTimer = new javax.swing.Timer(8000, e -> moduleHintBar.setVisible(false));
+        moduleHintTimer.setRepeats(false);
+        moduleHintTimer.start();
+    }
+
+    private javax.swing.Timer moduleHintTimer;
+
+    /** Кнопка «Приёмные карты» видна, только если в сцене есть модульный экран (D2); пропала (модуль убрали, сцену
+     *  сменили) — возврат в «Расключение экрана», чтобы не остаться на скрытом виде. */
+    private void updateCardsViewAvailability() {
+        boolean modular = ChainLinks.sceneHasModularScreen(model.getCurrentScene(), model.getWorkspace());
+        cardsViewBtn.setVisible(modular);
+        if (!modular && cardsViewBtn.isSelected()) {
+            chainViewBtn.setSelected(true);
+            contextBar.setSchemaMode(null);
+            viewCards.show(viewContainer, VIEW_CHAIN);
+            updateChainOnlyControlsVisibility();
+        } else if (modular && cardsViewBtn.isSelected()) {
+            cardsView.refresh();
+        }
     }
 
     /** Радиальное меню из 8 шаблонов серпантина (NovaLCT-style «Быстрая прописка») —
@@ -1005,6 +1079,7 @@ public class SignalStagePanel extends JPanel {
     private void refresh() {
         Screen scr = model.getCurrentScreen();
         boolean has = scr != null;
+        updateCardsViewAvailability();
 
         DefaultComboBoxModel<EquipmentPreset> ctrlModel = new DefaultComboBoxModel<>();
         for (EquipmentPreset ct : model.getEquipmentPresets()) {
@@ -1102,14 +1177,16 @@ public class SignalStagePanel extends JPanel {
             Scene scene = model.getCurrentScene();
             for (int i = 0; i < chains.size(); i++) {
                 SignalChain c = chains.get(i);
-                boolean crossScreen = c.getCabinetInstanceIds().stream().anyMatch(id -> scr.cabinetById(id) == null);
+                boolean crossScreen = ChainLinks.leaves(scr, c.getCabinetInstanceIds());
                 // Как и в Питании (Task #80) — текущая нагрузка (в пикселях) показывается
                 // ВСЕГДА, предупреждение/кнопка «Я знаю» — только если включён контроль
                 // нагрузки в Предпочтениях (см. AppModel.signalChainLoadStatus, дублирует
                 // уже готовый паттерн PowerStagePanel.refresh()).
                 AppModel.SignalChainLoadStatus status = model.signalChainLoadStatus(scene, c);
                 String label = (c.getPortNumber() != null ? "Порт " + portDisplayLabel(scr, c.getPortNumber()) : "Без порта")
-                        + (c.isBackup() ? " (бэкап)" : "") + " · " + c.getCabinetInstanceIds().size() + " каб."
+                        + (c.isBackup() ? " (бэкап)" : "") + " · "
+                        // D4: состав словами, как на экране — «3 карты, 2 каб.»; без карт это прежнее «N каб.»
+                        + ChainLinks.countsText(scene, c.getCabinetInstanceIds())
                         + (c.getBackupPortNumber() != null
                                 ? " · резерв: порт " + portDisplayLabel(scr, c.getBackupPortNumber()) : "")
                         + (crossScreen ? " (продолжается на другом экране)" : "")

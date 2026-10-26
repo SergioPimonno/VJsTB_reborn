@@ -105,7 +105,8 @@ public final class NovaLctControllerResolver {
 
     private static CabinetLocation findCabinet(Scene scene, String cabinetId) {
         for (Screen s : scene.getScreens()) {
-            CabinetInstance c = s.cabinetById(cabinetId);
+            // Трек D: звено цепочки порта — кабинет или приёмная карта (в сетке NovaLCT её представляет первый модуль).
+            CabinetInstance c = ChainLinks.anchorCabinet(s, cabinetId);
             if (c != null) {
                 return new CabinetLocation(s, c);
             }

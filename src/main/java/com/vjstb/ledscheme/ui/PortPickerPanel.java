@@ -239,7 +239,7 @@ public class PortPickerPanel extends JPanel {
         }
         b.setEnabled(!controllerReserved);
         b.setToolTipText("Порт " + localPort + " (глобально P" + port + ")"
-                + (main != null ? " · цепочка: " + main.getCabinetInstanceIds().size() + " каб." : " · без цепочки")
+                + (main != null ? " · цепочка: " + com.vjstb.ledscheme.service.ChainLinks.countsText(model.getCurrentScene(), main.getCabinetInstanceIds()) : " · без цепочки")
                 + (backupLink != null ? " · резервный порт: " + backupLabel : "")
                 + (reservedFor != null ? " · зарезервирован под бэкап порта " + reservedFor.getPortNumber() : "")
                 + (controllerReserved ? " · порт принадлежит контроллеру, зарезервированному под бэкап" : "")

@@ -192,7 +192,18 @@ public final class NovaLctScrWriter {
         }
         for (Map.Entry<Screen, java.util.Set<CellKey>> entry : byScreen.entrySet()) {
             Screen screen = entry.getKey();
-            java.util.Set<CellKey> wired = entry.getValue();
+            java.util.Set<CellKey> wired = new java.util.HashSet<>(entry.getValue());
+            // Модульный экран (трек D): карта представлена в сетке NovaLCT первым модулем, остальные её модули
+            // расключены вместе с ней — не «потеряны».
+            for (var card : screen.getReceiverCards()) {
+                List<CabinetInstance> mods = ChainLinks.cabinetsOf(screen, card.getId());
+                if (!mods.isEmpty()
+                        && wired.contains(new CellKey(mods.get(0).getColIndex(), mods.get(0).getRowIndex()))) {
+                    for (CabinetInstance m : mods) {
+                        wired.add(new CellKey(m.getColIndex(), m.getRowIndex()));
+                    }
+                }
+            }
             for (CabinetInstance cab : screen.getCabinets()) {
                 if (!cab.isHidden() && !wired.contains(new CellKey(cab.getColIndex(), cab.getRowIndex()))) {
                     return true;
@@ -207,8 +218,19 @@ public final class NovaLctScrWriter {
      *  вызывающий код должен явно предупредить пользователя перед экспортом. */
     public static boolean hasUnwiredCabinets(Screen screen, Scene scene, Workspace workspace) {
         Map<String, Rec> byId = resolve(screen, scene, workspace);
+        java.util.Set<String> covered = new java.util.HashSet<>(byId.keySet());
+        // Модульный экран (трек D): в цепочке порта стоит карта, а в сетке NovaLCT она представлена одной ячейкой
+        // (первый модуль) — остальные модули карты расключены вместе с ней, а не «потеряны».
+        for (var card : screen.getReceiverCards()) {
+            List<CabinetInstance> mods = ChainLinks.cabinetsOf(screen, card.getId());
+            if (!mods.isEmpty() && byId.containsKey(mods.get(0).getId())) {
+                for (CabinetInstance m : mods) {
+                    covered.add(m.getId());
+                }
+            }
+        }
         for (CabinetInstance cab : screen.getCabinets()) {
-            if (!cab.isHidden() && !byId.containsKey(cab.getId())) {
+            if (!cab.isHidden() && !covered.contains(cab.getId())) {
                 return true;
             }
         }
@@ -229,7 +251,7 @@ public final class NovaLctScrWriter {
             }
             List<String> ids = chain.getCabinetInstanceIds();
             for (int seq = 0; seq < ids.size(); seq++) {
-                CabinetInstance cab = screen.cabinetById(ids.get(seq));
+                CabinetInstance cab = ChainLinks.anchorCabinet(screen, ids.get(seq));
                 if (cab == null || cab.isHidden()) {
                     continue;
                 }
@@ -1514,7 +1536,7 @@ public final class NovaLctScrWriter {
             }
             int seq = 0;
             for (String id : chain.getCabinetInstanceIds()) {
-                CabinetInstance cab = screen.cabinetById(id);
+                CabinetInstance cab = ChainLinks.anchorCabinet(screen, id);
                 if (cab == null || cab.isHidden()) {
                     continue; // не на этом экране, либо деактивирован -- нет физической карты
                 }

@@ -7416,14 +7416,9 @@ public class AppModel {
         // исключение и застревала (ChainInteractionController.finish() не ожидал
         // ошибки от commitHandler) — пользователь физически не мог завершить
         // построение (см. Task #64).
-        validateCabinetIdsAcrossScene(cabinetIds);
+        validateCabinetIdsAcrossScene(cabinetIds, ChainUnits.Mode.POWER);
         pushUndo("Добавление цепочки питания");
-        for (String cabId : cabinetIds) {
-            CabinetInstance cab = cabinetInScene(cabId);
-            if (cab != null) {
-                cab.setPhase(phase);
-            }
-        }
+        applyPhaseToLinks(cabinetIds, phase);
         // Цепочка хранится на уровне СЦЕНЫ, а не конкретного экрана (см. Task #78,
         // независимый менеджер цепочек) — раньше привязка к "текущему на момент
         // завершения" экрану была источником повторяющихся багов: экран, где
@@ -7434,6 +7429,17 @@ public class AppModel {
         currentScene.getPowerChains().add(new PowerChain(phase, cabinetIds));
         resyncPowerSockets(currentScreen);
         changed();
+    }
+
+    /** Фаза хранится на самих ячейках (статистика экрана по фазам, подписи, экспорт читают {@code
+     *  CabinetInstance#getPhase}), поэтому для звена-блока питания фаза ставится на все его модули — иначе
+     *  «L1: N каб.» в статистике и фазы модулей в экспорте остались бы пустыми (трек D, D22/D25). */
+    private void applyPhaseToLinks(List<String> linkIds, int phase) {
+        for (String id : linkIds) {
+            for (CabinetInstance cab : ChainLinks.cabinetsOf(currentScene, id)) {
+                cab.setPhase(phase);
+            }
+        }
     }
 
     /** Имя авто-карты сигнальных вводов узла-экрана (см. resyncSignalSockets) —
@@ -7558,29 +7564,14 @@ public class AppModel {
         }
     }
 
+    /** Ячейка звена цепочки: сам кабинет либо «место» карты/блока (трек D — звено может быть картой или блоком). */
     private CabinetInstance cabinetInScene(Scene scene, String id) {
-        if (scene == null) {
-            return null;
-        }
-        for (Screen s : scene.getScreens()) {
-            CabinetInstance c = s.cabinetById(id);
-            if (c != null) {
-                return c;
-            }
-        }
-        return null;
+        return ChainLinks.place(scene, id);
     }
 
+    /** Экран, которому принадлежит звено цепочки (кабинет, карта или блок). */
     private Screen screenOfCabinet(Scene scene, String id) {
-        if (scene == null) {
-            return null;
-        }
-        for (Screen s : scene.getScreens()) {
-            if (s.cabinetById(id) != null) {
-                return s;
-            }
-        }
-        return null;
+        return ChainLinks.screenOf(scene, id);
     }
 
     public void addSignalChain(Integer port, boolean backup, List<String> cabinetIds) {
@@ -7602,7 +7593,7 @@ public class AppModel {
         // Сигнальная цепочка (в отличие от питания) физически может продолжаться с
         // одного экрана на другой (общий даунлинк на смежные экраны) — поэтому
         // кабинет ищется по ВСЕЙ сцене, а не только на текущем экране.
-        validateCabinetIdsAcrossScene(cabinetIds);
+        validateCabinetIdsAcrossScene(cabinetIds, ChainUnits.Mode.SIGNAL);
         pushUndo("Добавление сигнальной цепочки");
         // Если для порта уже есть цепочка-заглушка (создана setSignalBackupPortLink
         // только чтобы было куда сохранить резервный порт, кабинетов ещё нет) —
@@ -7864,15 +7855,10 @@ public class AppModel {
         if (chain == null) {
             return;
         }
-        validateCabinetIdsAcrossScene(cabinetIds);
+        validateCabinetIdsAcrossScene(cabinetIds, ChainUnits.Mode.POWER);
         pushUndo("Правка цепочки питания");
         List<String> oldIds = new ArrayList<>(chain.getCabinetInstanceIds());
-        for (String cabId : cabinetIds) {
-            CabinetInstance cab = cabinetInScene(cabId);
-            if (cab != null) {
-                cab.setPhase(chain.getPhase());
-            }
-        }
+        applyPhaseToLinks(cabinetIds, chain.getPhase());
         chain.setCabinetInstanceIds(new ArrayList<>(cabinetIds));
         java.util.LinkedHashSet<String> touched = new java.util.LinkedHashSet<>(oldIds);
         touched.addAll(cabinetIds);
@@ -7891,7 +7877,7 @@ public class AppModel {
         if (chain == null) {
             return;
         }
-        validateCabinetIdsAcrossScene(cabinetIds);
+        validateCabinetIdsAcrossScene(cabinetIds, ChainUnits.Mode.SIGNAL);
         pushUndo("Правка сигнальной цепочки");
         List<String> oldIds = new ArrayList<>(chain.getCabinetInstanceIds());
         chain.setCabinetInstanceIds(new ArrayList<>(cabinetIds));
@@ -8100,10 +8086,7 @@ public class AppModel {
         if (scene == null) {
             return Set.of();
         }
-        Set<String> ownIds = new HashSet<>();
-        for (CabinetInstance ci : screen.getCabinets()) {
-            ownIds.add(ci.getId());
-        }
+        Set<String> ownIds = ownLinkIds(screen);
         Set<String> result = new LinkedHashSet<>();
         if (mode == SchemaMode.POWER) {
             for (PowerChain c : scene.getPowerChains()) {
@@ -8258,12 +8241,24 @@ public class AppModel {
         }
     }
 
+    /** id всех возможных звеньев цепочек экрана: кабинеты, а на модульном экране ещё и карты с блоками питания. */
+    private static Set<String> ownLinkIds(Screen screen) {
+        Set<String> ids = new HashSet<>();
+        for (CabinetInstance ci : screen.getCabinets()) {
+            ids.add(ci.getId());
+        }
+        for (var card : screen.getReceiverCards()) {
+            ids.add(card.getId());
+        }
+        for (var supply : screen.getPowerSupplies()) {
+            ids.add(supply.getId());
+        }
+        return ids;
+    }
+
     /** true — хотя бы один кабинет экрана {@code scr} занят цепочкой режима {@code mode}. */
     private boolean isScreenWiredFor(SchemaMode mode, Screen scr) {
-        Set<String> ownIds = new HashSet<>();
-        for (CabinetInstance ci : scr.getCabinets()) {
-            ownIds.add(ci.getId());
-        }
+        Set<String> ownIds = ownLinkIds(scr);
         if (mode == SchemaMode.POWER) {
             for (PowerChain c : currentScene.getPowerChains()) {
                 for (String id : c.getCabinetInstanceIds()) {
@@ -8571,35 +8566,41 @@ public class AppModel {
         pushUndo("Очистка цепочек");
         if (mode == Mode.POWER) {
             currentScene.getPowerChains().removeIf(c ->
-                    c.getCabinetInstanceIds().stream().anyMatch(id -> currentScreen.cabinetById(id) != null));
+                    ChainLinks.touches(currentScreen, c.getCabinetInstanceIds()));
         } else {
             currentScene.getSignalChains().removeIf(c ->
-                    c.getCabinetInstanceIds().stream().anyMatch(id -> currentScreen.cabinetById(id) != null));
+                    ChainLinks.touches(currentScreen, c.getCabinetInstanceIds()));
         }
         changed();
     }
 
     /** И силовая, и сигнальная цепочка могут физически продолжаться с одного экрана
      *  сцены на другой — кабинет ищется по всей сцене, а не только по текущему экрану. */
-    private void validateCabinetIdsAcrossScene(List<String> ids) {
+    private void validateCabinetIdsAcrossScene(List<String> ids, ChainUnits.Mode linkMode) {
         for (String id : ids) {
             if (cabinetInScene(id) == null) {
                 throw new IllegalArgumentException("Кабинет не найден в сцене");
+            }
+            // Трек D: на модульном экране звено — карта (сигнал) или блок (питание), а не сам модуль (D26);
+            // карта в цепочке питания и блок в цепочке сигнала так же бессмысленны.
+            Screen owner = ChainLinks.screenOf(currentScene, id);
+            if (owner != null && owner.cabinetById(id) != null
+                    && ChainLinks.isModule(owner, workspace, id)) {
+                throw new IllegalArgumentException(linkMode == ChainUnits.Mode.SIGNAL
+                        ? "Модуль в цепочку не добавляется — добавьте его приёмную карту"
+                        : "Модуль в цепочку не добавляется — добавьте его блок питания");
+            }
+            if (owner != null && (linkMode == ChainUnits.Mode.SIGNAL
+                    ? owner.powerSupplyById(id) != null : owner.receiverCardById(id) != null)) {
+                throw new IllegalArgumentException(linkMode == ChainUnits.Mode.SIGNAL
+                        ? "Блок питания нельзя добавить в цепочку сигнала"
+                        : "Приёмную карту нельзя добавить в цепочку питания");
             }
         }
     }
 
     private CabinetInstance cabinetInScene(String id) {
-        if (currentScene == null) {
-            return null;
-        }
-        for (Screen s : currentScene.getScreens()) {
-            CabinetInstance c = s.cabinetById(id);
-            if (c != null) {
-                return c;
-            }
-        }
-        return null;
+        return cabinetInScene(currentScene, id);
     }
 
     /** true, если этот кабинет (на любом экране текущей сцены) уже используется
@@ -8611,21 +8612,38 @@ public class AppModel {
         if (currentScene == null) {
             return false;
         }
+        // Трек D: id может быть и картой, и ячейкой-модулем — модуль занят, если занята его карта.
+        String card = null;
+        for (Screen s : currentScene.getScreens()) {
+            card = ChainLinks.unitContaining(s, cabinetId, ChainUnits.Mode.SIGNAL);
+            if (card != null) {
+                break;
+            }
+        }
         for (SignalChain c : currentScene.getSignalChains()) {
-            if (c.getCabinetInstanceIds().contains(cabinetId)) {
+            if (c.getCabinetInstanceIds().contains(cabinetId)
+                    || (card != null && c.getCabinetInstanceIds().contains(card))) {
                 return true;
             }
         }
         return false;
     }
 
-    /** Как {@link #isCabinetWiredForSignal}, но для силовой цепочки. */
+    /** Как {@link #isCabinetWiredForSignal}, но для силовой цепочки (модуль занят, если занят его блок). */
     public boolean isCabinetWiredForPower(String cabinetId) {
         if (currentScene == null) {
             return false;
         }
+        String supply = null;
+        for (Screen s : currentScene.getScreens()) {
+            supply = ChainLinks.unitContaining(s, cabinetId, ChainUnits.Mode.POWER);
+            if (supply != null) {
+                break;
+            }
+        }
         for (PowerChain c : currentScene.getPowerChains()) {
-            if (c.getCabinetInstanceIds().contains(cabinetId)) {
+            if (c.getCabinetInstanceIds().contains(cabinetId)
+                    || (supply != null && c.getCabinetInstanceIds().contains(supply))) {
                 return true;
             }
         }
@@ -8643,7 +8661,7 @@ public class AppModel {
             return result;
         }
         for (PowerChain c : scene.getPowerChains()) {
-            if (c.getCabinetInstanceIds().stream().anyMatch(id -> screen.cabinetById(id) != null)) {
+            if (ChainLinks.touches(screen, c.getCabinetInstanceIds())) {
                 result.add(c);
             }
         }
@@ -8671,6 +8689,15 @@ public class AppModel {
                     }
                     break;
                 }
+                // Звено-блок питания (трек D, D22): нагрузка фазы — номинальная мощность блока, а не сумма модулей.
+                if (s.powerSupplyById(id) != null || s.receiverCardById(id) != null) {
+                    ChainUnits units = ChainUnits.of(s, workspace);
+                    ChainUnits.Unit u = units.unitOf(id);
+                    if (u != null) {
+                        total += units.watts(u);
+                    }
+                    break;
+                }
             }
         }
         return total;
@@ -8685,7 +8712,8 @@ public class AppModel {
         }
         String firstId = chain.getCabinetInstanceIds().get(0);
         for (Screen s : scene.getScreens()) {
-            CabinetInstance c = s.cabinetById(firstId);
+            // звено-блок: номинал разъёма — по типу модуля на месте блока (кабели питания идут от блока к модулям)
+            CabinetInstance c = ChainLinks.owns(s, firstId) ? ChainLinks.place(s, firstId) : null;
             if (c != null) {
                 CabinetType effective = ScreenLogic.effectiveType(c, typeOf(s), workspace);
                 return PowerCalc.cabinetConnectorAmps(effective);
@@ -8759,6 +8787,15 @@ public class AppModel {
                     }
                     break;
                 }
+                // Звено-карта (трек D, D24): пиксели карты — сумма пикселей её модулей.
+                if (s.receiverCardById(id) != null || s.powerSupplyById(id) != null) {
+                    ChainUnits units = ChainUnits.of(s, workspace);
+                    ChainUnits.Unit u = units.unitOf(id);
+                    if (u != null) {
+                        total += units.pixels(u);
+                    }
+                    break;
+                }
             }
         }
         return total;
@@ -8775,13 +8812,7 @@ public class AppModel {
             return 0;
         }
         String firstId = chain.getCabinetInstanceIds().get(0);
-        Screen homeScreen = null;
-        for (Screen s : scene.getScreens()) {
-            if (s.cabinetById(firstId) != null) {
-                homeScreen = s;
-                break;
-            }
-        }
+        Screen homeScreen = ChainLinks.screenOf(scene, firstId);
         if (homeScreen == null) {
             return 0;
         }
@@ -8835,7 +8866,7 @@ public class AppModel {
             return result;
         }
         for (SignalChain c : scene.getSignalChains()) {
-            if (c.getCabinetInstanceIds().stream().anyMatch(id -> screen.cabinetById(id) != null)) {
+            if (ChainLinks.touches(screen, c.getCabinetInstanceIds())) {
                 result.add(c);
             }
         }
