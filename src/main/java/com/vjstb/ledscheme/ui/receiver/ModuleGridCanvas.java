@@ -1,21 +1,35 @@
 package com.vjstb.ledscheme.ui.receiver;
 
 import com.vjstb.ledscheme.model.GridRect;
+import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.Point;
 import java.awt.Rectangle;
+import java.awt.event.ActionEvent;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.event.MouseWheelEvent;
+import javax.swing.AbstractAction;
 import javax.swing.JComponent;
+import javax.swing.JScrollBar;
+import javax.swing.JScrollPane;
 import javax.swing.JViewport;
+import javax.swing.KeyStroke;
 import javax.swing.Scrollable;
+import javax.swing.SwingUtilities;
 
 /**
  * Общий каркас холстов видов «Приёмные карты» и «Блоки питания»: сетка клеток экрана, протяжка мышью по клеткам и
  * клик по клетке. Что значит протяжка (карта, блок, выбор) — решает вид-владелец через {@link Listener}; холст не
  * знает ни про модель, ни про инструменты, поэтому поведение мыши одинаково в обоих видах и проверяется одним
  * тестом реальной доставки событий.
+ *
+ * <p>Перемещение и масштаб — как на остальных холстах приложения (баг-репорт: здесь не работали ни средняя кнопка,
+ * ни колесо): зажатая средняя кнопка двигает сетку в прокрутке, Ctrl+колесо — масштаб вокруг курсора, обычное колесо
+ * и Shift+колесо — прокрутка. Ctrl+0 возвращает масштаб 1.
  *
  * <p>Пока кнопка зажата, выделение рисуется подклассом ({@link #dragRect()}). Протяжка в пределах одной клетки —
  * это клик (как в прототипе: «moved» ставится только при смене клетки), иначе дрожание руки при клике по модулю
@@ -26,6 +40,8 @@ abstract class ModuleGridCanvas extends JComponent implements Scrollable {
     static final double MARGIN = 14;
     static final double MAX_CELL_WIDTH = 84;
     static final double MIN_CELL_WIDTH = 26;
+    static final double MIN_ZOOM = 0.25;
+    static final double MAX_ZOOM = 8;
 
     /** Что вид делает с жестами на холсте. */
     interface Listener {
@@ -42,6 +58,11 @@ abstract class ModuleGridCanvas extends JComponent implements Scrollable {
     private Listener listener;
     private int[] pressCell;
     private int[] dragCell;
+    private double zoom = 1.0;
+    /** Начало перемещения средней кнопкой: точка в координатах вьюпорта (не экрана — она не зависит от того, что
+     *  сам холст едет под рукой) и положение вида на момент нажатия. */
+    private Point panStart;
+    private Point panStartView;
 
     ModuleGridCanvas() {
         setOpaque(true);
@@ -49,6 +70,11 @@ abstract class ModuleGridCanvas extends JComponent implements Scrollable {
         MouseAdapter mouse = new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent e) {
+                if (SwingUtilities.isMiddleMouseButton(e)) {
+                    requestFocusInWindow();
+                    startPan(e);
+                    return;
+                }
                 if (e.getButton() != MouseEvent.BUTTON1) {
                     return;
                 }
@@ -64,6 +90,10 @@ abstract class ModuleGridCanvas extends JComponent implements Scrollable {
 
             @Override
             public void mouseDragged(MouseEvent e) {
+                if (panStart != null) {
+                    pan(e);
+                    return;
+                }
                 if (pressCell == null) {
                     return;
                 }
@@ -73,6 +103,12 @@ abstract class ModuleGridCanvas extends JComponent implements Scrollable {
 
             @Override
             public void mouseReleased(MouseEvent e) {
+                if (panStart != null && e.getButton() == MouseEvent.BUTTON2) {
+                    panStart = null;
+                    panStartView = null;
+                    setCursor(Cursor.getDefaultCursor());
+                    return;
+                }
                 if (pressCell == null || e.getButton() != MouseEvent.BUTTON1) {
                     return;
                 }
@@ -93,6 +129,96 @@ abstract class ModuleGridCanvas extends JComponent implements Scrollable {
         };
         addMouseListener(mouse);
         addMouseMotionListener(mouse);
+        addMouseWheelListener(this::wheel);
+        getInputMap(WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_0,
+                java.awt.Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx()), "module-grid-zoom-reset");
+        getActionMap().put("module-grid-zoom-reset", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                setZoom(1.0, null);
+            }
+        });
+    }
+
+    private JViewport viewport() {
+        return getParent() instanceof JViewport vp ? vp : null;
+    }
+
+    private void startPan(MouseEvent e) {
+        JViewport vp = viewport();
+        if (vp == null) {
+            return;
+        }
+        panStart = SwingUtilities.convertPoint(this, e.getPoint(), vp);
+        panStartView = vp.getViewPosition();
+        setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR));
+    }
+
+    private void pan(MouseEvent e) {
+        JViewport vp = viewport();
+        if (vp == null || panStartView == null) {
+            return;
+        }
+        Point now = SwingUtilities.convertPoint(this, e.getPoint(), vp);
+        vp.setViewPosition(clampView(vp, panStartView.x + (panStart.x - now.x), panStartView.y + (panStart.y - now.y)));
+    }
+
+    private static Point clampView(JViewport vp, int x, int y) {
+        Dimension ext = vp.getExtentSize();
+        Dimension view = vp.getViewSize();
+        return new Point(Math.max(0, Math.min(Math.max(0, view.width - ext.width), x)),
+                Math.max(0, Math.min(Math.max(0, view.height - ext.height), y)));
+    }
+
+    /** Ctrl+колесо — масштаб вокруг курсора; без Ctrl — обычная прокрутка (Shift — по горизонтали). */
+    private void wheel(MouseWheelEvent e) {
+        if (e.isControlDown()) {
+            setZoom(zoom * Math.pow(1.15, -e.getPreciseWheelRotation()), e.getPoint());
+            return;
+        }
+        JScrollPane sp = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, this);
+        if (sp != null) {
+            JScrollBar bar = e.isShiftDown() ? sp.getHorizontalScrollBar() : sp.getVerticalScrollBar();
+            bar.setValue(bar.getValue() + e.getUnitsToScroll() * bar.getUnitIncrement());
+        }
+    }
+
+    double zoom() {
+        return zoom;
+    }
+
+    /** Масштаб; точка {@code anchor} (в координатах холста) остаётся под курсором, {@code null} — центр вида. */
+    void setZoom(double value, Point anchor) {
+        double z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, value));
+        if (z == zoom) {
+            return;
+        }
+        JViewport vp = viewport();
+        Point pin = null;
+        double fx = 0.5;
+        double fy = 0.5;
+        if (vp != null && getWidth() > 0 && getHeight() > 0) {
+            Point a = anchor != null ? anchor : new Point(vp.getViewPosition().x + vp.getWidth() / 2,
+                    vp.getViewPosition().y + vp.getHeight() / 2);
+            fx = a.x / (double) getWidth();
+            fy = a.y / (double) getHeight();
+            pin = new Point(a.x - vp.getViewPosition().x, a.y - vp.getViewPosition().y);
+        }
+        zoom = z;
+        revalidate();
+        repaint();
+        if (vp != null && pin != null) {
+            double ffx = fx;
+            double ffy = fy;
+            Point fpin = pin;
+            // размер холста обновится только после раскладки — положение вида ставим уже после неё
+            SwingUtilities.invokeLater(() -> {
+                vp.validate();
+                Dimension view = vp.getViewSize();
+                vp.setViewPosition(clampView(vp, (int) Math.round(ffx * view.width) - fpin.x,
+                        (int) Math.round(ffy * view.height) - fpin.y));
+            });
+        }
     }
 
     void setListener(Listener listener) {
@@ -116,7 +242,7 @@ abstract class ModuleGridCanvas extends JComponent implements Scrollable {
 
     /** Геометрия сетки при текущем размере компонента. */
     ModuleGridGeometry geometry() {
-        return ModuleGridGeometry.fit(rows, cols, aspect, getWidth(), getHeight(), MARGIN, MAX_CELL_WIDTH);
+        return ModuleGridGeometry.fit(rows, cols, aspect, getWidth(), getHeight(), MARGIN, MAX_CELL_WIDTH * zoom);
     }
 
     /** Протягиваемый сейчас прямоугольник или {@code null}. */
@@ -162,8 +288,8 @@ abstract class ModuleGridCanvas extends JComponent implements Scrollable {
 
     @Override
     public Dimension getPreferredSize() {
-        return new Dimension((int) Math.ceil(cols * MIN_CELL_WIDTH + 2 * MARGIN),
-                (int) Math.ceil(rows * MIN_CELL_WIDTH / aspect + 2 * MARGIN));
+        return new Dimension((int) Math.ceil(cols * MIN_CELL_WIDTH * zoom + 2 * MARGIN),
+                (int) Math.ceil(rows * MIN_CELL_WIDTH * zoom / aspect + 2 * MARGIN));
     }
 
     @Override
