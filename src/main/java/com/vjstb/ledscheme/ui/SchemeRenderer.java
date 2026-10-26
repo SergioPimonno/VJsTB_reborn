@@ -496,15 +496,20 @@ public final class SchemeRenderer {
         // (см. signalChainEndLabel), только раньше этого не было в этом, "богатом",
         // виде схемы вовсе.
         Map<String, List<LabelLine>> endLabelsByCabinet = new LinkedHashMap<>();
+        // Кружки-разъёмы и стрелки рисуются на каждом звене цепочки, как у обычных кабинетов (по ним пересчитывают
+        // кабинеты и перепроверяются). На модульном экране звено — карта/блок, а не модуль, поэтому и размер знаков
+        // берётся по типичной карте/блоку: от размера мелкого модуля они пропадали (баг-репорт: «воспринимается тяжелее»)
+        int symbolMin = typicalUnitSide(scr, power, type, cellW, cellH, offX, offY, workspace);
         if (power) {
             for (PowerChain chain : powerChains) {
-                drawChainWithDots(g2, scr, chain.getCabinetInstanceIds(), cellW, cellH, offX, offY, type, workspace, false);
+                drawChainWithDots(g2, scr, chain.getCabinetInstanceIds(), cellW, cellH, offX, offY, type, workspace, false,
+                        symbolMin);
                 addStartLabel(startLabelsByCabinet, chain.getCabinetInstanceIds(), new LabelLine("L" + chain.getPhase(), false));
             }
         } else {
             for (SignalChain chain : signalChains) {
                 drawChainWithDots(g2, scr, chain.getCabinetInstanceIds(), cellW, cellH, offX, offY, type, workspace,
-                        chain.isBackup());
+                        chain.isBackup(), symbolMin);
                 if (chain.getPortNumber() != null) {
                     String lbl = portLabel(sceneControllers, workspace, chain.getPortNumber(), false);
                     // Раньше резервная цепочка получала префикс "рез:" — на мелких
@@ -713,10 +718,41 @@ public final class SchemeRenderer {
      *  ТЕ ЖЕ кабинеты, что и основная (см. вызов из paintWiringDiagram) — без
      *  визуального различия основной и резервный путь были бы неотличимы, рисуясь
      *  друг поверх друга в одних и тех же точках. */
+    /** Меньшая сторона ТИПИЧНОЙ (медианной) карты/блока модульного экрана в пикселях; для обычного экрана — меньшая
+     *  сторона ячейки. От неё зависит, рисовать ли стрелки/кружки и какого они размера. */
+    private static int typicalUnitSide(Screen scr, boolean power, CabinetType type, int cellW, int cellH, int offX,
+                                       int offY, Workspace workspace) {
+        int cell = Math.min(cellW, cellH);
+        com.vjstb.ledscheme.service.ChainUnits cu = com.vjstb.ledscheme.service.ChainUnits.of(scr, workspace);
+        if (!cu.isModular()) {
+            return cell;
+        }
+        List<Integer> sides = new ArrayList<>();
+        for (com.vjstb.ledscheme.service.ChainUnits.Unit u : cu.units(power
+                ? com.vjstb.ledscheme.service.ChainUnits.Mode.POWER : com.vjstb.ledscheme.service.ChainUnits.Mode.SIGNAL)) {
+            if (u.kind() == com.vjstb.ledscheme.service.ChainUnits.Kind.CABINET) {
+                continue;
+            }
+            java.awt.Rectangle union = null;
+            for (CabinetInstance c : u.cabinets()) {
+                java.awt.Rectangle r = cabinetScreenRect(c, type, cellW, cellH, offX, offY, workspace);
+                union = union == null ? r : union.union(r);
+            }
+            if (union != null) {
+                sides.add(Math.min(union.width, union.height));
+            }
+        }
+        if (sides.isEmpty()) {
+            return cell;
+        }
+        java.util.Collections.sort(sides);
+        return Math.max(cell, sides.get(sides.size() / 2));
+    }
+
     private static void drawChainWithDots(Graphics2D g2, Screen scr, List<String> ids,
                                            int cellW, int cellH, int offX, int offY,
-                                           CabinetType type, Workspace workspace, boolean dashed) {
-        int minCell = Math.min(cellW, cellH);
+                                           CabinetType type, Workspace workspace, boolean dashed, int symbolMin) {
+        int minCell = symbolMin;
         float strokeWidth = (float) Math.max(0.8, Math.min(2.5, minCell * 0.08));
         g2.setStroke(dashed
                 ? new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 0,

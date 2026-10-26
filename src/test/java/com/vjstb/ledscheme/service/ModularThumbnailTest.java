@@ -49,12 +49,12 @@ class ModularThumbnailTest {
 
         // линия стыка двух модулей ВНУТРИ карты: с модулями — рамка ячейки, с «только карты» — сплошная заливка
         int x = 10 + CELL;
-        int y = 10 + CELL / 2;
+        int y = 10 + CELL * 3 + CELL / 2; // в нижней строке карты — подальше от кружка-разъёма у места карты
         assertEquals(Palette.CELL_BORDER.getRGB(), new Color(modules.getRGB(x, y)).getRGB(), "модули — рамка между ними");
         assertNotEquals(Palette.CELL_BORDER.getRGB(), new Color(cards.getRGB(x, y)).getRGB(),
                 "только карты — внутри карты рамок модулей нет");
         // карта по-прежнему красится цветом своей цепочки
-        Color inside = new Color(cards.getRGB(10 + CELL * 2 - 4, 10 + CELL * 2 - 4));
+        Color inside = new Color(cards.getRGB(10 + 3, 10 + 3)); // угол карты: в центре — кружок-разъём
         assertNotEquals(Color.BLACK.getRGB(), inside.getRGB());
     }
 
@@ -68,9 +68,16 @@ class ModularThumbnailTest {
 
         BufferedImage cards = paint(f, chain, true, CELL);
 
-        // у угла ячейки: в центре цепочка рисует точку-разъём
-        Color ordinary = new Color(cards.getRGB(10 + CELL * 7 + 3, 10 + 3));
-        assertNotEquals(Color.BLACK.getRGB(), ordinary.getRGB(), "обычный кабинет на месте и закрашен");
+        // кружок-разъём и стрелка цепочки закрывают часть ячейки, поэтому считаем долю закрашенных пикселей
+        int painted = 0;
+        for (int px = 10 + CELL * 7; px < 10 + CELL * 8; px++) {
+            for (int py = 10; py < 10 + CELL; py++) {
+                if (cards.getRGB(px, py) != Color.BLACK.getRGB()) {
+                    painted++;
+                }
+            }
+        }
+        assertTrue(painted > CELL * CELL / 3, "обычный кабинет на месте и закрашен: " + painted);
     }
 
     @Test
