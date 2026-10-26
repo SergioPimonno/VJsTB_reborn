@@ -87,9 +87,11 @@ public class CabinetTypeDialog extends JDialog {
             + "(модуль: общая карта, питание от блока)");
 
     private CabinetType result;
+    private final AppModel model;
 
     public CabinetTypeDialog(Window owner, AppModel model, CabinetType existing) {
         super(owner, existing == null ? "Новый кабинет" : "Редактирование кабинета", ModalityType.APPLICATION_MODAL);
+        this.model = model;
         companyField.setEditable(true);
         companyField.setModel(new javax.swing.DefaultComboBoxModel<>(model.getKnownCompanies().toArray(new String[0])));
 
@@ -325,11 +327,60 @@ public class CabinetTypeDialog extends JDialog {
             ct.setVisibleInPalette(visibleInPaletteCheck.isSelected());
             ct.setExportAsStandardCabinet(exportAsStandardCheck.isSelected());
             ct.setReceiverCardSeparate(receiverCardSeparateCheck.isSelected());
+            if (existing != null && existing.isReceiverCardSeparate() && !ct.isReceiverCardSeparate()
+                    && !confirmModuleFlagRemoval(existing)) {
+                return; // остаёмся в диалоге: пользователь может вернуть флаг или отменить правку целиком
+            }
             result = ct;
             dispose();
         } catch (IllegalArgumentException ex) {
             JOptionPane.showMessageDialog(this, ex.getMessage(), "Проверка данных", JOptionPane.WARNING_MESSAGE);
         }
+    }
+
+    /**
+     * Снятие флага «Приёмная карта отдельно» у типа, который стоит на экранах с картами и блоками питания, удалит эти
+     * карты и блоки (их ячейки перестанут быть модулями) вместе со звеньями в цепочках — поэтому до сохранения
+     * спрашиваем, не молча (docs/receiver-cards/PLAN.md, раздел 5). Если терять нечего — без вопроса.
+     */
+    private boolean confirmModuleFlagRemoval(CabinetType existing) {
+        com.vjstb.ledscheme.service.ModuleIntegrity.Impact impact = model.moduleFlagRemovalImpact(existing.getId());
+        if (!impact.any()) {
+            return true;
+        }
+        int choice = JOptionPane.showConfirmDialog(this, removalMessage(impact), "Снять флаг модуля?",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
+        return choice == JOptionPane.OK_OPTION;
+    }
+
+    /** Текст подтверждения: «2 карты, 1 блок питания и их цепочки будут удалены» (+ сколько потеряют часть модулей). */
+    static String removalMessage(com.vjstb.ledscheme.service.ModuleIntegrity.Impact impact) {
+        java.util.List<String> gone = new java.util.ArrayList<>();
+        if (impact.cardsRemoved() > 0) {
+            gone.add(com.vjstb.ledscheme.ui.receiver.RuPlural.count(impact.cardsRemoved(), "карта", "карты", "карт"));
+        }
+        if (impact.suppliesRemoved() > 0) {
+            gone.add(com.vjstb.ledscheme.ui.receiver.RuPlural.count(impact.suppliesRemoved(), "блок питания",
+                    "блока питания", "блоков питания"));
+        }
+        StringBuilder sb = new StringBuilder("Ячейки этого типа перестанут быть модулями.");
+        if (!gone.isEmpty()) {
+            sb.append("\n\n").append(String.join(", ", gone)).append(" и их цепочки будут удалены.");
+        }
+        java.util.List<String> shrunk = new java.util.ArrayList<>();
+        if (impact.cardsShrunk() > 0) {
+            shrunk.add(com.vjstb.ledscheme.ui.receiver.RuPlural.count(impact.cardsShrunk(), "карта", "карты", "карт"));
+        }
+        if (impact.suppliesShrunk() > 0) {
+            shrunk.add(com.vjstb.ledscheme.ui.receiver.RuPlural.count(impact.suppliesShrunk(), "блок питания",
+                    "блока питания", "блоков питания"));
+        }
+        if (!shrunk.isEmpty()) {
+            sb.append("\n\nЗатронуты ещё: ").append(String.join(", ", shrunk))
+                    .append(" — из них будут убраны модули этого типа, остальные модули останутся.");
+        }
+        sb.append("\n\nСнять флаг?");
+        return sb.toString();
     }
 
     private double parsePositive(String s, String field) {

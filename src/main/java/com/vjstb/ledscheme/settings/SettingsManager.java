@@ -423,6 +423,13 @@ public class SettingsManager {
         persist();
     }
 
+    /** Цвет «Приёмные карты» (RGB без альфы; {@code null} — встроенный) — см. {@link UserProfile#getReceiverCardColor()}.
+     *  Палитру после смены нужно перечитать ({@code Palette.applyProfile}) — это делает окно персонализации. */
+    public void setReceiverCardColor(Integer rgb) {
+        activeProfile().setReceiverCardColor(rgb);
+        persist();
+    }
+
     /** Запоминает выбор диалога экспорта таблицы экранов (легенда кабинетов / статистика сцены /
      *  фермы / легенда ферм). */
     public void setScreensExportOptions(boolean legend, boolean stats, boolean trusses, boolean trussLegend) {
